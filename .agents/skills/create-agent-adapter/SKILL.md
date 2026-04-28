@@ -571,7 +571,7 @@ Paperclip ships shared skills (in the repo's top-level `skills/` directory) that
 
 **How claude-local does it:**
 
-1. At execution time, create a fresh tmpdir: `mkdtemp("paperclip-skills-")`
+1. At execution time, create a fresh tmpdir: `mkdtemp("paperclip-extensions-")`
 2. Inside it, create `.claude/skills/` (the directory structure Claude Code expects)
 3. Symlink each skill directory from the repo's `skills/` into the tmpdir's `.claude/skills/`
 4. Pass the tmpdir to Claude Code via `--add-dir <tmpdir>` — this makes Claude Code discover the skills as if they were registered in that directory, without touching the agent's actual cwd
@@ -580,7 +580,7 @@ Paperclip ships shared skills (in the repo's top-level `skills/` directory) that
 ```ts
 // From claude-local execute.ts
 async function buildSkillsDir(): Promise<string> {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-skills-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-extensions-"));
   const target = path.join(tmp, ".claude", "skills");
   await fs.mkdir(target, { recursive: true });
   const entries = await fs.readdir(PAPERCLIP_SKILLS_DIR, { withFileTypes: true });
