@@ -6,11 +6,17 @@ export const envBindingPlainSchema = z.object({
   value: z.string(),
 });
 
-export const envBindingSecretRefSchema = z.object({
-  type: z.literal("secret_ref"),
-  secretId: z.string().uuid(),
-  version: z.union([z.literal("latest"), z.number().int().positive()]).optional(),
-});
+export const envBindingSecretRefSchema = z
+  .object({
+    type: z.literal("secret_ref"),
+    secretId: z.string().uuid().optional(),
+    secretName: z.string().min(1).optional(),
+    version: z.union([z.literal("latest"), z.number().int().positive()]).optional(),
+  })
+  .refine(
+    (data) => Boolean(data.secretId) !== Boolean(data.secretName),
+    { message: "secret_ref must include exactly one of secretId or secretName" },
+  );
 
 // Backward-compatible union that accepts legacy inline values.
 export const envBindingSchema = z.union([

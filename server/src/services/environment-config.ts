@@ -448,14 +448,16 @@ export async function resolveEnvironmentDriverConfigForRuntime(
   const secrets = secretService(db);
 
   if (parsed.driver === "ssh" && parsed.config.privateKeySecretRef) {
+    const ref = parsed.config.privateKeySecretRef;
+    const secretId = await secrets.resolveSecretIdForBinding(companyId, ref);
     return {
       driver: "ssh",
       config: {
         ...parsed.config,
         privateKey: await secrets.resolveSecretValue(
           companyId,
-          parsed.config.privateKeySecretRef.secretId,
-          parsed.config.privateKeySecretRef.version ?? "latest",
+          secretId,
+          ref.version ?? "latest",
         ),
       },
     };

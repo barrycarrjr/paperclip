@@ -119,4 +119,90 @@ describeEmbeddedPostgres("secretService", () => {
       ],
     });
   });
+
+  it("resolves secret_ref by secretName at persistence time", async () => {
+    const companyId = randomUUID();
+    const svc = secretService(db);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "ByName Co",
+      issuePrefix: "BYN",
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const secret = await svc.create(companyId, {
+      name: "WORKSNAPS_API_TOKEN",
+      provider: "local_encrypted",
+      value: "wsnap-token",
+      description: null,
+    });
+
+    const normalized = await svc.normalizeAdapterConfigForPersistence(companyId, {
+      env: {
+        WORKSNAPS_API_TOKEN: { type: "secret_ref", secretName: "WORKSNAPS_API_TOKEN" },
+      },
+    });
+
+    expect(normalized.env).toEqual({
+      WORKSNAPS_API_TOKEN: {
+        type: "secret_ref",
+        secretId: secret.id,
+        version: "latest",
+      },
+    });
+  });
+
+  it("rejects secret_ref by secretName when the named secret is missing", async () => {
+    const companyId = randomUUID();
+    const svc = secretService(db);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "MissingName Co",
+      issuePrefix: "MIS",
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await expect(
+      svc.normalizeAdapterConfigForPersistence(companyId, {
+        env: {
+          NOT_THERE: { type: "secret_ref", secretName: "NOT_THERE" },
+        },
+      }),
+    ).rejects.toThrow(/Secret not found in company: NOT_THERE/);
+  });
+
+  it("rejects secret_ref with both secretId and secretName", async () => {
+    const companyId = randomUUID();
+    const svc = secretService(db);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Both Co",
+      issuePrefix: "BTH",
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const secret = await svc.create(companyId, {
+      name: "DOUBLED",
+      provider: "local_encrypted",
+      value: "x",
+      description: null,
+    });
+
+    await expect(
+      svc.normalizeAdapterConfigForPersistence(companyId, {
+        env: {
+          DOUBLED: { type: "secret_ref", secretId: secret.id, secretName: "DOUBLED" },
+        },
+      }),
+    ).rejects.toThrow(/Invalid environment binding for key: DOUBLED/);
+  });
 });

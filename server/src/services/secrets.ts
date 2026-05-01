@@ -13,7 +13,12 @@ const REDACTED_SENTINEL = "***REDACTED***";
 
 type CanonicalEnvBinding =
   | { type: "plain"; value: string }
-  | { type: "secret_ref"; secretId: string; version: number | "latest" };
+  | {
+      type: "secret_ref";
+      secretId?: string;
+      secretName?: string;
+      version: number | "latest";
+    };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -33,7 +38,8 @@ function canonicalizeBinding(binding: EnvBinding): CanonicalEnvBinding {
   }
   return {
     type: "secret_ref",
-    secretId: binding.secretId,
+    ...(binding.secretId ? { secretId: binding.secretId } : {}),
+    ...(binding.secretName ? { secretName: binding.secretName } : {}),
     version: binding.version ?? "latest",
   };
 }
@@ -47,7 +53,7 @@ function collectSecretEnvKeys(adapterConfig: Record<string, unknown>) {
     const parsed = envBindingSchema.safeParse(rawBinding);
     if (!parsed.success || typeof parsed.data === "string") continue;
     const binding = canonicalizeBinding(parsed.data);
-    if (binding.type === "secret_ref") {
+    if (binding.type === "secret_ref" && binding.secretId) {
       refs.push({ secretId: binding.secretId, envKey });
     }
   }
@@ -94,6 +100,22 @@ export function secretService(db: Db) {
     if (!secret) throw notFound("Secret not found");
     if (secret.companyId !== companyId) throw unprocessable("Secret must belong to same company");
     return secret;
+  }
+
+  async function resolveSecretIdForBinding(
+    companyId: string,
+    binding: { secretId?: string; secretName?: string },
+  ): Promise<string> {
+    if (binding.secretId) return binding.secretId;
+    const name = binding.secretName ?? "";
+    if (!name) throw unprocessable("secret_ref must include secretId or secretName");
+    const found = await getByName(companyId, name);
+    if (!found) {
+      throw unprocessable(
+        `Secret not found in company: ${name}. Ask the board to create it before binding.`,
+      );
+    }
+    return found.id;
   }
 
   async function resolveSecretValue(
@@ -145,10 +167,13 @@ export function secretService(db: Db) {
         continue;
       }
 
-      await assertSecretInCompany(companyId, binding.secretId);
+      const resolvedSecretId = await resolveSecretIdForBinding(companyId, binding);
+      if (binding.secretId) {
+        await assertSecretInCompany(companyId, resolvedSecretId);
+      }
       normalized[key] = {
         type: "secret_ref",
-        secretId: binding.secretId,
+        secretId: resolvedSecretId,
         version: binding.version,
       };
     }
@@ -236,6 +261,7 @@ export function secretService(db: Db) {
 
     getById,
     getByName,
+    resolveSecretIdForBinding,
     resolveSecretValue,
 
     create: async (
@@ -410,7 +436,8 @@ export function secretService(db: Db) {
         if (binding.type === "plain") {
           resolved[key] = binding.value;
         } else {
-          resolved[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
+          const secretId = await resolveSecretIdForBinding(companyId, binding);
+          resolved[key] = await resolveSecretValue(companyId, secretId, binding.version);
           secretKeys.add(key);
         }
       }
@@ -441,7 +468,8 @@ export function secretService(db: Db) {
         if (binding.type === "plain") {
           env[key] = binding.value;
         } else {
-          env[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
+          const secretId = await resolveSecretIdForBinding(companyId, binding);
+          env[key] = await resolveSecretValue(companyId, secretId, binding.version);
           secretKeys.add(key);
         }
       }

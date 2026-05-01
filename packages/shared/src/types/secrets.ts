@@ -13,7 +13,18 @@ export interface EnvPlainBinding {
 
 export interface EnvSecretRefBinding {
   type: "secret_ref";
-  secretId: string;
+  /**
+   * Reference a company secret by UUID. Exactly one of `secretId` or `secretName`
+   * must be provided on input; the persistence layer canonicalizes inputs to `secretId`.
+   */
+  secretId?: string;
+  /**
+   * Reference a company secret by its human-readable name. Resolved to `secretId`
+   * at persistence time; fails if no matching secret exists in the agent's company.
+   * Lets agents (e.g. CEOs handling delegated config tasks) bind secrets without
+   * needing the secret listing endpoint, which is board-only.
+   */
+  secretName?: string;
   version?: SecretVersionSelector;
 }
 
