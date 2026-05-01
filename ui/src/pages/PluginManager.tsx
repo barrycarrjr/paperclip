@@ -60,6 +60,22 @@ function getPluginErrorSummary(plugin: PluginRecord): string {
  * @see PluginSettings — linked from the Settings icon on each plugin row.
  * @see doc/plugins/PLUGIN_SPEC.md §3 — Plugin Lifecycle for status semantics.
  */
+
+// True if `a` is strictly newer than `b` under simple major.minor.patch
+// comparison. Plugin versions in this codebase don't use pre-release tags, so
+// numeric triple compare is enough.
+function isVersionNewer(a: string, b: string): boolean {
+  const pa = a.split(".").map((n) => parseInt(n, 10));
+  const pb = b.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < 3; i++) {
+    const av = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const bv = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (av > bv) return true;
+    if (av < bv) return false;
+  }
+  return false;
+}
+
 export function PluginManager() {
   const { selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -474,7 +490,7 @@ export function PluginManager() {
                 lib &&
                 installedVersion &&
                 libraryVersion &&
-                installedVersion !== libraryVersion
+                isVersionNewer(libraryVersion, installedVersion)
               );
               const libraryInFlight =
                 installFromLibraryMutation.isPending &&
