@@ -97,6 +97,11 @@ export function PluginManager() {
     queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
     queryClient.invalidateQueries({ queryKey: queryKeys.plugins.examples });
     queryClient.invalidateQueries({ queryKey: queryKeys.plugins.uiContributions });
+    // Library entries carry a server-computed `installed` flag joined against
+    // the local plugins table; without invalidating, an uninstall leaves the
+    // "Install" button hidden until the 60s staleTime expires or the page is
+    // hard-refreshed.
+    queryClient.invalidateQueries({ queryKey: queryKeys.plugins.library });
   };
 
   const installMutation = useMutation({
@@ -186,7 +191,6 @@ export function PluginManager() {
     mutationFn: (id: string) => pluginsApi.installFromLibrary(id),
     onSuccess: (record) => {
       invalidatePluginQueries();
-      queryClient.invalidateQueries({ queryKey: queryKeys.plugins.library });
       pushToast({
         title: `Installed ${record.manifestJson.displayName ?? record.packageName} v${record.version}`,
         tone: "success",
@@ -208,6 +212,60 @@ export function PluginManager() {
       ),
     [installedPlugins]
   );
+
+  // Unified row model: every plugin appears exactly once. A plugin is either
+  // installed (locally), present in the configured library, or both. The row
+  // carries whichever sources are available so the renderer can show install
+  // controls, library metadata, and lifecycle controls all together.
+  type UnifiedRow = {
+    pluginKey: string;
+    displayName: string;
+    description: string | null;
+    packageName: string | null;
+    installedPlugin: PluginRecord | null;
+    libraryEntry: NonNullable<typeof libraryQuery.data>["plugins"][number] | null;
+  };
+  const unifiedRows = useMemo<UnifiedRow[]>(() => {
+    const rowsByKey = new Map<string, UnifiedRow>();
+
+    // Seed from installed plugins so locally/npm-installed plugins still
+    // appear even when the library doesn't list them.
+    for (const plugin of installedPlugins) {
+      rowsByKey.set(plugin.pluginKey, {
+        pluginKey: plugin.pluginKey,
+        displayName: plugin.manifestJson.displayName ?? plugin.packageName,
+        description: plugin.manifestJson.description ?? null,
+        packageName: plugin.packageName,
+        installedPlugin: plugin,
+        libraryEntry: null,
+      });
+    }
+
+    // Layer library entries on top — fills out description/size/author for
+    // installed plugins and adds rows for not-yet-installed library entries.
+    for (const entry of libraryQuery.data?.plugins ?? []) {
+      const existing = rowsByKey.get(entry.id);
+      if (existing) {
+        existing.libraryEntry = entry;
+        existing.description = existing.description ?? entry.description ?? null;
+        existing.displayName = existing.displayName || (entry.displayName ?? entry.id);
+      } else {
+        rowsByKey.set(entry.id, {
+          pluginKey: entry.id,
+          displayName: entry.displayName ?? entry.id,
+          description: entry.description ?? null,
+          packageName: null,
+          installedPlugin: null,
+          libraryEntry: entry,
+        });
+      }
+    }
+
+    // Pure alphabetical by display name — no installed-first grouping.
+    return Array.from(rowsByKey.values()).sort((a, b) =>
+      a.displayName.localeCompare(b.displayName),
+    );
+  }, [installedPlugins, libraryQuery.data]);
 
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading plugins...</div>;
   if (error) return <div className="p-4 text-sm text-destructive">Failed to load plugins.</div>;
@@ -375,91 +433,235 @@ export function PluginManager() {
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-base font-semibold">Plugin Library</h2>
+          <Puzzle className="h-5 w-5 text-muted-foreground" />
+          <h2 className="text-base font-semibold">Plugins</h2>
           {libraryQuery.data?.release.tag && (
-            <Badge variant="outline">
-              {libraryQuery.data.repo} · {libraryQuery.data.release.tag}
+            <Badge variant="outline" className="gap-1">
+              <Sparkles className="h-3 w-3" />
+              Library: {libraryQuery.data.repo} · {libraryQuery.data.release.tag}
             </Badge>
           )}
         </div>
 
-        {libraryQuery.isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading plugin library…</div>
-        ) : libraryQuery.error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            Failed to load plugin library: {(libraryQuery.error as Error).message}
+        {libraryQuery.error && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+            Couldn't load plugin library: {(libraryQuery.error as Error).message}. Showing
+            installed plugins only.
           </div>
-        ) : (libraryQuery.data?.plugins.length ?? 0) === 0 ? (
-          <div className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
-            No plugins found in the latest release of{" "}
-            {libraryQuery.data?.repo ?? "the plugin library"}.
-          </div>
+        )}
+
+        {unifiedRows.length === 0 ? (
+          <Card className="bg-muted/30">
+            <CardContent className="flex flex-col items-center justify-center py-10">
+              <Puzzle className="h-10 w-10 text-muted-foreground mb-4" />
+              <p className="text-sm font-medium">No plugins yet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Install one from the library above (once it loads), upload a .pcplugin, or
+                pull from npm.
+              </p>
+            </CardContent>
+          </Card>
         ) : (
           <ul className="divide-y rounded-md border bg-card">
-            {libraryQuery.data!.plugins.map((entry) => {
-              const inFlight =
+            {unifiedRows.map((row) => {
+              const installed = row.installedPlugin;
+              const lib = row.libraryEntry;
+              const installedVersion =
+                installed?.manifestJson.version ?? installed?.version ?? null;
+              const libraryVersion = lib?.version ?? null;
+              const upgradeAvailable = !!(
+                installed &&
+                lib &&
+                installedVersion &&
+                libraryVersion &&
+                installedVersion !== libraryVersion
+              );
+              const libraryInFlight =
                 installFromLibraryMutation.isPending &&
-                installFromLibraryMutation.variables === entry.id;
-              const isInstalled = entry.installed;
-              const upgrade = entry.upgradeAvailable;
+                installFromLibraryMutation.variables === row.pluginKey;
+
               return (
-                <li key={entry.id}>
-                  <div className="flex items-center gap-4 px-4 py-3">
+                <li key={row.pluginKey}>
+                  <div className="flex items-start gap-4 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">
-                          {entry.displayName ?? entry.id}
-                        </span>
-                        <Badge variant="outline">v{entry.version}</Badge>
-                        {isInstalled && !upgrade && (
-                          <Badge
-                            variant="default"
-                            className="bg-green-600 hover:bg-green-700"
+                        {installed ? (
+                          <Link
+                            to={`/instance/settings/plugins/${installed.id}`}
+                            className="font-medium hover:underline truncate block"
+                            title={row.displayName}
                           >
-                            Installed
-                          </Badge>
+                            {row.displayName}
+                          </Link>
+                        ) : (
+                          <span className="font-medium">{row.displayName}</span>
                         )}
-                        {isInstalled && upgrade && (
+                        {installedVersion && (
+                          <Badge variant="outline">v{installedVersion}</Badge>
+                        )}
+                        {!installed && libraryVersion && (
+                          <Badge variant="outline">v{libraryVersion}</Badge>
+                        )}
+                        {installed && installed.packageName &&
+                          examplePackageNames.has(installed.packageName) && (
+                            <Badge variant="outline">Example</Badge>
+                          )}
+                        {installed ? (
+                          <Badge
+                            variant={
+                              installed.status === "ready"
+                                ? "default"
+                                : installed.status === "error"
+                                  ? "destructive"
+                                  : "secondary"
+                            }
+                            className={cn(
+                              "shrink-0",
+                              installed.status === "ready" ? "bg-green-600 hover:bg-green-700" : "",
+                            )}
+                          >
+                            {installed.status}
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">Not installed</Badge>
+                        )}
+                        {upgradeAvailable && (
                           <Badge variant="secondary">
-                            Update available (you have v{entry.installedVersion})
+                            Update available (v{libraryVersion})
                           </Badge>
                         )}
-                        {!isInstalled && <Badge variant="secondary">Not installed</Badge>}
+                        {!installed && !lib && (
+                          <Badge variant="outline">Local only</Badge>
+                        )}
                       </div>
-                      {entry.description && (
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          {entry.description}
-                        </p>
-                      )}
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {entry.id}
-                        {typeof entry.sizeBytes === "number" &&
-                          ` · ${Math.round(entry.sizeBytes / 1024)} KB`}
-                        {entry.author && ` · ${entry.author}`}
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                        {row.pluginKey}
+                        {row.packageName && row.packageName !== row.pluginKey &&
+                          ` · ${row.packageName}`}
+                        {lib?.author && ` · ${lib.author}`}
+                        {typeof lib?.sizeBytes === "number" &&
+                          ` · ${Math.round(lib.sizeBytes / 1024)} KB`}
                       </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {!isInstalled && (
-                        <Button
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => installFromLibraryMutation.mutate(entry.id)}
-                          disabled={inFlight}
-                        >
-                          <Download className="h-4 w-4" />
-                          {inFlight ? "Installing…" : "Install"}
-                        </Button>
+                      <p className="text-sm text-muted-foreground truncate mt-1">
+                        {row.description ?? "No description provided."}
+                      </p>
+                      {installed?.status === "error" && (
+                        <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/[0.06] px-3 py-2">
+                          <div className="flex flex-wrap items-start gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 text-sm font-medium text-red-700 dark:text-red-300">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                <span>Plugin error</span>
+                              </div>
+                              <p
+                                className="mt-1 text-sm text-red-700/90 dark:text-red-200/90 break-words"
+                                title={installed.lastError ?? undefined}
+                              >
+                                {errorSummaryByPluginId.get(installed.id)}
+                              </p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-500/30 bg-background/60 text-red-700 hover:bg-red-500/10 hover:text-red-800 dark:text-red-200 dark:hover:text-red-100"
+                              onClick={() => setErrorDetailsPlugin(installed)}
+                            >
+                              View full error
+                            </Button>
+                          </div>
+                        </div>
                       )}
-                      {isInstalled && upgrade && (
-                        <Button
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => installFromLibraryMutation.mutate(entry.id)}
-                          disabled={inFlight}
-                        >
-                          <RefreshCw className={cn("h-4 w-4", inFlight && "animate-spin")} />
-                          {inFlight ? "Updating…" : `Update to v${entry.version}`}
+                    </div>
+                    <div className="flex shrink-0 self-center flex-col items-end gap-2">
+                      <div className="flex items-center gap-2">
+                        {!installed && lib && (
+                          <Button
+                            size="sm"
+                            className="gap-2 bg-green-600 text-white hover:bg-green-700"
+                            onClick={() => installFromLibraryMutation.mutate(row.pluginKey)}
+                            disabled={libraryInFlight}
+                          >
+                            <Download className="h-4 w-4" />
+                            {libraryInFlight ? "Installing…" : "Install"}
+                          </Button>
+                        )}
+                        {installed && upgradeAvailable && (
+                          <Button
+                            size="sm"
+                            className="gap-2 bg-green-600 text-white hover:bg-green-700"
+                            onClick={() => installFromLibraryMutation.mutate(row.pluginKey)}
+                            disabled={libraryInFlight}
+                          >
+                            <RefreshCw className={cn("h-4 w-4", libraryInFlight && "animate-spin")} />
+                            {libraryInFlight ? "Updating…" : `Update to v${libraryVersion}`}
+                          </Button>
+                        )}
+                        {installed && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              className="h-8 w-8"
+                              title={installed.status === "ready" ? "Disable" : "Enable"}
+                              onClick={() => {
+                                if (installed.status === "ready") {
+                                  disableMutation.mutate(installed.id);
+                                } else {
+                                  enableMutation.mutate(installed.id);
+                                }
+                              }}
+                              disabled={enableMutation.isPending || disableMutation.isPending}
+                            >
+                              <Power
+                                className={cn(
+                                  "h-4 w-4",
+                                  installed.status === "ready" ? "text-green-600" : "",
+                                )}
+                              />
+                            </Button>
+                            {installed.packagePath && (
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                className="h-8 w-8"
+                                title="Reinstall from local path (re-reads the manifest after rebuild; preserves config and state)"
+                                onClick={() => reinstallMutation.mutate(installed.id)}
+                                disabled={reinstallMutation.isPending}
+                              >
+                                <RefreshCw
+                                  className={cn(
+                                    "h-4 w-4",
+                                    reinstallMutation.isPending &&
+                                      reinstallMutation.variables === installed.id &&
+                                      "animate-spin",
+                                  )}
+                                />
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              title="Uninstall"
+                              onClick={() => {
+                                setUninstallPluginId(installed.id);
+                                setUninstallPluginName(
+                                  installed.manifestJson.displayName ?? installed.packageName,
+                                );
+                              }}
+                              disabled={uninstallMutation.isPending}
+                            >
+                              <Trash className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                      {installed && (
+                        <Button variant="outline" size="sm" className="h-8" asChild>
+                          <Link to={`/instance/settings/plugins/${installed.id}`}>
+                            <Settings className="h-4 w-4" />
+                            Configure
+                          </Link>
                         </Button>
                       )}
                     </div>
@@ -468,6 +670,10 @@ export function PluginManager() {
               );
             })}
           </ul>
+        )}
+
+        {libraryQuery.isLoading && (
+          <div className="text-xs text-muted-foreground">Loading plugin library…</div>
         )}
       </section>
 
@@ -538,6 +744,7 @@ export function PluginManager() {
                       ) : (
                         <Button
                           size="sm"
+                          className="bg-green-600 text-white hover:bg-green-700"
                           disabled={installPending || installMutation.isPending}
                           onClick={() =>
                             installMutation.mutate({
@@ -558,156 +765,6 @@ export function PluginManager() {
         )}
       </section>
 
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Puzzle className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-base font-semibold">Installed Plugins</h2>
-        </div>
-
-        {!installedPlugins.length ? (
-          <Card className="bg-muted/30">
-            <CardContent className="flex flex-col items-center justify-center py-10">
-              <Puzzle className="h-10 w-10 text-muted-foreground mb-4" />
-              <p className="text-sm font-medium">No plugins installed</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Install a plugin to extend functionality.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <ul className="divide-y rounded-md border bg-card">
-            {installedPlugins.map((plugin) => (
-              <li key={plugin.id}>
-                <div className="flex items-start gap-4 px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Link
-                        to={`/instance/settings/plugins/${plugin.id}`}
-                        className="font-medium hover:underline truncate block"
-                        title={plugin.manifestJson.displayName ?? plugin.packageName}
-                      >
-                        {plugin.manifestJson.displayName ?? plugin.packageName}
-                      </Link>
-                      {examplePackageNames.has(plugin.packageName) && (
-                        <Badge variant="outline">Example</Badge>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate" title={plugin.packageName}>
-                        {plugin.packageName} · v{plugin.manifestJson.version ?? plugin.version}
-                      </p>
-                    </div>
-                    <p className="text-sm text-muted-foreground truncate mt-0.5" title={plugin.manifestJson.description}>
-                      {plugin.manifestJson.description || "No description provided."}
-                    </p>
-                    {plugin.status === "error" && (
-                      <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/[0.06] px-3 py-2">
-                        <div className="flex flex-wrap items-start gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-sm font-medium text-red-700 dark:text-red-300">
-                              <AlertTriangle className="h-4 w-4 shrink-0" />
-                              <span>Plugin error</span>
-                            </div>
-                            <p
-                              className="mt-1 text-sm text-red-700/90 dark:text-red-200/90 break-words"
-                              title={plugin.lastError ?? undefined}
-                            >
-                              {errorSummaryByPluginId.get(plugin.id)}
-                            </p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-red-500/30 bg-background/60 text-red-700 hover:bg-red-500/10 hover:text-red-800 dark:text-red-200 dark:hover:text-red-100"
-                            onClick={() => setErrorDetailsPlugin(plugin)}
-                          >
-                            View full error
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 self-center">
-                    <div className="flex flex-col items-end gap-2">
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant={
-                            plugin.status === "ready"
-                              ? "default"
-                              : plugin.status === "error"
-                                ? "destructive"
-                              : "secondary"
-                          }
-                          className={cn(
-                            "shrink-0",
-                            plugin.status === "ready" ? "bg-green-600 hover:bg-green-700" : ""
-                          )}
-                        >
-                          {plugin.status}
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="icon-sm"
-                          className="h-8 w-8"
-                          title={plugin.status === "ready" ? "Disable" : "Enable"}
-                          onClick={() => {
-                            if (plugin.status === "ready") {
-                              disableMutation.mutate(plugin.id);
-                            } else {
-                              enableMutation.mutate(plugin.id);
-                            }
-                          }}
-                          disabled={enableMutation.isPending || disableMutation.isPending}
-                        >
-                          <Power className={cn("h-4 w-4", plugin.status === "ready" ? "text-green-600" : "")} />
-                        </Button>
-                        {plugin.packagePath && (
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            className="h-8 w-8"
-                            title="Reinstall from local path (re-reads the manifest after rebuild; preserves config and state)"
-                            onClick={() => reinstallMutation.mutate(plugin.id)}
-                            disabled={reinstallMutation.isPending}
-                          >
-                            <RefreshCw
-                              className={cn(
-                                "h-4 w-4",
-                                reinstallMutation.isPending &&
-                                  reinstallMutation.variables === plugin.id &&
-                                  "animate-spin",
-                              )}
-                            />
-                          </Button>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="icon-sm"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          title="Uninstall"
-                          onClick={() => {
-                            setUninstallPluginId(plugin.id);
-                            setUninstallPluginName(plugin.manifestJson.displayName ?? plugin.packageName);
-                          }}
-                          disabled={uninstallMutation.isPending}
-                        >
-                          <Trash className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <Button variant="outline" size="sm" className="mt-2 h-8" asChild>
-                        <Link to={`/instance/settings/plugins/${plugin.id}`}>
-                          <Settings className="h-4 w-4" />
-                          Configure
-                        </Link>
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       <Dialog
         open={uninstallPluginId !== null}
