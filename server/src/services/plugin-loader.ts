@@ -109,6 +109,61 @@ export function getManagedPluginDir(pluginId: string, managedDir = DEFAULT_MANAG
   return path.join(managedDir, pluginId);
 }
 
+/**
+ * Compute the on-disk paths that uninstall should remove for `plugin`.
+ *
+ * Plugins can land in two managed locations depending on install source:
+ *
+ * - **npm installs** end up under `localPluginDir/node_modules/<packageName>`
+ *   (or `localPluginDir/<packageName>` for the legacy direct layout). Keyed
+ *   by the npm package name.
+ * - **Local-filesystem and `.pcplugin` installs** are extracted to
+ *   `managedPluginDir/<pluginKey>/` by `installPlugin`. Keyed by the
+ *   manifest id (a.k.a. plugin key), NOT the package name.
+ *
+ * Cleanup must cover both layouts; an earlier version only handled the npm
+ * one, which silently leaked `.pcplugin`-extracted directories on uninstall.
+ *
+ * Pure function — no filesystem access — so it can be unit-tested with
+ * synthetic plugin records.
+ *
+ * @internal exported for tests
+ */
+export function computeCleanupTargets(
+  plugin: Pick<PluginRecord, "pluginKey" | "packageName" | "packagePath">,
+  dirs: { localPluginDir: string; managedPluginDir: string },
+): Set<string> {
+  const { localPluginDir, managedPluginDir } = dirs;
+  const targets = new Set<string>();
+
+  // npm-managed install paths (under localPluginDir).
+  targets.add(resolveManagedInstallPackageDir(localPluginDir, plugin.packageName));
+  const directManagedDir = path.join(localPluginDir, plugin.packageName);
+  if (isPathInsideDir(directManagedDir, localPluginDir)) {
+    targets.add(directManagedDir);
+  }
+
+  // Local-filesystem and .pcplugin installs land under managedPluginDir,
+  // keyed by pluginKey. Guard with isPathInsideDir so a malformed pluginKey
+  // can't escape the managed root.
+  const managedKeyedDir = getManagedPluginDir(plugin.pluginKey, managedPluginDir);
+  if (isPathInsideDir(managedKeyedDir, managedPluginDir)) {
+    targets.add(managedKeyedDir);
+  }
+
+  // packagePath may be set to either layout depending on install source;
+  // accept it if it sits inside either managed root.
+  if (
+    plugin.packagePath &&
+    (isPathInsideDir(plugin.packagePath, localPluginDir) ||
+      isPathInsideDir(plugin.packagePath, managedPluginDir))
+  ) {
+    targets.add(path.resolve(plugin.packagePath));
+  }
+
+  return targets;
+}
+
 const DEV_TSX_LOADER_PATH = path.resolve(__dirname, "../../../cli/node_modules/tsx/dist/loader.mjs");
 
 // ---------------------------------------------------------------------------
@@ -912,9 +967,27 @@ export function pluginLoader(
     if (!pkgJson) throw new Error(`Missing package.json at ${resolvedPackagePath}`);
 
     const manifestPath = resolveManifestPath(resolvedPackagePath, pkgJson);
-    if (!manifestPath || !existsSync(manifestPath)) {
+    if (!manifestPath) {
       throw new Error(
-        `Package ${resolvedPackageName} at ${resolvedPackagePath} does not appear to be a Paperclip plugin (no manifest found).`,
+        `Package ${resolvedPackageName} at ${resolvedPackagePath} does not appear to be a Paperclip plugin: package.json has no \`paperclipPlugin.manifest\` field.`,
+      );
+    }
+    if (!existsSync(manifestPath)) {
+      // package.json points at a manifest path, but the file isn't there.
+      // Most common cause: the plugin source is checked in but `dist/` hasn't
+      // been built yet (e.g. clicking "Install Example" before the example
+      // was compiled). Surface a directive instead of the generic
+      // "no manifest found" so the operator knows what to do.
+      const buildScript =
+        pkgJson.scripts && typeof pkgJson.scripts === "object"
+          ? (pkgJson.scripts as Record<string, unknown>).build
+          : undefined;
+      const buildHint =
+        typeof buildScript === "string" && buildScript.length > 0
+          ? `Run \`pnpm --filter ${resolvedPackageName} build\` from the paperclip root, or \`pnpm build\` inside the package, then click Install again.`
+          : `The package has no \`build\` script — verify the manifest path in package.json is correct.`;
+      throw new Error(
+        `Plugin ${resolvedPackageName} is missing its built manifest at ${manifestPath}. ${buildHint}`,
       );
     }
 
@@ -1488,17 +1561,10 @@ export function pluginLoader(
     // -----------------------------------------------------------------------
 
     async cleanupInstallArtifacts(plugin: PluginRecord): Promise<void> {
-      const managedTargets = new Set<string>();
-      const managedNodeModulesDir = resolveManagedInstallPackageDir(localPluginDir, plugin.packageName);
-      const directManagedDir = path.join(localPluginDir, plugin.packageName);
-
-      managedTargets.add(managedNodeModulesDir);
-      if (isPathInsideDir(directManagedDir, localPluginDir)) {
-        managedTargets.add(directManagedDir);
-      }
-      if (plugin.packagePath && isPathInsideDir(plugin.packagePath, localPluginDir)) {
-        managedTargets.add(path.resolve(plugin.packagePath));
-      }
+      const managedTargets = computeCleanupTargets(plugin, {
+        localPluginDir,
+        managedPluginDir,
+      });
 
       const packageJsonPath = path.join(localPluginDir, "package.json");
       if (existsSync(packageJsonPath)) {

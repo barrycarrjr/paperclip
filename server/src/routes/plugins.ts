@@ -183,6 +183,12 @@ function listBundledPluginExamples(): AvailablePluginExample[] {
   return BUNDLED_PLUGIN_EXAMPLES.flatMap((plugin) => {
     const absoluteLocalPath = path.resolve(REPO_ROOT, plugin.localPath);
     if (!existsSync(absoluteLocalPath)) return [];
+    // Only surface examples whose built manifest is present. Otherwise
+    // clicking "Install Example" produces a confusing error since the install
+    // pipeline can't resolve the manifest. Operators can build an unbuilt
+    // example with `pnpm --filter <package> build` and refresh.
+    const distManifestPath = path.join(absoluteLocalPath, "dist", "manifest.js");
+    if (!existsSync(distManifestPath)) return [];
     return [{ ...plugin, localPath: absoluteLocalPath }];
   });
 }
