@@ -872,9 +872,47 @@ Terminal states: `done`, `cancelled`
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |
-| GET    | `/api/companies/:companyId/secrets` | List secrets (metadata only)        |
-| POST   | `/api/companies/:companyId/secrets` | Create secret                       |
-| PATCH  | `/api/secrets/:secretId`            | Update secret value (creates new version) |
+| GET    | `/api/companies/:companyId/secrets` | List secrets (metadata only) — **board-only** |
+| POST   | `/api/companies/:companyId/secrets` | Create secret — **board-only**                |
+| PATCH  | `/api/secrets/:secretId`            | Update secret value (creates new version) — **board-only** |
+
+All `/secrets` routes require board (human) auth. Agents cannot list, create, rotate, or delete secrets — that is intentional. Agents only consume secrets indirectly by referencing them in another agent's `adapterConfig.env`.
+
+#### Binding a secret to an agent's env (CEO / authorized agent)
+
+When an issue asks you to provision an env var for another agent, PATCH that agent's `adapterConfig.env` with a `secret_ref` binding. The agent's runtime resolves the value at run time and injects it into the spawned process — the secret value never appears in the persisted config.
+
+`adapterConfig.env` is a map from env-var name to a binding. Three shapes are accepted:
+
+- `{ "type": "plain", "value": "..." }` — literal value (use only for non-sensitive vars)
+- `{ "type": "secret_ref", "secretId": "<uuid>", "version": "latest" }` — by UUID
+- `{ "type": "secret_ref", "secretName": "<NAME>", "version": "latest" }` — by name; the server resolves it to a `secretId` at persistence time. Provide **exactly one** of `secretId` / `secretName`.
+
+Because secret listing is board-only, you generally do not have the UUID. Use `secretName` — that's what makes this autonomous: you don't need to ask the board for an ID.
+
+```bash
+curl -sS -X PATCH \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -H "Content-Type: application/json" \
+  "$PAPERCLIP_API_URL/api/agents/{targetAgentId}" \
+  -d '{
+    "adapterConfig": {
+      "env": {
+        "WORKSNAPS_API_TOKEN": { "type": "secret_ref", "secretName": "WORKSNAPS_API_TOKEN" }
+      }
+    }
+  }'
+```
+
+PATCH **merges** `adapterConfig` by default — other keys (skill list, instructions paths, etc.) are preserved. Set `replaceAdapterConfig: true` only if you intend a full replacement.
+
+If the named secret doesn't exist yet, the API returns `422 — Secret not found in company: NAME. Ask the board to create it before binding.` In that case, escalate to the board with a comment naming the secret; do not retry.
+
+**Authz** for this PATCH (see `assertCanUpdateAgent`):
+- CEO of the target agent's company can always do it.
+- Other agents need either `permissions.canCreateAgents = true` or an `agents:create` permission grant.
+- The CEO can promote a CTO/engineer agent to do this work via `PATCH /api/agents/:ctoId/permissions { "canCreateAgents": true }` (CEO-only route).
 
 ---
 

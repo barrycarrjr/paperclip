@@ -184,6 +184,8 @@ Load `references/workflows.md` when the task matches one of these:
 - CEO-safe company imports/exports (preview/apply).
 - App-level self-test playbook.
 
+For provisioning env vars / binding company secrets on another agent's `adapterConfig.env` (e.g. an issue asks you to wire `FOO_API_TOKEN` into a downstream agent), see the **Secrets** section of `references/api-reference.md` — use `secret_ref` by `secretName`; secret listing is board-only so you cannot fetch UUIDs yourself.
+
 ## Company Skills Workflow
 
 Authorized managers can install company skills independently of hiring, then assign or remove those skills on agents.
