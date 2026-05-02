@@ -854,7 +854,7 @@ function loadCompaniesOnce(): Promise<Company[]> {
  * checkbox plus one checkbox per company. Stores `["*"]` for portfolio-wide
  * or specific UUIDs otherwise.
  */
-const CompanyMultiSelectField = React.memo(({
+export const CompanyMultiSelectField = React.memo(({
   value,
   onChange,
   disabled,

@@ -305,6 +305,22 @@ export type {
   CompanyPortabilityExportRequest,
 } from "./company-portability.js";
 export type {
+  ExternalMcpTransport,
+  ExternalMcpBindings,
+  ExternalMcpServerRecord,
+  ExternalMcpToolPreview,
+  ExternalMcpTestConnectResult,
+} from "./external-mcp.js";
+export {
+  EXTERNAL_MCP_TRANSPORTS,
+  EXTERNAL_MCP_MUTATION_PREFIXES,
+  EXTERNAL_MCP_TOOL_NAMESPACE,
+  PORTFOLIO_WIDE_COMPANY_TOKEN,
+  isLikelyMutationToolName,
+  isPortfolioWide,
+  isCompanyAllowed,
+} from "./external-mcp.js";
+export type {
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,

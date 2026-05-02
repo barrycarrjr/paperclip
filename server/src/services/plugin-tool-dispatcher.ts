@@ -38,6 +38,9 @@ import {
   type ToolExecutionResult,
 } from "./plugin-tool-registry.js";
 import { pluginRegistryService } from "./plugin-registry.js";
+import type { ExternalMcpToolSource } from "./external-mcp-tool-source.js";
+import type { ExternalMcpServerManager } from "./external-mcp-server-manager.js";
+import { EXTERNAL_MCP_TOOL_NAMESPACE, isCompanyAllowed } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +77,28 @@ export interface PluginToolDispatcherOptions {
   lifecycleManager?: PluginLifecycleManager;
   /** Database connection for looking up plugin records. */
   db?: Db;
+  /**
+   * External MCP tool source — supplies tools from operator-registered
+   * external MCP servers. Optional; when omitted, only plugin tools surface.
+   */
+  externalMcpToolSource?: ExternalMcpToolSource;
+  /**
+   * External MCP server manager — handles `tools/call` for `mcp:*`
+   * namespaced tool names. Required if `externalMcpToolSource` is provided.
+   */
+  externalMcpServerManager?: ExternalMcpServerManager;
+}
+
+/**
+ * Filter shape extended to support per-company external MCP tool listing.
+ */
+export interface AgentToolListFilter extends ToolListFilter {
+  /**
+   * If provided, also include tools from external MCP servers whose
+   * `allowedCompanies` includes this company. Plugin tools are unaffected
+   * (plugin company-scoping is enforced elsewhere).
+   */
+  companyId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,12 +137,14 @@ export interface PluginToolDispatcher {
   /**
    * List all available tools for agents, optionally filtered.
    *
-   * Returns tool descriptors in an agent-friendly format.
+   * Returns tool descriptors in an agent-friendly format. Plugin tools are
+   * always included; external MCP tools are included when `filter.companyId`
+   * is provided and the server's `allowedCompanies` matches.
    *
    * @param filter - Optional filter criteria
    * @returns Array of agent tool descriptors
    */
-  listToolsForAgent(filter?: ToolListFilter): AgentToolDescriptor[];
+  listToolsForAgent(filter?: AgentToolListFilter): Promise<AgentToolDescriptor[]>;
 
   /**
    * Look up a tool by its namespaced name.
@@ -210,7 +237,7 @@ export interface PluginToolDispatcher {
  * await dispatcher.initialize();
  *
  * // In agent service — list tools for prompt construction
- * const tools = dispatcher.listToolsForAgent();
+ * const tools = await dispatcher.listToolsForAgent({ companyId });
  *
  * // In agent service — execute a tool
  * const result = await dispatcher.executeTool(
@@ -223,11 +250,28 @@ export interface PluginToolDispatcher {
 export function createPluginToolDispatcher(
   options: PluginToolDispatcherOptions = {},
 ): PluginToolDispatcher {
-  const { workerManager, lifecycleManager, db } = options;
+  const {
+    workerManager,
+    lifecycleManager,
+    db,
+    externalMcpToolSource,
+    externalMcpServerManager,
+  } = options;
   const log = logger.child({ service: "plugin-tool-dispatcher" });
+
+  if (externalMcpToolSource && !externalMcpServerManager) {
+    throw new Error(
+      "createPluginToolDispatcher: externalMcpServerManager is required when externalMcpToolSource is provided",
+    );
+  }
 
   // Create the underlying tool registry, backed by the worker manager
   const registry = createPluginToolRegistry(workerManager);
+
+  const externalMcpPrefix = `${EXTERNAL_MCP_TOOL_NAMESPACE}:`;
+  function isExternalMcpName(name: string): boolean {
+    return name.startsWith(externalMcpPrefix);
+  }
 
   // Track lifecycle event listeners so we can remove them on teardown
   let enabledListener: ((payload: { pluginId: string; pluginKey: string }) => void) | null = null;
@@ -386,8 +430,33 @@ export function createPluginToolDispatcher(
       log.info("plugin tool dispatcher torn down");
     },
 
-    listToolsForAgent(filter?: ToolListFilter): AgentToolDescriptor[] {
-      return registry.listTools(filter).map(toAgentDescriptor);
+    async listToolsForAgent(filter?: AgentToolListFilter): Promise<AgentToolDescriptor[]> {
+      const pluginDescriptors = registry.listTools(filter).map(toAgentDescriptor);
+
+      if (!externalMcpToolSource || !filter?.companyId) {
+        return pluginDescriptors;
+      }
+
+      try {
+        const mcpTools = await externalMcpToolSource.listToolsForCompany(filter.companyId);
+        const mcpDescriptors: AgentToolDescriptor[] = mcpTools.map((tool) => ({
+          name: tool.namespacedName,
+          displayName: tool.name,
+          description: tool.description,
+          parametersSchema: tool.parametersSchema,
+          pluginId: `${EXTERNAL_MCP_TOOL_NAMESPACE}:${tool.serverKey}`,
+        }));
+        return [...pluginDescriptors, ...mcpDescriptors];
+      } catch (err) {
+        log.warn(
+          {
+            companyId: filter.companyId,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "external mcp tool source failed; returning plugin tools only",
+        );
+        return pluginDescriptors;
+      }
     },
 
     getTool(namespacedName: string): RegisteredTool | null {
@@ -407,6 +476,74 @@ export function createPluginToolDispatcher(
         },
         "dispatching tool execution",
       );
+
+      // Route external MCP tools through the connector manager.
+      if (isExternalMcpName(namespacedName)) {
+        if (!externalMcpToolSource || !externalMcpServerManager) {
+          throw new Error(
+            `Cannot execute MCP tool "${namespacedName}" — external MCP support is not configured on this dispatcher.`,
+          );
+        }
+        const parsed = externalMcpToolSource.parseNamespacedName(namespacedName);
+        if (!parsed) {
+          throw new Error(
+            `Invalid MCP tool name "${namespacedName}". Expected format: "${EXTERNAL_MCP_TOOL_NAMESPACE}:<serverKey>:<toolName>"`,
+          );
+        }
+        const server = await externalMcpServerManager.getServerByKey(parsed.serverKey);
+        if (!server) {
+          throw new Error(`MCP server "${parsed.serverKey}" not found`);
+        }
+        if (!runContext.companyId) {
+          throw new Error(`Cannot execute MCP tool "${namespacedName}" — runContext.companyId is required`);
+        }
+        if (!isCompanyAllowed(server.allowedCompanies, runContext.companyId)) {
+          throw new Error(
+            `[ECOMPANY_NOT_ALLOWED] Company ${runContext.companyId} cannot call MCP server "${server.key}"`,
+          );
+        }
+        const callResult = await externalMcpServerManager.callTool(
+          server.id,
+          runContext.companyId,
+          parsed.toolName,
+          parameters,
+        );
+        // MCP tool results carry an array of content blocks; the plugin
+        // ToolResult shape carries a single string. Flatten text blocks into
+        // `content` and preserve the original blocks under `data` for any
+        // caller that wants structured access (e.g. images, resource links).
+        const flatContent = Array.isArray(callResult.content)
+          ? callResult.content
+              .map((block: unknown) => {
+                if (block && typeof block === "object" && "type" in block) {
+                  const b = block as { type: string; text?: string };
+                  if (b.type === "text" && typeof b.text === "string") return b.text;
+                }
+                return "";
+              })
+              .filter(Boolean)
+              .join("\n")
+          : "";
+        const result: ToolResult = {
+          content: flatContent,
+          data: callResult.content,
+          ...(callResult.isError ? { error: "tool reported isError=true" } : {}),
+        };
+        log.debug(
+          {
+            tool: namespacedName,
+            serverKey: server.key,
+            toolName: parsed.toolName,
+            hasError: callResult.isError,
+          },
+          "external mcp tool execution completed",
+        );
+        return {
+          pluginId: `${EXTERNAL_MCP_TOOL_NAMESPACE}:${server.key}`,
+          toolName: parsed.toolName,
+          result,
+        };
+      }
 
       const result = await registry.executeTool(
         namespacedName,

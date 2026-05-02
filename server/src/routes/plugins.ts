@@ -747,8 +747,9 @@ export function pluginRoutes(
     }
 
     const pluginId = req.query.pluginId as string | undefined;
-    const filter = pluginId ? { pluginId } : undefined;
-    const tools = toolDeps.toolDispatcher.listToolsForAgent(filter);
+    const companyId = req.query.companyId as string | undefined;
+    const filter = pluginId || companyId ? { pluginId, companyId } : undefined;
+    const tools = await toolDeps.toolDispatcher.listToolsForAgent(filter);
     res.json(tools);
   });
 

@@ -270,6 +270,13 @@ export {
 } from "./secret.js";
 
 export {
+  createExternalMcpServerSchema,
+  updateExternalMcpServerSchema,
+  type CreateExternalMcpServer,
+  type UpdateExternalMcpServer,
+} from "./external-mcp.js";
+
+export {
   createRoutineSchema,
   updateRoutineSchema,
   createRoutineTriggerSchema,

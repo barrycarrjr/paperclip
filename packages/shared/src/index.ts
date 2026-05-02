@@ -510,6 +510,20 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  ExternalMcpTransport,
+  ExternalMcpBindings,
+  ExternalMcpServerRecord,
+  ExternalMcpToolPreview,
+  ExternalMcpTestConnectResult,
+} from "./types/index.js";
+export {
+  EXTERNAL_MCP_TRANSPORTS,
+  EXTERNAL_MCP_MUTATION_PREFIXES,
+  EXTERNAL_MCP_TOOL_NAMESPACE,
+  PORTFOLIO_WIDE_COMPANY_TOKEN,
+  isLikelyMutationToolName,
+  isPortfolioWide,
+  isCompanyAllowed,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
@@ -729,6 +743,10 @@ export {
   type RequestApprovalRevision,
   type ResubmitApproval,
   type AddApprovalComment,
+  createExternalMcpServerSchema,
+  updateExternalMcpServerSchema,
+  type CreateExternalMcpServer,
+  type UpdateExternalMcpServer,
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,
