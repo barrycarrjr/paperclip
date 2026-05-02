@@ -3,6 +3,8 @@ title: Secrets
 summary: Secrets CRUD
 ---
 
+> For the conceptual model — how vault entries get bound to agents, plugins, environments, and scheduled tasks — see the [Managing Secrets](../guides/board-operator/managing-secrets.md) guide. This page is the REST reference.
+
 Manage encrypted secrets that agents reference in their environment configuration.
 
 ## List Secrets

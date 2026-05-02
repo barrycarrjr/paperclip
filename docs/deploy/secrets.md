@@ -3,6 +3,8 @@ title: Secrets Management
 summary: Master key, encryption, and strict mode
 ---
 
+> Looking for the conceptual overview of how secrets reach agents and plugins? See the board-operator guide on [Managing Secrets](../guides/board-operator/managing-secrets.md). This page covers the deploy-side details (encryption, master key, strict mode).
+
 Paperclip encrypts secrets at rest using a local master key. Agent environment variables that contain sensitive values (API keys, tokens) are stored as encrypted secret references.
 
 ## Default Provider: `local_encrypted`

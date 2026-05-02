@@ -80,12 +80,8 @@ describe("EnvVarEditor", () => {
     expect(container.textContent).not.toContain("New");
     expect(container.textContent).toContain("Company Settings > Secrets");
 
-    const keyInput = container.querySelector("input[placeholder='KEY']") as HTMLInputElement;
     const sourceSelect = container.querySelector("select") as HTMLSelectElement;
 
-    await act(async () => {
-      setInputValue(keyInput, "OPENAI_API_KEY");
-    });
     await act(async () => {
       setSelectValue(sourceSelect, "secret");
     });
@@ -98,6 +94,65 @@ describe("EnvVarEditor", () => {
     await act(async () => {
       setSelectValue(secretSelect, "secret-1");
     });
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      OPENAI_API_KEY: {
+        type: "secret_ref",
+        secretId: "secret-1",
+        version: "latest",
+      },
+    } satisfies Record<string, EnvBinding>);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("makes the KEY input read-only when source=secret and derives it from the chosen secret", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const onChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <EnvVarEditor
+          value={{}}
+          secrets={[secret]}
+          onChange={onChange}
+        />,
+      );
+    });
+
+    const keyInput = container.querySelector("input[placeholder='KEY']") as HTMLInputElement;
+    const sourceSelect = container.querySelector("select") as HTMLSelectElement;
+
+    // Type something in the KEY input while source is plain — it should land.
+    await act(async () => {
+      setInputValue(keyInput, "MANUALLY_TYPED");
+    });
+    expect(keyInput.value).toBe("MANUALLY_TYPED");
+    expect(keyInput.readOnly).toBe(false);
+
+    // Switch source to secret — KEY should clear and become read-only.
+    await act(async () => {
+      setSelectValue(sourceSelect, "secret");
+    });
+
+    const keyInputAfterSwitch = container.querySelector("input[placeholder='KEY']") as HTMLInputElement;
+    expect(keyInputAfterSwitch.readOnly).toBe(true);
+    expect(keyInputAfterSwitch.value).toBe("");
+
+    // Pick a secret — KEY should auto-fill to the secret's name.
+    const selects = container.querySelectorAll("select");
+    const secretSelect = selects[1] as HTMLSelectElement;
+    await act(async () => {
+      setSelectValue(secretSelect, "secret-1");
+    });
+
+    const keyInputAfterPick = container.querySelector("input[placeholder='KEY']") as HTMLInputElement;
+    expect(keyInputAfterPick.value).toBe("OPENAI_API_KEY");
+    expect(keyInputAfterPick.readOnly).toBe(true);
 
     expect(onChange).toHaveBeenLastCalledWith({
       OPENAI_API_KEY: {
