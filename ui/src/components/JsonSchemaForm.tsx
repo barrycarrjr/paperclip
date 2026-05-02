@@ -940,28 +940,34 @@ export const CompanyMultiSelectField = React.memo(({
             </p>
           ) : (
             <div className="space-y-1.5">
-              {companies.map((c) => {
-                const checked = allSelected || selected.includes(c.id);
-                return (
-                  <div key={c.id} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`company-${c.id}`}
-                      checked={checked}
-                      onCheckedChange={(v) => toggleCompany(c.id, v === true)}
-                      disabled={disabled || allSelected}
-                    />
-                    <Label
-                      htmlFor={`company-${c.id}`}
-                      className={cn(
-                        "cursor-pointer text-sm",
-                        allSelected && "text-muted-foreground",
-                      )}
-                    >
-                      {c.name}
-                    </Label>
-                  </div>
-                );
-              })}
+              {companies
+                .filter((c) => c.status !== "archived" || selected.includes(c.id))
+                .map((c) => {
+                  const checked = allSelected || selected.includes(c.id);
+                  const isArchived = c.status === "archived";
+                  return (
+                    <div key={c.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`company-${c.id}`}
+                        checked={checked}
+                        onCheckedChange={(v) => toggleCompany(c.id, v === true)}
+                        disabled={disabled || allSelected}
+                      />
+                      <Label
+                        htmlFor={`company-${c.id}`}
+                        className={cn(
+                          "cursor-pointer text-sm",
+                          (allSelected || isArchived) && "text-muted-foreground",
+                        )}
+                      >
+                        {c.name}
+                        {isArchived && (
+                          <span className="ml-1.5 text-xs">(archived)</span>
+                        )}
+                      </Label>
+                    </div>
+                  );
+                })}
             </div>
           )}
         </div>
