@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { logger } from "../middleware/logger.js";
+import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
 
 // Canonical (Anthropic-shape) content blocks. Both providers translate
@@ -1033,6 +1034,19 @@ class AdapterExecuteProvider implements ChatProvider {
     // is not a real registered agent.
     const executePromise = (async () => {
       const runId = randomId();
+      const authToken = adapter.supportsLocalAgentJwt
+        ? createLocalAgentJwt(`clippy-${ctx.sessionId}`, ctx.companyId ?? "", decoded.adapterType, runId)
+        : null;
+      if (adapter.supportsLocalAgentJwt && !authToken) {
+        logger.warn(
+          {
+            companyId: ctx.companyId,
+            sessionId: ctx.sessionId,
+            adapterType: decoded.adapterType,
+          },
+          "local agent jwt secret missing or invalid; Clippy running without injected PAPERCLIP_API_KEY",
+        );
+      }
       const config: Record<string, unknown> = {
         model: decoded.modelId,
         // claude-local-specific defaults; harmless for other adapters since
@@ -1074,6 +1088,7 @@ class AdapterExecuteProvider implements ChatProvider {
           config,
           context: adapterContext,
           onLog,
+          authToken: authToken ?? undefined,
         } as Parameters<typeof adapter.execute>[0]);
         return result;
       } catch (err) {
