@@ -738,68 +738,70 @@ export function PluginManager() {
                       <p className="mt-1 text-sm text-muted-foreground">{example.description}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{example.packageName}</p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex shrink-0 self-center flex-col items-end gap-2">
                       {installedPlugin ? (
                         <>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            className="h-8 w-8"
-                            title={installedPlugin.status === "ready" ? "Disable" : "Enable"}
-                            onClick={() => {
-                              if (installedPlugin.status === "ready") {
-                                disableMutation.mutate(installedPlugin.id);
-                              } else {
-                                enableMutation.mutate(installedPlugin.id);
-                              }
-                            }}
-                            disabled={enableMutation.isPending || disableMutation.isPending}
-                          >
-                            <Power
-                              className={cn(
-                                "h-4 w-4",
-                                installedPlugin.status === "ready" ? "text-green-600" : "",
-                              )}
-                            />
-                          </Button>
-                          {installedPlugin.packagePath && (
+                          <div className="flex items-center gap-2">
                             <Button
                               variant="outline"
                               size="icon-sm"
                               className="h-8 w-8"
-                              title="Reinstall from local path"
-                              onClick={() => reinstallMutation.mutate(installedPlugin.id)}
-                              disabled={reinstallMutation.isPending}
+                              title={installedPlugin.status === "ready" ? "Disable" : "Enable"}
+                              onClick={() => {
+                                if (installedPlugin.status === "ready") {
+                                  disableMutation.mutate(installedPlugin.id);
+                                } else {
+                                  enableMutation.mutate(installedPlugin.id);
+                                }
+                              }}
+                              disabled={enableMutation.isPending || disableMutation.isPending}
                             >
-                              <RefreshCw
+                              <Power
                                 className={cn(
                                   "h-4 w-4",
-                                  reinstallMutation.isPending &&
-                                    reinstallMutation.variables === installedPlugin.id &&
-                                    "animate-spin",
+                                  installedPlugin.status === "ready" ? "text-green-600" : "",
                                 )}
                               />
                             </Button>
-                          )}
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            title="Uninstall"
-                            onClick={() => {
-                              setUninstallPluginId(installedPlugin.id);
-                              setUninstallPluginName(
-                                installedPlugin.manifestJson.displayName ?? installedPlugin.packageName,
-                              );
-                            }}
-                            disabled={uninstallMutation.isPending}
-                          >
-                            <Trash className="h-4 w-4" />
-                          </Button>
+                            {installedPlugin.packagePath && (
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                className="h-8 w-8"
+                                title="Reinstall from local path"
+                                onClick={() => reinstallMutation.mutate(installedPlugin.id)}
+                                disabled={reinstallMutation.isPending}
+                              >
+                                <RefreshCw
+                                  className={cn(
+                                    "h-4 w-4",
+                                    reinstallMutation.isPending &&
+                                      reinstallMutation.variables === installedPlugin.id &&
+                                      "animate-spin",
+                                  )}
+                                />
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              title="Uninstall"
+                              onClick={() => {
+                                setUninstallPluginId(installedPlugin.id);
+                                setUninstallPluginName(
+                                  installedPlugin.manifestJson.displayName ?? installedPlugin.packageName,
+                                );
+                              }}
+                              disabled={uninstallMutation.isPending}
+                            >
+                              <Trash className="h-4 w-4" />
+                            </Button>
+                          </div>
                           <Button variant="outline" size="sm" className="h-8" asChild>
                             <Link to={`/instance/settings/plugins/${installedPlugin.id}`}>
                               <Settings className="h-4 w-4" />
-                              {installedPlugin.status === "ready" ? "Open Settings" : "Review"}
+                              Configure
                             </Link>
                           </Button>
                         </>
