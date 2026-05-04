@@ -75,6 +75,7 @@ export const updateAgentSchema = createAgentSchema
   .partial()
   .extend({
     permissions: z.never().optional(),
+    forbiddenWritePaths: z.never().optional(),
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),
@@ -134,3 +135,14 @@ export const updateAgentPermissionsSchema = z.object({
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
+
+export const FORBIDDEN_WRITE_PATH_MAX_ENTRIES = 256;
+export const FORBIDDEN_WRITE_PATH_MAX_LENGTH = 256;
+
+export const updateAgentForbiddenWritePathsSchema = z.object({
+  paths: z
+    .array(z.string().trim().min(1).max(FORBIDDEN_WRITE_PATH_MAX_LENGTH))
+    .max(FORBIDDEN_WRITE_PATH_MAX_ENTRIES),
+});
+
+export type UpdateAgentForbiddenWritePaths = z.infer<typeof updateAgentForbiddenWritePathsSchema>;

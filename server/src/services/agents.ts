@@ -564,6 +564,23 @@ export function agentService(db: Db) {
       return updated ? normalizeAgentRow(updated) : null;
     },
 
+    updateForbiddenWritePaths: async (id: string, paths: string[]) => {
+      const existing = await getById(id);
+      if (!existing) return null;
+
+      const updated = await db
+        .update(agents)
+        .set({
+          forbiddenWritePaths: paths,
+          updatedAt: new Date(),
+        })
+        .where(eq(agents.id, id))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+
+      return updated ? normalizeAgentRow(updated) : null;
+    },
+
     listConfigRevisions: async (id: string) =>
       db
         .select()

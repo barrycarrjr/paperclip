@@ -24,6 +24,7 @@ const baseAgent = {
   pauseReason: null,
   pausedAt: null,
   permissions: { canCreateAgents: false },
+  forbiddenWritePaths: [],
   lastHeartbeatAt: null,
   metadata: null,
   createdAt: new Date("2026-03-19T00:00:00.000Z"),
@@ -37,6 +38,7 @@ const mockAgentService = vi.hoisted(() => ({
   activatePendingApproval: vi.fn(),
   update: vi.fn(),
   updatePermissions: vi.fn(),
+  updateForbiddenWritePaths: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
 }));
@@ -291,6 +293,7 @@ describe.sequential("agent permission routes", () => {
     mockAgentService.activatePendingApproval.mockReset();
     mockAgentService.update.mockReset();
     mockAgentService.updatePermissions.mockReset();
+    mockAgentService.updateForbiddenWritePaths.mockReset();
     mockAgentService.getChainOfCommand.mockReset();
     mockAgentService.resolveByReference.mockReset();
     mockAccessService.canUser.mockReset();
@@ -333,6 +336,7 @@ describe.sequential("agent permission routes", () => {
     });
     mockAgentService.update.mockResolvedValue(baseAgent);
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
+    mockAgentService.updateForbiddenWritePaths.mockResolvedValue(baseAgent);
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(false);
     mockAccessService.getMembership.mockResolvedValue({
@@ -1193,5 +1197,175 @@ describe.sequential("agent permission routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+  });
+
+  describe("forbidden-paths endpoint", () => {
+    it("allows instance-admin user to update forbidden write paths", async () => {
+      const updatedAgent = { ...baseAgent, forbiddenWritePaths: ["server/src/routes/agents.ts", "plugins/slack-tools/**"] };
+      mockAgentService.updateForbiddenWritePaths.mockResolvedValue(updatedAgent);
+
+      const app = await createApp({
+        type: "board",
+        userId: "barry",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: ["server/src/routes/agents.ts", "plugins/slack-tools/**"] }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.forbiddenWritePaths).toEqual([
+        "server/src/routes/agents.ts",
+        "plugins/slack-tools/**",
+      ]);
+      expect(mockAgentService.updateForbiddenWritePaths).toHaveBeenCalledWith(agentId, [
+        "server/src/routes/agents.ts",
+        "plugins/slack-tools/**",
+      ]);
+      expect(mockLogActivity).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "agent.forbidden_write_paths_updated",
+          entityId: agentId,
+          details: expect.objectContaining({
+            beforeCount: 0,
+            afterCount: 2,
+          }),
+        }),
+      );
+    });
+
+    it("allows local_implicit board to update forbidden write paths", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "local-board",
+        source: "local_implicit",
+        companyIds: [],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: ["plugins/slack-tools/**"] }));
+
+      expect(res.status).toBe(200);
+      expect(mockAgentService.updateForbiddenWritePaths).toHaveBeenCalled();
+    });
+
+    it("blocks CEO of agent's company from updating forbidden write paths (instance-admin only)", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "company-ceo-user",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: [companyId],
+        memberships: [{ companyId, membershipRole: "owner", status: "active" }],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: ["plugins/slack-tools/**"] }));
+
+      expect(res.status).toBe(403);
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    });
+
+    it("blocks the agent itself from updating its own forbidden write paths (self-PATCH denial)", async () => {
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        source: "agent_key",
+        runId: "run-1",
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: [] }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("Agent cannot modify its own forbidden-paths");
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    });
+
+    it("rejects requests with too-long path entries", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "barry",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: ["a".repeat(257)] }));
+
+      expect(res.status).toBe(400);
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+    });
+
+    it("rejects requests with too many path entries", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "barry",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const tooMany = Array.from({ length: 257 }, (_, i) => `path/${i}.ts`);
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: tooMany }));
+
+      expect(res.status).toBe(400);
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+    });
+
+    it("returns 404 when the agent does not exist", async () => {
+      mockAgentService.getById.mockResolvedValueOnce(null);
+
+      const app = await createApp({
+        type: "board",
+        userId: "barry",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/forbidden-paths`)
+        .send({ paths: [] }));
+
+      expect(res.status).toBe(404);
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("general PATCH rejection", () => {
+    it("rejects forbiddenWritePaths in general PATCH /agents/:id body", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "barry",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ forbiddenWritePaths: ["server/src/routes/agents.ts"] }));
+
+      // Zod schema rejects with 400 (z.never().optional()); behaviorally
+      // either 400 (schema-level) or 422 (handler-level) is acceptable.
+      expect([400, 422]).toContain(res.status);
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+      expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+    });
   });
 });

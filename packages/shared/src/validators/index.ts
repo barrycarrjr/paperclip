@@ -118,6 +118,9 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  updateAgentForbiddenWritePathsSchema,
+  FORBIDDEN_WRITE_PATH_MAX_ENTRIES,
+  FORBIDDEN_WRITE_PATH_MAX_LENGTH,
   type CreateAgent,
   type CreateAgentHire,
   type UpdateAgent,
@@ -130,6 +133,7 @@ export {
   type ResetAgentSession,
   type TestAdapterEnvironment,
   type UpdateAgentPermissions,
+  type UpdateAgentForbiddenWritePaths,
 } from "./agent.js";
 
 export {

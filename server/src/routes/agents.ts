@@ -20,6 +20,7 @@ import {
   upsertAgentInstructionsFileSchema,
   updateAgentInstructionsBundleSchema,
   updateAgentPermissionsSchema,
+  updateAgentForbiddenWritePathsSchema,
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
@@ -1857,6 +1858,63 @@ export function agentRoutes(
     res.json(await buildAgentDetail(agent));
   });
 
+  router.patch(
+    "/agents/:id/forbidden-paths",
+    validate(updateAgentForbiddenWritePathsSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const existing = await svc.getById(id);
+      if (!existing) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+
+      // Self-PATCH denial — an agent can never edit its own forbidden-paths,
+      // even if (somehow) it were granted instance-admin authority. This is
+      // Layer 3 of the Steward self-modification ban.
+      if (req.actor.type === "agent" && req.actor.agentId === id) {
+        res.status(403).json({ error: "Agent cannot modify its own forbidden-paths" });
+        return;
+      }
+
+      assertInstanceAdmin(req);
+
+      const before = Array.isArray(existing.forbiddenWritePaths)
+        ? [...existing.forbiddenWritePaths]
+        : [];
+      const next = req.body.paths as string[];
+
+      const agent = await svc.updateForbiddenWritePaths(id, next);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.forbidden_write_paths_updated",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          before,
+          after: next,
+          beforeCount: before.length,
+          afterCount: next.length,
+        },
+      });
+
+      res.json({
+        agentId: agent.id,
+        forbiddenWritePaths: agent.forbiddenWritePaths,
+      });
+    },
+  );
+
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {
     if (req.actor.type !== "board") {
       throw forbidden("Only board-authenticated callers can manage instructions path or bundle configuration");
@@ -2110,6 +2168,13 @@ export function agentRoutes(
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
+      return;
+    }
+
+    if (hasOwn(req.body as object, "forbiddenWritePaths")) {
+      res.status(422).json({
+        error: "Use /api/agents/:id/forbidden-paths for forbidden write path changes",
+      });
       return;
     }
 
