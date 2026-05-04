@@ -10,7 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
-import { accessService, logActivity, routineService } from "../services/index.js";
+import { accessService, companyService, logActivity, routineService } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden, unauthorized } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
@@ -62,6 +62,53 @@ export function routineRoutes(
     assertCompanyAccess(req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
+  });
+
+  router.get("/companies/:companyId/portfolio-routines", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+    const statusFilter = req.query.status as string | undefined;
+
+    const allCompanies = await companySvc.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const routineArrays = await Promise.all(
+      targetCompanies.map((company) => svc.list(company.id)),
+    );
+
+    let allRoutines = routineArrays.flat();
+    if (statusFilter) {
+      const statuses = new Set(statusFilter.split(",").map((s) => s.trim()).filter(Boolean));
+      allRoutines = allRoutines.filter((r) => statuses.has(r.status));
+    }
+
+    res.json({ routines: allRoutines, companies: targetCompanies });
   });
 
   router.post("/companies/:companyId/routines", validate(createRoutineSchema), async (req, res) => {

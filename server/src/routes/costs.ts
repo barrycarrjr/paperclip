@@ -213,6 +213,46 @@ export function costRoutes(
     res.json(results);
   });
 
+  router.get("/companies/:companyId/portfolio-costs", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const hqCompany = await companies.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+    const range = parseCostDateRange(req.query);
+
+    const allCompanies = await companies.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const summaries = await Promise.all(
+      targetCompanies.map((company) => costs.summary(company.id, range)),
+    );
+
+    res.json({ summaries, companies: targetCompanies });
+  });
+
   router.get("/companies/:companyId/budgets/overview", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

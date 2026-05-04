@@ -36,6 +36,7 @@ import {
   agentInstructionsService,
   accessService,
   approvalService,
+  companyService,
   companySkillService,
   budgetService,
   heartbeatService,
@@ -1129,6 +1130,59 @@ export function agentRoutes(
       return;
     }
     res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+  });
+
+  router.get("/companies/:companyId/portfolio-agents", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+    const statusFilter = req.query.status as string | undefined;
+    const roleFilter = req.query.role as string | undefined;
+
+    const allCompanies = await companySvc.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const agentArrays = await Promise.all(
+      targetCompanies.map((company) => svc.list(company.id)),
+    );
+
+    let allAgents = agentArrays.flat().filter((a) => a.status !== "terminated");
+
+    if (statusFilter) {
+      const statuses = new Set(statusFilter.split(",").map((s) => s.trim()).filter(Boolean));
+      allAgents = allAgents.filter((a) => statuses.has(a.status));
+    }
+    if (roleFilter) {
+      const roles = new Set(roleFilter.split(",").map((r) => r.trim()).filter(Boolean));
+      allAgents = allAgents.filter((a) => roles.has(a.role));
+    }
+
+    res.json({ agents: allAgents, companies: targetCompanies });
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {

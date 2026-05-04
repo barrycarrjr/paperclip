@@ -13,6 +13,10 @@ import {
   GitBranch,
   Settings,
   MessageSquare,
+  Globe2,
+  Bot,
+  LayoutGrid,
+  ClipboardCheck,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -71,6 +75,56 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
+        {selectedCompany?.isPortfolioRoot && (
+          <SidebarSection
+            label="Portfolio"
+            info="Cross-company views for managing the whole portfolio from one place."
+          >
+            <SidebarNavItem
+              to="/portfolio-dashboard"
+              label="Portfolio Dashboard"
+              icon={LayoutGrid}
+              info="High-level health snapshot for every company in the portfolio: agent counts, open issues, spend, and pending approvals at a glance."
+            />
+            <SidebarNavItem
+              to="/portfolio-issues"
+              label="Portfolio Issues"
+              icon={Globe2}
+              info="A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies."
+            />
+            <SidebarNavItem
+              to="/portfolio-agents"
+              label="Portfolio Agents"
+              icon={Bot}
+              info="See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide."
+            />
+            <SidebarNavItem
+              to="/portfolio-approvals"
+              label="Portfolio Approvals"
+              icon={ClipboardCheck}
+              info="Review and act on pending approvals across all portfolio companies without switching context."
+            />
+            <SidebarNavItem
+              to="/portfolio-routines"
+              label="Portfolio Routines"
+              icon={Repeat}
+              info="See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place."
+            />
+            <SidebarNavItem
+              to="/portfolio-costs"
+              label="Portfolio Costs"
+              icon={DollarSign}
+              info="Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable."
+            />
+            <SidebarNavItem
+              to="/portfolio-activity"
+              label="Portfolio Activity"
+              icon={History}
+              info="A unified audit trail of events across all portfolio companies — agent actions, status changes, and decisions in one feed."
+            />
+          </SidebarSection>
+        )}
+
         <div className="flex flex-col gap-0.5">
           {/* New Issue button aligned with nav items */}
           <button

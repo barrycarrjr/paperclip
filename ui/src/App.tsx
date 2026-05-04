@@ -52,6 +52,13 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { Clippy } from "./pages/Clippy";
+import { PortfolioIssues } from "./pages/PortfolioIssues";
+import { PortfolioAgents } from "./pages/PortfolioAgents";
+import { PortfolioApprovals } from "./pages/PortfolioApprovals";
+import { PortfolioActivity } from "./pages/PortfolioActivity";
+import { PortfolioRoutines } from "./pages/PortfolioRoutines";
+import { PortfolioCosts } from "./pages/PortfolioCosts";
+import { PortfolioDashboard } from "./pages/PortfolioDashboard";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
@@ -96,6 +103,13 @@ function boardRoutes() {
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
+      <Route path="portfolio-issues" element={<PortfolioIssues />} />
+      <Route path="portfolio-agents" element={<PortfolioAgents />} />
+      <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
+      <Route path="portfolio-activity" element={<PortfolioActivity />} />
+      <Route path="portfolio-routines" element={<PortfolioRoutines />} />
+      <Route path="portfolio-costs" element={<PortfolioCosts />} />
+      <Route path="portfolio-dashboard" element={<PortfolioDashboard />} />
       <Route path="issues" element={<Issues />} />
       <Route path="issues/all" element={<Navigate to="/issues" replace />} />
       <Route path="issues/active" element={<Navigate to="/issues" replace />} />

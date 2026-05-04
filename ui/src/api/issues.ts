@@ -1,6 +1,7 @@
 import type {
   AskUserQuestionsAnswer,
   Approval,
+  Company,
   CreateIssueTreeHold,
   DocumentRevision,
   FeedbackTargetType,
@@ -11,6 +12,8 @@ import type {
   IssueComment,
   IssueDocument,
   IssueLabel,
+  IssuePriority,
+  IssueStatus,
   IssueThreadInteraction,
   IssueTreeControlPreview,
   IssueTreeHold,
@@ -72,6 +75,27 @@ export const issuesApi = {
     if (filters?.limit) params.set("limit", String(filters.limit));
     const qs = params.toString();
     return api.get<Issue[]>(`/companies/${companyId}/issues${qs ? `?${qs}` : ""}`);
+  },
+  listPortfolio: (
+    hqCompanyId: string,
+    filters?: {
+      statuses?: IssueStatus[];
+      priorities?: IssuePriority[];
+      companyIds?: string[];
+      q?: string;
+      limit?: number;
+    },
+  ) => {
+    const params = new URLSearchParams();
+    if (filters?.statuses?.length) params.set("status", filters.statuses.join(","));
+    if (filters?.priorities?.length) params.set("priority", filters.priorities.join(","));
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    if (filters?.q) params.set("q", filters.q);
+    if (filters?.limit) params.set("limit", String(filters.limit));
+    const qs = params.toString();
+    return api.get<{ issues: Issue[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-issues${qs ? `?${qs}` : ""}`,
+    );
   },
   listLabels: (companyId: string) => api.get<IssueLabel[]>(`/companies/${companyId}/labels`),
   createLabel: (companyId: string, data: { name: string; color: string }) =>

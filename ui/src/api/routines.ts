@@ -1,5 +1,6 @@
 import type {
   ActivityEvent,
+  Company,
   Routine,
   RoutineDetail,
   RoutineListItem,
@@ -22,6 +23,15 @@ export interface RotateRoutineTriggerResponse {
 }
 
 export const routinesApi = {
+  listPortfolio: (hqCompanyId: string, filters?: { companyIds?: string[]; status?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    if (filters?.status) params.set("status", filters.status);
+    const qs = params.toString();
+    return api.get<{ routines: RoutineListItem[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-routines${qs ? `?${qs}` : ""}`,
+    );
+  },
   list: (companyId: string) => api.get<RoutineListItem[]>(`/companies/${companyId}/routines`),
   create: (companyId: string, data: Record<string, unknown>) =>
     api.post<Routine>(`/companies/${companyId}/routines`, data),

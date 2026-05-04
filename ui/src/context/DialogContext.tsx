@@ -16,6 +16,7 @@ interface NewIssueDefaults {
   assigneeUserId?: string;
   title?: string;
   description?: string;
+  companyId?: string;
 }
 
 interface NewGoalDefaults {

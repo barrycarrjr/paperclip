@@ -1,7 +1,19 @@
-import type { Approval, ApprovalComment, Issue } from "@paperclipai/shared";
+import type { Approval, ApprovalComment, Company, Issue } from "@paperclipai/shared";
 import { api } from "./client";
 
 export const approvalsApi = {
+  listPortfolio: (
+    hqCompanyId: string,
+    filters?: { status?: string; companyIds?: string[] },
+  ) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    const qs = params.toString();
+    return api.get<{ approvals: Approval[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-approvals${qs ? `?${qs}` : ""}`,
+    );
+  },
   list: (companyId: string, status?: string) =>
     api.get<Approval[]>(
       `/companies/${companyId}/approvals${status ? `?status=${encodeURIComponent(status)}` : ""}`,

@@ -1,4 +1,5 @@
 import type {
+  Company,
   CostSummary,
   CostByAgent,
   CostByProviderModel,
@@ -23,6 +24,16 @@ function dateParams(from?: string, to?: string): string {
 }
 
 export const costsApi = {
+  listPortfolio: (hqCompanyId: string, filters?: { companyIds?: string[]; from?: string; to?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    if (filters?.from) params.set("from", filters.from);
+    if (filters?.to) params.set("to", filters.to);
+    const qs = params.toString();
+    return api.get<{ summaries: CostSummary[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-costs${qs ? `?${qs}` : ""}`,
+    );
+  },
   summary: (companyId: string, from?: string, to?: string) =>
     api.get<CostSummary>(`/companies/${companyId}/costs/summary${dateParams(from, to)}`),
   byAgent: (companyId: string, from?: string, to?: string) =>

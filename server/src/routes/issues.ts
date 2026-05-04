@@ -956,6 +956,71 @@ export function issueRoutes(
     res.json(result);
   });
 
+  router.get("/companies/:companyId/portfolio-issues", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = serviceIndex.companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const rawLimit = req.query.limit as string | undefined;
+    const parsedLimit = rawLimit !== undefined && /^\d+$/.test(rawLimit)
+      ? Number.parseInt(rawLimit, 10)
+      : null;
+    if (rawLimit !== undefined && (parsedLimit === null || !Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
+      res.status(400).json({ error: `limit must be a positive integer up to ${ISSUE_LIST_MAX_LIMIT}` });
+      return;
+    }
+    const perCompanyLimit = parsedLimit === null ? ISSUE_LIST_DEFAULT_LIMIT : clampIssueListLimit(parsedLimit);
+
+    const statusFilter = req.query.status as string | undefined;
+    const priorityFilter = req.query.priority as string | undefined;
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+    const qFilter = req.query.q as string | undefined;
+
+    const allCompanies = await companySvc.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const issueArrays = await Promise.all(
+      targetCompanies.map((company) =>
+        svc.list(company.id, {
+          status: statusFilter,
+          q: qFilter,
+          limit: perCompanyLimit,
+        })
+      ),
+    );
+
+    let allIssues = issueArrays.flat();
+    if (priorityFilter) {
+      const priorities = new Set(priorityFilter.split(",").map((p) => p.trim()).filter(Boolean));
+      allIssues = allIssues.filter((issue) => priorities.has(issue.priority ?? ""));
+    }
+
+    res.json({ issues: allIssues, companies: targetCompanies });
+  });
+
   router.get("/companies/:companyId/labels", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

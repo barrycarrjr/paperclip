@@ -1,6 +1,8 @@
 import type {
   Agent,
   AgentDetail,
+  AgentRole,
+  AgentStatus,
   AgentInstructionsBundle,
   AgentInstructionsFileDetail,
   AgentSkillSnapshot,
@@ -13,6 +15,7 @@ import type {
   Approval,
   AgentConfigRevision,
 } from "@paperclipai/shared";
+import type { Company } from "@paperclipai/shared";
 import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { ApiError, api } from "./client";
 
@@ -74,6 +77,23 @@ function agentPath(id: string, companyId?: string, suffix = "") {
 
 export const agentsApi = {
   list: (companyId: string) => api.get<Agent[]>(`/companies/${companyId}/agents`),
+  listPortfolio: (
+    hqCompanyId: string,
+    filters?: {
+      statuses?: AgentStatus[];
+      roles?: AgentRole[];
+      companyIds?: string[];
+    },
+  ) => {
+    const params = new URLSearchParams();
+    if (filters?.statuses?.length) params.set("status", filters.statuses.join(","));
+    if (filters?.roles?.length) params.set("role", filters.roles.join(","));
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    const qs = params.toString();
+    return api.get<{ agents: Agent[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-agents${qs ? `?${qs}` : ""}`,
+    );
+  },
   org: (companyId: string) => api.get<OrgNode[]>(`/companies/${companyId}/org`),
   listConfigurations: (companyId: string) =>
     api.get<Record<string, unknown>[]>(`/companies/${companyId}/agent-configurations`),

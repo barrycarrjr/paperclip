@@ -1,0 +1,546 @@
+import { useState, useMemo, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight, Plus, Check } from "lucide-react";
+import type { Company, Issue, IssuePriority, IssueStatus } from "@paperclipai/shared";
+import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
+import { issuesApi } from "../api/issues";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useDialog } from "../context/DialogContext";
+import { StatusIcon } from "../components/StatusIcon";
+import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { Link } from "@/lib/router";
+import { timeAgo } from "../lib/timeAgo";
+import { priorityColor, priorityColorDefault } from "../lib/status-colors";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "../lib/utils";
+
+const DEFAULT_STATUS_FILTER: IssueStatus[] = ISSUE_STATUSES.filter(
+  (s) => s !== "done" && s !== "cancelled",
+);
+
+function statusLabel(status: string) {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function priorityLabel(p: string) {
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+interface FilterOption {
+  value: string;
+  label: string;
+}
+
+interface FilterPopoverProps {
+  label: string;
+  options: FilterOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}
+
+function FilterPopover({ label, options, selected, onChange }: FilterPopoverProps) {
+  function toggle(value: string) {
+    onChange(
+      selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value],
+    );
+  }
+  const activeLabel = selected.length > 0 && selected.length < options.length
+    ? `${label}: ${selected.length}`
+    : label;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn(
+            "h-7 text-xs gap-1",
+            selected.length > 0 && selected.length < options.length && "border-primary/50 text-primary",
+          )}
+        >
+          {activeLabel}
+          <ChevronDown className="h-3 w-3 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-48 p-1">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => toggle(opt.value)}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"
+          >
+            <Checkbox
+              checked={selected.includes(opt.value)}
+              onCheckedChange={() => toggle(opt.value)}
+              className="h-3.5 w-3.5"
+            />
+            <span className="flex-1 text-left">{opt.label}</span>
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+interface IssueRowProps {
+  issue: Issue;
+  companyPrefix: string;
+  selected: boolean;
+  onToggle: () => void;
+  onStatusChange: (status: string) => void;
+}
+
+function PortfolioIssueRow({ issue, companyPrefix, selected, onToggle, onStatusChange }: IssueRowProps) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group",
+        selected && "bg-accent/60",
+      )}
+    >
+      <Checkbox
+        checked={selected}
+        onCheckedChange={onToggle}
+        className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100"
+      />
+
+      <StatusIcon
+        status={issue.status}
+        blockerAttention={issue.blockerAttention}
+        onChange={onStatusChange}
+        className="h-4 w-4 shrink-0"
+      />
+
+      <span className="text-[10px] font-mono text-muted-foreground shrink-0 w-16 hidden sm:block">
+        {issue.identifier ?? ""}
+      </span>
+
+      <Link
+        to={`/${companyPrefix}/issues/${issue.id}`}
+        className="flex-1 truncate font-medium hover:underline"
+      >
+        {issue.title}
+      </Link>
+
+      <span
+        className={cn(
+          "text-[10px] font-semibold uppercase shrink-0",
+          priorityColor[issue.priority] ?? priorityColorDefault,
+        )}
+      >
+        {issue.priority?.slice(0, 4).toUpperCase()}
+      </span>
+
+      <span className="text-[11px] text-muted-foreground shrink-0 w-14 text-right">
+        {timeAgo(issue.updatedAt)}
+      </span>
+    </div>
+  );
+}
+
+interface CompanySectionProps {
+  company: Company;
+  issues: Issue[];
+  selectedIds: Set<string>;
+  onToggleIssue: (id: string) => void;
+  onToggleAll: (companyId: string, issueIds: string[]) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onStatusChange: (issueId: string, status: string) => void;
+  onNewIssue: (companyId: string) => void;
+}
+
+function CompanySection({
+  company,
+  issues,
+  selectedIds,
+  onToggleIssue,
+  onToggleAll,
+  collapsed,
+  onToggleCollapse,
+  onStatusChange,
+  onNewIssue,
+}: CompanySectionProps) {
+  const issueIds = issues.map((i) => i.id);
+  const allSelected = issueIds.length > 0 && issueIds.every((id) => selectedIds.has(id));
+  const someSelected = !allSelected && issueIds.some((id) => selectedIds.has(id));
+
+  return (
+    <div className="mb-1">
+      <div className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent/30 cursor-pointer group">
+        <Checkbox
+          checked={allSelected}
+          data-state={someSelected ? "indeterminate" : undefined}
+          onCheckedChange={() => onToggleAll(company.id, issueIds)}
+          className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100 data-[state=indeterminate]:opacity-100"
+          onClick={(e) => e.stopPropagation()}
+        />
+        <button
+          className="flex flex-1 items-center gap-2 min-w-0"
+          onClick={onToggleCollapse}
+        >
+          {collapsed
+            ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+          <CompanyPatternIcon
+            companyName={company.name}
+            logoUrl={company.logoUrl}
+            brandColor={company.brandColor}
+            className="h-5 w-5 shrink-0 rounded-[3px]"
+          />
+          <span className="font-medium text-sm truncate">{company.name}</span>
+          <span className="text-xs text-muted-foreground ml-1">{issues.length} open</span>
+        </button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground"
+          onClick={() => onNewIssue(company.id)}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {!collapsed && (
+        <div className="ml-6 flex flex-col">
+          {issues.map((issue) => (
+            <PortfolioIssueRow
+              key={issue.id}
+              issue={issue}
+              companyPrefix={company.issuePrefix}
+              selected={selectedIds.has(issue.id)}
+              onToggle={() => onToggleIssue(issue.id)}
+              onStatusChange={(status) => onStatusChange(issue.id, status)}
+            />
+          ))}
+          {issues.length === 0 && (
+            <p className="px-3 py-2 text-sm text-muted-foreground">No issues match the current filters.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface BulkActionsBarProps {
+  count: number;
+  onStatusChange: (status: string) => void;
+  onComment: () => void;
+  onClear: () => void;
+  commentOpen: boolean;
+  setCommentOpen: (open: boolean) => void;
+  commentText: string;
+  setCommentText: (text: string) => void;
+  onSubmitComment: () => void;
+  isPending: boolean;
+}
+
+function BulkActionsBar({
+  count,
+  onStatusChange,
+  onComment,
+  onClear,
+  commentOpen,
+  setCommentOpen,
+  commentText,
+  setCommentText,
+  onSubmitComment,
+  isPending,
+}: BulkActionsBarProps) {
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5">
+      <span className="text-sm font-medium text-muted-foreground mr-1">
+        {count} selected
+      </span>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+            Status
+            <ChevronDown className="h-3 w-3 opacity-50" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" side="top" className="mb-1">
+          {ISSUE_STATUSES.map((s) => (
+            <DropdownMenuItem key={s} onSelect={() => onStatusChange(s)}>
+              {statusLabel(s)}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Popover open={commentOpen} onOpenChange={setCommentOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onComment}>
+            Add Comment
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="center" side="top" className="w-72 mb-1">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground">
+              Add a comment to {count} issue{count !== 1 ? "s" : ""}
+            </p>
+            <Textarea
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder="Write a comment…"
+              className="text-sm resize-none"
+              rows={3}
+              autoFocus
+            />
+            <Button
+              size="sm"
+              onClick={onSubmitComment}
+              disabled={!commentText.trim() || isPending}
+              className="self-end"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
+              Submit
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 text-xs text-muted-foreground"
+        onClick={onClear}
+      >
+        ✕ Deselect
+      </Button>
+    </div>
+  );
+}
+
+export function PortfolioIssues() {
+  const { selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const { openNewIssue } = useDialog();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Portfolio Issues" }]);
+  }, [setBreadcrumbs]);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+  const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(DEFAULT_STATUS_FILTER);
+  const [priorityFilter, setPriorityFilter] = useState<IssuePriority[]>([]);
+  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
+
+  const [commentText, setCommentText] = useState("");
+  const [commentOpen, setCommentOpen] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["portfolio-issues", selectedCompanyId, statusFilter, priorityFilter, companyIdFilter],
+    queryFn: () =>
+      issuesApi.listPortfolio(selectedCompanyId!, {
+        statuses: statusFilter,
+        priorities: priorityFilter.length > 0 ? priorityFilter : undefined,
+        companyIds: companyIdFilter.length > 0 ? companyIdFilter : undefined,
+      }),
+    enabled: !!selectedCompanyId,
+  });
+
+  const issues = data?.issues ?? [];
+  const companies = useMemo(() => {
+    const raw = data?.companies ?? [];
+    return [...raw].sort((a, b) => (b.isPortfolioRoot ? 1 : 0) - (a.isPortfolioRoot ? 1 : 0));
+  }, [data?.companies]);
+
+  const companyOptions = useMemo(
+    () => companies.map((c) => ({ value: c.id, label: c.name })),
+    [companies],
+  );
+
+  const issuesByCompany = useMemo(() => {
+    const map = new Map<string, Issue[]>();
+    for (const company of companies) {
+      map.set(company.id, []);
+    }
+    for (const issue of issues) {
+      const list = map.get(issue.companyId);
+      if (list) list.push(issue);
+    }
+    return map;
+  }, [issues, companies]);
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      issuesApi.update(id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
+    },
+  });
+
+  const commentMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: string }) =>
+      issuesApi.addComment(id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
+    },
+  });
+
+  function handleToggleIssue(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function handleToggleAll(companyId: string, issueIds: string[]) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = issueIds.every((id) => next.has(id));
+      if (allSelected) {
+        issueIds.forEach((id) => next.delete(id));
+      } else {
+        issueIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }
+
+  function handleToggleCollapse(companyId: string) {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(companyId)) next.delete(companyId);
+      else next.add(companyId);
+      return next;
+    });
+  }
+
+  function handleStatusChange(issueId: string, status: string) {
+    updateMutation.mutate({ id: issueId, status });
+  }
+
+  async function handleBulkStatusChange(status: string) {
+    const ids = Array.from(selectedIds);
+    await Promise.all(ids.map((id) => issuesApi.update(id, { status })));
+    queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
+    setSelectedIds(new Set());
+  }
+
+  async function handleBulkComment() {
+    if (!commentText.trim()) return;
+    const ids = Array.from(selectedIds);
+    await Promise.all(ids.map((id) => issuesApi.addComment(id, commentText.trim())));
+    queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
+    setSelectedIds(new Set());
+    setCommentText("");
+    setCommentOpen(false);
+  }
+
+  function handleNewIssue(companyId: string) {
+    openNewIssue({ companyId });
+  }
+
+  const hasActiveFilters =
+    statusFilter.length < DEFAULT_STATUS_FILTER.length ||
+    priorityFilter.length > 0 ||
+    companyIdFilter.length > 0;
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+        <h1 className="text-base font-semibold">Portfolio Issues</h1>
+        <span className="text-sm text-muted-foreground">
+          {isLoading ? "Loading…" : `${issues.length} open`}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2 px-6 py-2.5 border-b border-border shrink-0 flex-wrap">
+        <FilterPopover
+          label="Status"
+          options={ISSUE_STATUSES.map((s) => ({ value: s, label: statusLabel(s) }))}
+          selected={statusFilter}
+          onChange={(next) => setStatusFilter(next as IssueStatus[])}
+        />
+        <FilterPopover
+          label="Priority"
+          options={ISSUE_PRIORITIES.map((p) => ({ value: p, label: priorityLabel(p) }))}
+          selected={priorityFilter}
+          onChange={(next) => setPriorityFilter(next as IssuePriority[])}
+        />
+        {companyOptions.length > 0 && (
+          <FilterPopover
+            label="Company"
+            options={companyOptions}
+            selected={companyIdFilter}
+            onChange={setCompanyIdFilter}
+          />
+        )}
+        {hasActiveFilters && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-muted-foreground"
+            onClick={() => {
+              setStatusFilter(DEFAULT_STATUS_FILTER);
+              setPriorityFilter([]);
+              setCompanyIdFilter([]);
+            }}
+          >
+            Reset filters
+          </Button>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground px-2 py-4">Loading issues…</p>
+        ) : companies.length === 0 ? (
+          <p className="text-sm text-muted-foreground px-2 py-4">No companies found.</p>
+        ) : (
+          companies.map((company) => {
+            const companyIssues = issuesByCompany.get(company.id) ?? [];
+            return (
+              <CompanySection
+                key={company.id}
+                company={company}
+                issues={companyIssues}
+                selectedIds={selectedIds}
+                onToggleIssue={handleToggleIssue}
+                onToggleAll={handleToggleAll}
+                collapsed={collapsedIds.has(company.id)}
+                onToggleCollapse={() => handleToggleCollapse(company.id)}
+                onStatusChange={handleStatusChange}
+                onNewIssue={handleNewIssue}
+              />
+            );
+          })
+        )}
+      </div>
+
+      {selectedIds.size > 0 && (
+        <BulkActionsBar
+          count={selectedIds.size}
+          onStatusChange={handleBulkStatusChange}
+          onComment={() => setCommentOpen(true)}
+          onClear={() => setSelectedIds(new Set())}
+          commentOpen={commentOpen}
+          setCommentOpen={setCommentOpen}
+          commentText={commentText}
+          setCommentText={setCommentText}
+          onSubmitComment={handleBulkComment}
+          isPending={commentMutation.isPending}
+        />
+      )}
+    </div>
+  );
+}

@@ -11,6 +11,7 @@ import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
   approvalService,
+  companyService,
   heartbeatService,
   issueApprovalService,
   logActivity,
@@ -55,6 +56,48 @@ export function approvalRoutes(
     const status = req.query.status as string | undefined;
     const result = await svc.list(companyId, status);
     res.json(result.map((approval) => redactApprovalPayload(approval)));
+  });
+
+  router.get("/companies/:companyId/portfolio-approvals", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const statusFilter = (req.query.status as string | undefined) ?? "pending";
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+
+    const allCompanies = await companySvc.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const approvalArrays = await Promise.all(
+      targetCompanies.map((company) => svc.list(company.id, statusFilter)),
+    );
+    const allApprovals = approvalArrays.flat().map((a) => redactApprovalPayload(a));
+
+    res.json({ approvals: allApprovals, companies: targetCompanies });
   });
 
   router.get("/approvals/:id", async (req, res) => {

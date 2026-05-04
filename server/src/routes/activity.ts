@@ -4,7 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
-import { heartbeatService, issueService } from "../services/index.js";
+import { companyService, heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
 const createActivitySchema = z.object({
@@ -43,6 +43,54 @@ export function activityRoutes(db: Db) {
     };
     const result = await svc.list(filters);
     res.json(result);
+  });
+
+  router.get("/companies/:companyId/portfolio-activity", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const companyIdsFilter = req.query.companyIds as string | undefined;
+    const perCompanyLimit = normalizeActivityLimit(Number(req.query.limit ?? 50));
+
+    const allCompanies = await companySvc.list();
+    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    if (companyIdsFilter) {
+      const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
+      targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));
+    }
+
+    const eventArrays = await Promise.all(
+      targetCompanies.map((company) =>
+        svc.list({ companyId: company.id, limit: perCompanyLimit }),
+      ),
+    );
+
+    const allEvents = eventArrays
+      .flat()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 200);
+
+    res.json({ events: allEvents, companies: targetCompanies });
   });
 
   router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {

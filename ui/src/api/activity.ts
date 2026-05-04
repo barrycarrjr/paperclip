@@ -1,4 +1,4 @@
-import type { ActivityEvent, RunLivenessState } from "@paperclipai/shared";
+import type { ActivityEvent, Company, RunLivenessState } from "@paperclipai/shared";
 import { api } from "./client";
 
 export type { RunLivenessState } from "@paperclipai/shared";
@@ -55,6 +55,15 @@ export interface IssueForRun {
 }
 
 export const activityApi = {
+  listPortfolio: (hqCompanyId: string, filters?: { companyIds?: string[]; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (filters?.companyIds?.length) params.set("companyIds", filters.companyIds.join(","));
+    if (filters?.limit) params.set("limit", String(filters.limit));
+    const qs = params.toString();
+    return api.get<{ events: ActivityEvent[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-activity${qs ? `?${qs}` : ""}`,
+    );
+  },
   list: (companyId: string, filters?: { entityType?: string; entityId?: string; agentId?: string; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.entityType) params.set("entityType", filters.entityType);
