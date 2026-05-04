@@ -123,6 +123,74 @@ function SortableCompanyItem({
   );
 }
 
+/**
+ * HQ pinned at the top — always rendered first, never draggable, always
+ * rounded-square shape (other companies toggle between circle and square
+ * on hover/select). Tooltip identifies it as the portfolio root.
+ */
+function PinnedHqItem({
+  company,
+  isSelected,
+  hasLiveAgents,
+  hasUnreadInbox,
+  onSelect,
+}: {
+  company: Company;
+  isSelected: boolean;
+  hasLiveAgents: boolean;
+  hasUnreadInbox: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <div className="overflow-visible">
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <a
+            href={`/${company.issuePrefix}/dashboard`}
+            onClick={(e) => {
+              e.preventDefault();
+              onSelect();
+            }}
+            className="relative flex items-center justify-center group overflow-visible"
+          >
+            {/* Selection indicator pill */}
+            <div
+              className={cn(
+                "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+                isSelected ? "h-5" : "h-0 group-hover:h-2",
+              )}
+            />
+            <div className="relative overflow-visible">
+              <CompanyPatternIcon
+                companyName={company.name}
+                logoUrl={company.logoUrl}
+                brandColor={company.brandColor}
+                /* Always rounded-square — HQ is visually distinct from peer companies which morph from circle on hover. */
+                className="rounded-[14px] ring-1 ring-foreground/20"
+              />
+              {hasLiveAgents && (
+                <span className="pointer-events-none absolute -right-0.5 -top-0.5 z-10">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-80" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-background" />
+                  </span>
+                </span>
+              )}
+              {hasUnreadInbox && (
+                <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 z-10 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background" />
+              )}
+            </div>
+          </a>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={8}>
+          <p className="font-medium">{company.name}</p>
+          <p className="text-xs text-muted-foreground">Portfolio root</p>
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 export function CompanyRail() {
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { openOnboarding } = useDialog();
@@ -133,6 +201,14 @@ export function CompanyRail() {
   const sidebarCompanies = useMemo(
     () => companies.filter((company) => company.status !== "archived"),
     [companies],
+  );
+  const hqCompany = useMemo(
+    () => sidebarCompanies.find((c) => c.isPortfolioRoot) ?? null,
+    [sidebarCompanies],
+  );
+  const reorderableCompanies = useMemo(
+    () => sidebarCompanies.filter((c) => !c.isPortfolioRoot),
+    [sidebarCompanies],
   );
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -171,7 +247,7 @@ export function CompanyRail() {
   }, [companyIds, sidebarBadgeQueries]);
 
   const { orderedCompanies, persistOrder } = useCompanyOrder({
-    companies: sidebarCompanies,
+    companies: reorderableCompanies,
     userId: currentUserId,
   });
 
@@ -207,6 +283,25 @@ export function CompanyRail() {
 
       {/* Company list */}
       <div className="flex-1 flex flex-col items-center gap-2 py-3 w-full overflow-y-auto overflow-x-hidden scrollbar-none">
+        {hqCompany && (
+          <>
+            <PinnedHqItem
+              company={hqCompany}
+              isSelected={hqCompany.id === highlightedCompanyId}
+              hasLiveAgents={hasLiveAgentsByCompanyId.get(hqCompany.id) ?? false}
+              hasUnreadInbox={hasUnreadInboxByCompanyId.get(hqCompany.id) ?? false}
+              onSelect={() => {
+                setSelectedCompanyId(hqCompany.id);
+                if (isInstanceRoute) {
+                  navigate(`/${hqCompany.issuePrefix}/dashboard`);
+                }
+              }}
+            />
+            {orderedCompanies.length > 0 && (
+              <div className="w-8 h-px bg-border my-1 shrink-0" aria-hidden />
+            )}
+          </>
+        )}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}

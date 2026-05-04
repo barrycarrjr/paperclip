@@ -1,0 +1,2 @@
+ALTER TABLE "companies" ADD COLUMN "is_portfolio_root" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "companies_portfolio_root_singleton_uq" ON "companies" USING btree ("is_portfolio_root") WHERE "companies"."is_portfolio_root" = true;

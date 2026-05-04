@@ -8,9 +8,40 @@ import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
+import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Populate `actor.isPortfolioRootAgent` / `actor.isPortfolioRootUserAdmin`
+ * from already-loaded actor data. The HQ company id is cached in process,
+ * so this is essentially free after the first call.
+ */
+async function annotateHqStatus(req: Request, db: Db): Promise<void> {
+  const actor = req.actor;
+  if (actor.type === "agent" && actor.companyId) {
+    const rootId = await getPortfolioRootCompanyId(db);
+    if (rootId && actor.companyId === rootId) {
+      actor.isPortfolioRootAgent = true;
+    }
+  } else if (
+    actor.type === "board" &&
+    Array.isArray(actor.memberships) &&
+    actor.memberships.length > 0
+  ) {
+    const rootId = await getPortfolioRootCompanyId(db);
+    if (rootId) {
+      const isAdmin = actor.memberships.some(
+        (m) =>
+          m.companyId === rootId &&
+          m.status === "active" &&
+          (m.membershipRole === "owner" || m.membershipRole === "admin"),
+      );
+      if (isAdmin) actor.isPortfolioRootUserAdmin = true;
+    }
+  }
 }
 
 interface ActorMiddlewareOptions {
@@ -81,6 +112,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             runId: runIdHeader ?? undefined,
             source: "session",
           };
+          await annotateHqStatus(req, db);
           next();
           return;
         }
@@ -113,6 +145,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           runId: runIdHeader || undefined,
           source: "board_key",
         };
+        await annotateHqStatus(req, db);
         next();
         return;
       }
@@ -156,6 +189,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         runId: runIdHeader || claims.run_id || undefined,
         source: "agent_jwt",
       };
+      await annotateHqStatus(req, db);
       next();
       return;
     }
@@ -185,6 +219,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       source: "agent_key",
     };
 
+    await annotateHqStatus(req, db);
     next();
   };
 }

@@ -2,6 +2,7 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  companies,
   companyMemberships,
   instanceUserRoles,
   issues,
@@ -30,6 +31,52 @@ export function accessService(db: Db) {
       .select({ id: instanceUserRoles.id })
       .from(instanceUserRoles)
       .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+      .then((rows) => rows[0] ?? null);
+    return Boolean(row);
+  }
+
+  /**
+   * True iff the agent's company has `isPortfolioRoot = true` (HQ).
+   * Cross-company READ in `assertCompanyAccess(_, _, "read")` bypasses
+   * the company-match check for these agents. Cross-company WRITE remains
+   * blocked (HQ agents write only to HQ).
+   */
+  async function isPortfolioRootAgent(
+    agentId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!agentId) return false;
+    const row = await db
+      .select({ isRoot: companies.isPortfolioRoot })
+      .from(agents)
+      .innerJoin(companies, eq(companies.id, agents.companyId))
+      .where(eq(agents.id, agentId))
+      .then((rows) => rows[0] ?? null);
+    return Boolean(row?.isRoot);
+  }
+
+  /**
+   * True iff the user has an active `owner` or `admin` membership in HQ.
+   * Operators/members in HQ get HQ-scoped access only (not cross-company).
+   * Cross-company READ in `assertCompanyAccess(_, _, "read")` bypasses
+   * the company-match check for these users. Writes still per-company.
+   */
+  async function isPortfolioRootUserAdmin(
+    userId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!userId) return false;
+    const row = await db
+      .select({ id: companyMemberships.id })
+      .from(companyMemberships)
+      .innerJoin(companies, eq(companies.id, companyMemberships.companyId))
+      .where(
+        and(
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, userId),
+          eq(companyMemberships.status, "active"),
+          inArray(companyMemberships.membershipRole, ["owner", "admin"]),
+          eq(companies.isPortfolioRoot, true),
+        ),
+      )
       .then((rows) => rows[0] ?? null);
     return Boolean(row);
   }
@@ -768,6 +815,8 @@ export function accessService(db: Db) {
 
   return {
     isInstanceAdmin,
+    isPortfolioRootAgent,
+    isPortfolioRootUserAdmin,
     canUser,
     hasPermission,
     getMembership,

@@ -191,7 +191,10 @@ export function Dashboard() {
     return <PageSkeleton variant="dashboard" />;
   }
 
-  const hasNoAgents = agents !== undefined && agents.length === 0;
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const isHq = selectedCompany?.isPortfolioRoot ?? false;
+  // HQ doesn't host operating agents; the "no agents" pitch doesn't apply.
+  const hasNoAgents = agents !== undefined && agents.length === 0 && !isHq;
 
   return (
     <div className="space-y-6">

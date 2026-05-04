@@ -17,6 +17,8 @@ export interface Company {
   feedbackDataSharingConsentByUserId: string | null;
   feedbackDataSharingTermsVersion: string | null;
   brandColor: string | null;
+  /** True if this is HQ — the portfolio-root holding-company entity. Singleton per instance. */
+  isPortfolioRoot: boolean;
   logoAssetId: string | null;
   logoUrl: string | null;
   createdAt: Date;

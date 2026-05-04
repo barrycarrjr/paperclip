@@ -32,7 +32,7 @@ export function activityRoutes(db: Db) {
 
   router.get("/companies/:companyId/activity", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCompanyAccess(req, companyId, "read");
 
     const filters = {
       companyId,

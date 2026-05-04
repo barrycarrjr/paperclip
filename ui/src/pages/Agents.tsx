@@ -54,7 +54,7 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean
 }
 
 export function Agents() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, companies } = useCompany();
   const { openNewAgent } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
@@ -79,6 +79,9 @@ export function Agents() {
     queryFn: () => agentsApi.org(selectedCompanyId!),
     enabled: !!selectedCompanyId && effectiveView === "org",
   });
+
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const isHq = selectedCompany?.isPortfolioRoot ?? false;
 
   const { data: runs } = useQuery({
     queryKey: [...queryKeys.liveRuns(selectedCompanyId!), "agents-page"],
@@ -205,12 +208,18 @@ export function Agents() {
 
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
-      {agents && agents.length === 0 && (
+      {agents && agents.length === 0 && !isHq && (
         <EmptyState
           icon={Bot}
           message="Create your first agent to get started."
           action="New Agent"
           onAction={openNewAgent}
+        />
+      )}
+      {agents && agents.length === 0 && isHq && (
+        <EmptyState
+          icon={Bot}
+          message="HQ doesn't host operating agents. Portfolio-wide agents (Steward, etc.) live here when added."
         />
       )}
 

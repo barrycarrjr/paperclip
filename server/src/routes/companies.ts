@@ -24,7 +24,7 @@ import {
   logActivity,
 } from "../services/index.js";
 import type { StorageService } from "../storage/types.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 
 export function companyRoutes(db: Db, storage?: StorageService) {
   const router = Router();
@@ -88,9 +88,19 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   }
 
   router.get("/", async (req, res) => {
-    assertBoard(req);
+    assertAuthenticated(req);
     const result = await svc.list();
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+    // HQ agent (cross-company read via membership in portfolio root)
+    if (req.actor.type === "agent" && req.actor.isPortfolioRootAgent) {
+      res.json(result);
+      return;
+    }
+    assertBoard(req);
+    if (
+      req.actor.source === "local_implicit" ||
+      req.actor.isInstanceAdmin ||
+      req.actor.isPortfolioRootUserAdmin
+    ) {
       res.json(result);
       return;
     }
@@ -99,11 +109,20 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   });
 
   router.get("/stats", async (req, res) => {
-    assertBoard(req);
-    const allowed = req.actor.source === "local_implicit" || req.actor.isInstanceAdmin
-      ? null
-      : new Set(req.actor.companyIds ?? []);
+    assertAuthenticated(req);
     const stats = await svc.stats();
+    // HQ agent: full portfolio stats (cross-company read)
+    if (req.actor.type === "agent" && req.actor.isPortfolioRootAgent) {
+      res.json(stats);
+      return;
+    }
+    assertBoard(req);
+    const allowed =
+      req.actor.source === "local_implicit" ||
+      req.actor.isInstanceAdmin ||
+      req.actor.isPortfolioRootUserAdmin
+        ? null
+        : new Set(req.actor.companyIds ?? []);
     if (!allowed) {
       res.json(stats);
       return;
@@ -381,6 +400,17 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    const target = await svc.getById(companyId);
+    if (!target) {
+      res.status(404).json({ error: "Company not found" });
+      return;
+    }
+    if (target.isPortfolioRoot) {
+      res.status(409).json({
+        error: "[EROOT_UNDELETABLE] HQ (portfolio-root company) cannot be archived",
+      });
+      return;
+    }
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -401,6 +431,17 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    const target = await svc.getById(companyId);
+    if (!target) {
+      res.status(404).json({ error: "Company not found" });
+      return;
+    }
+    if (target.isPortfolioRoot) {
+      res.status(409).json({
+        error: "[EROOT_UNDELETABLE] HQ (portfolio-root company) cannot be deleted",
+      });
+      return;
+    }
     const company = await svc.remove(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });

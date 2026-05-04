@@ -1,6 +1,8 @@
 import type { Request } from "express";
 import { forbidden, unauthorized } from "../errors.js";
 
+export type AccessMode = "read" | "write";
+
 export function assertAuthenticated(req: Request) {
   if (req.actor.type === "none") {
     throw unauthorized();
@@ -39,14 +41,24 @@ export function assertInstanceAdmin(req: Request) {
   throw forbidden("Instance admin access required");
 }
 
-export function assertCompanyAccess(req: Request, companyId: string) {
+export function assertCompanyAccess(
+  req: Request,
+  companyId: string,
+  mode: AccessMode = "write",
+) {
   assertAuthenticated(req);
   if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
+    if (mode === "read" && req.actor.isPortfolioRootAgent) {
+      return;
+    }
     throw forbidden("Agent key cannot access another company");
   }
   if (req.actor.type === "board" && req.actor.source !== "local_implicit") {
     const allowedCompanies = req.actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
+      if (mode === "read" && req.actor.isPortfolioRootUserAdmin) {
+        return;
+      }
       throw forbidden("User does not have access to this company");
     }
     const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
