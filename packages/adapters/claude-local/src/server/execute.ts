@@ -479,6 +479,43 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
+  // Plugin MCP bridge — when chat.ts has minted a token and built a URL,
+  // write a temp .mcp.json so Claude Code dials in via Streamable HTTP and
+  // sees Paperclip plugin tools (e.g. `3cx-tools__pbx_click_to_call`).
+  // The file is cleaned up after the spawned Claude exits.
+  const pluginMcpUrl = asString(context.pluginMcpUrl, "").trim();
+  let mcpConfigFilePath: string | null = null;
+  if (pluginMcpUrl) {
+    try {
+      const tmpDir = await fs.mkdtemp(
+        path.join((await import("node:os")).tmpdir(), "paperclip-mcp-"),
+      );
+      mcpConfigFilePath = path.join(tmpDir, "mcp.json");
+      await fs.writeFile(
+        mcpConfigFilePath,
+        JSON.stringify(
+          {
+            mcpServers: {
+              paperclip: {
+                type: "http",
+                url: pluginMcpUrl,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onLog?.(
+        "stderr",
+        `[paperclip] Warning: failed to write MCP bridge config; plugin tools won't be available this turn: ${msg}\n`,
+      );
+      mcpConfigFilePath = null;
+    }
+  }
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     wakePrompt,
@@ -518,6 +555,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--append-system-prompt-file", attemptInstructionsFilePath);
     }
     args.push("--add-dir", effectivePromptBundleAddDir);
+    // Plugin MCP bridge: makes Paperclip plugin tools callable from
+    // inside the spawned Claude Code session as MCP tools.
+    if (mcpConfigFilePath) {
+      args.push("--mcp-config", mcpConfigFilePath);
+    }
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };
@@ -814,6 +856,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `[paperclip] Restoring workspace changes from ${describeAdapterExecutionTarget(executionTarget)}.\n`,
       );
       await restoreRemoteWorkspace();
+    }
+    if (mcpConfigFilePath) {
+      // Best-effort cleanup of the per-turn MCP bridge config tmpfile.
+      const dirToRemove = path.dirname(mcpConfigFilePath);
+      await fs
+        .rm(dirToRemove, { recursive: true, force: true })
+        .catch(() => {});
     }
   }
 }

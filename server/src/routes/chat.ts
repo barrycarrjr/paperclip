@@ -60,11 +60,15 @@ function writeSseEvent(res: Response, event: StreamEvent | { type: "ping" }) {
 
 export interface ChatRoutesDeps {
   pluginToolDispatcher?: import("../services/plugin-tool-dispatcher.js").PluginToolDispatcher | null;
+  pluginMcpBridge?: import("../services/plugin-mcp-bridge.js").PluginMcpBridge | null;
 }
 
 export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   const router = Router();
-  const svc = chatService(db, { pluginToolDispatcher: deps.pluginToolDispatcher });
+  const svc = chatService(db, {
+    pluginToolDispatcher: deps.pluginToolDispatcher,
+    pluginMcpBridge: deps.pluginMcpBridge,
+  });
   const attachments = chatAttachmentService(db);
   const attachmentUpload = multer({
     storage: multer.memoryStorage(),

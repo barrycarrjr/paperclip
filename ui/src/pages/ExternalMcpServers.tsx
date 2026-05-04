@@ -233,6 +233,8 @@ export function ExternalMcpServers() {
         (Help Scout, Stripe) prefer the polished <strong>Plugin</strong> path instead.
       </p>
 
+      <InternalPluginBridgeCard />
+
       {isLoading && <div className="text-sm text-muted-foreground">Loading…</div>}
       {error && (
         <Card>
@@ -636,5 +638,83 @@ export function ExternalMcpServers() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ─── Internal Plugin Bridge status card ─────────────────────────────────
+//
+// Read-only sibling to the External MCP servers list. Surfaces the
+// in-process MCP server that exposes plugin tools to spawned LLM
+// subprocesses (e.g. Claude Code via the claude_local adapter). Operators
+// can't configure it — it's auto-managed by chat sessions — but visibility
+// here removes the "where do plugin tools live for adapter chats?" mystery.
+
+interface BridgeStatus {
+  enabled: boolean;
+  activeTokenCount: number;
+  totalMinted: number;
+  totalRevoked: number;
+  defaultTtlMs: number;
+}
+
+function InternalPluginBridgeCard() {
+  const { data, error, isLoading, refetch } = useQuery<BridgeStatus>({
+    queryKey: ["plugin-mcp-bridge-status"] as const,
+    queryFn: async () => api.get("/api/internal/mcp-bridge/status") as Promise<BridgeStatus>,
+    refetchInterval: 15_000,
+    staleTime: 5_000,
+  });
+
+  return (
+    <Card className="border-dashed">
+      <CardContent className="space-y-2 py-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm font-semibold">paperclip (internal)</span>
+              <Badge variant={data?.enabled ? "default" : "secondary"}>
+                {isLoading ? "checking…" : data?.enabled ? "running" : "off"}
+              </Badge>
+              <Badge variant="outline">auto-managed</Badge>
+            </div>
+            <div className="text-sm text-muted-foreground">Internal Plugin Bridge</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              In-process MCP server that exposes installed plugin tools to spawned LLM
+              subprocesses (Claude Code via the claude_local adapter, etc.). Auto-managed by
+              chat sessions — no operator action needed. Sits next to the External MCP
+              servers below, role-inverted: Paperclip is the server here, not the client.
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => void refetch()}>
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
+        {error && (
+          <div className="text-xs text-destructive">
+            Failed to load bridge status: {(error as Error).message}
+          </div>
+        )}
+        {data && (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
+            <div>
+              <span className="text-foreground">Active tokens: </span>
+              <span className="font-mono">{data.activeTokenCount}</span>
+            </div>
+            <div>
+              <span className="text-foreground">Minted (since boot): </span>
+              <span className="font-mono">{data.totalMinted}</span>
+            </div>
+            <div>
+              <span className="text-foreground">Revoked (since boot): </span>
+              <span className="font-mono">{data.totalRevoked}</span>
+            </div>
+            <div>
+              <span className="text-foreground">Token TTL: </span>
+              <span className="font-mono">{Math.round(data.defaultTtlMs / 60_000)}m</span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

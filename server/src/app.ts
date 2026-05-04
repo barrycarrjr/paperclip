@@ -53,6 +53,11 @@ import { createPluginWorkerManager, type PluginWorkerManager } from "./services/
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
+import {
+  createPluginMcpBridge,
+  setPluginMcpBridge,
+} from "./services/plugin-mcp-bridge.js";
+import { internalMcpRoutes } from "./routes/internal-mcp.js";
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
 import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
@@ -239,9 +244,19 @@ export async function createApp(
     externalMcpToolSource: externalMcpSource,
     externalMcpServerManager: externalMcpManager,
   });
-  // chatRoutes mounted here (after toolDispatcher exists) so chat-Agent
-  // sessions can surface plugin tools via the dispatcher.
-  api.use(chatRoutes(db, { pluginToolDispatcher: toolDispatcher }));
+  // Plugin MCP bridge — exposes plugin tools to spawned LLM subprocesses
+  // (claude_local → Claude Code) via in-process Streamable HTTP MCP. Lives
+  // alongside External MCP infrastructure but with the role inverted (we
+  // host an MCP server here; external-mcp-server-manager.ts is the client
+  // counterpart).
+  const pluginMcpBridge = createPluginMcpBridge({ pluginToolDispatcher: toolDispatcher });
+  setPluginMcpBridge(pluginMcpBridge);
+  api.use(internalMcpRoutes());
+
+  // chatRoutes mounted here (after toolDispatcher + bridge exist) so
+  // chat-Agent sessions can surface plugin tools via the dispatcher AND
+  // mint MCP bridge tokens for adapter-execute providers.
+  api.use(chatRoutes(db, { pluginToolDispatcher: toolDispatcher, pluginMcpBridge }));
   const jobCoordinator = createPluginJobCoordinator({
     db,
     lifecycle,

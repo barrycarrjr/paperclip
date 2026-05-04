@@ -87,6 +87,14 @@ export interface AdapterTurnContext {
   prevSessionParams: Record<string, unknown> | null;
   /** Persist updated sessionParams (or null to clear) for the next turn. */
   saveSessionParams: (params: Record<string, unknown> | null) => Promise<void>;
+  /**
+   * URL to the plugin MCP bridge for this turn (e.g.
+   * `http://127.0.0.1:3100/api/internal/mcp/<token>`). Set by chat.ts
+   * when the session is agent-mode and a bridge token was minted.
+   * claude_local consumes this and writes a temp .mcp.json before
+   * spawning Claude Code so plugin tools become callable.
+   */
+  pluginMcpUrl?: string;
 }
 
 export type ProviderStreamEvent =
@@ -1037,6 +1045,13 @@ class AdapterExecuteProvider implements ChatProvider {
         paperclipTaskMarkdown: userPrompt,
         clippy: true,
       };
+      // When the chat layer minted an MCP bridge URL+token for this turn,
+      // pass it through. claude_local consumes this and writes a temp
+      // .mcp.json so the spawned Claude Code can call Paperclip plugin
+      // tools as if they were native MCP tools.
+      if (ctx.pluginMcpUrl) {
+        adapterContext.pluginMcpUrl = ctx.pluginMcpUrl;
+      }
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = await adapter.execute({

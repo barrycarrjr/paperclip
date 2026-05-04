@@ -188,11 +188,20 @@ export interface ChatServiceOptions {
    * Agent mode is limited to the hardcoded chat tools.
    */
   pluginToolDispatcher?: PluginToolDispatcher | null;
+  /**
+   * Plugin MCP bridge. When provided, chat-Agent sessions running on
+   * adapter-execute providers (e.g. claude_local) get an ephemeral MCP
+   * token minted per turn so the spawned LLM subprocess can call plugin
+   * tools via the bridge. Without it, those adapter sessions only see
+   * whatever tools the adapter natively exposes.
+   */
+  pluginMcpBridge?: import("./plugin-mcp-bridge.js").PluginMcpBridge | null;
 }
 
 export function chatService(db: Db, options: ChatServiceOptions = {}) {
   const attachments = chatAttachmentService(db);
   const pluginToolDispatcher = options.pluginToolDispatcher ?? null;
+  const pluginMcpBridge = options.pluginMcpBridge ?? null;
 
   // Pre-load attachment bytes referenced anywhere in the conversation so
   // providers can splice base64 inline without async fanout during the stream.
@@ -469,6 +478,35 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       tools = undefined;
     }
 
+    // Plugin MCP bridge token is minted ONCE per turn-stream invocation
+    // and reused across the tool-loop iterations below; revoked in the
+    // post-loop cleanup. Adapter-execute providers (claude_local) read
+    // pluginMcpUrl from adapterContext and write it into a temp .mcp.json
+    // so the spawned LLM subprocess can call plugin tools as MCP tools.
+    let mcpBridgeToken: string | null = null;
+    let pluginMcpUrl: string | undefined;
+    if (
+      session.mode === "agent" &&
+      provider.name === "adapter" &&
+      defaultCompanyId &&
+      pluginMcpBridge
+    ) {
+      try {
+        mcpBridgeToken = pluginMcpBridge.mintToken({
+          chatSessionId: session.id,
+          companyId: defaultCompanyId,
+          actor,
+        });
+        const port = process.env.PAPERCLIP_LISTEN_PORT ?? "3100";
+        pluginMcpUrl = `http://127.0.0.1:${port}/api/internal/mcp/${mcpBridgeToken}`;
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          "Failed to mint MCP bridge token; adapter session will run without plugin tools",
+        );
+      }
+    }
+
     let loops = 0;
     while (loops < MAX_TOOL_LOOPS && !aborted) {
       loops += 1;
@@ -497,6 +535,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
               .where(eq(chatSessions.id, session.id));
             session = { ...session, adapterSessionParams: params };
           },
+          pluginMcpUrl,
         },
       });
 
@@ -619,6 +658,13 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
 
       await appendToolResults(sessionId, toolResults);
       session = await getSession(actor, sessionId);
+    }
+
+    // Revoke the per-turn MCP bridge token now that the turn is over.
+    // Token has a TTL fallback in the bridge, so a missed revoke just
+    // means it lingers for a day, not a leak. Best effort either way.
+    if (mcpBridgeToken && pluginMcpBridge) {
+      pluginMcpBridge.revokeToken(mcpBridgeToken);
     }
 
     if (loops >= MAX_TOOL_LOOPS) {
