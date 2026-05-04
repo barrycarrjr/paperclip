@@ -8,13 +8,16 @@ import { CheckIcon } from "lucide-react";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   chatApi,
+  type AvailableModel,
   type ChatAttachmentSummary,
   type ChatMode,
   type EffortLevel,
@@ -66,6 +69,116 @@ interface Props {
 }
 
 const MAX_ATTACHMENTS = 8;
+
+interface ModelGroup {
+  key: string;
+  label: string;
+  tagline: string;
+  items: AvailableModel[];
+}
+
+const PROVIDER_INFO: Record<string, { label: string; tagline: string; order: number }> = {
+  anthropic: {
+    label: "Anthropic",
+    tagline: "Claude API — uses ANTHROPIC_API_KEY.",
+    order: 10,
+  },
+  openai: {
+    label: "OpenAI",
+    tagline: "GPT API — uses OPENAI_API_KEY.",
+    order: 20,
+  },
+  gemini: {
+    label: "Google Gemini",
+    tagline: "Gemini API — uses GEMINI_API_KEY.",
+    order: 30,
+  },
+  ollama: {
+    label: "Ollama",
+    tagline: "Local models — no network, no API keys.",
+    order: 40,
+  },
+  claude_local: {
+    label: "Claude (local CLI)",
+    tagline: "Routed via your local Claude CLI session — no direct API key.",
+    order: 50,
+  },
+  codex_local: {
+    label: "OpenAI Codex (local CLI)",
+    tagline: "Routed via your local OpenAI Codex CLI session.",
+    order: 60,
+  },
+  aider_local: {
+    label: "Aider (local CLI)",
+    tagline: "Aider CLI driving local Ollama models.",
+    order: 70,
+  },
+  gemini_local: {
+    label: "Gemini (local CLI)",
+    tagline: "Routed via your local Gemini CLI session — no direct API key.",
+    order: 80,
+  },
+  ollama_local: {
+    label: "Ollama (local CLI)",
+    tagline: "Local Ollama models exposed through the Ollama CLI adapter.",
+    order: 90,
+  },
+  opencode_local: {
+    label: "OpenCode (local CLI)",
+    tagline: "Routed via the OpenCode CLI — multi-provider gateway running on your machine.",
+    order: 100,
+  },
+  cursor: {
+    label: "Cursor",
+    tagline: "Models exposed via your Cursor session — covers Anthropic, OpenAI, Gemini, xAI, etc.",
+    order: 110,
+  },
+};
+
+function prettifyAdapterKey(key: string): string {
+  // Turn "foo_bar_local" into "Foo Bar (local CLI)" so unknown adapters
+  // don't render as raw snake_case ALL CAPS in the dropdown header.
+  const stripped = key.endsWith("_local") ? key.slice(0, -"_local".length) : key;
+  const titled = stripped
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+  return key.endsWith("_local") ? `${titled} (local CLI)` : titled;
+}
+
+function infoForGroupKey(key: string): { label: string; tagline: string; order: number } {
+  return (
+    PROVIDER_INFO[key] ?? {
+      label: prettifyAdapterKey(key),
+      tagline: key.endsWith("_local")
+        ? "Routed via a local CLI adapter."
+        : "Additional provider.",
+      order: 1000,
+    }
+  );
+}
+
+function groupModels(models: AvailableModel[]): ModelGroup[] {
+  const buckets = new Map<string, AvailableModel[]>();
+  for (const m of models) {
+    const key = m.source ?? m.provider;
+    const list = buckets.get(key);
+    if (list) list.push(m);
+    else buckets.set(key, [m]);
+  }
+  return [...buckets.entries()]
+    .map(([key, items]): ModelGroup => {
+      const info = infoForGroupKey(key);
+      return { key, label: info.label, tagline: info.tagline, items };
+    })
+    .sort((a, b) => {
+      const ao = infoForGroupKey(a.key).order;
+      const bo = infoForGroupKey(b.key).order;
+      if (ao !== bo) return ao - bo;
+      return a.label.localeCompare(b.label);
+    });
+}
 
 function ModeSelectItem({
   value,
@@ -427,27 +540,34 @@ export function ClippyComposer({
                         </SelectItem>
                       );
                     })()}
-                    {models.map((m) => {
-                      // Adapter-routed models are encoded as "adapter:<type>:<modelId>".
-                      // Show the user the bare model id with a "via <adapter>" tag so
-                      // they know it's running through their adapter's auth (e.g.
-                      // Claude Pro), not a direct API key.
-                      const isAdapterRouted = m.provider === "adapter" && m.model.startsWith("adapter:");
-                      let displayModel = m.model;
-                      let label = m.source ? `${m.source} → ${m.provider}` : m.provider;
-                      if (isAdapterRouted) {
-                        const rest = m.model.slice("adapter:".length);
-                        const sep = rest.indexOf(":");
-                        if (sep > 0) displayModel = rest.slice(sep + 1);
-                        label = `via ${m.source ?? "adapter"}`;
-                      }
-                      return (
-                        <SelectItem key={`${m.provider}:${m.model}:${m.source ?? ""}`} value={m.model}>
-                          <span className="font-mono">{displayModel}</span>
-                          <span className="ml-2 text-[10px] text-muted-foreground">{label}</span>
-                        </SelectItem>
-                      );
-                    })}
+                    {groupModels(models).map((group) => (
+                      <SelectGroup key={group.key}>
+                        <SelectLabel className="px-2 pt-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                          {group.label}
+                        </SelectLabel>
+                        <div className="px-2 pb-1 text-[10px] leading-snug text-muted-foreground">
+                          {group.tagline}
+                        </div>
+                        {group.items.map((m) => {
+                          const isAdapterRouted =
+                            m.provider === "adapter" && m.model.startsWith("adapter:");
+                          let displayModel = m.model;
+                          if (isAdapterRouted) {
+                            const rest = m.model.slice("adapter:".length);
+                            const sep = rest.indexOf(":");
+                            if (sep > 0) displayModel = rest.slice(sep + 1);
+                          }
+                          return (
+                            <SelectItem
+                              key={`${m.provider}:${m.model}:${m.source ?? ""}`}
+                              value={m.model}
+                            >
+                              <span className="font-mono">{displayModel}</span>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectGroup>
+                    ))}
                   </>
                 )}
               </SelectContent>
