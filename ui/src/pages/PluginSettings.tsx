@@ -27,6 +27,9 @@ import {
   getDefaultValues,
   type JsonSchemaNode,
 } from "@/components/JsonSchemaForm";
+import { MarkdownBody } from "@/components/MarkdownBody";
+
+type PluginSettingsTab = "status" | "setup" | "configuration";
 
 /**
  * PluginSettings page component.
@@ -63,7 +66,7 @@ export function PluginSettings() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { companyPrefix, pluginId } = useParams<{ companyPrefix?: string; pluginId: string }>();
-  const [activeTab, setActiveTab] = useState<"configuration" | "status">("configuration");
+  const [activeTab, setActiveTab] = useState<PluginSettingsTab>("status");
 
   const { data: plugin, isLoading: pluginLoading } = useQuery({
     queryKey: queryKeys.plugins.detail(pluginId!),
@@ -133,7 +136,11 @@ export function PluginSettings() {
   }, [selectedCompany?.name, setBreadcrumbs, companyPrefix, plugin]);
 
   useEffect(() => {
-    setActiveTab("configuration");
+    // Default landing tab: Status. The arrival order is intentional —
+    // glance at Status first ("is it healthy?"), then Setup if you need
+    // instructions, then Configuration when you actually want to change
+    // settings.
+    setActiveTab("status");
   }, [pluginId]);
 
   if (pluginLoading) {
@@ -152,6 +159,9 @@ export function PluginSettings() {
         ? "destructive"
         : "secondary";
   const pluginDescription = plugin.manifestJson.description || "No description provided.";
+  // Optional markdown walkthrough surfaced in the "Setup" tab. Plugins
+  // without it just don't show that tab.
+  const setupInstructions = (plugin.manifestJson as { setupInstructions?: string }).setupInstructions?.trim() || null;
   const pluginCapabilities = plugin.manifestJson.capabilities ?? [];
 
   return (
@@ -174,16 +184,35 @@ export function PluginSettings() {
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "configuration" | "status")} className="space-y-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PluginSettingsTab)} className="space-y-6">
         <PageTabBar
           align="start"
           items={[
-            { value: "configuration", label: "Configuration" },
             { value: "status", label: "Status" },
+            ...(setupInstructions
+              ? [{ value: "setup", label: "Setup" }]
+              : []),
+            { value: "configuration", label: "Configuration" },
           ]}
           value={activeTab}
-          onValueChange={(value) => setActiveTab(value as "configuration" | "status")}
+          onValueChange={(value) => setActiveTab(value as PluginSettingsTab)}
         />
+
+        {setupInstructions ? (
+          <TabsContent value="setup" className="space-y-6">
+            <section className="space-y-4">
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold">Setup</h2>
+                <p className="text-sm text-muted-foreground">
+                  Walkthrough provided by the plugin author. Read this before filling out the Configuration tab.
+                </p>
+              </div>
+              <div className="rounded-md border bg-card p-6">
+                <MarkdownBody>{setupInstructions}</MarkdownBody>
+              </div>
+            </section>
+          </TabsContent>
+        ) : null}
 
         <TabsContent value="configuration" className="space-y-6">
           <div className="space-y-8">

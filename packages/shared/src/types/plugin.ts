@@ -329,6 +329,19 @@ export interface PaperclipPluginManifestV1 {
   launchers?: PluginLauncherDeclaration[];
   /** UI bundle declarations. Requires `entrypoints.ui` when populated. */
   ui?: PluginUiDeclaration;
+  /**
+   * Operator-facing setup walkthrough rendered as a "Setup" tab on the
+   * plugin's settings page. Markdown source. Optional — plugins without it
+   * just don't show the Setup tab.
+   *
+   * Use for: API key + secret creation steps, external-system config
+   * (e.g. SIP trunks, OAuth apps), cross-references to dashboards the
+   * operator needs to visit. Anything an operator needs to read AT
+   * install time to get the plugin working.
+   *
+   * Render order on the settings page: Status → Setup → Configuration.
+   */
+  setupInstructions?: string;
 }
 
 // ---------------------------------------------------------------------------

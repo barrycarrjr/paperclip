@@ -476,6 +476,10 @@ export const pluginManifestV1Schema = z.object({
     slots: z.array(pluginUiSlotDeclarationSchema).min(1).optional(),
     launchers: z.array(pluginLauncherDeclarationSchema).optional(),
   }).optional(),
+  // Operator-facing setup walkthrough rendered as a "Setup" tab on the
+  // plugin settings page. Markdown source. Optional — plugins without it
+  // just don't show the Setup tab.
+  setupInstructions: z.string().max(50_000).optional(),
 }).superRefine((manifest, ctx) => {
   // ── Entrypoint ↔ UI slot consistency ──────────────────────────────────
   // Plugins that declare UI slots must also declare a UI entrypoint so the
