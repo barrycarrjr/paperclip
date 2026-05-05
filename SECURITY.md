@@ -2,7 +2,9 @@
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities through GitHub's Security Advisory feature:
-[https://github.com/paperclipai/paperclip/security/advisories/new](https://github.com/paperclipai/paperclip/security/advisories/new)
+This is a private fork. Report security vulnerabilities directly to the
+fork owner at **barrycarrjr@gmail.com** rather than opening a public issue.
 
-Do not open public issues for security vulnerabilities.
+If you came here from the upstream Paperclip project, please report there
+instead — issues found in unmodified upstream code should go to
+[paperclipai/paperclip](https://github.com/paperclipai/paperclip/security/advisories/new).

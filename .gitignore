@@ -42,9 +42,13 @@ diagnostics/
 *.tmp
 .vscode/
 .claude/settings.local.json
+.claude/launch.json
+.claude/skills/
 .paperclip-local/
 /.idea/
 /.agents/
+/skills/
+/.github/pr-screenshots/
 
 # Doc maintenance cursor
 .doc-review-cursor

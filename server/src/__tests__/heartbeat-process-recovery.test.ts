@@ -28,8 +28,6 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { runningProcesses } from "../adapters/index.ts";
-const mockTelemetryClient = vi.hoisted(() => ({ track: vi.fn() }));
-const mockTrackAgentFirstHeartbeat = vi.hoisted(() => vi.fn());
 const mockAdapterExecute = vi.hoisted(() =>
   vi.fn(async () => ({
     exitCode: 0,
@@ -41,20 +39,6 @@ const mockAdapterExecute = vi.hoisted(() =>
     model: "test-model",
   })),
 );
-
-vi.mock("../telemetry.ts", () => ({
-  getTelemetryClient: () => mockTelemetryClient,
-}));
-
-vi.mock("@paperclipai/shared/telemetry", async () => {
-  const actual = await vi.importActual<typeof import("@paperclipai/shared/telemetry")>(
-    "@paperclipai/shared/telemetry",
-  );
-  return {
-    ...actual,
-    trackAgentFirstHeartbeat: mockTrackAgentFirstHeartbeat,
-  };
-});
 
 vi.mock("../adapters/index.ts", async () => {
   const actual = await vi.importActual<typeof import("../adapters/index.ts")>("../adapters/index.ts");
@@ -1182,24 +1166,6 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const run = await heartbeat.getRun(runId);
     expect(run?.errorCode).toBeNull();
     expect(run?.error).toBeNull();
-  });
-
-  it("tracks the first heartbeat with the agent role instead of adapter type", async () => {
-    const { agentId, runId } = await seedRunFixture({
-      agentStatus: "running",
-      includeIssue: false,
-    });
-    const heartbeat = heartbeatService(db);
-
-    await heartbeat.cancelRun(runId);
-
-    expect(mockTrackAgentFirstHeartbeat).toHaveBeenCalledWith(
-      mockTelemetryClient,
-      expect.objectContaining({
-        agentRole: "engineer",
-        agentId,
-      }),
-    );
   });
 
   it("records manual cancellation stop metadata", async () => {

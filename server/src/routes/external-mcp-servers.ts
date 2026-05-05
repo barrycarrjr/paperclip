@@ -23,8 +23,29 @@ import {
 import type { ExternalMcpServerManager } from "../services/external-mcp-server-manager.js";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
-import { assertBoard } from "./authz.js";
+import { assertBoard, assertInstanceAdmin } from "./authz.js";
 import { notFound, conflict } from "../errors.js";
+
+/**
+ * External MCP server records carry env-binding secret refs and an
+ * `allowedCompanies` allow-list. They are instance-global resources, so reads
+ * should be filtered to records that overlap the caller's company memberships,
+ * and writes (create/update/delete) require an instance admin. A board user
+ * from one company should not be able to mutate another company's MCP server
+ * config (which would let them rotate secrets, expand allowed companies, or
+ * flip allowMutations).
+ */
+function actorMayReadServer(
+  req: Parameters<typeof assertBoard>[0],
+  allowedCompanies: string[] | null | undefined,
+): boolean {
+  if (req.actor.source === "local_implicit") return true;
+  if (req.actor.isInstanceAdmin) return true;
+  const list = allowedCompanies ?? [];
+  if (list.length === 0) return false;
+  const memberOf = req.actor.companyIds ?? [];
+  return list.some((id) => memberOf.includes(id));
+}
 
 const auditLog = logger.child({ service: "external-mcp-servers-audit" });
 
@@ -84,7 +105,8 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
   router.get("/external-mcp-servers", async (req, res) => {
     assertBoard(req);
     const rows = await db.select().from(externalMcpServers);
-    res.json(rows.map(dbRowToRecord));
+    const visible = rows.filter((row) => actorMayReadServer(req, row.allowedCompanies));
+    res.json(visible.map(dbRowToRecord));
   });
 
   router.get("/external-mcp-servers/:id", async (req, res) => {
@@ -92,6 +114,9 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
     const id = req.params.id as string;
     const rows = await db.select().from(externalMcpServers).where(eq(externalMcpServers.id, id));
     if (rows.length === 0) throw notFound("MCP server not found");
+    if (!actorMayReadServer(req, rows[0].allowedCompanies)) {
+      throw notFound("MCP server not found");
+    }
     res.json(dbRowToRecord(rows[0]));
   });
 
@@ -99,7 +124,7 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
     "/external-mcp-servers",
     validate(createExternalMcpServerSchema),
     async (req, res) => {
-      assertBoard(req);
+      assertInstanceAdmin(req);
       const body = req.body as CreateExternalMcpServer;
 
       const existing = await db
@@ -139,7 +164,7 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
     "/external-mcp-servers/:id",
     validate(updateExternalMcpServerSchema),
     async (req, res) => {
-      assertBoard(req);
+      assertInstanceAdmin(req);
       const id = req.params.id as string;
       const existingRows = await db
         .select()
@@ -201,7 +226,7 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
   );
 
   router.delete("/external-mcp-servers/:id", async (req, res) => {
-    assertBoard(req);
+    assertInstanceAdmin(req);
     const id = req.params.id as string;
     const existingRows = await db
       .select()
@@ -227,7 +252,7 @@ export function externalMcpServerRoutes(db: Db, deps: ExternalMcpRouteDeps = {})
   });
 
   router.post("/external-mcp-servers/:id/test-connect", async (req, res) => {
-    assertBoard(req);
+    assertInstanceAdmin(req);
     if (!manager) {
       res.status(501).json({ error: "External MCP support is not enabled" });
       return;

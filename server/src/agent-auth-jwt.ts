@@ -122,10 +122,11 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
   const now = Math.floor(Date.now() / 1000);
   if (exp < now) return null;
 
-  const issuer = typeof claims.iss === "string" ? claims.iss : undefined;
-  const audience = typeof claims.aud === "string" ? claims.aud : undefined;
-  if (issuer && issuer !== config.issuer) return null;
-  if (audience && audience !== config.audience) return null;
+  // iss and aud are mandatory: tokens minted here always set them, so missing
+  // claims indicate a forged or downgraded token. Reject before they can be
+  // used as bearer credentials.
+  if (typeof claims.iss !== "string" || claims.iss !== config.issuer) return null;
+  if (typeof claims.aud !== "string" || claims.aud !== config.audience) return null;
 
   return {
     sub,
@@ -134,8 +135,8 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
     run_id: runId,
     iat,
     exp,
-    ...(issuer ? { iss: issuer } : {}),
-    ...(audience ? { aud: audience } : {}),
+    iss: claims.iss,
+    aud: claims.aud,
     jti: typeof claims.jti === "string" ? claims.jti : undefined,
   };
 }

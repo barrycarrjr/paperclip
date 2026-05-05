@@ -1165,13 +1165,15 @@ export async function removeClippyWorkspace(sessionId: string): Promise<void> {
 }
 
 function randomId(): string {
-  // RFC4122 v4 lite — adequate for short-lived adapter run identifiers.
-  const bytes = new Uint8Array(16);
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  // RFC4122 v4 — used in JWT claims and clippy session paths, so unguessability
+  // matters. crypto.getRandomValues is mandatory in Node 18+; if it's missing
+  // the runtime is broken or has been polyfilled away — fail loudly rather
+  // than fall back to Math.random().
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    throw new Error("crypto.getRandomValues is unavailable; cannot mint adapter run id");
   }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");

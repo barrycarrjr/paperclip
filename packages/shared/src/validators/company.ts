@@ -13,19 +13,20 @@ export const createCompanySchema = z.object({
 
 export type CreateCompany = z.infer<typeof createCompanySchema>;
 
+// Server-managed fields (consent timestamp/user/terms-version, spent counter)
+// are NOT accepted from request bodies — the route handler sets them based on
+// the actor and the consent transition. Allowing them in the body would let a
+// caller backdate consent, point it at a different user, or zero out spend.
 export const updateCompanySchema = createCompanySchema
   .partial()
   .extend({
     status: z.enum(COMPANY_STATUSES).optional(),
-    spentMonthlyCents: z.number().int().nonnegative().optional(),
     requireBoardApprovalForNewAgents: z.boolean().optional(),
     feedbackDataSharingEnabled: z.boolean().optional(),
-    feedbackDataSharingConsentAt: z.coerce.date().nullable().optional(),
-    feedbackDataSharingConsentByUserId: z.string().min(1).nullable().optional(),
-    feedbackDataSharingTermsVersion: feedbackDataSharingTermsVersionSchema,
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
-  });
+  })
+  .strict();
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;
 

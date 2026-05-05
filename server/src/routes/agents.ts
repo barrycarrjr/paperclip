@@ -30,7 +30,6 @@ import {
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
-import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import {
   agentService,
@@ -82,7 +81,6 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
-import { getTelemetryClient } from "../telemetry.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
 
@@ -1659,11 +1657,6 @@ export function agentRoutes(
         desiredSkills: desiredSkillAssignment.desiredSkills,
       },
     });
-    const telemetryClient = getTelemetryClient();
-    if (telemetryClient) {
-      trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
-    }
-
     await applyDefaultAgentTaskAssignGrant(
       companyId,
       agent.id,
@@ -1771,11 +1764,6 @@ export function agentRoutes(
         desiredSkills: desiredSkillAssignment.desiredSkills,
       },
     });
-    const telemetryClient = getTelemetryClient();
-    if (telemetryClient) {
-      trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
-    }
-
     await applyDefaultAgentTaskAssignGrant(
       companyId,
       agent.id,
@@ -2176,6 +2164,40 @@ export function agentRoutes(
         error: "Use /api/agents/:id/forbidden-paths for forbidden write path changes",
       });
       return;
+    }
+
+    // Block agents from self-mutating fields that would grant them more privilege
+    // (role escalation, budget reset, spend reset, etc.). Board and CEO mutations
+    // of OTHER agents go through the assertCanUpdateAgent path above; only the
+    // self-PATCH bypass is closed here.
+    const isSelfPatch =
+      req.actor.type === "agent" && req.actor.agentId === existing.id;
+    if (isSelfPatch) {
+      const FORBIDDEN_SELF_FIELDS = [
+        "role",
+        "budgetMonthlyCents",
+        "spentMonthlyCents",
+        "defaultEnvironmentId",
+        "status",
+      ] as const;
+      for (const field of FORBIDDEN_SELF_FIELDS) {
+        if (hasOwn(req.body as object, field)) {
+          throw forbidden(
+            `Agents cannot self-modify '${field}'; ask a CEO or board member.`,
+          );
+        }
+      }
+    }
+
+    // Role changes require CEO or board approval even for non-self targets.
+    // assertCanUpdateAgent permits non-CEO agents with an agents:create grant
+    // to update other agents (for hiring), but role escalation must be reserved
+    // to the CEO so a hiring grant can't be used to mint a peer CEO.
+    if (hasOwn(req.body as object, "role") && req.actor.type === "agent") {
+      const actorAgent = await svc.getById(req.actor.agentId!);
+      if (!actorAgent || actorAgent.role !== "ceo") {
+        throw forbidden("Only CEO or board members can change agent roles.");
+      }
     }
 
     const patchData = { ...(req.body as Record<string, unknown>) };

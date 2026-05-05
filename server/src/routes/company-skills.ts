@@ -6,12 +6,10 @@ import {
   companySkillImportSchema,
   companySkillProjectScanRequestSchema,
 } from "@paperclipai/shared";
-import { trackSkillImported } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
 import { forbidden } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
-import { getTelemetryClient } from "../telemetry.js";
 
 type SkillTelemetryInput = {
   key: string;
@@ -213,16 +211,6 @@ export function companySkillRoutes(db: Db) {
           warningCount: result.warnings.length,
         },
       });
-      const telemetryClient = getTelemetryClient();
-      if (telemetryClient) {
-        for (const skill of result.imported) {
-          trackSkillImported(telemetryClient, {
-            sourceType: skill.sourceType,
-            skillRef: deriveTrackedSkillRef(skill),
-          });
-        }
-      }
-
       res.status(201).json(result);
     },
   );

@@ -721,6 +721,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           completedAt: null,
           cancelledAt: null,
           hiddenAt: null,
+          startDate: null,
+          dueDate: null,
           createdAt: now,
           updatedAt: now,
         };

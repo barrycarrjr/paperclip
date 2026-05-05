@@ -88,6 +88,45 @@ const INVITE_TOKEN_PREFIX = "pcp_invite_";
 const INVITE_TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const INVITE_TOKEN_SUFFIX_LENGTH = 8;
 const INVITE_TOKEN_MAX_RETRIES = 5;
+
+// Per-IP rate limiter for the unauthenticated CLI-auth challenge endpoint.
+// Without this, any network-reachable caller can mint unbounded pending board
+// API keys and use them for phishing-bait or to flood the approval queue.
+const CLI_AUTH_CHALLENGE_RATE_WINDOW_MS = 60_000;
+const CLI_AUTH_CHALLENGE_RATE_MAX = 10;
+const CLI_AUTH_CHALLENGE_HISTORY_TTL_MS = 5 * 60_000;
+const cliAuthChallengeHits = new Map<string, number[]>();
+
+function ipKeyForRequest(req: Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return forwarded.split(",")[0]!.trim() || req.ip || "unknown";
+  }
+  return req.ip || (req.socket?.remoteAddress ?? "unknown");
+}
+
+function rateLimitCliAuthChallenge(req: Request): boolean {
+  const now = Date.now();
+  const key = ipKeyForRequest(req);
+  const window = now - CLI_AUTH_CHALLENGE_RATE_WINDOW_MS;
+  const recent = (cliAuthChallengeHits.get(key) ?? []).filter((t) => t > window);
+  if (recent.length >= CLI_AUTH_CHALLENGE_RATE_MAX) {
+    cliAuthChallengeHits.set(key, recent);
+    return false;
+  }
+  recent.push(now);
+  cliAuthChallengeHits.set(key, recent);
+  // Opportunistic GC: evict callers we haven't seen in a while.
+  if (cliAuthChallengeHits.size > 1024) {
+    const cutoff = now - CLI_AUTH_CHALLENGE_HISTORY_TTL_MS;
+    for (const [k, hits] of cliAuthChallengeHits) {
+      if (hits.length === 0 || hits[hits.length - 1] < cutoff) {
+        cliAuthChallengeHits.delete(k);
+      }
+    }
+  }
+  return true;
+}
 const COMPANY_INVITE_TTL_MS = 72 * 60 * 60 * 1000;
 const INVITE_RESOLUTION_DNS_TIMEOUT_MS = 3_000;
 
@@ -2496,6 +2535,13 @@ export function accessRoutes(
     "/cli-auth/challenges",
     validate(createCliAuthChallengeSchema),
     async (req, res) => {
+      if (!rateLimitCliAuthChallenge(req)) {
+        res
+          .status(429)
+          .set("Retry-After", String(Math.ceil(CLI_AUTH_CHALLENGE_RATE_WINDOW_MS / 1000)))
+          .json({ error: "Too many CLI auth challenge requests" });
+        return;
+      }
       const created = await boardAuth.createCliAuthChallenge(req.body);
       const approvalPath = buildCliAuthApprovalPath(
         created.challenge.id,

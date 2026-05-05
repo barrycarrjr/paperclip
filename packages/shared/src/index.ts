@@ -944,8 +944,6 @@ export {
   storageLocalDiskConfigSchema,
   storageS3ConfigSchema,
   secretsLocalEncryptedConfigSchema,
-  telemetryConfigSchema,
-  type TelemetryConfig,
   type PaperclipConfig,
   type LlmConfig,
   type DatabaseBackupConfig,
