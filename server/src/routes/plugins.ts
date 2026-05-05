@@ -2310,8 +2310,17 @@ export function pluginRoutes(
    * of running `paperclipai plugin uninstall <key>; paperclipai plugin install
    * --local <path>` against a local-path plugin whose code has changed.
    *
-   * Only works for plugins installed from a local path (`packagePath` set).
-   * Plugins installed from npm should use `/upgrade` to bump version.
+   * Body (optional):
+   * - `localPath`: explicit source path to reinstall from. Use this when the
+   *   plugin's stored `localSourcePath` is wrong, missing, or points at a
+   *   one-shot temp extract from a `.pcplugin` Library install.
+   *
+   * Default behaviour without `localPath`:
+   * - For `--local` installs: re-reads from the stored localSourcePath.
+   * - For `.pcplugin` Library installs: refuses if the stored localSourcePath
+   *   is in the OS temp dir (a one-shot extract that doesn't reflect any
+   *   editable source) — falls through to the library re-download path.
+   * - For npm installs: should use `/upgrade` to bump version.
    *
    * Response: `PluginRecord` (post-reinstall)
    * Errors:
@@ -2328,15 +2337,55 @@ export function pluginRoutes(
       res.status(404).json({ error: "Plugin not found" });
       return;
     }
-    // Prefer the original source path (set for current-style local installs)
-    // and fall back to packagePath for legacy installs that predate the
-    // managed-install copy.
-    const sourcePath = plugin.localSourcePath ?? plugin.packagePath;
 
-    // Local-path reinstall: source directory must exist on disk.
-    // Library-installed plugins have localSourcePath set to the temp dir that
-    // was cleaned up after installation — those fall through to the library
-    // re-download path below.
+    // Optional explicit override (operator's escape hatch when the stored
+    // localSourcePath is stale / wrong / a temp extract).
+    const overrideLocalPath = (req.body as { localPath?: string } | undefined)?.localPath;
+
+    // Reject paths that look like one-shot temp extracts from .pcplugin
+    // Library installs. These dirs exist on disk but their contents are
+    // frozen at install time and silently re-reading them produces stale
+    // reinstalls (the operator's intent — "pick up my edits" — never works).
+    // Detected by checking whether the path is inside the OS temp dir.
+    const isTempExtract = (p: string): boolean => {
+      try {
+        const real = path.resolve(p);
+        const tmp = path.resolve(os.tmpdir());
+        return real.startsWith(tmp + path.sep) || real === tmp;
+      } catch {
+        return false;
+      }
+    };
+
+    // Choose the source path for this reinstall:
+    //   1. Explicit `localPath` override if provided (and not a temp extract).
+    //   2. Otherwise the stored `localSourcePath`, but only if it's NOT a
+    //      one-shot temp extract.
+    //   3. Otherwise fall back to `packagePath` (legacy installs).
+    let sourcePath: string | null = null;
+    if (overrideLocalPath) {
+      if (isTempExtract(overrideLocalPath)) {
+        res.status(400).json({
+          error:
+            "Refusing to reinstall from a temp directory. Provide a path to your editable source folder (the one with package.json + src/) instead.",
+        });
+        return;
+      }
+      sourcePath = overrideLocalPath;
+    } else if (plugin.localSourcePath && !isTempExtract(plugin.localSourcePath)) {
+      sourcePath = plugin.localSourcePath;
+    } else if (plugin.localSourcePath && isTempExtract(plugin.localSourcePath)) {
+      // Stored path is a stale temp extract from a prior .pcplugin install.
+      // Tell the operator how to recover. Don't silently read stale content.
+      res.status(400).json({
+        error:
+          "This plugin was installed from a .pcplugin Library archive; the stored source path is a one-shot temp extract that no longer reflects any editable source. To pick up code changes, either: (1) POST again with body `{\"localPath\": \"<absolute path to your editable plugin folder>\"}`; (2) upload a fresh .pcplugin via /api/plugins/install-file; or (3) run `paperclipai plugin uninstall <key>` then `paperclipai plugin install --local <path>` to re-bind to an editable source.",
+      });
+      return;
+    } else {
+      sourcePath = plugin.packagePath;
+    }
+
     if (sourcePath && existsSync(sourcePath)) {
       const previousVersion = plugin.version;
       try {
