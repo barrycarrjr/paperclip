@@ -263,6 +263,24 @@ export {
 } from "./memory.js";
 
 export {
+  WORK_QUEUE_ITEM_STATUSES,
+  workQueueSlugSchema,
+  createWorkQueueSchema,
+  updateWorkQueueSchema,
+  enqueueWorkQueueItemSchema,
+  completeWorkQueueItemSchema,
+  failWorkQueueItemSchema,
+  workQueueItemListQuerySchema,
+  type WorkQueueItemStatus,
+  type CreateWorkQueue,
+  type UpdateWorkQueue,
+  type EnqueueWorkQueueItem,
+  type CompleteWorkQueueItem,
+  type FailWorkQueueItem,
+  type WorkQueueItemListQuery,
+} from "./work-queue.js";
+
+export {
   createApprovalSchema,
   resolveApprovalSchema,
   requestApprovalRevisionSchema,

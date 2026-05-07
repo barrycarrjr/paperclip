@@ -30,6 +30,11 @@ export { issueApprovalService } from "./issue-approvals.js";
 export { issueReferenceService } from "./issue-references.js";
 export { goalService } from "./goals.js";
 export { memoryService, type MemoryService, type MemoryListFilter, type MemoryActor } from "./memories.js";
+export {
+  workQueueService,
+  WorkQueueClaimRaceError,
+  type WorkQueueService,
+} from "./work-queues.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";

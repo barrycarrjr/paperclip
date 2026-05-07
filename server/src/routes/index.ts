@@ -8,6 +8,7 @@ export { issueTreeControlRoutes } from "./issue-tree-control.js";
 export { routineRoutes } from "./routines.js";
 export { goalRoutes } from "./goals.js";
 export { memoryRoutes } from "./memories.js";
+export { workQueueRoutes } from "./work-queues.js";
 export { approvalRoutes } from "./approvals.js";
 export { secretRoutes } from "./secrets.js";
 export { costRoutes } from "./costs.js";
