@@ -50,43 +50,42 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const actorName = actor?.name ?? (event.actorType === "system" ? "System" : userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
   const actorAvatarUrl = userProfile?.image ?? null;
 
-  const inner = (
-    <div className="space-y-2">
-      <div className="flex gap-3">
-        <p className="flex-1 min-w-0 truncate">
-          <Identity
-            name={actorName}
-            avatarUrl={actorAvatarUrl}
-            size="xs"
-            className="align-middle"
-          />
-          <span className="text-muted-foreground ml-1">{verb} </span>
-          {name && <span className="font-medium">{name}</span>}
-          {entityTitle && <span className="text-muted-foreground ml-1">— {entityTitle}</span>}
-        </p>
-        <span className="text-xs text-muted-foreground shrink-0 pt-0.5">{timeAgo(event.createdAt)}</span>
-      </div>
-      <IssueReferenceActivitySummary event={event} />
+  const headline = (
+    <div className="flex gap-3">
+      <p className="flex-1 min-w-0 truncate">
+        <Identity
+          name={actorName}
+          avatarUrl={actorAvatarUrl}
+          size="xs"
+          className="align-middle"
+        />
+        <span className="text-muted-foreground ml-1">{verb} </span>
+        {name && <span className="font-medium">{name}</span>}
+        {entityTitle && <span className="text-muted-foreground ml-1">— {entityTitle}</span>}
+      </p>
+      <span className="text-xs text-muted-foreground shrink-0 pt-0.5">{timeAgo(event.createdAt)}</span>
     </div>
   );
 
   const classes = cn(
-    "px-4 py-2 text-sm",
-    link && "cursor-pointer hover:bg-accent/50 transition-colors",
+    "px-4 py-2 text-sm space-y-2",
+    link && "hover:bg-accent/50 transition-colors",
     className,
   );
 
-  if (link) {
-    return (
-      <Link to={link} className={cn(classes, "no-underline text-inherit block")}>
-        {inner}
-      </Link>
-    );
-  }
-
+  // The headline links to the activity's primary entity, while the
+  // IssueReferenceActivitySummary renders its own per-issue pill links. We
+  // keep them as siblings so anchors never nest.
   return (
     <div className={classes}>
-      {inner}
+      {link ? (
+        <Link to={link} className="no-underline text-inherit block cursor-pointer">
+          {headline}
+        </Link>
+      ) : (
+        headline
+      )}
+      <IssueReferenceActivitySummary event={event} />
     </div>
   );
 }
