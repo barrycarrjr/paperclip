@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/EmptyState";
+import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
@@ -213,8 +214,73 @@ export function WorkQueues() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Work queues</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Work queues</h1>
+            <InfoPopoverButton
+              title="What work queues are for"
+              info={
+                <>
+                  <p>
+                    A queue is a named work stream — support tickets, leads,
+                    Rollbar errors, anything that arrives continuously. Webhooks
+                    or operators drop items in; agents claim and complete them
+                    one at a time. The platform handles the boring parts: race-
+                    safe claiming, retries on failure, dedupe by external ID.
+                  </p>
+                  <p className="font-medium text-foreground">How to wire one up</p>
+                  <ol className="ml-4 list-decimal space-y-1">
+                    <li>Create the queue here with a stable slug.</li>
+                    <li>
+                      Point the source at{" "}
+                      <code className="rounded bg-muted px-1 text-[11px]">
+                        POST /api/work-queues/&lt;id&gt;/items
+                      </code>{" "}
+                      with the payload as JSON. Set{" "}
+                      <code className="rounded bg-muted px-1 text-[11px]">
+                        externalSource
+                      </code>{" "}
+                      and{" "}
+                      <code className="rounded bg-muted px-1 text-[11px]">
+                        externalId
+                      </code>{" "}
+                      for idempotent dedupe.
+                    </li>
+                    <li>
+                      Give an agent the{" "}
+                      <code className="rounded bg-muted px-1 text-[11px]">
+                        work-queue-runner
+                      </code>{" "}
+                      skill and a routine that fires it with{" "}
+                      <code className="rounded bg-muted px-1 text-[11px]">
+                        queueSlug
+                      </code>
+                      .
+                    </li>
+                  </ol>
+                  <p className="font-medium text-foreground">Item lifecycle</p>
+                  <p>
+                    pending → claimed → completed | failed. Agents claim with a
+                    single atomic UPDATE — two agents racing produce exactly one
+                    winner. Operators can cancel pending items inline; failed
+                    items stay visible so they aren't silently dropped.
+                  </p>
+                  <p className="font-medium text-foreground">When to use one</p>
+                  <p>
+                    When work arrives continuously and any agent in a role can
+                    handle it. For one-off tasks, file an issue. For scheduled
+                    work without external input, use a routine.
+                  </p>
+                </>
+              }
+              contentClassName="w-96"
+            />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Streams of inbound work — support tickets, leads, errors — that agents claim one item at a time.
+          </p>
+        </div>
         <Button size="sm" onClick={() => setCreateQueueOpen(true)}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
           New queue
@@ -224,7 +290,7 @@ export function WorkQueues() {
       {queues.length === 0 ? (
         <EmptyState
           icon={Inbox}
-          message="No queues yet. Create one to give agents a steady stream of work — support tickets, lead intake, error monitoring, anything that arrives continuously."
+          message="No queues yet. Pick a slug like 'support', 'inbound-leads', or 'rollbar-errors', then point the source webhook at the items endpoint. Agents on the work-queue-runner skill will start claiming items as soon as they arrive."
           action="Create your first queue"
           onAction={() => setCreateQueueOpen(true)}
         />

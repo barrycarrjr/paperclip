@@ -18,6 +18,7 @@ import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "
 import { getRecentProjectIds, trackRecentProject } from "../lib/recent-projects";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { EmptyState } from "../components/EmptyState";
+import { InfoPopoverButton } from "../components/InfoPopoverButton";
 import { IssuesList } from "../components/IssuesList";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
@@ -563,9 +564,68 @@ export function Routines() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Routines
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Routines</h1>
+            <InfoPopoverButton
+              title="What routines are for"
+              info={
+                <>
+                  <p>
+                    A routine is a recurring task that fires on a schedule.
+                    Each fire creates a fresh execution issue assigned to an
+                    agent — so the work is auditable and replayable, not just
+                    a "ran at 9am" log line.
+                  </p>
+                  <p className="font-medium text-foreground">Routine vs issue vs work queue</p>
+                  <ul className="ml-4 list-disc space-y-1">
+                    <li>
+                      <span className="font-medium">Issue</span> — one-off work
+                      that has a definition of done.
+                    </li>
+                    <li>
+                      <span className="font-medium">Routine</span> — work that
+                      should happen on a clock (daily report, hourly sweep).
+                    </li>
+                    <li>
+                      <span className="font-medium">Work queue</span> — work
+                      that arrives continuously from outside (tickets, leads,
+                      errors). Use a routine to drive a queue runner if the
+                      arrival rate is steady; pair them.
+                    </li>
+                  </ul>
+                  <p className="font-medium text-foreground">Concurrency policy</p>
+                  <p>
+                    Controls what happens when the routine fires while a
+                    previous run is still active.{" "}
+                    <span className="font-medium">coalesce_if_active</span>{" "}
+                    keeps one follow-up queued (the safe default).{" "}
+                    <span className="font-medium">always_enqueue</span> stacks
+                    every fire (use only when each fire is independent).{" "}
+                    <span className="font-medium">skip_if_active</span> drops
+                    new fires entirely (use for "best effort" work).
+                  </p>
+                  <p className="font-medium text-foreground">Catch-up policy</p>
+                  <p>
+                    What happens to fires the scheduler missed (paused
+                    instance, restart).{" "}
+                    <span className="font-medium">skip_missed</span> ignores
+                    them. <span className="font-medium">enqueue_missed_with_cap</span>{" "}
+                    re-fires them, capped, so the agent doesn't drown.
+                  </p>
+                  <p className="font-medium text-foreground">Variables</p>
+                  <p>
+                    <code className="rounded bg-muted px-1 text-[11px]">
+                      {"{{name}}"}
+                    </code>{" "}
+                    placeholders are substituted only at fire time. The UI
+                    list shows the raw template — that's expected. Hardcode
+                    the title, put placeholders in the description body only.
+                  </p>
+                </>
+              }
+              contentClassName="w-96"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             Recurring work definitions that materialize into auditable execution issues.
           </p>

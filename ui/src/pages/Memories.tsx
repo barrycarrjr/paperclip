@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/EmptyState";
+import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
@@ -168,6 +169,64 @@ export function Memories() {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Memories</h1>
+            <InfoPopoverButton
+              title="What memories are for"
+              info={
+                <>
+                  <p>
+                    Durable notes that agents and operators save so the next run starts
+                    warm. Without memories, every agent starts from zero each time.
+                  </p>
+                  <p className="font-medium text-foreground">The four kinds</p>
+                  <ul className="ml-4 list-disc space-y-1">
+                    <li>
+                      <span className="font-medium">user</span> — facts about the
+                      operator (you) and how you work
+                    </li>
+                    <li>
+                      <span className="font-medium">feedback</span> — corrections,
+                      preferences, and validated approaches the agent should follow
+                    </li>
+                    <li>
+                      <span className="font-medium">project</span> — ongoing work,
+                      deadlines, and decisions that aren't in code or git history
+                    </li>
+                    <li>
+                      <span className="font-medium">reference</span> — pointers to
+                      where information lives (Linear board, Slack channel, dashboard)
+                    </li>
+                  </ul>
+                  <p className="font-medium text-foreground">Scope</p>
+                  <p>
+                    Leave the agent dropdown blank and the memory is company-wide —
+                    every agent in this company can read it. Pick an agent and the
+                    memory only applies to that one.
+                  </p>
+                  <p className="font-medium text-foreground">When to add one</p>
+                  <p>
+                    When you correct an agent or learn something non-obvious you'd
+                    have to repeat. If removing the memory would force a future
+                    conversation to re-discover the fact, it's worth saving.
+                  </p>
+                </>
+              }
+              contentClassName="w-96"
+            />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Durable notes — facts, preferences, decisions — that agents save and recall across runs.
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1.5" />
+          New Memory
+        </Button>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[220px] max-w-xs">
           <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -202,12 +261,6 @@ export function Memories() {
             </option>
           ))}
         </select>
-        <div className="ml-auto">
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
-            New Memory
-          </Button>
-        </div>
       </div>
 
       {memoriesQuery.error && (
@@ -220,7 +273,7 @@ export function Memories() {
           message={
             search || kindFilter || agentFilter
               ? "No memories match these filters."
-              : "No memories yet. Agents and operators can save durable notes here so the next run starts warm."
+              : "No memories yet. Save the kind of facts you'd otherwise have to re-explain to an agent every run — your role, the project's deadline, that the print shop closes Wednesdays. Agents read these automatically; you don't have to manually pass them in."
           }
           action="Add Memory"
           onAction={() => setCreateOpen(true)}
