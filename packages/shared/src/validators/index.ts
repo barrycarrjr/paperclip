@@ -248,6 +248,21 @@ export {
 } from "./goal.js";
 
 export {
+  MEMORY_KINDS,
+  MEMORY_NAME_MAX,
+  MEMORY_DESCRIPTION_MAX,
+  MEMORY_CONTENT_MAX,
+  memoryKindSchema,
+  createMemorySchema,
+  updateMemorySchema,
+  memoryListQuerySchema,
+  type MemoryKind,
+  type CreateMemory,
+  type UpdateMemory,
+  type MemoryListQuery,
+} from "./memory.js";
+
+export {
   createApprovalSchema,
   resolveApprovalSchema,
   requestApprovalRevisionSchema,

@@ -28,6 +28,7 @@ export { workspaceOperations } from "./workspace_operations.js";
 export { workspaceRuntimeServices } from "./workspace_runtime_services.js";
 export { projectGoals } from "./project_goals.js";
 export { goals } from "./goals.js";
+export { memories } from "./memories.js";
 export { issues } from "./issues.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";
 export { issueRelations } from "./issue_relations.js";
