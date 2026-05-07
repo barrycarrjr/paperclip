@@ -189,3 +189,13 @@ export function useCompany() {
   }
   return ctx;
 }
+
+/**
+ * Returns the company context if available, or null when rendered outside a
+ * CompanyProvider (e.g. in unit tests that mount components in isolation).
+ * Use this when a component wants to opt into company-derived behavior but
+ * shouldn't crash without it.
+ */
+export function useCompanyOptional() {
+  return useContext(CompanyContext);
+}

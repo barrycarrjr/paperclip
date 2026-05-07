@@ -9,6 +9,36 @@ const BARE_ISSUE_IDENTIFIER_RE = /^[A-Z][A-Z0-9]+-\d+$/i;
 const ISSUE_SCHEME_RE = /^issue:\/\/:?([^?#\s]+)(?:[?#].*)?$/i;
 const ISSUE_REFERENCE_TOKEN_RE = /issue:\/\/:?[^\s<>()]+|https?:\/\/[^\s<>()]+|\/(?:[^\s<>()/]+\/)*issues\/[A-Z][A-Z0-9]+-\d+(?=$|[\s<>)\],.;!?:])|\b[A-Z][A-Z0-9]+-\d+\b/gi;
 
+export interface IssueReferenceLinkifyOptions {
+  /**
+   * If provided, only bare identifiers (e.g. `PAP-123`) whose prefix matches one
+   * of these values are auto-linkified. URL-style references (`issue://...`,
+   * `/issues/...`) bypass this check because they're explicit user intent.
+   *
+   * Pass `undefined` to allow any prefix (default). Pass an empty array to
+   * disable bare-identifier linkification entirely (useful while the company
+   * list is still loading, to avoid spamming `/api/issues/{whatever}` 404s).
+   */
+  knownPrefixes?: ReadonlyArray<string>;
+}
+
+function isBareIdentifierToken(value: string): boolean {
+  return BARE_ISSUE_IDENTIFIER_RE.test(value.trim());
+}
+
+function isPrefixAllowed(
+  identifier: string,
+  knownPrefixes: ReadonlyArray<string> | undefined,
+): boolean {
+  if (knownPrefixes === undefined) return true;
+  const prefix = identifier.split("-", 1)[0]?.toUpperCase();
+  if (!prefix) return false;
+  for (const candidate of knownPrefixes) {
+    if (candidate.toUpperCase() === prefix) return true;
+  }
+  return false;
+}
+
 export function parseIssuePathIdFromPath(pathOrUrl: string | null | undefined): string | null {
   if (!pathOrUrl) return null;
   const pathname = pathOrUrl.trim();
@@ -83,7 +113,10 @@ function createIssueLinkNode(value: string, href: string, childType: "text" | "i
   };
 }
 
-function linkifyIssueReferencesInText(value: string): MarkdownNode[] | null {
+function linkifyIssueReferencesInText(
+  value: string,
+  knownPrefixes: ReadonlyArray<string> | undefined,
+): MarkdownNode[] | null {
   const nodes: MarkdownNode[] = [];
   let cursor = 0;
   let matched = false;
@@ -97,6 +130,9 @@ function linkifyIssueReferencesInText(value: string): MarkdownNode[] | null {
     const { core, trailing } = splitTrailingPunctuation(raw);
     const issueRef = parseIssueReferenceFromHref(core);
     if (!issueRef) continue;
+    if (isBareIdentifierToken(core) && !isPrefixAllowed(issueRef.issuePathId, knownPrefixes)) {
+      continue;
+    }
 
     matched = true;
     if (start > cursor) {
@@ -116,7 +152,10 @@ function linkifyIssueReferencesInText(value: string): MarkdownNode[] | null {
   return nodes;
 }
 
-function rewriteMarkdownTree(node: MarkdownNode) {
+function rewriteMarkdownTree(
+  node: MarkdownNode,
+  knownPrefixes: ReadonlyArray<string> | undefined,
+) {
   if (!Array.isArray(node.children) || node.children.length === 0) return;
   if (node.type === "link" || node.type === "linkReference" || node.type === "code" || node.type === "definition" || node.type === "html") {
     return;
@@ -126,28 +165,29 @@ function rewriteMarkdownTree(node: MarkdownNode) {
   for (const child of node.children) {
     if (child.type === "inlineCode" && typeof child.value === "string") {
       const issueRef = parseIssueReferenceFromHref(child.value);
-      if (issueRef) {
+      if (issueRef && (!isBareIdentifierToken(child.value) || isPrefixAllowed(issueRef.issuePathId, knownPrefixes))) {
         nextChildren.push(createIssueLinkNode(child.value, issueRef.href, "inlineCode"));
         continue;
       }
     }
 
     if (child.type === "text" && typeof child.value === "string") {
-      const linked = linkifyIssueReferencesInText(child.value);
+      const linked = linkifyIssueReferencesInText(child.value, knownPrefixes);
       if (linked) {
         nextChildren.push(...linked);
         continue;
       }
     }
 
-    rewriteMarkdownTree(child);
+    rewriteMarkdownTree(child, knownPrefixes);
     nextChildren.push(child);
   }
   node.children = nextChildren;
 }
 
-export function remarkLinkIssueReferences() {
+export function remarkLinkIssueReferences(options?: IssueReferenceLinkifyOptions) {
+  const knownPrefixes = options?.knownPrefixes;
   return (tree: MarkdownNode) => {
-    rewriteMarkdownTree(tree);
+    rewriteMarkdownTree(tree, knownPrefixes);
   };
 }

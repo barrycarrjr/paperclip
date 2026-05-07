@@ -98,6 +98,18 @@ export function resolveViteHmrPort(serverPort: number): number {
   return Math.max(1_024, serverPort - 10_000);
 }
 
+/**
+ * The browser-side HMR host. When the server binds to a wildcard address
+ * ("0.0.0.0" / "::"), that's a server-side "listen on every interface"
+ * directive — it's NOT a valid address for a browser to dial back into.
+ * Returning undefined makes the Vite HMR client default to the page's
+ * own hostname, which is what we want.
+ */
+export function resolveViteHmrClientHost(bindHost: string): string | undefined {
+  if (bindHost === "0.0.0.0" || bindHost === "::" || bindHost === "::0") return undefined;
+  return bindHost;
+}
+
 export function shouldServeViteDevHtml(req: ExpressRequest): boolean {
   const pathname = req.path;
   if (VITE_DEV_STATIC_PATHS.has(pathname)) return false;
@@ -411,7 +423,7 @@ export async function createApp(
       server: {
         middlewareMode: true,
         hmr: {
-          host: opts.bindHost,
+          host: resolveViteHmrClientHost(opts.bindHost),
           port: hmrPort,
           clientPort: hmrPort,
         },
