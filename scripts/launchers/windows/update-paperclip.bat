@@ -92,12 +92,6 @@ echo.
 echo   Commit:    %GIT_COMMIT%
 echo   Branch:    %GIT_BRANCH%
 echo.
-if /i "%PAPERCLIP_UPDATE_NO_LAUNCH%"=="1" (
-  echo.
-  echo PAPERCLIP_UPDATE_NO_LAUNCH=1 set — skipping auto-restart prompt and launch chain.
-  exit /b 0
-)
-
 echo   Auto-restart in 5 seconds. Y = restart now, N = cancel.
 echo ==========================================================
 choice /M "Restart now" /T 5 /D Y /C YN
