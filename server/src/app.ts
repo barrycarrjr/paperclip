@@ -22,6 +22,7 @@ import { executionWorkspaceRoutes } from "./routes/execution-workspaces.js";
 import { goalRoutes } from "./routes/goals.js";
 import { memoryRoutes } from "./routes/memories.js";
 import { workQueueRoutes } from "./routes/work-queues.js";
+import { structuralFindingRoutes } from "./routes/structural-findings.js";
 import { approvalRoutes } from "./routes/approvals.js";
 import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
@@ -227,6 +228,7 @@ export async function createApp(
   api.use(goalRoutes(db));
   api.use(memoryRoutes(db));
   api.use(workQueueRoutes(db));
+  api.use(structuralFindingRoutes(db));
   api.use(approvalRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));

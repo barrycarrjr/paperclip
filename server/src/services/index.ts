@@ -35,6 +35,13 @@ export {
   WorkQueueClaimRaceError,
   type WorkQueueService,
 } from "./work-queues.js";
+export {
+  STRUCTURAL_FINDING_KINDS,
+  structuralFindingService,
+  type StructuralFinding,
+  type StructuralFindingKind,
+  type StructuralFindingService,
+} from "./structural-findings.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
