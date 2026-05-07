@@ -7,7 +7,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { serverVersion } from "../version.js";
+import { readInstallCommit, serverVersion } from "../version.js";
 
 function shouldExposeFullHealthDetails(
   actorType: "none" | "board" | "agent" | null | undefined,
@@ -53,10 +53,12 @@ export function healthRoutes(
     const exposeDevServerDetails =
       exposeFullDetails || hasDevServerStatusToken(req.get("x-paperclip-dev-server-status-token"));
 
+    const installCommit = readInstallCommit();
+
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion }
+          ? { status: "ok", version: serverVersion, ...(installCommit ? { commit: installCommit } : {}) }
           : { status: "ok", deploymentMode: opts.deploymentMode },
       );
       return;
@@ -133,6 +135,7 @@ export function healthRoutes(
     res.json({
       status: "ok",
       version: serverVersion,
+      ...(installCommit ? { commit: installCommit } : {}),
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,

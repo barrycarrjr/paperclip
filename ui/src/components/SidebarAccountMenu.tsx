@@ -32,6 +32,7 @@ interface SidebarAccountMenuProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   version?: string | null;
+  commit?: string | null;
 }
 
 interface MenuActionProps {
@@ -110,7 +111,9 @@ export function SidebarAccountMenu({
   open: controlledOpen,
   onOpenChange,
   version,
+  commit,
 }: SidebarAccountMenuProps) {
+  const shortCommit = commit ? commit.slice(0, 8) : null;
   const [internalOpen, setInternalOpen] = useState(false);
   const queryClient = useQueryClient();
   const { isMobile, setSidebarOpen } = useSidebar();
@@ -173,6 +176,14 @@ export function SidebarAccountMenu({
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1 truncate">{displayName}</span>
+            {shortCommit ? (
+              <span
+                className="ml-auto shrink-0 font-mono text-[10px] font-normal text-muted-foreground/70"
+                title={commit ?? undefined}
+              >
+                {shortCommit}
+              </span>
+            ) : null}
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -198,8 +209,16 @@ export function SidebarAccountMenu({
                   </span>
                 </div>
                 <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
-                {version ? (
-                  <p className="mt-1 text-xs text-muted-foreground">Paperclip v{version}</p>
+                {version || shortCommit ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {version ? <>Paperclip v{version}</> : null}
+                    {version && shortCommit ? " · " : null}
+                    {shortCommit ? (
+                      <span className="font-mono" title={commit ?? undefined}>
+                        {shortCommit}
+                      </span>
+                    ) : null}
+                  </p>
                 ) : null}
               </div>
             </div>

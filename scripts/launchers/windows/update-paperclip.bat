@@ -68,8 +68,8 @@ if "!LOCK_BEFORE!"=="!LOCK_AFTER!" (
 )
 
 echo.
-echo [4/6] pnpm build
-call pnpm --dir "%PAPERCLIP_SRC%" build
+echo [4/6] pnpm build:runtime ^(skips in-repo example/scaffold plugins^)
+call pnpm --dir "%PAPERCLIP_SRC%" build:runtime
 if errorlevel 1 goto :update_failed
 
 echo.
@@ -92,6 +92,12 @@ echo.
 echo   Commit:    %GIT_COMMIT%
 echo   Branch:    %GIT_BRANCH%
 echo.
+if /i "%PAPERCLIP_UPDATE_NO_LAUNCH%"=="1" (
+  echo.
+  echo PAPERCLIP_UPDATE_NO_LAUNCH=1 set — skipping auto-restart prompt and launch chain.
+  exit /b 0
+)
+
 echo   Auto-restart in 5 seconds. Y = restart now, N = cancel.
 echo ==========================================================
 choice /M "Restart now" /T 5 /D Y /C YN
@@ -102,9 +108,14 @@ if errorlevel 2 (
   exit /b 0
 )
 
-start "Paperclip" "%~dp0launch-paperclip.bat"
+REM Chain into launch-paperclip.bat in the SAME window (no `start`, no
+REM `call`). This makes double-click feel continuous: the update window
+REM transitions into the running server window. With `start` instead, the
+REM update window would close after spawning launch in a separate window —
+REM which from CLI looks fine but from double-click looks like "the window
+REM just closed."
 endlocal
-exit /b 0
+"%~dp0launch-paperclip.bat"
 
 :update_failed
 echo.

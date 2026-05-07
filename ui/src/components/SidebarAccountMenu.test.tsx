@@ -114,4 +114,43 @@ describe("SidebarAccountMenu", () => {
       root.unmount();
     });
   });
+
+  it("renders the first 8 chars of the commit hash next to the user name", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarAccountMenu
+            deploymentMode="authenticated"
+            instanceSettingsTarget="/instance/settings/general"
+            version="1.2.3"
+            commit="9be597811d288770ab6722fad3e69aa40ebf4a64"
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const trigger = container.querySelector('button[aria-label="Open account menu"]');
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).toContain("9be59781");
+    expect(trigger?.textContent).not.toContain("9be597811d288770");
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(document.body.textContent).toContain("Paperclip v1.2.3");
+    expect(document.body.textContent).toContain("9be59781");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

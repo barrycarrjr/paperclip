@@ -22,14 +22,23 @@ wherever you cloned this — no path edits needed.
 ### Setup & maintenance
 
 - **`install-paperclip.bat`** — Run **once after `git clone`**. Idempotent.
-  Does `pnpm install` → `pnpm build` → migrations (or `paperclipai onboard`
-  on a truly fresh box) → records the install location at
+  Does `pnpm install` → `pnpm build:runtime` → migrations (or `paperclipai
+  onboard` on a truly fresh box) → records the install location at
   `%USERPROFILE%\.paperclip\install.json`. Re-running is safe and refreshes
   the marker.
 - **`update-paperclip.bat`** — Pull the latest from `origin/master`,
   rebuild, run new migrations, and auto-restart. Stops the server first,
   reinstalls only if `pnpm-lock.yaml` changed, refreshes the install
   marker, gives you a 5-second cancel before the auto-restart kicks in.
+
+> **Note on `build:runtime` vs `build`:** the launchers use `pnpm
+> build:runtime`, which skips the in-repo plugin packages
+> (`packages/plugins/examples/*`, `paperclip-plugin-fake-sandbox`,
+> `create-paperclip-plugin`). Those aren't used at runtime — runtime
+> plugins come from `paperclip-extensions` and live under
+> `%USERPROFILE%\.paperclip\installed-plugins\`. Use the regular
+> `pnpm build` only when you're working on the in-repo plugin examples
+> or scaffold themselves.
 - **`migrate-from-upstream.bat`** — One-time switch for a clone whose
   `origin` still points at `paperclipai/paperclip`. Backs up your data,
   re-points `origin` to `barrycarrjr/paperclip`, hard-resets to the fork's

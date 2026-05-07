@@ -51,8 +51,8 @@ call pnpm --dir "%PAPERCLIP_SRC%" install
 if errorlevel 1 goto :install_failed
 
 echo.
-echo [2/4] pnpm build
-call pnpm --dir "%PAPERCLIP_SRC%" build
+echo [2/4] pnpm build:runtime ^(skips in-repo example/scaffold plugins^)
+call pnpm --dir "%PAPERCLIP_SRC%" build:runtime
 if errorlevel 1 goto :install_failed
 
 echo.

@@ -14,6 +14,7 @@
     "storybook": "pnpm --filter @paperclipai/ui storybook",
     "build-storybook": "pnpm --filter @paperclipai/ui build-storybook",
     "build": "pnpm run preflight:workspace-links && pnpm -r build",
+    "build:runtime": "pnpm run preflight:workspace-links && pnpm -r --filter \"!@paperclipai/plugin-*-example\" --filter \"!@paperclipai/plugin-fake-sandbox\" --filter \"!@paperclipai/create-paperclip-plugin\" build",
     "typecheck": "pnpm run preflight:workspace-links && pnpm -r typecheck",
     "test": "pnpm run test:run",
     "test:watch": "pnpm run preflight:workspace-links && vitest",

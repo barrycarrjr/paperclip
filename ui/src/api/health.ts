@@ -15,6 +15,7 @@ export type DevServerHealthStatus = {
 export type HealthStatus = {
   status: "ok";
   version?: string;
+  commit?: string;
   deploymentMode?: "local_trusted" | "authenticated";
   deploymentExposure?: "private" | "public";
   authReady?: boolean;

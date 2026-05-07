@@ -1,12 +1,19 @@
 @echo off
 REM === Stop paperclip ===
-REM Kills the running paperclip server and its embedded postgres + dev-runner children.
+REM Kills the paperclip server (whatever process is listening on port 3100)
+REM along with its descendants, plus any embedded postgres whose command
+REM line references %USERPROFILE%\.paperclip\.
+REM
+REM Strictly port + process-tree based — does NOT regex-match command lines,
+REM so it cannot accidentally kill Claude Code, JetBrains TS server, your
+REM shell, or any other unrelated tool that happens to run tsx/esbuild/etc.
+REM
 REM Leaves your data dir alone.
 
 title Stop Paperclip
 echo Stopping paperclip processes...
 
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -match 'paperclip|tsx|esbuild|cross-env' -or $_.Name -match 'postgres') -and $_.CommandLine -notmatch 'JetBrains|claude\.exe|ai-os|MCP' } | ForEach-Object { Write-Host '  killing' $_.Name 'PID' $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-paperclip.ps1"
 
 timeout /t 2 /nobreak > nul
 

@@ -7,10 +7,16 @@ import * as devServerStatus from "../dev-server-status.js";
 import { serverVersion } from "../version.js";
 
 const mockReadPersistedDevServerStatus = vi.hoisted(() => vi.fn());
+const mockReadInstallCommit = vi.hoisted(() => vi.fn());
 
 vi.mock("../dev-server-status.js", () => ({
   readPersistedDevServerStatus: mockReadPersistedDevServerStatus,
   toDevServerHealthStatus: vi.fn(),
+}));
+
+vi.mock("../version.js", () => ({
+  serverVersion: "0.0.0-test",
+  readInstallCommit: mockReadInstallCommit,
 }));
 
 function createApp(db?: Db) {
@@ -23,6 +29,7 @@ describe("GET /health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReadPersistedDevServerStatus.mockReturnValue(undefined);
+    mockReadInstallCommit.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -133,6 +140,18 @@ describe("GET /health", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
+    });
+  });
+
+  it("includes the install commit when available", async () => {
+    mockReadInstallCommit.mockReturnValue("9be597811d288770ab6722fad3e69aa40ebf4a64");
+    const app = createApp();
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: "ok",
+      version: serverVersion,
+      commit: "9be597811d288770ab6722fad3e69aa40ebf4a64",
     });
   });
 

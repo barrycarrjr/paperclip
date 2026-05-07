@@ -350,6 +350,7 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}
+              commit={health?.commit}
             />
           </div>
         ) : (
@@ -375,6 +376,7 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}
+              commit={health?.commit}
             />
           </div>
         )}
