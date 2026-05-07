@@ -18,6 +18,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "portfolio-dashboard",
   "routines",
   "goals",
+  "memories",
+  "work-queues",
   "approvals",
   "costs",
   "usage",
