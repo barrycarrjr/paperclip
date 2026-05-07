@@ -176,6 +176,15 @@ export function InstanceSettings() {
         <p className="text-sm text-muted-foreground">
           Each heartbeat, the agent wakes up, checks its work, does something useful, and exits — agents do not run continuously.
         </p>
+        <div className="mt-2 space-y-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Most agents don&apos;t need this.</p>
+          <p>
+            When you assign an issue to an agent, or a routine fires, paperclip already wakes the agent to handle it. Timer heartbeats are for the cases where the agent needs to wake up <em>without</em> a specific trigger — scanning for stalled work, polling external state, or idle background tasks.
+          </p>
+          <p>
+            Each heartbeat is an LLM run. Enabling 60 agents at 5-minute intervals is 720 invocations per hour. If you can&apos;t name a specific reason an agent needs to wake without a trigger, leave it off.
+          </p>
+        </div>
       </div>
 
       <div className="flex items-center gap-4 text-sm text-muted-foreground">
