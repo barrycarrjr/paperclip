@@ -29,7 +29,7 @@ echo.
 echo Snapshotting %SRC%
 echo to %DEST%
 echo.
-echo (May take a minute. Excludes db/postgresql.conf lock files.)
+echo (May take a minute. Excludes postmaster.pid postgres lockfile.)
 echo.
 
 robocopy "%SRC%" "%DEST%" /E /COPY:DAT /NFL /NDL /R:1 /W:1 /XF postmaster.pid
