@@ -1,5 +1,6 @@
 import {
   Inbox,
+  Brain,
   CircleDot,
   Target,
   LayoutDashboard,
@@ -186,6 +187,18 @@ export function Sidebar() {
             label="Goals"
             icon={Target}
             info="Higher-level objectives this company is working toward. Goals can have sub-goals and link to the issues that contribute to them."
+          />
+          <SidebarNavItem
+            to="/work-queues"
+            label="Work queues"
+            icon={Inbox}
+            info="Named work streams (support, leads, errors). Webhooks or operators drop items in; agents claim and complete one item at a time."
+          />
+          <SidebarNavItem
+            to="/memories"
+            label="Memories"
+            icon={Brain}
+            info="Durable notes — facts, preferences, decisions — that agents save and recall across runs. Scope to the whole company or to a specific agent."
           />
           {showWorkspacesLink ? (
             <SidebarNavItem
