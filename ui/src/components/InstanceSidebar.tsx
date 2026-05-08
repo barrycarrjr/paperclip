@@ -1,17 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, UserRoundPen } from "lucide-react";
-import { NavLink } from "@/lib/router";
-import { pluginsApi } from "@/api/plugins";
-import { queryKeys } from "@/lib/queryKeys";
-import { SIDEBAR_SCROLL_RESET_STATE } from "@/lib/navigation-scroll";
 import { SidebarNavItem } from "./SidebarNavItem";
 
 export function InstanceSidebar() {
-  const { data: plugins } = useQuery({
-    queryKey: queryKeys.plugins.all,
-    queryFn: () => pluginsApi.list(),
-  });
-
   return (
     <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">
       <div className="flex items-center gap-2 px-3 h-12 shrink-0">
@@ -29,30 +19,6 @@ export function InstanceSidebar() {
           <SidebarNavItem to="/instance/settings/heartbeats" label="Heartbeats" icon={Clock3} end />
           <SidebarNavItem to="/instance/settings/experimental" label="Experimental" icon={FlaskConical} />
           <SidebarNavItem to="/instance/settings/plugins" label="Plugins" icon={Puzzle} />
-          {/* Installed plugins render as nested children of "Plugins" — must
-              appear BEFORE the Adapters link, otherwise they visually nest
-              under Adapters which is wrong (they're plugins, not adapters). */}
-          {(plugins ?? []).length > 0 ? (
-            <div className="ml-4 mt-1 flex flex-col gap-0.5 border-l border-border/70 pl-3">
-              {(plugins ?? []).map((plugin) => (
-                <NavLink
-                  key={plugin.id}
-                  to={`/instance/settings/plugins/${plugin.id}`}
-                  state={SIDEBAR_SCROLL_RESET_STATE}
-                  className={({ isActive }) =>
-                    [
-                      "rounded-md px-2 py-1.5 text-xs transition-colors",
-                      isActive
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                    ].join(" ")
-                  }
-                >
-                  {plugin.manifestJson.displayName ?? plugin.packageName}
-                </NavLink>
-              ))}
-            </div>
-          ) : null}
           <SidebarNavItem to="/instance/settings/adapters" label="Adapters" icon={Cpu} />
           <SidebarNavItem to="/instance/settings/agent-defaults" label="Agent defaults" icon={Bot} />
           <SidebarNavItem to="/instance/settings/external-mcp" label="MCP servers" icon={Network} />
