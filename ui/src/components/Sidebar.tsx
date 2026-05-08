@@ -18,6 +18,8 @@ import {
   Bot,
   LayoutGrid,
   ClipboardCheck,
+  Sunrise,
+  Receipt,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -98,6 +100,12 @@ export function Sidebar() {
             info="Cross-company views for managing the whole portfolio from one place."
           >
             <SidebarNavItem
+              to="/portfolio-brief"
+              label="Portfolio Brief"
+              icon={Sunrise}
+              info="The morning narrative across the entire portfolio: drafts awaiting your tap, overnight outcomes, and today's open issues — grouped by company."
+            />
+            <SidebarNavItem
               to="/portfolio-dashboard"
               label="Portfolio Dashboard"
               icon={LayoutGrid}
@@ -134,6 +142,12 @@ export function Sidebar() {
               info="Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable."
             />
             <SidebarNavItem
+              to="/portfolio-receipts"
+              label="Portfolio Receipts"
+              icon={Receipt}
+              info="Outcome-shaped activity across every company — drafts, approvals, issues — filterable by category and by company. Same data as Portfolio Activity, framed as outcomes."
+            />
+            <SidebarNavItem
               to="/portfolio-activity"
               label="Portfolio Activity"
               icon={History}
@@ -143,6 +157,12 @@ export function Sidebar() {
         )}
 
         <div className="flex flex-col gap-0.5">
+          <SidebarNavItem
+            to="/brief"
+            label="Brief"
+            icon={Sunrise}
+            info="Your morning narrative: what your agents got done overnight, what's awaiting your tap, and what's lined up today. Outcome-shaped, not metric-shaped."
+          />
           <SidebarNavItem
             to="/dashboard"
             label="Dashboard"
@@ -243,6 +263,12 @@ export function Sidebar() {
             label="Costs"
             icon={DollarSign}
             info="Track LLM and infrastructure spend across agents and runs, so you can see where the money is going."
+          />
+          <SidebarNavItem
+            to="/receipts"
+            label="Receipts"
+            icon={Receipt}
+            info="What your agents actually did, framed as outcomes (drafted, sent, called, posted) rather than raw events. Filter by category, group by day."
           />
           <SidebarNavItem
             to="/activity"

@@ -26,6 +26,8 @@ import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
+import { MorningBrief } from "./pages/MorningBrief";
+import { Receipts } from "./pages/Receipts";
 import { Inbox } from "./pages/Inbox";
 import { CompanySettings } from "./pages/CompanySettings";
 import { CompanyAccess } from "./pages/CompanyAccess";
@@ -61,6 +63,8 @@ import { PortfolioActivity } from "./pages/PortfolioActivity";
 import { PortfolioRoutines } from "./pages/PortfolioRoutines";
 import { PortfolioCosts } from "./pages/PortfolioCosts";
 import { PortfolioDashboard } from "./pages/PortfolioDashboard";
+import { PortfolioBrief } from "./pages/PortfolioBrief";
+import { PortfolioReceipts } from "./pages/PortfolioReceipts";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
@@ -112,6 +116,8 @@ function boardRoutes() {
       <Route path="portfolio-routines" element={<PortfolioRoutines />} />
       <Route path="portfolio-costs" element={<PortfolioCosts />} />
       <Route path="portfolio-dashboard" element={<PortfolioDashboard />} />
+      <Route path="portfolio-brief" element={<PortfolioBrief />} />
+      <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
       <Route path="issues" element={<Issues />} />
       <Route path="issues/all" element={<Navigate to="/issues" replace />} />
       <Route path="issues/active" element={<Navigate to="/issues" replace />} />
@@ -135,6 +141,8 @@ function boardRoutes() {
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
+      <Route path="brief" element={<MorningBrief />} />
+      <Route path="receipts" element={<Receipts />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/mine" element={<Inbox />} />
       <Route path="inbox/recent" element={<Inbox />} />
@@ -307,6 +315,8 @@ export function App() {
             <Route path="adapters" element={<AdapterManager />} />
             <Route path="external-mcp" element={<ExternalMcpServers />} />
           </Route>
+          <Route path="brief" element={<UnprefixedBoardRedirect />} />
+          <Route path="receipts" element={<UnprefixedBoardRedirect />} />
           <Route path="clippy" element={<UnprefixedBoardRedirect />} />
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />

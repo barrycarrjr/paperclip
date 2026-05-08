@@ -1,4 +1,6 @@
 const BOARD_ROUTE_ROOTS = new Set([
+  "brief",
+  "receipts",
   "dashboard",
   "companies",
   "company",
@@ -9,6 +11,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "workspaces",
   "execution-workspaces",
   "issues",
+  "portfolio-brief",
+  "portfolio-receipts",
   "portfolio-issues",
   "portfolio-agents",
   "portfolio-approvals",
