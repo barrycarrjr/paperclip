@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev:server"],
+      "port": 3100
+    },
+    {
+      "name": "vite",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev:ui"],
+      "port": 5173
+    },
+    {
+      "name": "live",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "console.log('attached'); setInterval(() => {}, 1000)"],
+      "port": 3100
+    },
+    {
+      "name": "storybook",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@paperclipai/ui", "storybook", "--no-open"],
+      "port": 6006
+    },
+    {
+      "name": "mockup",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "const http=require('http'),fs=require('fs'),path=require('path');const root=path.join(process.cwd(),'.tmp','mockup');http.createServer((req,res)=>{const f=path.join(root,req.url==='/'?'index.html':req.url.split('?')[0]);fs.readFile(f,(e,c)=>{if(e){res.writeHead(404);res.end('404')}else{res.writeHead(200,{'Content-Type':f.endsWith('.html')?'text/html':'text/plain'});res.end(c)}})}).listen(7700,()=>console.log('mockup on 7700'))"],
+      "port": 7700
+    }
+  ]
+}
