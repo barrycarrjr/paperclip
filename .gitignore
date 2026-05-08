@@ -47,7 +47,6 @@ diagnostics/
 .paperclip-local/
 /.idea/
 /.agents/
-/skills/
 /.github/pr-screenshots/
 
 # Doc maintenance cursor
