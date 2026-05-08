@@ -44,16 +44,16 @@ export function SidebarNavItem({
       onClick={() => { if (isMobile) setSidebarOpen(false); }}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors",
+          "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
           isActive
-            ? "bg-accent text-foreground"
-            : "text-foreground/80 hover:bg-accent/50 hover:text-foreground",
+            ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
+            : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
           info && "pr-8",
           className,
         )
       }
     >
-      <span className="relative shrink-0">
+      <span className={cn("relative shrink-0", "[&_svg]:transition-colors")}>
         <Icon className="h-4 w-4" />
         {alert && (
           <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500 shadow-[0_0_0_2px_hsl(var(--background))]" />

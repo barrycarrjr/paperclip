@@ -196,16 +196,31 @@ export function Dashboard() {
   // HQ doesn't host operating agents; the "no agents" pitch doesn't apply.
   const hasNoAgents = agents !== undefined && agents.length === 0 && !isHq;
 
+  const totalAgents = data ? data.agents.active + data.agents.running + data.agents.paused + data.agents.error : 0;
+  const agentTone: "default" | "danger" | "success" =
+    data && data.agents.error > 0 ? "danger" : data && data.agents.running > 0 ? "success" : "default";
+  const tasksTone: "default" | "warning" =
+    data && data.tasks.blocked > 0 ? "warning" : "default";
+  const costTone: "default" | "warning" | "danger" = (() => {
+    if (!data) return "default";
+    if (data.costs.monthBudgetCents <= 0) return "default";
+    if (data.costs.monthUtilizationPercent >= 100) return "danger";
+    if (data.costs.monthUtilizationPercent >= 80) return "warning";
+    return "default";
+  })();
+  const pendingTotal = data ? data.pendingApprovals + data.budgets.pendingApprovals : 0;
+  const approvalsTone: "default" | "warning" = pendingTotal > 0 ? "warning" : "default";
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
       {hasNoAgents && (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-500/25 dark:bg-amber-950/60">
+        <div className="flex items-center justify-between gap-3 border-l-[3px] border-amber-500 bg-amber-50/60 px-4 py-3 dark:bg-amber-950/40">
           <div className="flex items-center gap-2.5">
             <Bot className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <p className="text-sm text-amber-900 dark:text-amber-100">
-              You have no agents.
+              You have no agents yet.
             </p>
           </div>
           <button
@@ -217,52 +232,49 @@ export function Dashboard() {
         </div>
       )}
 
-      <ActiveAgentsPanel companyId={selectedCompanyId!} />
+      {data && data.budgets.activeIncidents > 0 ? (
+        <div className="flex items-start justify-between gap-3 border-l-[3px] border-red-500 bg-red-500/5 px-4 py-3 dark:bg-red-950/30">
+          <div className="flex items-start gap-2.5">
+            <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+            <div>
+              <p className="text-sm font-semibold text-red-900 dark:text-red-50">
+                {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
+              </p>
+              <p className="text-xs text-red-700/80 dark:text-red-100/80 mt-0.5">
+                {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
+              </p>
+            </div>
+          </div>
+          <Link to="/costs" className="text-sm underline underline-offset-2 text-red-700 dark:text-red-100 shrink-0 self-center">
+            Open budgets
+          </Link>
+        </div>
+      ) : null}
 
       {data && (
-        <>
-          {data.budgets.activeIncidents > 0 ? (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-500/20 bg-[linear-gradient(180deg,rgba(255,80,80,0.12),rgba(255,255,255,0.02))] px-4 py-3">
-              <div className="flex items-start gap-2.5">
-                <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
-                <div>
-                  <p className="text-sm font-medium text-red-50">
-                    {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
-                  </p>
-                  <p className="text-xs text-red-100/70">
-                    {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
-                  </p>
-                </div>
-              </div>
-              <Link to="/costs" className="text-sm underline underline-offset-2 text-red-100">
-                Open budgets
-              </Link>
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
+        <section aria-label="Key metrics">
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-px bg-border">
             <MetricCard
               icon={Bot}
-              value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
-              label="Agents Enabled"
+              value={totalAgents}
+              label="Agents"
               to="/agents"
+              tone={agentTone}
               description={
                 <span>
-                  {data.agents.running} running{", "}
-                  {data.agents.paused} paused{", "}
-                  {data.agents.error} errors
+                  {data.agents.running} running · {data.agents.paused} paused · {data.agents.error} errors
                 </span>
               }
             />
             <MetricCard
               icon={CircleDot}
               value={data.tasks.inProgress}
-              label="Tasks In Progress"
+              label="In Progress"
               to="/issues"
+              tone={tasksTone}
               description={
                 <span>
-                  {data.tasks.open} open{", "}
-                  {data.tasks.blocked} blocked
+                  {data.tasks.open} open · {data.tasks.blocked} blocked
                 </span>
               }
             />
@@ -271,59 +283,81 @@ export function Dashboard() {
               value={formatCents(data.costs.monthSpendCents)}
               label="Month Spend"
               to="/costs"
+              tone={costTone}
               description={
                 <span>
                   {data.costs.monthBudgetCents > 0
                     ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
+                    : "No budget set"}
                 </span>
               }
             />
             <MetricCard
               icon={ShieldCheck}
-              value={data.pendingApprovals + data.budgets.pendingApprovals}
+              value={pendingTotal}
               label="Pending Approvals"
               to="/approvals"
+              tone={approvalsTone}
               description={
                 <span>
                   {data.budgets.pendingApprovals > 0
                     ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
-                    : "Awaiting board review"}
+                    : pendingTotal > 0
+                      ? "Awaiting board review"
+                      : "All clear"}
                 </span>
               }
             />
           </div>
+        </section>
+      )}
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <ChartCard title="Run Activity" subtitle="Last 14 days">
-              <RunActivityChart activity={data.runActivity} />
-            </ChartCard>
-            <ChartCard title="Issues by Priority" subtitle="Last 14 days">
-              <PriorityChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Issues by Status" subtitle="Last 14 days">
-              <IssueStatusChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Success Rate" subtitle="Last 14 days">
-              <SuccessRateChart activity={data.runActivity} />
-            </ChartCard>
-          </div>
+      <ActiveAgentsPanel companyId={selectedCompanyId!} />
+
+      {data && (
+        <>
+          <section aria-label="Activity charts">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Trends
+              </h2>
+              <span className="text-[10px] text-muted-foreground/70">Last 14 days</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border">
+              <ChartCard title="Run Activity">
+                <RunActivityChart activity={data.runActivity} />
+              </ChartCard>
+              <ChartCard title="Issues by Priority">
+                <PriorityChart issues={issues ?? []} />
+              </ChartCard>
+              <ChartCard title="Issues by Status">
+                <IssueStatusChart issues={issues ?? []} />
+              </ChartCard>
+              <ChartCard title="Success Rate">
+                <SuccessRateChart activity={data.runActivity} />
+              </ChartCard>
+            </div>
+          </section>
 
           <PluginSlotOutlet
             slotTypes={["dashboardWidget"]}
             context={{ companyId: selectedCompanyId }}
             className="grid gap-4 md:grid-cols-2"
-            itemClassName="rounded-lg border bg-card p-4 shadow-sm"
+            itemClassName="border border-border bg-card p-4"
           />
 
-          <div className="grid md:grid-cols-2 gap-4">
-            {/* Recent Activity */}
+          <div className="grid md:grid-cols-2 gap-6">
             {recentActivity.length > 0 && (
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                  Recent Activity
-                </h3>
-                <div className="border border-border divide-y divide-border overflow-hidden">
+              <section className="min-w-0" aria-label="Recent activity">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                    Recent Activity
+                  </h3>
+                  <Link to="/activity" className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    View all →
+                  </Link>
+                </div>
+                <div className="border border-border bg-card divide-y divide-border overflow-hidden">
                   {recentActivity.map((event) => (
                     <ActivityRow
                       key={event.id}
@@ -336,40 +370,42 @@ export function Dashboard() {
                     />
                   ))}
                 </div>
-              </div>
+              </section>
             )}
 
-            {/* Recent Tasks */}
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                Recent Tasks
-              </h3>
+            <section className="min-w-0" aria-label="Recent tasks">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  Recent Tasks
+                </h3>
+                <Link to="/issues" className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors">
+                  View all →
+                </Link>
+              </div>
               {recentIssues.length === 0 ? (
-                <div className="border border-border p-4">
+                <div className="border border-border bg-card p-6 text-center">
                   <p className="text-sm text-muted-foreground">No tasks yet.</p>
                 </div>
               ) : (
-                <div className="border border-border divide-y divide-border overflow-hidden">
+                <div className="border border-border bg-card divide-y divide-border overflow-hidden">
                   {recentIssues.slice(0, 10).map((issue) => (
                     <Link
                       key={issue.id}
                       to={`/issues/${issue.identifier ?? issue.id}`}
-                      className="px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block"
+                      className="group px-4 py-2.5 text-sm cursor-pointer hover:bg-accent/40 transition-colors no-underline text-inherit block"
                     >
-                      <div className="flex items-start gap-2 sm:items-center sm:gap-3">
-                        {/* Status icon - left column on mobile */}
+                      <div className="flex items-start gap-2.5 sm:items-center sm:gap-3">
                         <span className="shrink-0 sm:hidden">
                           <StatusIcon status={issue.status} blockerAttention={issue.blockerAttention} />
                         </span>
 
-                        {/* Right column on mobile: title + metadata stacked */}
                         <span className="flex min-w-0 flex-1 flex-col gap-1 sm:contents">
-                          <span className="line-clamp-2 text-sm sm:order-2 sm:flex-1 sm:min-w-0 sm:line-clamp-none sm:truncate">
+                          <span className="line-clamp-2 text-sm sm:order-2 sm:flex-1 sm:min-w-0 sm:line-clamp-none sm:truncate group-hover:text-foreground">
                             {issue.title}
                           </span>
                           <span className="flex items-center gap-2 sm:order-1 sm:shrink-0">
                             <span className="hidden sm:inline-flex"><StatusIcon status={issue.status} blockerAttention={issue.blockerAttention} /></span>
-                            <span className="text-xs font-mono text-muted-foreground">
+                            <span className="text-[11px] font-mono text-muted-foreground tabular-nums">
                               {issue.identifier ?? issue.id.slice(0, 8)}
                             </span>
                             {issue.assigneeAgentId && (() => {
@@ -389,7 +425,7 @@ export function Dashboard() {
                   ))}
                 </div>
               )}
-            </div>
+            </section>
           </div>
 
         </>

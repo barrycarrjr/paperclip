@@ -15,24 +15,33 @@ interface PageSkeletonProps {
 export function PageSkeleton({ variant = "list" }: PageSkeletonProps) {
   if (variant === "dashboard") {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-32 w-full border border-border" />
-
-        <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+      <div className="space-y-8">
+        <div className="grid grid-cols-2 gap-px xl:grid-cols-4 bg-border">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full" />
+            <Skeleton key={i} className="h-28 w-full rounded-none" />
           ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-44 w-full" />
-          ))}
+        <Skeleton className="h-32 w-full" />
+
+        <div>
+          <Skeleton className="mb-3 h-3 w-24" />
+          <div className="grid grid-cols-2 gap-px lg:grid-cols-4 bg-border">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-44 w-full rounded-none" />
+            ))}
+          </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <Skeleton className="h-72 w-full" />
-          <Skeleton className="h-72 w-full" />
+        <div className="grid gap-6 md:grid-cols-2">
+          <div>
+            <Skeleton className="mb-3 h-3 w-24" />
+            <Skeleton className="h-72 w-full" />
+          </div>
+          <div>
+            <Skeleton className="mb-3 h-3 w-24" />
+            <Skeleton className="h-72 w-full" />
+          </div>
         </div>
       </div>
     );
