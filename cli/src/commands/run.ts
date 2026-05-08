@@ -52,14 +52,18 @@ export async function runCommand(opts: RunOptions): Promise<void> {
   p.log.message(pc.dim(`Config: ${configPath}`));
 
   if (!configExists(configPath)) {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      p.log.error("No config found and terminal is non-interactive.");
-      p.log.message(`Run ${pc.cyan("paperclipai onboard")} once, then retry ${pc.cyan("paperclipai run")}.`);
-      process.exit(1);
+    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    if (interactive) {
+      p.log.step("No config found. Starting onboarding...");
+      await onboard({ config: configPath, invokedByRun: true, bind: opts.bind });
+    } else {
+      // Launcher path: paperclip.exe spawns us with stdin null'd, so we can't
+      // prompt. Auto-bootstrap quickstart defaults (loopback, embedded pg,
+      // local secrets) — same shape as `paperclipai onboard --yes`. The user
+      // can run `paperclipai configure` later to change anything.
+      p.log.step("No config found. Bootstrapping with quickstart defaults (non-interactive)...");
+      await onboard({ config: configPath, invokedByRun: true, yes: true, bind: opts.bind });
     }
-
-    p.log.step("No config found. Starting onboarding...");
-    await onboard({ config: configPath, invokedByRun: true, bind: opts.bind });
   }
 
   p.log.step("Running doctor checks...");
