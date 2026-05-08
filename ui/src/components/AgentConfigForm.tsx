@@ -193,6 +193,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     queryFn: () => instanceSettingsApi.getExperimental(),
     retry: false,
   });
+  const { data: instanceAgentDefaults } = useQuery({
+    queryKey: queryKeys.instance.agentDefaults,
+    queryFn: () => instanceSettingsApi.getAgentDefaults(),
+    retry: false,
+  });
   const environmentsEnabled = experimentalSettings?.enableEnvironments === true;
 
   const { data: environments = [] } = useQuery<Environment[]>({
@@ -795,6 +800,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 allowDefault={adapterType !== "opencode_local"}
                 required={adapterType === "opencode_local"}
                 groupByProvider={adapterType === "opencode_local"}
+                instanceDefaultModel={
+                  instanceAgentDefaults?.defaultModelByAdapterType[adapterType] ?? null
+                }
                 creatable
                 detectedModel={detectedModel}
                 detectedModelCandidates={[]}
@@ -1139,6 +1147,7 @@ function ModelDropdown({
   allowDefault,
   required,
   groupByProvider,
+  instanceDefaultModel,
   creatable,
   detectedModel,
   detectedModelCandidates,
@@ -1156,6 +1165,12 @@ function ModelDropdown({
   allowDefault: boolean;
   required: boolean;
   groupByProvider: boolean;
+  /**
+   * The instance-wide default model configured for this adapter type, if any.
+   * Surfaced as part of the "Default" affordance so the operator knows what
+   * leaving the field unset will actually run. `null` = no default configured.
+   */
+  instanceDefaultModel?: string | null;
   creatable?: boolean;
   detectedModel?: string | null;
   detectedModelCandidates?: string[];
@@ -1250,7 +1265,15 @@ function ModelDropdown({
             <span className={cn(!value && "text-muted-foreground")}>
               {selected
                 ? selected.label
-                : value || (allowDefault ? "Default" : required ? "Select model (required)" : "Select model")}
+                : value
+                  ? value
+                  : allowDefault
+                    ? instanceDefaultModel
+                      ? `Default (${instanceDefaultModel})`
+                      : "Default (adapter CLI fallback)"
+                    : required
+                      ? "Select model (required)"
+                      : "Select model"}
             </span>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
@@ -1378,7 +1401,7 @@ function ModelDropdown({
               <button
                 type="button"
                 className={cn(
-                  "flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
+                  "flex items-center justify-between gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
                   !value && "bg-accent",
                 )}
                 onClick={() => {
@@ -1386,7 +1409,10 @@ function ModelDropdown({
                   onOpenChange(false);
                 }}
               >
-                Default
+                <span>Default</span>
+                <span className="text-xs text-muted-foreground">
+                  {instanceDefaultModel ? instanceDefaultModel : "adapter CLI fallback"}
+                </span>
               </button>
             )}
             {canCreateManualModel && (

@@ -589,6 +589,13 @@
       "when": 1779400000000,
       "tag": "0083_seed_hq_company",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1779500000000,
+      "tag": "0084_instance_settings_agent_defaults",
+      "breakpoints": true
     }
   ]
 }

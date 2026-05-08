@@ -8,6 +8,10 @@ export {
   issueGraphLivenessAutoRecoveryRequestSchema,
   type InstanceExperimentalSettings,
   type PatchInstanceExperimentalSettings,
+  instanceAgentDefaultsSchema,
+  patchInstanceAgentDefaultsSchema,
+  type InstanceAgentDefaults,
+  type PatchInstanceAgentDefaults,
   type IssueGraphLivenessAutoRecoveryRequest,
 } from "./instance.js";
 

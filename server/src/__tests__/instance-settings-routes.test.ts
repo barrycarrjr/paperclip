@@ -7,6 +7,8 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
   getExperimental: vi.fn(),
   updateGeneral: vi.fn(),
   updateExperimental: vi.fn(),
+  getAgentDefaults: vi.fn(),
+  updateAgentDefaults: vi.fn(),
   listCompanyIds: vi.fn(),
 }));
 const mockHeartbeatService = vi.hoisted(() => ({
@@ -52,6 +54,8 @@ describe("instance settings routes", () => {
     mockInstanceSettingsService.getExperimental.mockReset();
     mockInstanceSettingsService.updateGeneral.mockReset();
     mockInstanceSettingsService.updateExperimental.mockReset();
+    mockInstanceSettingsService.getAgentDefaults.mockReset();
+    mockInstanceSettingsService.updateAgentDefaults.mockReset();
     mockInstanceSettingsService.listCompanyIds.mockReset();
     mockHeartbeatService.buildIssueGraphLivenessAutoRecoveryPreview.mockReset();
     mockHeartbeatService.reconcileIssueGraphLiveness.mockReset();
@@ -84,6 +88,15 @@ describe("instance settings routes", () => {
         autoRestartDevServerWhenIdle: false,
         enableIssueGraphLivenessAutoRecovery: true,
         issueGraphLivenessAutoRecoveryLookbackHours: 24,
+      },
+    });
+    mockInstanceSettingsService.getAgentDefaults.mockResolvedValue({
+      defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
+    });
+    mockInstanceSettingsService.updateAgentDefaults.mockResolvedValue({
+      id: "instance-settings-1",
+      agentDefaults: {
+        defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
       },
     });
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1", "company-2"]);
@@ -338,5 +351,104 @@ describe("instance settings routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockInstanceSettingsService.updateGeneral).not.toHaveBeenCalled();
+  });
+
+  it("allows local board users to read and update agent defaults", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const getRes = await request(app).get("/api/instance/settings/agent-defaults");
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toEqual({
+      defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
+    });
+
+    const patchRes = await request(app)
+      .patch("/api/instance/settings/agent-defaults")
+      .send({
+        defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
+      });
+
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body).toEqual({
+      defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
+    });
+    expect(mockInstanceSettingsService.updateAgentDefaults).toHaveBeenCalledWith({
+      defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
+    });
+    expect(mockLogActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows non-admin org members to read agent defaults", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+
+    const res = await request(app).get("/api/instance/settings/agent-defaults");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
+    });
+  });
+
+  it("rejects non-admin board users from updating agent defaults", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings/agent-defaults")
+      .send({
+        defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockInstanceSettingsService.updateAgentDefaults).not.toHaveBeenCalled();
+  });
+
+  it("rejects agent callers from updating agent defaults", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings/agent-defaults")
+      .send({
+        defaultModelByAdapterType: { claude_local: "claude-sonnet-4-6" },
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockInstanceSettingsService.updateAgentDefaults).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthenticated requests for agent defaults", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-2",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [],
+      memberships: [],
+    });
+
+    const res = await request(app).get("/api/instance/settings/agent-defaults");
+
+    expect(res.status).toBe(403);
+    expect(mockInstanceSettingsService.getAgentDefaults).not.toHaveBeenCalled();
   });
 });

@@ -98,6 +98,7 @@ import {
   resolveExecutionWorkspaceMode,
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { resolveAgentModelForRun } from "./resolve-agent-model.js";
 import {
   RECOVERY_ORIGIN_KINDS,
   RUN_LIVENESS_CONTINUATION_REASON,
@@ -4766,6 +4767,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       (explicitResumeSessionDisplayId ? { sessionId: explicitResumeSessionDisplayId } : null) ??
       normalizeSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null));
     const config = parseObject(agent.adapterConfig);
+    // Substitute the instance-configured default model when the agent's own
+    // adapterConfig leaves it blank ("Default" in the UI). Bedrock-authed
+    // claude_local agents will still have the resulting --model arg dropped
+    // by the adapter's own guard — that's intentional, see resolve-agent-model.ts.
+    const instanceAgentDefaults = await instanceSettings.getAgentDefaults();
+    const resolvedAgentModel = resolveAgentModelForRun({
+      adapterType: agent.adapterType,
+      configuredModel: config.model,
+      instanceAgentDefaults,
+    });
+    if (resolvedAgentModel.length > 0) {
+      config.model = resolvedAgentModel;
+    }
     const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,

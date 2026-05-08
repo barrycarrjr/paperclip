@@ -24,6 +24,7 @@ export type {
   FeedbackTraceBundle,
 } from "./feedback.js";
 export type {
+  InstanceAgentDefaults,
   InstanceExperimentalSettings,
   InstanceGeneralSettings,
   InstanceSettings,

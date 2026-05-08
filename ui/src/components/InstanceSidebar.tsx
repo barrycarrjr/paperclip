@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, UserRoundPen } from "lucide-react";
+import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, UserRoundPen } from "lucide-react";
 import { NavLink } from "@/lib/router";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
@@ -54,6 +54,7 @@ export function InstanceSidebar() {
             </div>
           ) : null}
           <SidebarNavItem to="/instance/settings/adapters" label="Adapters" icon={Cpu} />
+          <SidebarNavItem to="/instance/settings/agent-defaults" label="Agent defaults" icon={Bot} />
           <SidebarNavItem to="/instance/settings/external-mcp" label="MCP servers" icon={Network} />
         </div>
       </nav>

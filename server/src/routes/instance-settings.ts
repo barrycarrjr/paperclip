@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
   issueGraphLivenessAutoRecoveryRequestSchema,
+  patchInstanceAgentDefaultsSchema,
   patchInstanceExperimentalSettingsSchema,
   patchInstanceGeneralSettingsSchema,
 } from "@paperclipai/shared";
@@ -96,6 +97,43 @@ export function instanceSettingsRoutes(db: Db) {
         ),
       );
       res.json(updated.experimental);
+    },
+  );
+
+  router.get("/instance/settings/agent-defaults", async (req, res) => {
+    // Read-only access mirrors general/experimental: any authenticated org
+    // member can see the configured defaults, only instance admins can change them.
+    assertBoardOrgAccess(req);
+    res.json(await svc.getAgentDefaults());
+  });
+
+  router.patch(
+    "/instance/settings/agent-defaults",
+    validate(patchInstanceAgentDefaultsSchema),
+    async (req, res) => {
+      assertCanManageInstanceSettings(req);
+      const updated = await svc.updateAgentDefaults(req.body);
+      const actor = getActorInfo(req);
+      const companyIds = await svc.listCompanyIds();
+      await Promise.all(
+        companyIds.map((companyId) =>
+          logActivity(db, {
+            companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "instance.settings.agent_defaults_updated",
+            entityType: "instance_settings",
+            entityId: updated.id,
+            details: {
+              agentDefaults: updated.agentDefaults,
+              changedKeys: Object.keys(req.body).sort(),
+            },
+          }),
+        ),
+      );
+      res.json(updated.agentDefaults);
     },
   );
 

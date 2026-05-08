@@ -263,6 +263,7 @@ export type {
   AgentSkillEntry,
   AgentSkillSnapshot,
   AgentSkillSyncRequest,
+  InstanceAgentDefaults,
   InstanceExperimentalSettings,
   InstanceGeneralSettings,
   InstanceSettings,
@@ -588,6 +589,9 @@ export {
   patchInstanceExperimentalSettingsSchema,
   issueGraphLivenessAutoRecoveryRequestSchema,
   type PatchInstanceExperimentalSettings,
+  instanceAgentDefaultsSchema,
+  patchInstanceAgentDefaultsSchema,
+  type PatchInstanceAgentDefaults,
   type IssueGraphLivenessAutoRecoveryRequest,
 } from "./validators/index.js";
 

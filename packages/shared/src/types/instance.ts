@@ -34,10 +34,15 @@ export interface InstanceExperimentalSettings {
   issueGraphLivenessAutoRecoveryLookbackHours: number;
 }
 
+export interface InstanceAgentDefaults {
+  defaultModelByAdapterType: Record<string, string>;
+}
+
 export interface InstanceSettings {
   id: string;
   general: InstanceGeneralSettings;
   experimental: InstanceExperimentalSettings;
+  agentDefaults: InstanceAgentDefaults;
   createdAt: Date;
   updatedAt: Date;
 }

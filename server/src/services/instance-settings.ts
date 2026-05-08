@@ -4,10 +4,13 @@ import {
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
   DEFAULT_BACKUP_RETENTION,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  instanceAgentDefaultsSchema,
   instanceGeneralSettingsSchema,
+  type InstanceAgentDefaults,
   type InstanceGeneralSettings,
   instanceExperimentalSettingsSchema,
   type InstanceExperimentalSettings,
+  type PatchInstanceAgentDefaults,
   type PatchInstanceGeneralSettings,
   type InstanceSettings,
   type PatchInstanceExperimentalSettings,
@@ -58,11 +61,22 @@ function normalizeExperimentalSettings(raw: unknown): InstanceExperimentalSettin
   };
 }
 
+function normalizeAgentDefaults(raw: unknown): InstanceAgentDefaults {
+  const parsed = instanceAgentDefaultsSchema.safeParse(raw ?? {});
+  if (parsed.success) {
+    return {
+      defaultModelByAdapterType: parsed.data.defaultModelByAdapterType ?? {},
+    };
+  }
+  return { defaultModelByAdapterType: {} };
+}
+
 function toInstanceSettings(row: typeof instanceSettings.$inferSelect): InstanceSettings {
   return {
     id: row.id,
     general: normalizeGeneralSettings(row.general),
     experimental: normalizeExperimentalSettings(row.experimental),
+    agentDefaults: normalizeAgentDefaults(row.agentDefaults),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -84,6 +98,7 @@ export function instanceSettingsService(db: Db) {
         singletonKey: DEFAULT_SINGLETON_KEY,
         general: {},
         experimental: {},
+        agentDefaults: {},
         createdAt: now,
         updatedAt: now,
       })
@@ -156,10 +171,48 @@ export function instanceSettingsService(db: Db) {
       return toInstanceSettings(updated ?? current);
     },
 
+    getAgentDefaults: async (): Promise<InstanceAgentDefaults> => {
+      const row = await getOrCreateRow();
+      return normalizeAgentDefaults(row.agentDefaults);
+    },
+
+    updateAgentDefaults: async (patch: PatchInstanceAgentDefaults): Promise<InstanceSettings> => {
+      const current = await getOrCreateRow();
+      const currentDefaults = normalizeAgentDefaults(current.agentDefaults);
+      const nextDefaults = normalizeAgentDefaults({
+        ...currentDefaults,
+        ...patch,
+        defaultModelByAdapterType: pruneEmptyValues({
+          ...currentDefaults.defaultModelByAdapterType,
+          ...(patch.defaultModelByAdapterType ?? {}),
+        }),
+      });
+      const now = new Date();
+      const [updated] = await db
+        .update(instanceSettings)
+        .set({
+          agentDefaults: { ...nextDefaults },
+          updatedAt: now,
+        })
+        .where(eq(instanceSettings.id, current.id))
+        .returning();
+      return toInstanceSettings(updated ?? current);
+    },
+
     listCompanyIds: async (): Promise<string[]> =>
       db
         .select({ id: companies.id })
         .from(companies)
         .then((rows) => rows.map((row) => row.id)),
   };
+}
+
+function pruneEmptyValues(input: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      result[key] = value;
+    }
+  }
+  return result;
 }

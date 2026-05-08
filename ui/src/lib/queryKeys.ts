@@ -120,6 +120,7 @@ export const queryKeys = {
     generalSettings: ["instance", "general-settings"] as const,
     schedulerHeartbeats: ["instance", "scheduler-heartbeats"] as const,
     experimentalSettings: ["instance", "experimental-settings"] as const,
+    agentDefaults: ["instance", "agent-defaults"] as const,
   },
   health: ["health"] as const,
   system: {
