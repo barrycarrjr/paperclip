@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "@/lib/router";
+import { Link, useNavigate } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sun,
@@ -95,7 +95,8 @@ function groupByCompany<T extends { companyId: string }>(
 }
 
 export function PortfolioBrief() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
+  const navigate = useNavigate();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {
@@ -426,6 +427,37 @@ export function PortfolioBrief() {
         </div>
       </section>
 
+      {/* Companies — per-company health grid (absorbed from Portfolio Dashboard) */}
+      {companies.length > 0 && (
+        <section aria-label="Companies">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Companies
+            </h2>
+            <span className="text-[11px] text-muted-foreground">
+              {companies.length} compan{companies.length === 1 ? "y" : "ies"}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {companies.map((company) => {
+              const summary = summariesByCompanyId.get(company.id);
+              if (!summary) return null;
+              return (
+                <CompanyHealthCard
+                  key={company.id}
+                  company={company}
+                  summary={summary}
+                  onSelect={() => {
+                    setSelectedCompanyId(company.id, { source: "route_sync" });
+                    navigate(`/${company.issuePrefix}/brief`);
+                  }}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Awaiting your tap */}
       <section aria-label="Awaiting your tap">
         <div className="mb-3 flex items-baseline justify-between">
@@ -698,7 +730,7 @@ function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
     <div className="border border-border bg-card overflow-hidden">
       <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
         <Link
-          to={`/${company.issuePrefix}/dashboard`}
+          to={`/${company.issuePrefix}/brief`}
           className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground no-underline"
         >
           <CompanyPatternIcon
@@ -869,5 +901,99 @@ function OutcomeRow({ event, company }: OutcomeRowProps) {
     </Link>
   ) : (
     <div>{inner}</div>
+  );
+}
+
+interface CompanyHealthCardProps {
+  company: Company;
+  summary: DashboardSummary;
+  onSelect: () => void;
+}
+
+function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProps) {
+  const spendPct = summary.costs.monthUtilizationPercent ?? 0;
+  const hasError = summary.agents.error > 0;
+  const hasPending = summary.pendingApprovals > 0;
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onSelect();
+      }}
+      className="block rounded-lg border border-border bg-card hover:border-primary/40 hover:shadow-sm transition-all p-4 group cursor-pointer"
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <CompanyPatternIcon
+          companyName={company.name}
+          logoUrl={company.logoUrl}
+          brandColor={company.brandColor}
+          className="h-6 w-6 shrink-0 rounded-[4px]"
+        />
+        <span className="font-semibold text-sm truncate group-hover:text-primary transition-colors">
+          {company.name}
+        </span>
+        {(hasError || hasPending) && (
+          <span className="ml-auto h-2 w-2 rounded-full bg-red-400 shrink-0" />
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 mb-2 text-sm">
+        <span className="text-[10px] font-medium uppercase text-muted-foreground w-14 shrink-0">Agents</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <HealthStat label="running" value={summary.agents.running} />
+          <HealthStat label="active" value={summary.agents.active} />
+          <HealthStat label="paused" value={summary.agents.paused} tone={summary.agents.paused > 0 ? "warn" : undefined} />
+          <HealthStat label="error" value={summary.agents.error} tone={summary.agents.error > 0 ? "danger" : undefined} />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 mb-2 text-sm">
+        <span className="text-[10px] font-medium uppercase text-muted-foreground w-14 shrink-0">Issues</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <HealthStat label="open" value={summary.tasks.open} />
+          <HealthStat label="active" value={summary.tasks.inProgress} />
+          <HealthStat label="blocked" value={summary.tasks.blocked} tone={summary.tasks.blocked > 0 ? "warn" : undefined} />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50 text-xs text-muted-foreground">
+        <span>
+          <span className="font-semibold text-foreground tabular-nums">
+            {formatCents(summary.costs.monthSpendCents)}
+          </span>
+          {summary.costs.monthBudgetCents > 0 && (
+            <span className={cn("ml-1", spendPct >= 90 ? "text-red-500" : spendPct >= 70 ? "text-yellow-500" : "")}>
+              / {formatCents(summary.costs.monthBudgetCents)} ({spendPct.toFixed(0)}%)
+            </span>
+          )}
+          {" MTD"}
+        </span>
+        {summary.pendingApprovals > 0 && (
+          <span className="text-amber-500 font-medium">
+            {summary.pendingApprovals} approval{summary.pendingApprovals !== 1 ? "s" : ""} pending
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HealthStat({ label, value, tone }: { label: string; value: number; tone?: "danger" | "warn" }) {
+  const color =
+    tone === "danger"
+      ? "text-red-500"
+      : tone === "warn"
+        ? "text-yellow-500"
+        : "text-muted-foreground";
+  return (
+    <span className="flex items-center gap-0.5">
+      <span className={cn("font-semibold tabular-nums", color, value === 0 && "text-muted-foreground/50")}>
+        {value}
+      </span>
+      <span className="text-[10px] text-muted-foreground">{label}</span>
+    </span>
   );
 }

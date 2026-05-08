@@ -3,9 +3,7 @@ import {
   Brain,
   CircleDot,
   Target,
-  LayoutDashboard,
   DollarSign,
-  History,
   Search,
   SquarePen,
   Network,
@@ -16,10 +14,7 @@ import {
   MessageSquare,
   Globe2,
   Bot,
-  LayoutGrid,
-  ClipboardCheck,
   Sunrise,
-  Receipt,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -103,13 +98,7 @@ export function Sidebar() {
               to="/portfolio-brief"
               label="Portfolio Brief"
               icon={Sunrise}
-              info="The morning narrative across the entire portfolio: drafts awaiting your tap, overnight outcomes, and today's open issues — grouped by company."
-            />
-            <SidebarNavItem
-              to="/portfolio-dashboard"
-              label="Portfolio Dashboard"
-              icon={LayoutGrid}
-              info="High-level health snapshot for every company in the portfolio: agent counts, open issues, spend, and pending approvals at a glance."
+              info="Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company."
             />
             <SidebarNavItem
               to="/portfolio-issues"
@@ -124,12 +113,6 @@ export function Sidebar() {
               info="See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide."
             />
             <SidebarNavItem
-              to="/portfolio-approvals"
-              label="Portfolio Approvals"
-              icon={ClipboardCheck}
-              info="Review and act on pending approvals across all portfolio companies without switching context."
-            />
-            <SidebarNavItem
               to="/portfolio-routines"
               label="Portfolio Routines"
               icon={Repeat}
@@ -141,18 +124,6 @@ export function Sidebar() {
               icon={DollarSign}
               info="Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable."
             />
-            <SidebarNavItem
-              to="/portfolio-receipts"
-              label="Portfolio Receipts"
-              icon={Receipt}
-              info="Outcome-shaped activity across every company — drafts, approvals, issues — filterable by category and by company. Same data as Portfolio Activity, framed as outcomes."
-            />
-            <SidebarNavItem
-              to="/portfolio-activity"
-              label="Portfolio Activity"
-              icon={History}
-              info="A unified audit trail of events across all portfolio companies — agent actions, status changes, and decisions in one feed."
-            />
           </SidebarSection>
         )}
 
@@ -161,14 +132,8 @@ export function Sidebar() {
             to="/brief"
             label="Brief"
             icon={Sunrise}
-            info="Your morning narrative: what your agents got done overnight, what's awaiting your tap, and what's lined up today. Outcome-shaped, not metric-shaped."
-          />
-          <SidebarNavItem
-            to="/dashboard"
-            label="Dashboard"
-            icon={LayoutDashboard}
             liveCount={liveRunCount}
-            info="A live overview of what's happening in this company right now: running agents, recent activity, and key metrics on one page."
+            info="Your overview: what your agents got done overnight, what's awaiting your tap, what's lined up today, key metrics, and active runs in one place."
           />
           <SidebarNavItem
             to="/inbox"
@@ -263,12 +228,6 @@ export function Sidebar() {
             label="Costs"
             icon={DollarSign}
             info="Track LLM and infrastructure spend across agents and runs, so you can see where the money is going."
-          />
-          <SidebarNavItem
-            to="/receipts"
-            label="Receipts"
-            icon={Receipt}
-            info="What your agents actually did, framed as outcomes (drafted, sent, called, posted) rather than raw events. Filter by category, group by day."
           />
           <SidebarNavItem
             to="/company/settings"

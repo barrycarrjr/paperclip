@@ -1,7 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sun, Sunrise, Moon, ShieldCheck, ListChecks, Sparkles, History, AlertCircle, CheckCircle2, Mail } from "lucide-react";
+import {
+  Sun,
+  Sunrise,
+  Moon,
+  ListChecks,
+  Sparkles,
+  AlertCircle,
+  CheckCircle2,
+  Mail,
+  Bot,
+  CircleDot,
+  DollarSign,
+  ShieldCheck,
+  PauseCircle,
+} from "lucide-react";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
@@ -11,17 +25,28 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
+import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Identity } from "../components/Identity";
 import { StatusIcon } from "../components/StatusIcon";
+import { MetricCard } from "../components/MetricCard";
+import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
+import {
+  ChartCard,
+  RunActivityChart,
+  PriorityChart,
+  IssueStatusChart,
+  SuccessRateChart,
+} from "../components/ActivityCharts";
 import { approvalLabel, typeIcon, defaultTypeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
+import { PluginSlotOutlet } from "@/plugins/slots";
 import {
   dismissReviewSender,
   graduateSender,
@@ -64,6 +89,7 @@ function greeting(now: Date): { word: string; icon: typeof Sun } {
 
 export function MorningBrief() {
   const { selectedCompanyId, companies } = useCompany();
+  const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {
@@ -284,7 +310,6 @@ export function MorningBrief() {
   // Hero pulse: outcomes overnight + drafts awaiting + errors + spend
   const pendingApprovals = approvals?.length ?? 0;
   const errors = summary?.agents.error ?? 0;
-  const spendCents = summary?.costs.monthSpendCents ?? 0;
 
   // Count outcomes only from last OVERNIGHT_HOURS
   const overnightCount = outcomes.length;
@@ -298,6 +323,25 @@ export function MorningBrief() {
     red: "bg-red-500/55",
   }[heroTone];
 
+  // Metric card state (absorbed from old Dashboard)
+  const totalAgents = summary
+    ? summary.agents.active + summary.agents.running + summary.agents.paused + summary.agents.error
+    : 0;
+  const hasNoAgents = !summary || totalAgents === 0;
+  const agentTone: "default" | "danger" | "success" =
+    summary && summary.agents.error > 0 ? "danger" : summary && summary.agents.running > 0 ? "success" : "default";
+  const tasksTone: "default" | "warning" =
+    summary && summary.tasks.blocked > 0 ? "warning" : "default";
+  const costTone: "default" | "warning" | "danger" = (() => {
+    if (!summary) return "default";
+    if (summary.costs.monthBudgetCents <= 0) return "default";
+    if (summary.costs.monthUtilizationPercent >= 100) return "danger";
+    if (summary.costs.monthUtilizationPercent >= 80) return "warning";
+    return "default";
+  })();
+  const pendingTotal = summary ? summary.pendingApprovals + summary.budgets.pendingApprovals : 0;
+  const approvalsTone: "default" | "warning" = pendingTotal > 0 ? "warning" : "default";
+
   const draftsToShow = (approvals ?? []).slice(0, DRAFTS_SHOWN);
   const remainingDrafts = Math.max(0, (approvals?.length ?? 0) - DRAFTS_SHOWN);
 
@@ -306,6 +350,44 @@ export function MorningBrief() {
 
   return (
     <div className="space-y-8">
+      {/* Empty agents banner */}
+      {hasNoAgents && (
+        <div className="flex items-center justify-between gap-3 border-l-[3px] border-amber-500 bg-amber-50/60 px-4 py-3 dark:bg-amber-950/40">
+          <div className="flex items-center gap-2.5">
+            <Bot className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <p className="text-sm text-amber-900 dark:text-amber-100">
+              You have no agents yet.
+            </p>
+          </div>
+          <button
+            onClick={() => openOnboarding({ initialStep: 2, companyId: selectedCompanyId })}
+            className="text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100 underline underline-offset-2 shrink-0"
+          >
+            Create one here
+          </button>
+        </div>
+      )}
+
+      {/* Budget incidents banner */}
+      {summary && summary.budgets.activeIncidents > 0 ? (
+        <div className="flex items-start justify-between gap-3 border-l-[3px] border-red-500 bg-red-500/5 px-4 py-3 dark:bg-red-950/30">
+          <div className="flex items-start gap-2.5">
+            <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+            <div>
+              <p className="text-sm font-semibold text-red-900 dark:text-red-50">
+                {summary.budgets.activeIncidents} active budget incident{summary.budgets.activeIncidents === 1 ? "" : "s"}
+              </p>
+              <p className="text-xs text-red-700/80 dark:text-red-100/80 mt-0.5">
+                {summary.budgets.pausedAgents} agents paused · {summary.budgets.pausedProjects} projects paused · {summary.budgets.pendingApprovals} pending budget approvals
+              </p>
+            </div>
+          </div>
+          <Link to="/costs" className="text-sm underline underline-offset-2 text-red-700 dark:text-red-100 shrink-0 self-center">
+            Open budgets
+          </Link>
+        </div>
+      ) : null}
+
       {/* Hero */}
       <section
         aria-label="Morning brief"
@@ -331,16 +413,72 @@ export function MorningBrief() {
                 </span>
               </span>
               <span className="text-muted-foreground">{overnightCount} outcomes overnight</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span className="text-muted-foreground">{pendingApprovals} draft{pendingApprovals === 1 ? "" : "s"} ready for you</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span className="text-muted-foreground">{errors} error{errors === 1 ? "" : "s"}</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span className="text-muted-foreground tabular-nums">{formatCents(spendCents)} this month</span>
             </div>
           </div>
         </div>
       </section>
+
+      {/* Metric cards (absorbed from Dashboard) */}
+      {summary && (
+        <section aria-label="Key metrics">
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-px bg-border">
+            <MetricCard
+              icon={Bot}
+              value={totalAgents}
+              label="Agents"
+              to="/agents"
+              tone={agentTone}
+              description={
+                <span>
+                  {summary.agents.running} running · {summary.agents.paused} paused · {summary.agents.error} errors
+                </span>
+              }
+            />
+            <MetricCard
+              icon={CircleDot}
+              value={summary.tasks.inProgress}
+              label="In Progress"
+              to="/issues"
+              tone={tasksTone}
+              description={
+                <span>
+                  {summary.tasks.open} open · {summary.tasks.blocked} blocked
+                </span>
+              }
+            />
+            <MetricCard
+              icon={DollarSign}
+              value={formatCents(summary.costs.monthSpendCents)}
+              label="Month Spend"
+              to="/costs"
+              tone={costTone}
+              description={
+                <span>
+                  {summary.costs.monthBudgetCents > 0
+                    ? `${summary.costs.monthUtilizationPercent}% of ${formatCents(summary.costs.monthBudgetCents)} budget`
+                    : "No budget set"}
+                </span>
+              }
+            />
+            <MetricCard
+              icon={ShieldCheck}
+              value={pendingTotal}
+              label="Pending Approvals"
+              to="/approvals"
+              tone={approvalsTone}
+              description={
+                <span>
+                  {summary.budgets.pendingApprovals > 0
+                    ? `${summary.budgets.pendingApprovals} budget overrides awaiting board review`
+                    : pendingTotal > 0
+                      ? "Awaiting board review"
+                      : "All clear"}
+                </span>
+              }
+            />
+          </div>
+        </section>
+      )}
 
       {/* Awaiting your tap — drafts AND email senders both count */}
       <section aria-label="Awaiting your tap">
@@ -453,6 +591,9 @@ export function MorningBrief() {
         )}
       </section>
 
+      {/* Active agents (absorbed from Dashboard) */}
+      <ActiveAgentsPanel companyId={selectedCompanyId} />
+
       {/* Overnight outcomes */}
       <section aria-label="Overnight outcomes">
         <div className="mb-3 flex items-baseline justify-between">
@@ -549,6 +690,39 @@ export function MorningBrief() {
           </div>
         )}
       </section>
+
+      <PluginSlotOutlet
+        slotTypes={["dashboardWidget"]}
+        context={{ companyId: selectedCompanyId }}
+        className="grid gap-4 md:grid-cols-2"
+        itemClassName="border border-border bg-card p-4"
+      />
+
+      {/* Trends — charts pushed to the bottom (absorbed from Dashboard) */}
+      {summary && (
+        <section aria-label="Activity charts">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Trends
+            </h2>
+            <span className="text-[10px] text-muted-foreground/70">Last 14 days</span>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border">
+            <ChartCard title="Run Activity">
+              <RunActivityChart activity={summary.runActivity} />
+            </ChartCard>
+            <ChartCard title="Issues by Priority">
+              <PriorityChart issues={issues ?? []} />
+            </ChartCard>
+            <ChartCard title="Issues by Status">
+              <IssueStatusChart issues={issues ?? []} />
+            </ChartCard>
+            <ChartCard title="Success Rate">
+              <SuccessRateChart activity={summary.runActivity} />
+            </ChartCard>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

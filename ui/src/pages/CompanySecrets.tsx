@@ -13,7 +13,7 @@ export function CompanySecrets() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
+      { label: selectedCompany?.name ?? "Company", href: "/brief" },
       { label: "Settings", href: "/company/settings" },
       { label: "Secrets" },
     ]);

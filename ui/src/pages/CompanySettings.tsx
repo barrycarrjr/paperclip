@@ -19,7 +19,6 @@ import { secretsApi } from "../api/secrets";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Settings, Check, Download, Upload, History } from "lucide-react";
-import { Link } from "@/lib/router";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { JsonSchemaForm, getDefaultValues, validateJsonSchemaForm } from "@/components/JsonSchemaForm";
 import {
@@ -461,7 +460,7 @@ export function CompanySettings() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
+      { label: selectedCompany?.name ?? "Company", href: "/brief" },
       { label: "Settings" }
     ]);
   }, [setBreadcrumbs, selectedCompany?.name]);
@@ -1233,10 +1232,10 @@ export function CompanySettings() {
           </p>
           <div className="mt-3">
             <Button size="sm" variant="outline" asChild>
-              <Link to="/activity">
+              <a href="/activity">
                 <History className="mr-1.5 h-3.5 w-3.5" />
                 View activity
-              </Link>
+              </a>
             </Button>
           </div>
         </div>

@@ -20,7 +20,7 @@ export function JoinRequestQueue() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
+      { label: selectedCompany?.name ?? "Company", href: "/brief" },
       { label: "Inbox", href: "/inbox" },
       { label: "Join Requests" },
     ]);

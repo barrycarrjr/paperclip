@@ -866,8 +866,8 @@ export function CompanyImport() {
         title: "Import complete",
         body: `${result.company.name}: ${result.agents.length} agent${result.agents.length === 1 ? "" : "s"} processed.`,
       });
-      // Force a fresh dashboard load so newly imported agents are immediately visible.
-      window.location.assign(`/${importedCompany.issuePrefix}/dashboard`);
+      // Force a fresh brief load so newly imported agents are immediately visible.
+      window.location.assign(`/${importedCompany.issuePrefix}/brief`);
     },
     onError: (err) => {
       pushToast({

@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
-import { Dashboard } from "./pages/Dashboard";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -63,7 +62,6 @@ import { PortfolioApprovals } from "./pages/PortfolioApprovals";
 import { PortfolioActivity } from "./pages/PortfolioActivity";
 import { PortfolioRoutines } from "./pages/PortfolioRoutines";
 import { PortfolioCosts } from "./pages/PortfolioCosts";
-import { PortfolioDashboard } from "./pages/PortfolioDashboard";
 import { PortfolioBrief } from "./pages/PortfolioBrief";
 import { PortfolioReceipts } from "./pages/PortfolioReceipts";
 import { useCompany } from "./context/CompanyContext";
@@ -74,8 +72,8 @@ import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-rou
 function boardRoutes() {
   return (
     <>
-      <Route index element={<Navigate to="dashboard" replace />} />
-      <Route path="dashboard" element={<Dashboard />} />
+      <Route index element={<Navigate to="brief" replace />} />
+      <Route path="dashboard" element={<Navigate to="/brief" replace />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
@@ -116,7 +114,7 @@ function boardRoutes() {
       <Route path="portfolio-activity" element={<PortfolioActivity />} />
       <Route path="portfolio-routines" element={<PortfolioRoutines />} />
       <Route path="portfolio-costs" element={<PortfolioCosts />} />
-      <Route path="portfolio-dashboard" element={<PortfolioDashboard />} />
+      <Route path="portfolio-dashboard" element={<Navigate to="/portfolio-brief" replace />} />
       <Route path="portfolio-brief" element={<PortfolioBrief />} />
       <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
       <Route path="issues" element={<Issues />} />
@@ -230,7 +228,7 @@ function CompanyRootRedirect() {
     return <NoCompaniesStartPage />;
   }
 
-  return <Navigate to={`/${targetCompany.issuePrefix}/dashboard`} replace />;
+  return <Navigate to={`/${targetCompany.issuePrefix}/brief`} replace />;
 }
 
 function UnprefixedBoardRedirect() {

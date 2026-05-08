@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -19,6 +19,7 @@ import { issuesApi } from "../api/issues";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useInboxDismissals } from "../hooks/useInboxBadge";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -110,7 +111,7 @@ export function UnifiedInbox() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const { dismissedAtByKey, dismiss } = useInboxDismissals(selectedCompanyId);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }, { label: "Unified (preview)" }]);
@@ -234,12 +235,12 @@ export function UnifiedInbox() {
     }
 
     return out
-      .filter((it) => !dismissed.has(it.id))
+      .filter((it) => !dismissedAtByKey.has(it.id))
       .sort((a, b) => {
         if (b.rankWeight !== a.rankWeight) return b.rankWeight - a.rankWeight;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
-  }, [approvals, rulesBundles, heartbeats, dismissed]);
+  }, [approvals, rulesBundles, heartbeats, dismissedAtByKey]);
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => approvalsApi.approve(id),
@@ -335,14 +336,6 @@ export function UnifiedInbox() {
       navigate(`/agents/${newRun.agentId}/runs/${newRun.id}`);
     },
   });
-
-  function dismiss(id: string) {
-    setDismissed((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }
 
   function disablePreview() {
     setUnifiedInboxEnabled(false);
