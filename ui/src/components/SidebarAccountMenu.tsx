@@ -36,6 +36,11 @@ interface SidebarAccountMenuProps {
   onOpenChange?: (open: boolean) => void;
   version?: string | null;
   commit?: string | null;
+  /**
+   * When true, the trigger row shows a clickable "Update" pill in place of the
+   * commit hash, and the dropdown's Update icon gains a badge dot.
+   */
+  updateAvailable?: boolean;
 }
 
 interface MenuActionProps {
@@ -119,6 +124,8 @@ interface IconActionProps {
   // Tone controls the icon + hover tint. Neutral = muted-foreground / accent
   // hover; info/success/warning/danger pick up colored tints (sky/green/amber/red).
   tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  /** Render a small dot on top-right of the icon — used to flag the action. */
+  badge?: boolean;
 }
 
 function IconAction({
@@ -130,6 +137,7 @@ function IconAction({
   external = false,
   disabled = false,
   tone = "neutral",
+  badge = false,
 }: IconActionProps) {
   const toneClass =
     tone === "info"
@@ -148,7 +156,17 @@ function IconAction({
     disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
   );
 
-  const inner = <Icon className="size-4" />;
+  const inner = (
+    <span className="relative inline-flex items-center justify-center">
+      <Icon className="size-4" />
+      {badge ? (
+        <span
+          aria-hidden="true"
+          className="absolute -right-1 -top-1 size-1.5 rounded-full bg-amber-500 ring-2 ring-popover"
+        />
+      ) : null}
+    </span>
+  );
 
   let trigger;
   if (href) {
@@ -186,6 +204,9 @@ function IconAction({
   );
 }
 
+const UPDATE_CONFIRM_MESSAGE =
+  "Update Paperclip? A console window will open and pull the latest, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the update.";
+
 export function SidebarAccountMenu({
   deploymentMode,
   instanceSettingsTarget,
@@ -193,6 +214,7 @@ export function SidebarAccountMenu({
   onOpenChange,
   version,
   commit,
+  updateAvailable = false,
 }: SidebarAccountMenuProps) {
   const shortCommit = commit ? commit.slice(0, 8) : null;
   const [internalOpen, setInternalOpen] = useState(false);
@@ -261,8 +283,15 @@ export function SidebarAccountMenu({
     if (isMobile) setSidebarOpen(false);
   }
 
+  function confirmAndUpdate() {
+    if (lifecycleBusy) return;
+    if (window.confirm(UPDATE_CONFIRM_MESSAGE)) {
+      updateMutation.mutate();
+    }
+  }
+
   return (
-    <div className="border-t border-r border-border bg-background px-3 py-2">
+    <div className="relative border-t border-r border-border bg-background px-3 py-2">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
@@ -275,7 +304,7 @@ export function SidebarAccountMenu({
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1 truncate">{displayName}</span>
-            {shortCommit ? (
+            {shortCommit && !updateAvailable ? (
               <span
                 className="ml-auto shrink-0 font-mono text-[10px] font-normal text-muted-foreground/70"
                 title={commit ?? undefined}
@@ -283,8 +312,39 @@ export function SidebarAccountMenu({
                 {shortCommit}
               </span>
             ) : null}
+            {updateAvailable ? <span className="ml-auto h-6 w-[5.25rem]" aria-hidden="true" /> : null}
           </button>
         </PopoverTrigger>
+        {updateAvailable ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  event.preventDefault();
+                  confirmAndUpdate();
+                }}
+                disabled={lifecycleBusy}
+                aria-label={
+                  updateMutation.isPending
+                    ? "Updating Paperclip"
+                    : "Update available — click to update Paperclip"
+                }
+                className="absolute right-5 top-1/2 z-10 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 text-[10px] font-medium text-amber-500 transition-colors hover:bg-amber-500/15 hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download className="size-3" />
+                <span>{updateMutation.isPending ? "Updating…" : "Update"}</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6} className="max-w-[220px]">
+              <p className="font-medium">Update available</p>
+              <p className="text-[10px] opacity-80">
+                A new commit is on origin/master. Click to pull, rebuild, and relaunch.
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
         <PopoverContent
           side="top"
           align="start"
@@ -317,6 +377,11 @@ export function SidebarAccountMenu({
                         {shortCommit}
                       </span>
                     ) : null}
+                  </p>
+                ) : null}
+                {updateAvailable ? (
+                  <p className="mt-1 text-xs font-medium text-amber-500">
+                    Update available — pull origin/master to apply.
                   </p>
                 ) : null}
               </div>
@@ -387,16 +452,8 @@ export function SidebarAccountMenu({
                   icon={Download}
                   tone="warning"
                   disabled={lifecycleBusy}
-                  onClick={() => {
-                    if (lifecycleBusy) return;
-                    if (
-                      window.confirm(
-                        "Update Paperclip? A console window will open and pull the latest, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the update.",
-                      )
-                    ) {
-                      updateMutation.mutate();
-                    }
-                  }}
+                  badge={updateAvailable}
+                  onClick={confirmAndUpdate}
                 />
                 <IconAction
                   label={restartMutation.isPending ? "Restarting…" : "Restart Paperclip"}

@@ -37,6 +37,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertInstanceAdmin } from "./authz.js";
+import { checkForRemoteUpdate } from "../services/check-for-updates.js";
 
 const SHUTDOWN_DELAY_MS = 250;
 const RESTART_TRAMPOLINE_DELAY_MS = 2000;
@@ -260,6 +261,24 @@ export function systemRoutes() {
       "rebuild-paperclip.bat",
       "Paperclip is rebuilding from the local working tree. A console window has opened — it will stop this server, rebuild, migrate, and relaunch automatically.",
     );
+  });
+
+  /**
+   * GET /api/system/update-check
+   *
+   * Compare the local install's commit against the latest commit on the
+   * tracked branch in the configured GitHub remote. The UI uses this to show
+   * a passive "update available" indicator without requiring the user to
+   * speculatively click "Update Paperclip".
+   *
+   * Backed by an in-process 5-minute cache on the GitHub fetch — repeated UI
+   * polls and multi-tab sessions don't burn the 60/hr unauthenticated rate
+   * limit. Always returns a value; errors come back in the `error` field.
+   */
+  router.get("/system/update-check", async (req, res) => {
+    assertInstanceAdmin(req);
+    const result = await checkForRemoteUpdate();
+    res.json(result);
   });
 
   /**

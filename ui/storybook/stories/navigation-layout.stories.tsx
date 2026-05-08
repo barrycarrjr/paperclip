@@ -265,6 +265,7 @@ function NavigationLayoutStories() {
                   open
                   onOpenChange={() => undefined}
                   version="0.3.1"
+                  commit="49d307dbabcdef0123456789"
                 />
               </div>
             </div>
@@ -275,6 +276,37 @@ function NavigationLayoutStories() {
 
             <div className="h-[320px] overflow-hidden border border-border bg-background p-4">
               <CompanySwitcher open onOpenChange={() => undefined} />
+            </div>
+          </div>
+        </Section>
+
+        <Section eyebrow="Account menu" title="Update-available indicator (closed and open)">
+          <div className="grid gap-5 xl:grid-cols-2">
+            <div className="relative h-[80px] overflow-hidden border border-border bg-background">
+              <div className="absolute bottom-0 left-0 w-72">
+                <SidebarAccountMenu
+                  deploymentMode="authenticated"
+                  instanceSettingsTarget="/instance/settings/general"
+                  open={false}
+                  onOpenChange={() => undefined}
+                  version="0.3.1"
+                  commit="49d307dbabcdef0123456789"
+                  updateAvailable
+                />
+              </div>
+            </div>
+            <div className="relative h-[440px] overflow-hidden border border-border bg-background">
+              <div className="absolute bottom-0 left-0 w-72">
+                <SidebarAccountMenu
+                  deploymentMode="authenticated"
+                  instanceSettingsTarget="/instance/settings/general"
+                  open
+                  onOpenChange={() => undefined}
+                  version="0.3.1"
+                  commit="49d307dbabcdef0123456789"
+                  updateAvailable
+                />
+              </div>
             </div>
           </div>
         </Section>

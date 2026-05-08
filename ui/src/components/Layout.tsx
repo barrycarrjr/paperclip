@@ -28,6 +28,7 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
+import { systemApi } from "../api/system";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
 import {
   DEFAULT_INSTANCE_SETTINGS_PATH,
@@ -95,6 +96,14 @@ export function Layout() {
     },
     refetchIntervalInBackground: true,
   });
+  const { data: updateCheck } = useQuery({
+    queryKey: queryKeys.system.updateCheck,
+    queryFn: () => systemApi.checkUpdate(),
+    retry: false,
+    refetchInterval: 5 * 60 * 1000,
+    refetchIntervalInBackground: true,
+  });
+  const updateAvailable = updateCheck?.available === true;
   const keyboardShortcutsEnabled = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -351,6 +360,7 @@ export function Layout() {
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}
               commit={health?.commit}
+              updateAvailable={updateAvailable}
             />
           </div>
         ) : (
@@ -377,6 +387,7 @@ export function Layout() {
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}
               commit={health?.commit}
+              updateAvailable={updateAvailable}
             />
           </div>
         )}

@@ -10,6 +10,22 @@ const mockHealthApi = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const mockSystemApi = vi.hoisted(() => ({
+  shutdown: vi.fn(),
+  restart: vi.fn(),
+  update: vi.fn(),
+  rebuild: vi.fn(),
+  checkUpdate: vi.fn(),
+}));
+
+const mockSidebarAccountMenu = vi.hoisted(() =>
+  vi.fn((props: { updateAvailable?: boolean }) => (
+    <div data-testid="account-menu" data-update-available={props.updateAvailable ? "yes" : "no"}>
+      Account menu
+    </div>
+  )),
+);
+
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getGeneral: vi.fn(),
 }));
@@ -92,7 +108,7 @@ vi.mock("./DevRestartBanner", () => ({
 }));
 
 vi.mock("./SidebarAccountMenu", () => ({
-  SidebarAccountMenu: () => <div>Account menu</div>,
+  SidebarAccountMenu: mockSidebarAccountMenu,
 }));
 
 vi.mock("../context/DialogContext", () => ({
@@ -140,6 +156,10 @@ vi.mock("../api/health", () => ({
   healthApi: mockHealthApi,
 }));
 
+vi.mock("../api/system", () => ({
+  systemApi: mockSystemApi,
+}));
+
 vi.mock("../api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
 }));
@@ -184,6 +204,14 @@ describe("Layout", () => {
     mockInstanceSettingsApi.getGeneral.mockResolvedValue({
       keyboardShortcuts: false,
     });
+    mockSystemApi.checkUpdate.mockResolvedValue({
+      available: false,
+      localCommit: null,
+      remoteCommit: null,
+      branch: null,
+      lastChecked: new Date().toISOString(),
+    });
+    mockSidebarAccountMenu.mockClear();
   });
 
   afterEach(() => {
@@ -215,6 +243,39 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain(
       "Sign-in is required and this instance is intended for private-network access.",
     );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("forwards updateAvailable to SidebarAccountMenu when /system/update-check reports an update", async () => {
+    mockSystemApi.checkUpdate.mockResolvedValue({
+      available: true,
+      localCommit: "ab461f01bb91c06a9d4f69eef11caa3c758b0576",
+      remoteCommit: "feedfaceabc1234567890",
+      branch: "master",
+      lastChecked: new Date().toISOString(),
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockSystemApi.checkUpdate).toHaveBeenCalled();
+    const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
+    expect(accountMenuNode?.getAttribute("data-update-available")).toBe("yes");
 
     await act(async () => {
       root.unmount();
