@@ -54,6 +54,7 @@ import {
 import { EnvVarEditor } from "@/components/EnvVarEditor";
 import { CompanyMultiSelectField } from "@/components/JsonSchemaForm";
 import { api } from "@/api/client";
+import { cn } from "@/lib/utils";
 
 const QUERY_KEY = ["external-mcp-servers"] as const;
 
@@ -658,9 +659,9 @@ interface BridgeStatus {
 }
 
 function InternalPluginBridgeCard() {
-  const { data, error, isLoading, refetch } = useQuery<BridgeStatus>({
+  const { data, error, isLoading, isFetching, refetch } = useQuery<BridgeStatus>({
     queryKey: ["plugin-mcp-bridge-status"] as const,
-    queryFn: async () => api.get("/api/internal/mcp-bridge/status") as Promise<BridgeStatus>,
+    queryFn: async () => api.get("/internal/mcp-bridge/status") as Promise<BridgeStatus>,
     refetchInterval: 15_000,
     staleTime: 5_000,
   });
@@ -672,7 +673,14 @@ function InternalPluginBridgeCard() {
           <div>
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm font-semibold">paperclip (internal)</span>
-              <Badge variant={data?.enabled ? "default" : "secondary"}>
+              <Badge
+                variant="secondary"
+                className={
+                  data?.enabled
+                    ? "text-emerald-700 border-emerald-400 dark:text-emerald-400"
+                    : undefined
+                }
+              >
                 {isLoading ? "checking…" : data?.enabled ? "running" : "off"}
               </Badge>
               <Badge variant="outline">auto-managed</Badge>
@@ -685,8 +693,14 @@ function InternalPluginBridgeCard() {
               servers below, role-inverted: Paperclip is the server here, not the client.
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => void refetch()}>
-            <RefreshCw className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            title="Refresh bridge status"
+          >
+            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
           </Button>
         </div>
         {error && (

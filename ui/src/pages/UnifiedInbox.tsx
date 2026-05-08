@@ -361,9 +361,17 @@ export function UnifiedInbox() {
             One queue: approvals, drafts, email review, and failed runs. Ranked by urgency.
           </p>
         </div>
-        <span className="text-[12px] text-muted-foreground tabular-nums">
-          {items.length} item{items.length === 1 ? "" : "s"}
-        </span>
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="text-[12px] text-muted-foreground tabular-nums">
+            {items.length} item{items.length === 1 ? "" : "s"}
+          </span>
+          <Link
+            to="/issues"
+            className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            Looking for an issue? Browse issues →
+          </Link>
+        </div>
       </header>
 
       {items.length === 0 ? (
