@@ -40,6 +40,7 @@ import {
 import { pluginRegistryService } from "./plugin-registry.js";
 import type { ExternalMcpToolSource } from "./external-mcp-tool-source.js";
 import type { ExternalMcpServerManager } from "./external-mcp-server-manager.js";
+import type { DraftGate } from "./tool-draft-gate.js";
 import { EXTERNAL_MCP_TOOL_NAMESPACE, isCompanyAllowed } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
@@ -87,6 +88,14 @@ export interface PluginToolDispatcherOptions {
    * namespaced tool names. Required if `externalMcpToolSource` is provided.
    */
   externalMcpServerManager?: ExternalMcpServerManager;
+  /**
+   * Optional draft gate — when provided, mutating outbound tools (email
+   * send, Slack DM, outbound call, etc.) are intercepted and queued as
+   * pending approvals instead of executed immediately. The dispatcher
+   * returns a synthesized "drafted" result to the agent. See
+   * `tool-draft-gate.ts` for policy.
+   */
+  draftGate?: DraftGate;
 }
 
 /**
@@ -253,6 +262,7 @@ export function createPluginToolDispatcher(
   const {
     workerManager,
     lifecycleManager,
+    draftGate,
     db,
     externalMcpToolSource,
     externalMcpServerManager,
@@ -476,6 +486,26 @@ export function createPluginToolDispatcher(
         },
         "dispatching tool execution",
       );
+
+      // Trust loop: certain mutating outbound tools (email_send, slack_send_dm,
+      // phone_call_make, ...) are intercepted by the draft gate, queued as
+      // approvals, and a synthesized "drafted" result is returned to the agent.
+      // The actual side effect runs only when the user approves the draft, via
+      // the approve route's hook into `executeDraftedApproval()`.
+      if (draftGate) {
+        const gateResult = await draftGate.intercept(namespacedName, parameters, runContext);
+        if (gateResult.intercepted && gateResult.result) {
+          // Resolve the pluginId so the synthesized result still attributes
+          // correctly in audit logs. Read from the registry rather than
+          // hardcoding so this stays accurate as plugins evolve.
+          const tool = registry.getTool(namespacedName);
+          return {
+            pluginId: tool?.pluginId ?? namespacedName.split(":")[0] ?? "draft-gate",
+            toolName: namespacedName,
+            result: gateResult.result,
+          };
+        }
+      }
 
       // Route external MCP tools through the connector manager.
       if (isExternalMcpName(namespacedName)) {

@@ -1,4 +1,4 @@
-import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
+import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck, Pencil } from "lucide-react";
 import { formatCents } from "../lib/utils";
 
 export const typeLabel: Record<string, string> = {
@@ -6,7 +6,30 @@ export const typeLabel: Record<string, string> = {
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
   request_board_approval: "Board Approval",
+  outbound_tool_draft: "Draft",
 };
+
+/**
+ * Map a `<pluginKey>:<toolName>` string to a short, human-readable verb
+ * phrase for UI rendering ("Email reply", "Slack DM", "Outbound call").
+ * Falls back to the raw tool name. Used by the Morning Brief and Approval
+ * detail views to label `outbound_tool_draft` approvals.
+ */
+const OUTBOUND_TOOL_LABEL: Record<string, string> = {
+  "email-tools:email_send": "Email",
+  "email-tools:email_reply": "Email reply",
+  "help-scout:helpscout_send_reply": "HelpScout reply",
+  "help-scout:helpscout_create_conversation": "HelpScout conversation",
+  "slack-tools:slack_send_dm": "Slack DM",
+  "slack-tools:slack_send_channel": "Slack post",
+  "phone-tools:phone_call_make": "Outbound call",
+  "3cx-tools:pbx_click_to_call": "Click-to-call",
+};
+
+export function outboundToolLabel(toolName: string | null | undefined): string {
+  if (!toolName) return "Outbound action";
+  return OUTBOUND_TOOL_LABEL[toolName] ?? toolName.split(":").pop() ?? toolName;
+}
 
 function firstNonEmptyString(...values: unknown[]): string | null {
   for (const value of values) {
@@ -28,6 +51,13 @@ export function approvalSubject(payload?: Record<string, unknown> | null): strin
 
 /** Build a contextual label for an approval, e.g. "Hire Agent: Designer" */
 export function approvalLabel(type: string, payload?: Record<string, unknown> | null): string {
+  if (type === "outbound_tool_draft") {
+    const toolName = typeof payload?.toolName === "string" ? payload.toolName : null;
+    const verb = outboundToolLabel(toolName);
+    const summary = typeof payload?.summary === "string" ? payload.summary : null;
+    if (summary) return `${verb}: ${summary}`;
+    return verb;
+  }
   const base = typeLabel[type] ?? type;
   const subject = approvalSubject(payload);
   if (subject) {
@@ -41,6 +71,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   approve_ceo_strategy: Lightbulb,
   budget_override_required: ShieldAlert,
   request_board_approval: ShieldCheck,
+  outbound_tool_draft: Pencil,
 };
 
 export const defaultTypeIcon = ShieldCheck;

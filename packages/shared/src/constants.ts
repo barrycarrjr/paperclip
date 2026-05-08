@@ -292,8 +292,30 @@ export const APPROVAL_TYPES = [
   "approve_ceo_strategy",
   "budget_override_required",
   "request_board_approval",
+  "outbound_tool_draft",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
+
+/**
+ * Tool names (in `<pluginKey>:<toolName>` form) that the trust-loop gate
+ * intercepts: the agent's call is captured as a pending approval instead of
+ * being executed immediately. The user reviews + approves to actually send.
+ *
+ * Matches the receipt-feed framing: outcomes the user wants to see *before*
+ * they leave the system. Read-only siblings (search/get/list/find) are
+ * deliberately excluded — only mutating outbound calls are gated.
+ */
+export const OUTBOUND_TOOL_DRAFT_GATE = [
+  "email-tools:email_send",
+  "email-tools:email_reply",
+  "help-scout:helpscout_send_reply",
+  "help-scout:helpscout_create_conversation",
+  "slack-tools:slack_send_dm",
+  "slack-tools:slack_send_channel",
+  "phone-tools:phone_call_make",
+  "3cx-tools:pbx_click_to_call",
+] as const;
+export type OutboundToolDraftGate = (typeof OUTBOUND_TOOL_DRAFT_GATE)[number];
 
 export const APPROVAL_STATUSES = [
   "pending",

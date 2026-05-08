@@ -20,6 +20,8 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
+import { executeDraftedApproval } from "../services/tool-draft-gate.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -30,7 +32,15 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
 
 export function approvalRoutes(
   db: Db,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    /**
+     * Lazy reference to the tool dispatcher — used to re-dispatch
+     * `outbound_tool_draft` approvals when a user approves them. Lazy
+     * because the dispatcher is constructed after this route is mounted.
+     */
+    getToolDispatcher?: () => PluginToolDispatcher | null;
+  } = {},
 ) {
   const router = Router();
   const svc = approvalService(db);
@@ -204,6 +214,40 @@ export function approvalRoutes(
           linkedIssueIds,
         },
       });
+
+      // Trust loop: if this was a drafted outbound tool call, re-dispatch
+      // it now that the user has approved. The dispatcher's draft gate will
+      // not re-intercept because the draft has already been resolved. Log a
+      // separate "approval.executed" activity so the receipt feed shows
+      // both the draft (created on the agent's call) and the actual send.
+      if (approval.type === "outbound_tool_draft") {
+        const dispatcher = options.getToolDispatcher?.() ?? null;
+        if (dispatcher) {
+          const exec = await executeDraftedApproval({
+            approvalId: approval.id,
+            decidedByUserId: req.actor.userId ?? "board",
+            executeTool: (toolName, params, runContext) =>
+              dispatcher.executeTool(toolName, params, runContext),
+            db,
+          });
+          await logActivity(db, {
+            companyId: approval.companyId,
+            actorType: "user",
+            actorId: req.actor.userId ?? "board",
+            action: exec.ok ? "approval.executed" : "approval.execute_failed",
+            entityType: "approval",
+            entityId: approval.id,
+            details: {
+              type: approval.type,
+              ok: exec.ok,
+              reason: exec.reason ?? null,
+              hadError: !!exec.toolResult?.error,
+            },
+          });
+        } else {
+          logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
+        }
+      }
 
       if (approval.requestedByAgentId) {
         try {

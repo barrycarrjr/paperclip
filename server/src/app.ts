@@ -56,6 +56,7 @@ import { createPluginWorkerManager, type PluginWorkerManager } from "./services/
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
+import { createDraftGate } from "./services/tool-draft-gate.js";
 import {
   createPluginMcpBridge,
   setPluginMcpBridge,
@@ -200,6 +201,16 @@ export async function createApp(
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = opts.pluginWorkerManager ?? createPluginWorkerManager();
 
+  // Trust loop: the draft gate intercepts mutating outbound tool calls
+  // (email_send, slack_send_dm, phone_call_make, ...) and queues them as
+  // approvals instead of executing them immediately. Created before the
+  // tool dispatcher so it can be passed in below; the lazy ref is shared
+  // with the approval routes so the approve handler can re-dispatch.
+  const draftGate = createDraftGate({ db });
+  const toolDispatcherRef: { current: ReturnType<typeof createPluginToolDispatcher> | null } = {
+    current: null,
+  };
+
   // Mount API routes
   const api = Router();
   api.use(boardMutationGuard());
@@ -229,7 +240,10 @@ export async function createApp(
   api.use(memoryRoutes(db));
   api.use(workQueueRoutes(db));
   api.use(structuralFindingRoutes(db));
-  api.use(approvalRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(approvalRoutes(db, {
+    pluginWorkerManager: workerManager,
+    getToolDispatcher: () => toolDispatcherRef.current,
+  }));
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
@@ -261,7 +275,9 @@ export async function createApp(
     db,
     externalMcpToolSource: externalMcpSource,
     externalMcpServerManager: externalMcpManager,
+    draftGate,
   });
+  toolDispatcherRef.current = toolDispatcher;
   // Plugin MCP bridge — exposes plugin tools to spawned LLM subprocesses
   // (claude_local → Claude Code) via in-process Streamable HTTP MCP. Lives
   // alongside External MCP infrastructure but with the role inverted (we
