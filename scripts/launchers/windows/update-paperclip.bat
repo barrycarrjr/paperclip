@@ -64,18 +64,18 @@ if "!LOCK_BEFORE!"=="!LOCK_AFTER!" (
   echo       lockfile unchanged — skipping
 ) else (
   call pnpm --dir "%PAPERCLIP_SRC%" install
-  if errorlevel 1 goto :update_failed
+  if !errorlevel! neq 0 goto :update_failed
 )
 
 echo.
 echo [4/6] pnpm build:runtime ^(skips in-repo example/scaffold plugins^)
 call pnpm --dir "%PAPERCLIP_SRC%" build:runtime
-if errorlevel 1 goto :update_failed
+if !errorlevel! neq 0 goto :update_failed
 
 echo.
 echo [5/6] pnpm db:migrate
 call pnpm --dir "%PAPERCLIP_SRC%" db:migrate
-if errorlevel 1 goto :update_failed
+if !errorlevel! neq 0 goto :update_failed
 
 echo.
 echo [6/6] Refreshing install marker
@@ -113,7 +113,32 @@ exit /b 0
 
 :update_failed
 echo.
-echo [!] Update failed. See errors above.
+echo ==========================================================
+echo   [!] UPDATE FAILED
+echo ==========================================================
+echo.
+echo   The update did not complete. See the errors above.
+echo.
+echo   Most common causes on Windows:
+echo.
+echo   1. Windows Defender real-time scan locked a file mid-copy.
+echo      Exit code 3221225477 ^(0xC0000005^) is the telltale.
+echo      Fix: add a Defender exclusion for the Paperclip folders.
+echo      Run PowerShell *as Administrator* and execute:
+echo.
+echo         Add-MpPreference -ExclusionPath '%PAPERCLIP_SRC%'
+echo         Add-MpPreference -ExclusionPath '%USERPROFILE%\.paperclip'
+echo.
+echo   2. A leftover Paperclip child process is holding files open.
+echo      Fix: open Task Manager, end every node.exe process,
+echo           then re-run this update.
+echo.
+echo   3. pnpm install needed elevated rights ^(rare^).
+echo      Fix: re-run paperclip-update from an elevated terminal.
+echo.
+echo   This window will stay open. Resolve the issue, then
+echo   re-run paperclip-update.
+echo ==========================================================
 pause
 endlocal
 exit /b 1

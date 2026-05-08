@@ -17,6 +17,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { useSidebar } from "../context/SidebarContext";
+import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import {
   applyIssueFilters,
@@ -88,6 +89,7 @@ import {
   XCircle,
   X,
   RotateCcw,
+  Loader2,
   UserPlus,
   Search,
   ListTree,
@@ -339,8 +341,13 @@ export function FailedRunInboxRow({
             className="h-8 shrink-0 px-2.5"
             onClick={onRetry}
             disabled={isRetrying}
+            aria-busy={isRetrying}
           >
-            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            {isRetrying ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            )}
             {isRetrying ? "Retrying…" : "Retry"}
           </Button>
           {!showUnreadSlot && (
@@ -363,8 +370,13 @@ export function FailedRunInboxRow({
           className="h-8 shrink-0 px-2.5"
           onClick={onRetry}
           disabled={isRetrying}
+          aria-busy={isRetrying}
         >
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+          {isRetrying ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+          )}
           {isRetrying ? "Retrying…" : "Retry"}
         </Button>
         {!showUnreadSlot && (
@@ -1365,6 +1377,8 @@ export function Inbox() {
   });
 
   const [retryingRunIds, setRetryingRunIds] = useState<Set<string>>(new Set());
+  const retryingRunIdsRef = useRef<Set<string>>(new Set());
+  const { pushToast } = useToastActions();
 
   const retryRunMutation = useMutation({
     mutationFn: async (run: HeartbeatRun) => {
@@ -1392,10 +1406,25 @@ export function Inbox() {
     onSuccess: ({ newRun, originalRun }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(originalRun.companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(originalRun.companyId, originalRun.agentId) });
+      pushToast({
+        dedupeKey: `retry-success:${originalRun.id}`,
+        title: "Retry started",
+        body: "Opening the new run.",
+        tone: "success",
+      });
       navigate(`/agents/${originalRun.agentId}/runs/${newRun.id}`);
+    },
+    onError: (err, run) => {
+      pushToast({
+        dedupeKey: `retry-error:${run.id}`,
+        title: "Retry failed",
+        body: err instanceof Error ? err.message : "Could not retry the run.",
+        tone: "error",
+      });
     },
     onSettled: (_data, _error, run) => {
       if (!run) return;
+      retryingRunIdsRef.current.delete(run.id);
       setRetryingRunIds((prev) => {
         const next = new Set(prev);
         next.delete(run.id);
@@ -1403,6 +1432,12 @@ export function Inbox() {
       });
     },
   });
+
+  const handleRetryRun = useCallback((run: HeartbeatRun) => {
+    if (retryingRunIdsRef.current.has(run.id)) return;
+    retryingRunIdsRef.current.add(run.id);
+    retryRunMutation.mutate(run);
+  }, [retryRunMutation]);
 
   const [fadingOutIssues, setFadingOutIssues] = useState<Set<string>>(new Set());
   const [showMarkAllReadConfirm, setShowMarkAllReadConfirm] = useState(false);
@@ -2370,7 +2405,7 @@ export function Inbox() {
                           agentName={agentName(item.run.agentId)}
                           issueLinkState={issueLinkState}
                           onDismiss={() => dismissInboxItem(runKey)}
-                          onRetry={() => retryRunMutation.mutate(item.run)}
+                          onRetry={() => handleRetryRun(item.run)}
                           isRetrying={retryingRunIds.has(item.run.id)}
                           unreadState={nonIssueUnreadState(runKey)}
                           onMarkRead={() => handleMarkNonIssueRead(runKey)}
