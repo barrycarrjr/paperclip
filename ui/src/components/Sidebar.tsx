@@ -271,12 +271,6 @@ export function Sidebar() {
             info="What your agents actually did, framed as outcomes (drafted, sent, called, posted) rather than raw events. Filter by category, group by day."
           />
           <SidebarNavItem
-            to="/activity"
-            label="Activity"
-            icon={History}
-            info="An audit trail of everything that's happened in this company: agent runs, status changes, decisions, and errors."
-          />
-          <SidebarNavItem
             to="/company/settings"
             label="Settings"
             icon={Settings}

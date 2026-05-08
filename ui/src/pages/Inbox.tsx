@@ -147,6 +147,8 @@ import {
   type InboxWorkItemGroupBy,
 } from "../lib/inbox";
 import { useDismissedInboxAlerts, useInboxDismissals, useReadInboxItems } from "../hooks/useInboxBadge";
+import { UnifiedInbox } from "./UnifiedInbox";
+import { isUnifiedInboxEnabled, setUnifiedInboxEnabled } from "../lib/unified-inbox-flag";
 
 export { InboxIssueMetaLeading, InboxIssueTrailingColumns } from "../components/IssueColumns";
 export { IssueGroupHeader as InboxGroupHeader } from "../components/IssueGroupHeader";
@@ -662,6 +664,13 @@ function JoinRequestInboxRow({
 }
 
 export function Inbox() {
+  if (isUnifiedInboxEnabled()) {
+    return <UnifiedInbox />;
+  }
+  return <ClassicInbox />;
+}
+
+function ClassicInbox() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { isMobile } = useSidebar();
@@ -1907,6 +1916,7 @@ export function Inbox() {
   const activeIssueFilterCount = countActiveIssueFilters(issueFilters, true);
   return (
     <div className="space-y-6">
+      <UnifiedInboxPreviewBanner />
       <div className="space-y-2">
         {/* Search — full-width row on mobile, inline on desktop */}
         <div className="relative sm:hidden">
@@ -2593,6 +2603,28 @@ export function Inbox() {
         </>
       )}
 
+    </div>
+  );
+}
+
+function UnifiedInboxPreviewBanner() {
+  function enable() {
+    setUnifiedInboxEnabled(true);
+    window.location.reload();
+  }
+  return (
+    <div className="border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[12px] text-sky-700 dark:text-sky-300 flex items-center justify-between">
+      <span>
+        <strong>Try the unified Inbox:</strong> approvals, drafts, email review, and failed runs
+        in one ranked list.
+      </span>
+      <button
+        type="button"
+        onClick={enable}
+        className="px-2 py-0.5 text-[11px] border border-sky-500/40 hover:bg-sky-500/20"
+      >
+        Try the unified Inbox
+      </button>
     </div>
   );
 }

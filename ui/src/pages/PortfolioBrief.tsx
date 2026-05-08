@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sun,
   Sunrise,
@@ -9,8 +9,10 @@ import {
   CheckCircle2,
   ListChecks,
   Pencil,
+  Mail,
 } from "lucide-react";
-import type { ActivityEvent, Approval, Company, DashboardSummary, Issue } from "@paperclipai/shared";
+import type { ActivityEvent, Approval, Company, DashboardSummary, Issue, IssueDocument } from "@paperclipai/shared";
+import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { approvalsApi } from "../api/approvals";
@@ -27,12 +29,38 @@ import { approvalLabel, typeIcon, defaultTypeIcon } from "../components/Approval
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
+import {
+  dismissReviewSender,
+  graduateSender,
+  keepAlwaysSender,
+  parseReviewQueue,
+} from "../lib/email-triage-rules";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 400;
 const OUTCOMES_PER_COMPANY = 5;
 const DRAFTS_PER_COMPANY = 4;
 const ISSUES_PER_COMPANY = 3;
+const REVIEW_QUEUE_PER_COMPANY = 5;
+const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
+const RULES_HOME_DOC_KEY = "email-triage-rules";
+
+interface ReviewQueueRow {
+  sender: string;
+  count: number;
+  mailbox: string;
+  rulesIssueId: string;
+  companyId: string;
+}
+
+interface RulesHomeBundle {
+  issueId: string;
+  companyId: string;
+  mailbox: string;
+  title: string;
+  body: string;
+  latestRevisionId: string | null;
+}
 
 function greeting(now: Date): { word: string; icon: typeof Sun } {
   const h = now.getHours();
@@ -110,22 +138,60 @@ export function PortfolioBrief() {
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
+  const { data: rulesData } = useQuery<{ bundles: RulesHomeBundle[]; companies: Company[] }>({
+    queryKey: ["portfolioBrief", "emailTriageRules", selectedCompanyId],
+    enabled: !!selectedCompanyId && isPortfolioRoot,
+    queryFn: async () => {
+      const result = await issuesApi.listPortfolio(selectedCompanyId!, {
+        q: RULES_HOME_TITLE_PREFIX,
+        limit: 200,
+      });
+      const rulesIssues = result.issues.filter((i) =>
+        i.title.startsWith(RULES_HOME_TITLE_PREFIX),
+      );
+      const docs = await Promise.allSettled(
+        rulesIssues.map(async (issue) => {
+          const doc: IssueDocument = await issuesApi.getDocument(issue.id, RULES_HOME_DOC_KEY);
+          return {
+            issueId: issue.id,
+            companyId: issue.companyId,
+            mailbox: issue.title.slice(RULES_HOME_TITLE_PREFIX.length).trim(),
+            title: issue.title,
+            body: doc?.body ?? "",
+            latestRevisionId: doc?.latestRevisionId ?? null,
+          } satisfies RulesHomeBundle;
+        }),
+      );
+      return {
+        bundles: docs
+          .filter((r): r is PromiseFulfilledResult<RulesHomeBundle> => r.status === "fulfilled")
+          .map((r) => r.value),
+        companies: result.companies,
+      };
+    },
+  });
+
+  const queryClient = useQueryClient();
+  const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
+  const [reviewQueueExpanded, setReviewQueueExpanded] = useState<Record<string, boolean>>({});
+
   const overnightCutoff = useMemo(() => {
     const d = new Date();
     d.setHours(d.getHours() - OVERNIGHT_HOURS);
     return d;
   }, []);
 
-  // Merge the company list across all four sources so a company shows up
-  // even if only one signal (a draft, an outcome, an issue) is present.
+  // Merge the company list across all sources so a company shows up
+  // even if only one signal (a draft, an outcome, an issue, an email sender) is present.
   const companyMap = useMemo(() => {
     const map = new Map<string, Company>();
     for (const c of dashboardData?.companies ?? []) map.set(c.id, c);
     for (const c of activityData?.companies ?? []) map.set(c.id, c);
     for (const c of approvalsData?.companies ?? []) map.set(c.id, c);
     for (const c of issuesData?.companies ?? []) map.set(c.id, c);
+    for (const c of rulesData?.companies ?? []) map.set(c.id, c);
     return map;
-  }, [dashboardData, activityData, approvalsData, issuesData]);
+  }, [dashboardData, activityData, approvalsData, issuesData, rulesData]);
 
   const companies = useMemo(() => {
     return Array.from(companyMap.values())
@@ -165,6 +231,86 @@ export function PortfolioBrief() {
       items: bucket.items.slice(0, ISSUES_PER_COMPANY),
     }));
   }, [issuesData, companies, myUserId]);
+
+  const reviewQueueRows: ReviewQueueRow[] = useMemo(() => {
+    if (!rulesData?.bundles) return [];
+    const rows: ReviewQueueRow[] = [];
+    for (const bundle of rulesData.bundles) {
+      const entries = parseReviewQueue(bundle.body);
+      for (const e of entries) {
+        rows.push({
+          sender: e.sender,
+          count: e.count,
+          mailbox: bundle.mailbox,
+          rulesIssueId: bundle.issueId,
+          companyId: bundle.companyId,
+        });
+      }
+    }
+    return rows.sort((a, b) => b.count - a.count);
+  }, [rulesData]);
+
+  const reviewQueueBuckets: CompanyBucket<ReviewQueueRow>[] = useMemo(() => {
+    return groupByCompany(reviewQueueRows, companies);
+  }, [reviewQueueRows, companies]);
+
+  async function applyReviewTransform(
+    row: ReviewQueueRow,
+    transform: (body: string, sender: string) => string,
+  ) {
+    const bundle = rulesData?.bundles.find((b) => b.issueId === row.rulesIssueId);
+    if (!bundle) throw new Error("Rules document no longer available.");
+
+    // Refetch the latest revision before writing — the email-triage agent
+    // writes to this same document during runs, and stale baseRevisionIds
+    // come back as 409 Conflict. One retry on conflict is enough for the
+    // common race; persistent contention will surface as the second error.
+    const submit = async (body: string, baseRevisionId: string | null) => {
+      await issuesApi.upsertDocument(row.rulesIssueId, RULES_HOME_DOC_KEY, {
+        title: bundle.title,
+        format: "markdown",
+        body: transform(body, row.sender),
+        baseRevisionId: baseRevisionId ?? undefined,
+      });
+    };
+
+    try {
+      await submit(bundle.body, bundle.latestRevisionId);
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      const fresh: IssueDocument = await issuesApi.getDocument(
+        row.rulesIssueId,
+        RULES_HOME_DOC_KEY,
+      );
+      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
+    }
+  }
+
+  const reviewMutationOptions = {
+    onMutate: (row: ReviewQueueRow) =>
+      setPendingRowAction(`${row.rulesIssueId}::${row.sender}`),
+    onSettled: () => setPendingRowAction(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["portfolioBrief", "emailTriageRules", selectedCompanyId],
+      });
+    },
+  };
+
+  const graduateMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, graduateSender),
+    ...reviewMutationOptions,
+  });
+  const keepMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, keepAlwaysSender),
+    ...reviewMutationOptions,
+  });
+  const dismissMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, dismissReviewSender),
+    ...reviewMutationOptions,
+  });
+  const lastReviewError =
+    graduateMutation.error ?? keepMutation.error ?? dismissMutation.error;
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Sunrise} message="Select a company to view its brief." />;
@@ -210,6 +356,7 @@ export function PortfolioBrief() {
   const overnightTotal = outcomeBuckets.reduce((sum, b) => sum + b.total, 0);
   const draftsTotal = draftBuckets.reduce((sum, b) => sum + b.total, 0);
   const issuesTotal = issueBuckets.reduce((sum, b) => sum + b.total, 0);
+  const reviewTotal = reviewQueueBuckets.reduce((sum, b) => sum + b.total, 0);
 
   const heroTone: "emerald" | "amber" | "red" =
     totals.errors > 0 || totals.activeIncidents > 0 ? "red" : draftsTotal > 0 ? "amber" : "emerald";
@@ -281,43 +428,129 @@ export function PortfolioBrief() {
 
       {/* Awaiting your tap */}
       <section aria-label="Awaiting your tap">
-        <SectionHeader
-          label="Awaiting your tap"
-          chip={
-            draftsTotal > 0
-              ? { text: `${draftsTotal} draft${draftsTotal === 1 ? "" : "s"}`, tone: "amber" }
-              : null
-          }
-          right={
-            draftsTotal > 0
-              ? { label: "Open all approvals →", to: "/portfolio-approvals" }
-              : null
-          }
-        />
-        {draftsTotal === 0 ? (
-          <EmptySection icon={CheckCircle2} message="Nothing waiting on you across the portfolio." tone="emerald" />
+        <div className="mb-3 flex items-baseline justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Awaiting your tap
+            </h2>
+            {draftsTotal > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                {draftsTotal} draft{draftsTotal === 1 ? "" : "s"}
+              </span>
+            )}
+            {reviewTotal > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300">
+                {reviewTotal} email sender{reviewTotal === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          {draftsTotal > 0 && (
+            <Link
+              to="/portfolio-approvals"
+              className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            >
+              Open all approvals →
+            </Link>
+          )}
+        </div>
+
+        {draftsTotal === 0 && reviewTotal === 0 ? (
+          <EmptySection
+            icon={CheckCircle2}
+            message="Nothing waiting on you across the portfolio."
+            tone="emerald"
+          />
         ) : (
-          <div className="space-y-3">
-            {draftBuckets.map(({ company, items, total }) => (
-              <CompanyBlock
-                key={company.id}
-                company={company}
-                total={total}
-                spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
-              >
-                {items.slice(0, DRAFTS_PER_COMPANY).map((approval) => (
-                  <DraftRow key={approval.id} approval={approval} company={company} />
-                ))}
-                {total > DRAFTS_PER_COMPANY && (
-                  <Link
-                    to={`/${company.issuePrefix}/approvals/pending`}
-                    className="block px-4 py-2 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground border-t border-border"
-                  >
-                    + {total - DRAFTS_PER_COMPANY} more in {company.name} →
-                  </Link>
+          <div className="space-y-5">
+            {draftsTotal > 0 && (
+              <div>
+                <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                  Drafts
+                </h3>
+                <div className="space-y-3">
+                  {draftBuckets.map(({ company, items, total }) => (
+                    <CompanyBlock
+                      key={company.id}
+                      company={company}
+                      total={total}
+                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
+                    >
+                      {items.slice(0, DRAFTS_PER_COMPANY).map((approval) => (
+                        <DraftRow key={approval.id} approval={approval} company={company} />
+                      ))}
+                      {total > DRAFTS_PER_COMPANY && (
+                        <Link
+                          to={`/${company.issuePrefix}/approvals/pending`}
+                          className="block px-4 py-2 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground border-t border-border"
+                        >
+                          + {total - DRAFTS_PER_COMPANY} more in {company.name} →
+                        </Link>
+                      )}
+                    </CompanyBlock>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {reviewTotal > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Email senders awaiting your call
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    Auto-triage = move noise · Keep = leave in INBOX · Dismiss = drop without a rule
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {reviewQueueBuckets.map(({ company, items, total }) => {
+                    const expanded = reviewQueueExpanded[company.id] ?? false;
+                    const visible = expanded ? items : items.slice(0, REVIEW_QUEUE_PER_COMPANY);
+                    return (
+                      <CompanyBlock key={company.id} company={company} total={total}>
+                        {visible.map((row) => {
+                          const key = `${row.rulesIssueId}::${row.sender}`;
+                          const isPending = pendingRowAction === key;
+                          return (
+                            <ReviewQueueRow
+                              key={key}
+                              row={row}
+                              pending={isPending}
+                              onGraduate={() => graduateMutation.mutate(row)}
+                              onKeep={() => keepMutation.mutate(row)}
+                              onDismiss={() => dismissMutation.mutate(row)}
+                            />
+                          );
+                        })}
+                        {total > REVIEW_QUEUE_PER_COMPANY && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReviewQueueExpanded((current) => ({
+                                ...current,
+                                [company.id]: !expanded,
+                              }))
+                            }
+                            className="block w-full px-4 py-2 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground border-t border-border transition-colors"
+                          >
+                            {expanded
+                              ? "Show fewer"
+                              : `+ ${total - REVIEW_QUEUE_PER_COMPANY} more in ${company.name} — show all`}
+                          </button>
+                        )}
+                      </CompanyBlock>
+                    );
+                  })}
+                </div>
+                {lastReviewError && (
+                  <p className="mt-2 text-[12px] text-red-500">
+                    {lastReviewError instanceof Error
+                      ? lastReviewError.message
+                      : "Couldn't apply that action. Try again."}
+                  </p>
                 )}
-              </CompanyBlock>
-            ))}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -482,6 +715,65 @@ function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
         </span>
       </div>
       <div className="divide-y divide-border">{children}</div>
+    </div>
+  );
+}
+
+interface ReviewQueueRowProps {
+  row: ReviewQueueRow;
+  pending: boolean;
+  onGraduate: () => void;
+  onKeep: () => void;
+  onDismiss: () => void;
+}
+
+function ReviewQueueRow({ row, pending, onGraduate, onKeep, onDismiss }: ReviewQueueRowProps) {
+  return (
+    <div className="group relative pl-5 pr-4 py-3">
+      <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
+      <div className="flex items-start gap-3">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
+          <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-mono text-[13px] truncate">{row.sender}</span>
+            <span className="text-[11px] text-muted-foreground">
+              · {row.count} message{row.count === 1 ? "" : "s"}
+            </span>
+            <span className="text-[11px] text-muted-foreground/70">· {row.mailbox} mailbox</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onGraduate}
+            disabled={pending}
+            title="Move all future mail from this sender to _paperclip/triage automatically."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Auto-triage
+          </button>
+          <button
+            type="button"
+            onClick={onKeep}
+            disabled={pending}
+            title="Always leave mail from this sender in INBOX. Beats Auto-triage if both match."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Keep
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={pending}
+            title="Remove from this list without writing a rule. Sender may reappear if they send more mail."
+            className="px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

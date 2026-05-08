@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
-import { Sun, Sunrise, Moon, ShieldCheck, ListChecks, Sparkles, History, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Sun, Sunrise, Moon, ShieldCheck, ListChecks, Sparkles, History, AlertCircle, CheckCircle2, Mail } from "lucide-react";
+import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { approvalsApi } from "../api/approvals";
@@ -21,12 +22,37 @@ import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
-import type { Agent, ActivityEvent, Approval, Issue } from "@paperclipai/shared";
+import {
+  dismissReviewSender,
+  graduateSender,
+  keepAlwaysSender,
+  parseReviewQueue,
+  type ReviewQueueEntry,
+} from "../lib/email-triage-rules";
+import type { Agent, ActivityEvent, Approval, Issue, IssueDocument } from "@paperclipai/shared";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 200;
 const OUTCOMES_SHOWN = 8;
 const DRAFTS_SHOWN = 5;
+const REVIEW_QUEUE_SHOWN = 5;
+const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
+const RULES_HOME_DOC_KEY = "email-triage-rules";
+
+interface ReviewQueueRow {
+  sender: string;
+  count: number;
+  mailbox: string;
+  rulesIssueId: string;
+}
+
+interface RulesHomeBundle {
+  issueId: string;
+  mailbox: string;
+  title: string;
+  body: string;
+  latestRevisionId: string | null;
+}
 
 function greeting(now: Date): { word: string; icon: typeof Sun } {
   const h = now.getHours();
@@ -84,6 +110,112 @@ export function MorningBrief() {
     queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+
+  const queryClient = useQueryClient();
+  const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
+  const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
+
+  const { data: rulesBundles } = useQuery<RulesHomeBundle[]>({
+    queryKey: ["morningBrief", "emailTriageRules", selectedCompanyId],
+    enabled: !!selectedCompanyId,
+    queryFn: async () => {
+      const matches = await issuesApi.list(selectedCompanyId!, {
+        q: RULES_HOME_TITLE_PREFIX,
+        limit: 50,
+      });
+      const rulesIssues = matches.filter((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX));
+      const docs = await Promise.allSettled(
+        rulesIssues.map(async (issue) => {
+          const doc: IssueDocument = await issuesApi.getDocument(issue.id, RULES_HOME_DOC_KEY);
+          return {
+            issueId: issue.id,
+            mailbox: issue.title.slice(RULES_HOME_TITLE_PREFIX.length).trim(),
+            title: issue.title,
+            body: doc?.body ?? "",
+            latestRevisionId: doc?.latestRevisionId ?? null,
+          } satisfies RulesHomeBundle;
+        }),
+      );
+      return docs
+        .filter((r): r is PromiseFulfilledResult<RulesHomeBundle> => r.status === "fulfilled")
+        .map((r) => r.value);
+    },
+  });
+
+  const reviewQueue: ReviewQueueRow[] = useMemo(() => {
+    if (!rulesBundles) return [];
+    const rows: ReviewQueueRow[] = [];
+    for (const bundle of rulesBundles) {
+      const entries = parseReviewQueue(bundle.body);
+      for (const e of entries) {
+        rows.push({
+          sender: e.sender,
+          count: e.count,
+          mailbox: bundle.mailbox,
+          rulesIssueId: bundle.issueId,
+        });
+      }
+    }
+    return rows.sort((a, b) => b.count - a.count);
+  }, [rulesBundles]);
+
+  const reviewMutationOptions = {
+    onMutate: (row: ReviewQueueRow) =>
+      setPendingRowAction(`${row.rulesIssueId}::${row.sender}`),
+    onSettled: () => setPendingRowAction(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["morningBrief", "emailTriageRules", selectedCompanyId],
+      });
+    },
+  };
+
+  async function applyReviewTransform(
+    row: ReviewQueueRow,
+    transform: (body: string, sender: string) => string,
+  ) {
+    const bundle = rulesBundles?.find((b) => b.issueId === row.rulesIssueId);
+    if (!bundle) throw new Error("Rules document no longer available.");
+
+    // Refetch the latest revision before writing — the email-triage agent
+    // writes to this same document during runs, and stale baseRevisionIds
+    // come back as 409 Conflict. One retry on conflict is enough for the
+    // common race; persistent contention will surface as the second error.
+    const submit = async (body: string, baseRevisionId: string | null) => {
+      await issuesApi.upsertDocument(row.rulesIssueId, RULES_HOME_DOC_KEY, {
+        title: bundle.title,
+        format: "markdown",
+        body: transform(body, row.sender),
+        baseRevisionId: baseRevisionId ?? undefined,
+      });
+    };
+
+    try {
+      await submit(bundle.body, bundle.latestRevisionId);
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      const fresh: IssueDocument = await issuesApi.getDocument(
+        row.rulesIssueId,
+        RULES_HOME_DOC_KEY,
+      );
+      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
+    }
+  }
+
+  const graduateMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, graduateSender),
+    ...reviewMutationOptions,
+  });
+  const keepMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, keepAlwaysSender),
+    ...reviewMutationOptions,
+  });
+  const dismissMutation = useMutation({
+    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, dismissReviewSender),
+    ...reviewMutationOptions,
+  });
+  const lastReviewError =
+    graduateMutation.error ?? keepMutation.error ?? dismissMutation.error;
 
   const userProfileMap = useMemo(
     () => buildCompanyUserProfileMap(members?.users),
@@ -210,7 +342,7 @@ export function MorningBrief() {
         </div>
       </section>
 
-      {/* Awaiting your tap */}
+      {/* Awaiting your tap — drafts AND email senders both count */}
       <section aria-label="Awaiting your tap">
         <div className="mb-3 flex items-baseline justify-between">
           <div className="flex items-center gap-2">
@@ -222,15 +354,15 @@ export function MorningBrief() {
                 {pendingApprovals} draft{pendingApprovals === 1 ? "" : "s"}
               </span>
             )}
+            {reviewQueue.length > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300">
+                {reviewQueue.length} email sender{reviewQueue.length === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
-          {pendingApprovals > 0 && (
-            <Link to="/approvals/pending" className="text-[11px] font-medium text-muted-foreground hover:text-foreground">
-              Open inbox →
-            </Link>
-          )}
         </div>
 
-        {pendingApprovals === 0 ? (
+        {pendingApprovals === 0 && reviewQueue.length === 0 ? (
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
@@ -238,17 +370,84 @@ export function MorningBrief() {
             </p>
           </div>
         ) : (
-          <div className="border border-border bg-card divide-y divide-border">
-            {draftsToShow.map((a) => (
-              <DraftRow key={a.id} approval={a} agentMap={agentMap} />
-            ))}
-            {remainingDrafts > 0 && (
-              <Link
-                to="/approvals/pending"
-                className="block px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-              >
-                + {remainingDrafts} more →
-              </Link>
+          <div className="space-y-4">
+            {pendingApprovals > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Drafts
+                  </h3>
+                  <Link
+                    to="/approvals/pending"
+                    className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Open all →
+                  </Link>
+                </div>
+                <div className="border border-border bg-card divide-y divide-border">
+                  {draftsToShow.map((a) => (
+                    <DraftRow key={a.id} approval={a} agentMap={agentMap} />
+                  ))}
+                  {remainingDrafts > 0 && (
+                    <Link
+                      to="/approvals/pending"
+                      className="block px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+                    >
+                      + {remainingDrafts} more →
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {reviewQueue.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Email senders awaiting your call
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    Auto-triage = move noise · Keep = leave in INBOX · Dismiss = drop without a rule
+                  </span>
+                </div>
+                <div className="border border-border bg-card divide-y divide-border">
+                  {(reviewQueueExpanded
+                    ? reviewQueue
+                    : reviewQueue.slice(0, REVIEW_QUEUE_SHOWN)
+                  ).map((row) => {
+                    const key = `${row.rulesIssueId}::${row.sender}`;
+                    const isPending = pendingRowAction === key;
+                    return (
+                      <ReviewQueueRow
+                        key={key}
+                        row={row}
+                        pending={isPending}
+                        onGraduate={() => graduateMutation.mutate(row)}
+                        onKeep={() => keepMutation.mutate(row)}
+                        onDismiss={() => dismissMutation.mutate(row)}
+                      />
+                    );
+                  })}
+                  {reviewQueue.length > REVIEW_QUEUE_SHOWN && (
+                    <button
+                      type="button"
+                      onClick={() => setReviewQueueExpanded((v) => !v)}
+                      className="block w-full px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+                    >
+                      {reviewQueueExpanded
+                        ? "Show fewer"
+                        : `+ ${reviewQueue.length - REVIEW_QUEUE_SHOWN} more pending review — show all`}
+                    </button>
+                  )}
+                </div>
+                {lastReviewError && (
+                  <p className="mt-2 text-[12px] text-red-500">
+                    {lastReviewError instanceof Error
+                      ? lastReviewError.message
+                      : "Couldn't apply that action. Try again."}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -350,6 +549,65 @@ export function MorningBrief() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+interface ReviewQueueRowProps {
+  row: ReviewQueueRow;
+  pending: boolean;
+  onGraduate: () => void;
+  onKeep: () => void;
+  onDismiss: () => void;
+}
+
+function ReviewQueueRow({ row, pending, onGraduate, onKeep, onDismiss }: ReviewQueueRowProps) {
+  return (
+    <div className="group relative pl-5 pr-4 py-3">
+      <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
+      <div className="flex items-start gap-3">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
+          <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-mono text-[13px] truncate">{row.sender}</span>
+            <span className="text-[11px] text-muted-foreground">
+              · {row.count} message{row.count === 1 ? "" : "s"}
+            </span>
+            <span className="text-[11px] text-muted-foreground/70">· {row.mailbox} mailbox</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onGraduate}
+            disabled={pending}
+            title="Move all future mail from this sender to _paperclip/triage automatically."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Auto-triage
+          </button>
+          <button
+            type="button"
+            onClick={onKeep}
+            disabled={pending}
+            title="Always leave mail from this sender in INBOX. Beats Auto-triage if both match."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Keep
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={pending}
+            title="Remove from this list without writing a rule. Sender may reappear if they send more mail."
+            className="px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

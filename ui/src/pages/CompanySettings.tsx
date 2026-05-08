@@ -18,7 +18,8 @@ import { instanceSettingsApi } from "../api/instanceSettings";
 import { secretsApi } from "../api/secrets";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
-import { Settings, Check, Download, Upload } from "lucide-react";
+import { Settings, Check, Download, Upload, History } from "lucide-react";
+import { Link } from "@/lib/router";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { JsonSchemaForm, getDefaultValues, validateJsonSchemaForm } from "@/components/JsonSchemaForm";
 import {
@@ -1217,6 +1218,27 @@ export function CompanySettings() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Audit log */}
+      <div className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Audit log
+        </div>
+        <div className="rounded-md border border-border px-4 py-4">
+          <p className="text-sm text-muted-foreground">
+            A chronological record of everything that's happened in this company:
+            agent runs, status changes, decisions, and errors.
+          </p>
+          <div className="mt-3">
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/activity">
+                <History className="mr-1.5 h-3.5 w-3.5" />
+                View activity
+              </Link>
+            </Button>
+          </div>
         </div>
       </div>
 
