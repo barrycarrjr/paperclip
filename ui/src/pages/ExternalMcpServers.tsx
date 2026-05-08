@@ -131,10 +131,21 @@ export function ExternalMcpServers() {
     ]);
   }, [setBreadcrumbs]);
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, dataUpdatedAt, error, refetch } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => externalMcpServersApi.list(),
   });
+
+  // See InternalPluginBridgeCard for rationale: localhost fetches return so
+  // fast that a CSS spin animation is imperceptible, so we hold the spin state
+  // for at least 500ms after a manual click for visible feedback.
+  const [minListSpinning, setMinListSpinning] = useState(false);
+  const listSpinning = isFetching || minListSpinning;
+  const handleListRefresh = () => {
+    setMinListSpinning(true);
+    void refetch();
+    window.setTimeout(() => setMinListSpinning(false), 500);
+  };
 
   // Fetch the selected company's secrets so EnvVarEditor can offer them in
   // the "Secret" picker. Bindings store the secret by NAME, so each company
@@ -217,8 +228,18 @@ export function ExternalMcpServers() {
           <h1 className="text-lg font-semibold">External MCP servers</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => refetch()}>
-            <RefreshCw className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleListRefresh}
+            disabled={listSpinning}
+            title={
+              dataUpdatedAt
+                ? `Refresh server list (last: ${new Date(dataUpdatedAt).toLocaleTimeString()})`
+                : "Refresh server list"
+            }
+          >
+            <RefreshCw className={cn("h-4 w-4", listSpinning && "animate-spin")} />
           </Button>
           <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
             <Plus className="mr-1 h-4 w-4" /> Register server
@@ -659,12 +680,24 @@ interface BridgeStatus {
 }
 
 function InternalPluginBridgeCard() {
-  const { data, error, isLoading, isFetching, refetch } = useQuery<BridgeStatus>({
+  const { data, error, isLoading, isFetching, dataUpdatedAt, refetch } = useQuery<BridgeStatus>({
     queryKey: ["plugin-mcp-bridge-status"] as const,
     queryFn: async () => api.get("/internal/mcp-bridge/status") as Promise<BridgeStatus>,
     refetchInterval: 15_000,
     staleTime: 5_000,
   });
+
+  // Local-server fetches return in single-digit ms — too fast for a CSS spin
+  // animation to register visually. Hold the spin state for at least 500ms
+  // after a manual click so the user gets perceptible feedback that the button
+  // did something.
+  const [minSpinning, setMinSpinning] = useState(false);
+  const spinning = isFetching || minSpinning;
+  const handleRefresh = () => {
+    setMinSpinning(true);
+    void refetch();
+    window.setTimeout(() => setMinSpinning(false), 500);
+  };
 
   return (
     <Card className="border-dashed">
@@ -696,11 +729,15 @@ function InternalPluginBridgeCard() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            title="Refresh bridge status"
+            onClick={handleRefresh}
+            disabled={spinning}
+            title={
+              dataUpdatedAt
+                ? `Refresh bridge status (last: ${new Date(dataUpdatedAt).toLocaleTimeString()})`
+                : "Refresh bridge status"
+            }
           >
-            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", spinning && "animate-spin")} />
           </Button>
         </div>
         {error && (
