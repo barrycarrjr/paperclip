@@ -467,7 +467,58 @@ fn load_tray_icon() -> Icon {
         .expect("decode tray icon PNG")
         .into_rgba8();
     let (w, h) = img.dimensions();
-    Icon::from_rgba(img.into_raw(), w, h).expect("tray icon from rgba")
+    let mut pixels = img.into_raw();
+
+    // The embedded favicon is rendered with the SVG's light-theme stroke
+    // (#18181b, zinc-900). On a dark Windows taskbar that disappears. If the
+    // user is on a dark theme, swap dark stroke pixels to the SVG's
+    // dark-theme color (#e4e4e7, zinc-200) while preserving anti-aliased
+    // alpha. We rasterize once at startup; theme changes need a relaunch.
+    if is_dark_taskbar_theme() {
+        for chunk in pixels.chunks_mut(4) {
+            let brightness = chunk[0] as u16 + chunk[1] as u16 + chunk[2] as u16;
+            // Alpha > 0 + low brightness = stroke pixel (vs fully transparent
+            // background). 240 covers anti-aliased edges as well as the core
+            // stroke without bleeding into mid-grey content if any existed.
+            if chunk[3] > 0 && brightness < 240 {
+                chunk[0] = 0xe4;
+                chunk[1] = 0xe4;
+                chunk[2] = 0xe7;
+            }
+        }
+    }
+
+    Icon::from_rgba(pixels, w, h).expect("tray icon from rgba")
+}
+
+/// True when the Windows taskbar is using its dark theme. Reads
+/// HKCU\...\Personalize\SystemUsesLightTheme via reg.exe so we don't have to
+/// pull in a Win32 registry binding. If the read fails, default to dark —
+/// that's the Windows 11 default and the harder case to render against.
+fn is_dark_taskbar_theme() -> bool {
+    let output = Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "/v",
+            "SystemUsesLightTheme",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            // Output looks like:
+            //   HKEY_CURRENT_USER\...\Personalize
+            //       SystemUsesLightTheme    REG_DWORD    0x0
+            let s = String::from_utf8_lossy(&out.stdout);
+            // 0x1 = light, 0x0 = dark, anything else = unknown → dark.
+            !s.contains("0x1")
+        }
+        _ => true,
+    }
 }
 
 fn acquire_single_instance_lock() -> bool {
