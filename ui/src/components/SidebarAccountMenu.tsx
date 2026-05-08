@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Download,
+  Hammer,
   LogOut,
   type LucideIcon,
   Moon,
@@ -21,6 +23,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "../lib/utils";
 
 const PROFILE_SETTINGS_PATH = "/instance/settings/profile";
@@ -105,6 +108,84 @@ function MenuAction({ label, description, icon: Icon, onClick, href, external = 
   );
 }
 
+interface IconActionProps {
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  onClick?: () => void;
+  href?: string;
+  external?: boolean;
+  disabled?: boolean;
+  // Tone controls the icon + hover tint. Neutral = muted-foreground / accent
+  // hover; info/success/warning/danger pick up colored tints (sky/green/amber/red).
+  tone?: "neutral" | "info" | "success" | "warning" | "danger";
+}
+
+function IconAction({
+  label,
+  description,
+  icon: Icon,
+  onClick,
+  href,
+  external = false,
+  disabled = false,
+  tone = "neutral",
+}: IconActionProps) {
+  const toneClass =
+    tone === "info"
+      ? "text-sky-500 hover:bg-sky-500/10 hover:text-sky-500"
+      : tone === "success"
+        ? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
+        : tone === "warning"
+          ? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
+          : tone === "danger"
+            ? "text-red-500 hover:bg-red-500/10 hover:text-red-500"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground";
+
+  const className = cn(
+    "flex flex-1 items-center justify-center rounded-lg p-2.5 transition-colors",
+    toneClass,
+    disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
+  );
+
+  const inner = <Icon className="size-4" />;
+
+  let trigger;
+  if (href) {
+    trigger = external ? (
+      <a href={href} target="_blank" rel="noreferrer" className={className} aria-label={label} onClick={onClick}>
+        {inner}
+      </a>
+    ) : (
+      <Link to={href} className={className} aria-label={label} onClick={onClick}>
+        {inner}
+      </Link>
+    );
+  } else {
+    trigger = (
+      <button
+        type="button"
+        className={className}
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={label}
+      >
+        {inner}
+      </button>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6} className="max-w-[220px]">
+        <p className="font-medium">{label}</p>
+        <p className="text-[10px] opacity-80">{description}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function SidebarAccountMenu({
   deploymentMode,
   instanceSettingsTarget,
@@ -148,7 +229,25 @@ export function SidebarAccountMenu({
     },
   });
 
-  const lifecycleBusy = restartMutation.isPending || shutdownMutation.isPending;
+  const updateMutation = useMutation({
+    mutationFn: () => systemApi.update(),
+    onSettled: () => {
+      setOpen(false);
+    },
+  });
+
+  const rebuildMutation = useMutation({
+    mutationFn: () => systemApi.rebuild(),
+    onSettled: () => {
+      setOpen(false);
+    },
+  });
+
+  const lifecycleBusy =
+    restartMutation.isPending ||
+    shutdownMutation.isPending ||
+    updateMutation.isPending ||
+    rebuildMutation.isPending;
 
   const displayName = session?.user.name?.trim() || "Board";
   const secondaryLabel =
@@ -245,71 +344,95 @@ export function SidebarAccountMenu({
                 href={instanceSettingsTarget}
                 onClick={closeNavigationChrome}
               />
-              <MenuAction
-                label="Documentation"
-                description="Open Paperclip docs in a new tab."
-                icon={BookOpen}
-                href={DOCS_URL}
-                external
-                onClick={() => setOpen(false)}
-              />
-              <MenuAction
-                label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                description="Toggle the app appearance."
-                icon={theme === "dark" ? Sun : Moon}
-                onClick={() => {
-                  toggleTheme();
-                  setOpen(false);
-                }}
-              />
-
               <div className="my-1 border-t border-border/60" />
 
-              <MenuAction
-                label={restartMutation.isPending ? "Restarting…" : "Restart Paperclip"}
-                description="Bounce the server. Everyone connected drops briefly while a new instance boots."
-                icon={RefreshCw}
-                onClick={() => {
-                  if (lifecycleBusy) return;
-                  if (
-                    window.confirm(
-                      "Restart the Paperclip server? Everyone connected will be disconnected briefly while a new instance boots.",
-                    )
-                  ) {
-                    restartMutation.mutate();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-destructive/10",
-                  lifecycleBusy && "cursor-not-allowed opacity-60",
-                )}
-                onClick={() => {
-                  if (lifecycleBusy) return;
-                  if (
-                    window.confirm(
-                      "Shut down the Paperclip server? Everyone connected will be disconnected and the server will stay stopped until you re-launch it manually.",
-                    )
-                  ) {
-                    shutdownMutation.mutate();
-                  }
-                }}
-                disabled={lifecycleBusy}
-              >
-                <span className="mt-0.5 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
-                  <Power className="size-4" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-foreground">
-                    {shutdownMutation.isPending ? "Shutting down…" : "Shut down Paperclip"}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    Stop the server. Re-launch manually when you're ready.
-                  </span>
-                </span>
-              </button>
+              <div className="flex items-center gap-1 rounded-xl bg-muted/30 p-1">
+                <IconAction
+                  label="Documentation"
+                  description="Open Paperclip docs in a new tab."
+                  icon={BookOpen}
+                  href={DOCS_URL}
+                  external
+                  onClick={() => setOpen(false)}
+                />
+                <IconAction
+                  label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                  description="Toggle the app appearance."
+                  icon={theme === "dark" ? Sun : Moon}
+                  onClick={() => {
+                    toggleTheme();
+                    setOpen(false);
+                  }}
+                />
+                <IconAction
+                  label={rebuildMutation.isPending ? "Rebuilding…" : "Rebuild from local"}
+                  description="Build from the local working tree (no git pull), migrate, and relaunch. Use after editing source."
+                  icon={Hammer}
+                  tone="info"
+                  disabled={lifecycleBusy}
+                  onClick={() => {
+                    if (lifecycleBusy) return;
+                    if (
+                      window.confirm(
+                        "Rebuild Paperclip from your local working tree? A console window will open, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the rebuild.",
+                      )
+                    ) {
+                      rebuildMutation.mutate();
+                    }
+                  }}
+                />
+                <IconAction
+                  label={updateMutation.isPending ? "Updating…" : "Update Paperclip"}
+                  description="Pull the latest from origin/master, rebuild, migrate, and relaunch. Opens in a console window."
+                  icon={Download}
+                  tone="warning"
+                  disabled={lifecycleBusy}
+                  onClick={() => {
+                    if (lifecycleBusy) return;
+                    if (
+                      window.confirm(
+                        "Update Paperclip? A console window will open and pull the latest, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the update.",
+                      )
+                    ) {
+                      updateMutation.mutate();
+                    }
+                  }}
+                />
+                <IconAction
+                  label={restartMutation.isPending ? "Restarting…" : "Restart Paperclip"}
+                  description="Bounce the server. Everyone connected drops briefly while a new instance boots."
+                  icon={RefreshCw}
+                  tone="success"
+                  disabled={lifecycleBusy}
+                  onClick={() => {
+                    if (lifecycleBusy) return;
+                    if (
+                      window.confirm(
+                        "Restart the Paperclip server? Everyone connected will be disconnected briefly while a new instance boots.",
+                      )
+                    ) {
+                      restartMutation.mutate();
+                    }
+                  }}
+                />
+                <IconAction
+                  label={shutdownMutation.isPending ? "Shutting down…" : "Shut down Paperclip"}
+                  description="Stop the server. Re-launch manually when you're ready."
+                  icon={Power}
+                  tone="danger"
+                  disabled={lifecycleBusy}
+                  onClick={() => {
+                    if (lifecycleBusy) return;
+                    if (
+                      window.confirm(
+                        "Shut down the Paperclip server? Everyone connected will be disconnected and the server will stay stopped until you re-launch it manually.",
+                      )
+                    ) {
+                      shutdownMutation.mutate();
+                    }
+                  }}
+                />
+              </div>
 
               {deploymentMode === "authenticated" ? (
                 <button

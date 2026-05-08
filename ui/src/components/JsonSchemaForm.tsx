@@ -652,6 +652,138 @@ const DynamicEnumField = React.memo(({
 DynamicEnumField.displayName = "DynamicEnumField";
 
 // ---------------------------------------------------------------------------
+// DynamicCheckboxArrayField — array of strings, options from a plugin action
+// ---------------------------------------------------------------------------
+//
+// Schema shape (on an array field):
+//   "x-paperclip-itemsOptionsFrom": { actionKey: "list-mailboxes" }
+//
+// Same fetch contract as `x-paperclip-optionsFrom`: POSTs to
+// /api/plugins/<pluginId>/actions/<actionKey> with `{params:{}}`, expects
+// `{data: {options: [{value, label} | "string", ...]}}` back. Renders one
+// checkbox per option; value is an array of selected `value` strings.
+//
+// Falls back to a plain string-input list (the array's default behavior)
+// when pluginId is unavailable or the fetch fails with no options. When
+// the fetch succeeds but returns zero options, shows a hint asking the
+// operator to fill in the credentials above and save first.
+const DynamicCheckboxArrayField = React.memo(({
+  schema,
+  value,
+  onChange,
+  disabled,
+  label,
+  description,
+  error,
+}: {
+  schema: JsonSchemaNode;
+  value: unknown;
+  onChange: (val: unknown) => void;
+  disabled: boolean;
+  label: string;
+  description?: string;
+  error?: string;
+}) => {
+  const ctx = React.useContext(FormRootContext);
+  const pluginId = ctx?.pluginId;
+  const optionsFrom = schema["x-paperclip-itemsOptionsFrom"] as
+    | { actionKey: string }
+    | undefined;
+
+  const [options, setOptions] = useState<DynamicEnumOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pluginId || !optionsFrom?.actionKey) return;
+    setLoading(true);
+    setFetchError(null);
+    fetch(`/api/plugins/${pluginId}/actions/${optionsFrom.actionKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ params: {} }),
+    })
+      .then((res) => res.json())
+      .then((json: { data?: { options?: unknown[] } }) => {
+        const raw = json.data?.options ?? [];
+        setOptions(
+          raw.map((o) =>
+            typeof o === "string"
+              ? { value: o, label: o }
+              : {
+                  value: String((o as { value: unknown }).value ?? ""),
+                  label: String(
+                    (o as { label?: unknown }).label ??
+                    (o as { value: unknown }).value ??
+                    "",
+                  ),
+                },
+          ),
+        );
+      })
+      .catch((err: Error) => setFetchError(err.message))
+      .finally(() => setLoading(false));
+  }, [pluginId, optionsFrom?.actionKey]);
+
+  const selected: string[] = Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : [];
+
+  const toggle = (val: string, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) next.add(val);
+    else next.delete(val);
+    onChange(Array.from(next));
+  };
+
+  return (
+    <FieldWrapper label={label} description={description} error={error} disabled={disabled}>
+      {loading && (
+        <p className="text-xs text-muted-foreground">Loading options…</p>
+      )}
+      {!loading && fetchError && (
+        <p className="text-xs text-destructive">
+          Could not load options: {fetchError}
+        </p>
+      )}
+      {!loading && !fetchError && options.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          No options available yet. If this is a new account row, fill in the credentials above and click Save Configuration first — the dynamic options come from the live API and need a saved config to fetch.
+        </p>
+      )}
+      {options.length > 0 && (
+        <div className="space-y-2">
+          {options.map((opt) => {
+            const checked = selected.includes(opt.value);
+            return (
+              <label
+                key={opt.value}
+                className="flex items-start gap-2 cursor-pointer"
+              >
+                <Checkbox
+                  checked={checked}
+                  disabled={disabled}
+                  onCheckedChange={(c) => toggle(opt.value, c === true)}
+                />
+                <span className="text-sm leading-tight">{opt.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {selected.length > 0 && options.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {selected.length} selected
+        </p>
+      )}
+    </FieldWrapper>
+  );
+});
+
+DynamicCheckboxArrayField.displayName = "DynamicCheckboxArrayField";
+
+// ---------------------------------------------------------------------------
 // SiblingEnumField — dropdown whose options come from a sibling array's items
 // ---------------------------------------------------------------------------
 //
@@ -1705,6 +1837,24 @@ const ArrayField = React.memo(({
     );
   }
 
+  // Custom widget: array whose items come from a plugin action call → checkboxes.
+  // Mirrors `x-paperclip-optionsFrom` on a single string field, but produces a
+  // multi-select of strings. Used by plugins that list dynamic IDs from external
+  // services (e.g., help-scout mailboxes pulled from the Help Scout API).
+  if (propSchema["x-paperclip-itemsOptionsFrom"]) {
+    return (
+      <DynamicCheckboxArrayField
+        schema={propSchema}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        label={label}
+        description={propSchema.description}
+        error={error}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -2189,6 +2339,27 @@ function JsonSchemaFormInner({
             return actual !== expected;
           });
           if (mismatch) return null;
+        }
+
+        // Conditional visibility — alternate predicate: hide a field until
+        // every listed sibling has a non-empty value. Use this to gate
+        // setup steps that depend on prior steps being filled in (e.g.
+        // mailbox dropdowns that need OAuth credential refs first).
+        // Schema shape:
+        //   "x-paperclip-showWhenAllPresent": ["clientIdRef", "clientSecretRef"]
+        // "Present" means: not undefined, not null, not "", not empty array.
+        const showWhenAllPresent = (propSchema as JsonSchemaNode)[
+          "x-paperclip-showWhenAllPresent"
+        ] as string[] | undefined;
+        if (Array.isArray(showWhenAllPresent) && showWhenAllPresent.length > 0) {
+          const isPresent = (v: unknown): boolean => {
+            if (v === undefined || v === null) return false;
+            if (typeof v === "string") return v.trim().length > 0;
+            if (Array.isArray(v)) return v.length > 0;
+            return true;
+          };
+          const allPresent = showWhenAllPresent.every((k) => isPresent(values[k]));
+          if (!allPresent) return null;
         }
 
         const value = values[key];

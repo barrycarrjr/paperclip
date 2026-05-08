@@ -1,7 +1,7 @@
 /**
- * System-level routes — shut down and restart the running paperclip server
- * from the Plugin Manager / Settings UI instead of forcing operators to drop
- * to the launcher scripts in `~/.paperclip/launchers/`.
+ * System-level routes — shut down, restart, and update the running paperclip
+ * server from the Settings UI instead of forcing operators to drop to the
+ * launcher scripts in `~/.paperclip/launchers/`.
  *
  * Design notes
  * ============
@@ -23,12 +23,17 @@
  *   Fallback: re-exec the same node binary + argv that started us. Works on
  *   any platform but doesn't reattach to the launcher's console window.
  *
- * Both routes require instance-admin authority — these are destructive
+ * **Update** (Windows only for now) spawns `update-paperclip.bat` detached
+ * in a new console window. The bat itself starts by killing the running
+ * server via stop-paperclip.bat, then pulls/builds/migrates and chains into
+ * launch-paperclip.bat — so we don't SIGTERM ourselves; the bat does it.
+ *
+ * All three routes require instance-admin authority — these are destructive
  * actions for everyone connected to this paperclip instance.
  */
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertInstanceAdmin } from "./authz.js";
@@ -40,6 +45,34 @@ function launcherScriptPath(): string {
   // Convention: launch-paperclip.bat sits in ~/.paperclip/launchers/.
   // Falls back to nothing if missing.
   return path.join(os.homedir(), ".paperclip", "launchers", "launch-paperclip.bat");
+}
+
+/**
+ * Read the repo path that the install marker records so the update route can
+ * find `<repo>\scripts\launchers\windows\update-paperclip.bat`. install.json
+ * is written by install-paperclip.bat / update-paperclip.bat themselves, so
+ * if it's missing we have no reliable way to find the bat — return null and
+ * let the caller surface a friendly error.
+ */
+function readInstallRepoPath(): string | null {
+  try {
+    const raw = readFileSync(path.join(os.homedir(), ".paperclip", "install.json"), "utf8");
+    // Strip a potential UTF-8 BOM (PowerShell's `Set-Content -Encoding UTF8`
+    // writes one on Windows).
+    const parsed = JSON.parse(raw.replace(/^﻿/, "")) as { repoPath?: string };
+    const repoPath = typeof parsed.repoPath === "string" && parsed.repoPath.length > 0 ? parsed.repoPath : null;
+    return repoPath;
+  } catch {
+    return null;
+  }
+}
+
+function repoLauncherScriptPath(scriptName: string): string | null {
+  if (process.platform !== "win32") return null;
+  const repoPath = readInstallRepoPath();
+  if (!repoPath) return null;
+  const bat = path.join(repoPath, "scripts", "launchers", "windows", scriptName);
+  return existsSync(bat) ? bat : null;
 }
 
 function spawnRestartTrampoline(): void {
@@ -132,6 +165,101 @@ export function systemRoutes() {
       message: "Paperclip is shutting down. The server will exit in a moment.",
     });
     killSelfGracefully();
+  });
+
+  /**
+   * Shared launcher-spawning route handler for the update / rebuild actions.
+   * Both actions spawn a detached .bat in a new console window; the bat itself
+   * stops this server via stop-paperclip.bat — we don't SIGTERM ourselves.
+   */
+  function handleLauncherSpawn(
+    req: Request,
+    res: Response,
+    action: "update" | "rebuild",
+    scriptName: string,
+    successMessage: string,
+  ) {
+    assertInstanceAdmin(req);
+
+    if (process.platform !== "win32") {
+      res.status(501).json({
+        ok: false,
+        action,
+        error: `${action === "update" ? "Update" : "Rebuild"} from the UI is only supported on Windows. Run scripts/launchers/<platform>/${scriptName.replace(/\.bat$/, "")} equivalent from a shell.`,
+      });
+      return;
+    }
+
+    const bat = repoLauncherScriptPath(scriptName);
+    if (!bat) {
+      res.status(500).json({
+        ok: false,
+        action,
+        error: `Could not locate ${scriptName}. Make sure ~/.paperclip/install.json points to a checkout that contains scripts/launchers/windows/${scriptName}.`,
+      });
+      return;
+    }
+
+    try {
+      const child = spawn("cmd.exe", ["/c", "start", "", bat], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+        // Run from the user's home dir so the bat's `cd /d "%PAPERCLIP_SRC%"`
+        // resolves predictably.
+        cwd: os.homedir(),
+      });
+      child.unref();
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        action,
+        error: `Failed to start ${scriptName}: ${err instanceof Error ? err.message : String(err)}. Server is still running.`,
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      action,
+      message: successMessage,
+    });
+    // No SIGTERM. The bat's first step calls stop-paperclip.bat which kills
+    // us by port — that's our exit signal.
+  }
+
+  /**
+   * POST /api/system/update
+   *
+   * Run update-paperclip.bat: stop server, git pull origin/master, rebuild,
+   * migrate, relaunch. Windows-only.
+   */
+  router.post("/system/update", (req, res) => {
+    handleLauncherSpawn(
+      req,
+      res,
+      "update",
+      "update-paperclip.bat",
+      "Paperclip is updating. A console window has opened — it will stop this server, pull the latest, rebuild, migrate, and relaunch automatically.",
+    );
+  });
+
+  /**
+   * POST /api/system/rebuild
+   *
+   * Run rebuild-paperclip.bat: stop server, build from local working tree
+   * (no git pull), migrate, relaunch. The local-dev counterpart to /update —
+   * use this after editing source files to bake the changes into the running
+   * prod-style install. Windows-only.
+   */
+  router.post("/system/rebuild", (req, res) => {
+    handleLauncherSpawn(
+      req,
+      res,
+      "rebuild",
+      "rebuild-paperclip.bat",
+      "Paperclip is rebuilding from the local working tree. A console window has opened — it will stop this server, rebuild, migrate, and relaunch automatically.",
+    );
   });
 
   /**

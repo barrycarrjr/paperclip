@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Puzzle, ArrowLeft, ShieldAlert, ActivitySquare, CheckCircle, XCircle, Loader2, Clock, Cpu, Webhook, CalendarClock, AlertTriangle } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
@@ -7,6 +7,7 @@ import { Link, Navigate, useParams } from "@/lib/router";
 import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
 import { pluginsApi } from "@/api/plugins";
 import { secretsApi } from "@/api/secrets";
+import { companiesApi } from "@/api/companies";
 import { queryKeys } from "@/lib/queryKeys";
 import type { CompanySecret } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
@@ -108,11 +109,64 @@ export function PluginSettings() {
   // Secrets list for the secret-ref picker in the auto-generated config form.
   // Scoped to the currently-selected company; the operator can paste a UUID
   // for cross-company refs as a fallback.
-  const { data: secretsData } = useQuery({
+  const { data: ownSecrets } = useQuery({
     queryKey: queryKeys.secrets.list(selectedCompanyId!),
     queryFn: () => secretsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId && !!hasConfigSchema,
   });
+
+  // Also surface portfolio-root (HQ) secrets in the picker so cross-company
+  // shared credentials don't require pasting a raw UUID. Common pattern:
+  // OAuth tokens for services accessed from many LLCs live in HQ once and
+  // every plugin account row can pick them by name.
+  // Use a dedicated query key — `queryKeys.companies.all` is already owned by
+  // CompanyContext which stores a different shape ({companies, unauthorized})
+  // and would corrupt my data otherwise.
+  const { data: allCompanies } = useQuery({
+    queryKey: ["companies", "list-flat"] as const,
+    queryFn: () => companiesApi.list(),
+    enabled: !!hasConfigSchema,
+    staleTime: 60_000,
+  });
+
+  // Stable derivations — recompute only when allCompanies / selectedCompanyId
+  // actually change. Without memo, `.find()` returns a new object reference
+  // every render which would invalidate downstream useMemo deps.
+  const portfolioRootId = useMemo(() => {
+    const list = Array.isArray(allCompanies) ? allCompanies : [];
+    const root = list.find((c) => c?.isPortfolioRoot);
+    if (!root || root.id === selectedCompanyId) return null;
+    return root.id;
+  }, [allCompanies, selectedCompanyId]);
+  const portfolioRootName = useMemo(() => {
+    if (!portfolioRootId) return null;
+    const list = Array.isArray(allCompanies) ? allCompanies : [];
+    return list.find((c) => c?.id === portfolioRootId)?.name ?? null;
+  }, [allCompanies, portfolioRootId]);
+
+  const { data: portfolioSecrets } = useQuery({
+    queryKey: queryKeys.secrets.list(portfolioRootId ?? "__none__"),
+    queryFn: () => secretsApi.list(portfolioRootId!),
+    enabled: !!portfolioRootId && !!hasConfigSchema,
+  });
+
+  // Merge: own secrets first (most-likely picks), then portfolio-root secrets
+  // labeled with the source company so the operator knows where they live.
+  const secretsData = useMemo<CompanySecret[] | undefined>(() => {
+    if (!ownSecrets) return undefined;
+    const combined: CompanySecret[] = [...ownSecrets];
+    if (portfolioSecrets && portfolioRootName) {
+      const ownIds = new Set(ownSecrets.map((s) => s.id));
+      for (const s of portfolioSecrets) {
+        if (ownIds.has(s.id)) continue;
+        combined.push({
+          ...s,
+          name: `[${portfolioRootName}] ${s.name}`,
+        });
+      }
+    }
+    return combined;
+  }, [ownSecrets, portfolioSecrets, portfolioRootName]);
 
   const { slots } = usePluginSlots({
     slotTypes: ["settingsPage"],
