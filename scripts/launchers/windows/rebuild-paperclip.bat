@@ -71,15 +71,17 @@ echo ==========================================================
 choice /M "Restart now" /T 5 /D Y /C YN
 if errorlevel 2 (
   echo.
-  echo Auto-restart cancelled. Run launch-paperclip.bat when ready.
+  echo Auto-restart cancelled. Double-click paperclip.exe when ready.
   pause
   exit /b 0
 )
 
-REM Chain into launch-paperclip.bat in the SAME window so double-click feels
-REM continuous (rebuild window transitions into running-server window).
+REM Chain into paperclip.exe (hidden launcher) so the post-rebuild server
+REM runs invisibly. The rebuild window closes immediately after spawning
+REM the exe, and the browser pops once port 3100 is bound.
 endlocal
-"%~dp0launch-paperclip.bat"
+start "" "%~dp0paperclip.exe"
+exit /b 0
 
 :rebuild_failed
 echo.

@@ -53,6 +53,9 @@ diagnostics/
 # Doc maintenance cursor
 .doc-review-cursor
 
+# Rust build artifacts (paperclip-launcher)
+tools/paperclip-launcher/target/
+
 # Playwright
 tests/e2e/test-results/
 tests/e2e/playwright-report/

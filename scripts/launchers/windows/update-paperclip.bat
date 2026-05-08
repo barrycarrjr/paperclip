@@ -97,19 +97,19 @@ echo ==========================================================
 choice /M "Restart now" /T 5 /D Y /C YN
 if errorlevel 2 (
   echo.
-  echo Auto-restart cancelled. Run launch-paperclip.bat when ready.
+  echo Auto-restart cancelled. Double-click paperclip.exe when ready.
   pause
   exit /b 0
 )
 
-REM Chain into launch-paperclip.bat in the SAME window (no `start`, no
-REM `call`). This makes double-click feel continuous: the update window
-REM transitions into the running server window. With `start` instead, the
-REM update window would close after spawning launch in a separate window —
-REM which from CLI looks fine but from double-click looks like "the window
-REM just closed."
+REM Chain into paperclip.exe (hidden launcher) so the post-update server
+REM runs invisibly — no terminal window left on the desktop. paperclip.exe
+REM is built from tools\paperclip-launcher (GUI subsystem, fire-and-forget);
+REM cmd returns immediately after spawning it, this update window closes,
+REM and the browser pops once the server has bound port 3100.
 endlocal
-"%~dp0launch-paperclip.bat"
+start "" "%~dp0paperclip.exe"
+exit /b 0
 
 :update_failed
 echo.

@@ -81,7 +81,8 @@ echo   Data:      %DATA_DIR%
 echo   Commit:    %GIT_COMMIT%
 echo   Branch:    %GIT_BRANCH%
 echo.
-echo   Next: double-click launch-paperclip.bat to start the server.
+echo   Next: double-click paperclip.exe to start the server (no terminal window).
+echo         Or launch-paperclip.bat if you want verbose console output.
 echo ==========================================================
 echo.
 pause
