@@ -293,7 +293,6 @@ fn run_tray(paths: Paths, config: Config) {
     let item_docs = MenuItem::new("Documentation", true, None);
     let sep3 = PredefinedMenuItem::separator();
     let item_shutdown = MenuItem::new("Shut down Paperclip", true, None);
-    let item_quit = MenuItem::new("Quit launcher (keep server running)", true, None);
 
     let _ = menu.append(&item_open);
     let _ = menu.append(&sep1);
@@ -305,7 +304,6 @@ fn run_tray(paths: Paths, config: Config) {
     let _ = menu.append(&item_docs);
     let _ = menu.append(&sep3);
     let _ = menu.append(&item_shutdown);
-    let _ = menu.append(&item_quit);
 
     let id_open = item_open.id().clone();
     let id_update = item_update.id().clone();
@@ -314,7 +312,6 @@ fn run_tray(paths: Paths, config: Config) {
     let id_logs = item_logs.id().clone();
     let id_docs = item_docs.id().clone();
     let id_shutdown = item_shutdown.id().clone();
-    let id_quit = item_quit.id().clone();
 
     let icon = load_tray_icon();
 
@@ -359,8 +356,6 @@ fn run_tray(paths: Paths, config: Config) {
                 }
             } else if id == &id_shutdown {
                 spawn_hidden_ps1(&paths.launcher_dir, "stop-paperclip.ps1");
-                *control_flow = ControlFlow::Exit;
-            } else if id == &id_quit {
                 *control_flow = ControlFlow::Exit;
             }
         }

@@ -1,9 +1,10 @@
 [package]
 name = "paperclip-launcher"
-version = "0.2.1"
+version = "0.2.3"
 edition = "2021"
 publish = false
 description = "Hidden-window launcher + tray icon for paperclip on Windows"
+build = "build.rs"
 
 [[bin]]
 name = "paperclip"
@@ -29,3 +30,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[build-dependencies]
+# Embeds a recolored paperclip icon as the exe's icon resource. We can't
+# theme-swap embedded resources at runtime, so we bake a light-stroke
+# variant at build time using the `ico` crate to decode/re-encode the
+# favicon and `winresource` (which calls windres on the GNU toolchain) to
+# bind it as the exe's primary icon.
+winresource = "0.1"
+ico = "0.4"
