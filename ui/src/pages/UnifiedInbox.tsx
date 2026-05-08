@@ -218,7 +218,7 @@ export function UnifiedInbox() {
         if (typeof value === "string" && value.length > 0) retryPayload[key] = value;
       }
       out.push({
-        id: `failed_run:${run.id}`,
+        id: `run:${run.id}`,
         kind: "failed_run",
         createdAt: String(run.createdAt),
         title: triggerLabel
@@ -380,7 +380,7 @@ export function UnifiedInbox() {
               <InboxItemRow
                 key={item.id}
                 item={item}
-                onDismiss={() => dismiss(item.id)}
+                onDismiss={isReviewSender ? undefined : () => dismiss(item.id)}
                 onApprove={
                   item.kind === "approval" || item.kind === "draft"
                     ? () => approveMutation.mutate(item.approvalId)
@@ -442,7 +442,7 @@ function PreviewBanner({ onDisable }: { onDisable: () => void }) {
 
 interface InboxItemRowProps {
   item: InboxItem;
-  onDismiss: () => void;
+  onDismiss?: () => void;
   onApprove?: () => void;
   onReject?: () => void;
   onGraduate?: () => void;
@@ -587,15 +587,17 @@ function InboxItemRow({
             >
               Open
             </button>
-            <button
-              type="button"
-              onClick={onDismiss}
-              aria-label="Hide from inbox"
-              title="Hide from this inbox view (won't change underlying state)."
-              className="px-1.5 py-1 text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            {onDismiss && (
+              <button
+                type="button"
+                onClick={onDismiss}
+                aria-label="Hide from inbox"
+                title="Hide from this inbox view (won't change underlying state)."
+                className="px-1.5 py-1 text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
           {item.meta && (
             <span className="text-[11px] text-muted-foreground">{item.meta}</span>
