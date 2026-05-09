@@ -124,7 +124,11 @@ function normaliseSql(input: string): string {
 function extractQualifiedRefs(statement: string): SqlRef[] {
   const refs: SqlRef[] = [];
   const patterns = [
-    /\b(from|join|references|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+    // `on` covers `create index ... on <schema>.<table>` and
+    // `create trigger ... on <schema>.<table>`. Other contexts (`on conflict`,
+    // join `on` clauses) don't follow the keyword with a `<schema>.<table>`
+    // pattern, so they're naturally filtered out by the regex shape.
+    /\b(from|join|references|into|update|on)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
     /\b(alter\s+table|create\s+table|create\s+view|drop\s+table|truncate\s+table)\s+(?:if\s+(?:not\s+)?exists\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
   ];
 

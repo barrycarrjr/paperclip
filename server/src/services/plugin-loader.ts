@@ -1392,7 +1392,7 @@ export function pluginLoader(
       let localSourcePath: string | undefined;
       if (discovered.source === "local-filesystem") {
         const targetDir = getManagedPluginDir(manifest.id, managedPluginDir);
-        await copyPluginToManagedDir(discovered.packagePath, targetDir);
+        await copyPluginToManagedDir(discovered.packagePath, targetDir, manifest);
         log.info(
           { pluginId: manifest.id, source: discovered.packagePath, target: targetDir },
           "plugin-loader: copied plugin into managed install directory",
@@ -1523,7 +1523,7 @@ export function pluginLoader(
       let nextLocalSourcePath: string | undefined;
       if (discovered.source === "local-filesystem") {
         const targetDir = getManagedPluginDir(newManifest.id, managedPluginDir);
-        await copyPluginToManagedDir(discovered.packagePath, targetDir);
+        await copyPluginToManagedDir(discovered.packagePath, targetDir, newManifest);
         log.info(
           { pluginId: newManifest.id, source: discovered.packagePath, target: targetDir },
           "plugin-loader: copied plugin into managed install directory (upgrade)",
@@ -2069,7 +2069,9 @@ export function pluginLoader(
  */
 /**
  * Copy a plugin's runtime artifacts (the `dist/` folder plus a sanitized
- * `package.json`) from the source folder into the managed install directory.
+ * `package.json`, plus any manifest-declared resource directories such as
+ * `database.migrationsDir`) from the source folder into the managed install
+ * directory.
  *
  * Wipes any prior contents at the target so each install is a clean snapshot
  * of the source — operators using the Reinstall flow after a rebuild always
@@ -2079,8 +2081,17 @@ export function pluginLoader(
  * runtime (name, version, type, paperclipPlugin, dependencies). Dev-only
  * fields (devDependencies, scripts, repository, build configs) are stripped
  * to minimize the install footprint and avoid leaking the source tree.
+ *
+ * Manifest-declared sibling directories (currently just the database
+ * migrations dir) are copied verbatim. The activation pipeline reads
+ * `database.migrationsDir` relative to the install root, so without copying
+ * it across activation fails with ENOENT scandir on the missing path.
  */
-async function copyPluginToManagedDir(sourceDir: string, targetDir: string): Promise<void> {
+async function copyPluginToManagedDir(
+  sourceDir: string,
+  targetDir: string,
+  manifest?: PaperclipPluginManifestV1,
+): Promise<void> {
   if (!existsSync(sourceDir)) {
     throw new Error(`copyPluginToManagedDir: source does not exist: ${sourceDir}`);
   }
@@ -2111,6 +2122,26 @@ async function copyPluginToManagedDir(sourceDir: string, targetDir: string): Pro
     JSON.stringify(sanitized, null, 2) + "\n",
     "utf-8",
   );
+
+  const migrationsDirRel = manifest?.database?.migrationsDir;
+  if (migrationsDirRel) {
+    const sourceMigrationsDir = path.resolve(sourceDir, migrationsDirRel);
+    const sourceRoot = path.resolve(sourceDir);
+    const relCheck = path.relative(sourceRoot, sourceMigrationsDir);
+    if (relCheck.startsWith("..") || path.isAbsolute(relCheck)) {
+      throw new Error(
+        `copyPluginToManagedDir: manifest.database.migrationsDir escapes package root: ${migrationsDirRel}`,
+      );
+    }
+    if (!existsSync(sourceMigrationsDir)) {
+      throw new Error(
+        `copyPluginToManagedDir: manifest declares database.migrationsDir="${migrationsDirRel}" but ${sourceMigrationsDir} does not exist on disk.`,
+      );
+    }
+    const targetMigrationsDir = path.resolve(targetDir, migrationsDirRel);
+    await mkdir(path.dirname(targetMigrationsDir), { recursive: true });
+    await cp(sourceMigrationsDir, targetMigrationsDir, { recursive: true });
+  }
 }
 
 function resolveWorkerEntrypoint(
