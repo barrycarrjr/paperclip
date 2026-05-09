@@ -5,6 +5,7 @@ import {
   AlertOctagon,
   CheckCircle2,
   ClipboardCheck,
+  FileText,
   Inbox as InboxIcon,
   Mail,
   Pencil,
@@ -13,7 +14,7 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
-import type { Approval, IssueDocument } from "@paperclipai/shared";
+import type { Approval, Issue, IssueDocument } from "@paperclipai/shared";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
@@ -37,8 +38,13 @@ import {
 import {
   ACTIONABLE_APPROVAL_STATUSES,
   getLatestFailedRunsByAgent,
+  getRecentTouchedIssues,
+  issueLastActivityTimestamp,
 } from "../lib/inbox";
 import { isUnifiedInboxEnabled, setUnifiedInboxEnabled } from "../lib/unified-inbox-flag";
+
+const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
+const INBOX_ISSUE_LIST_LIMIT = 200;
 
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
@@ -46,6 +52,7 @@ const RULES_HOME_DOC_KEY = "email-triage-rules";
 type ItemKind =
   | "approval"
   | "draft"
+  | "issue"
   | "email_review_sender"
   | "failed_run"
   | "join_request";
@@ -53,6 +60,7 @@ type ItemKind =
 const ITEM_KINDS: ItemKind[] = [
   "approval",
   "draft",
+  "issue",
   "email_review_sender",
   "failed_run",
   "join_request",
@@ -96,11 +104,19 @@ interface JoinRequestItem extends BaseItem {
   joinRequestId: string;
 }
 
+interface IssueItem extends BaseItem {
+  kind: "issue";
+  issueId: string;
+  identifier: string | null;
+  isUnread: boolean;
+}
+
 type InboxItem =
   | ApprovalItem
   | EmailReviewSenderItem
   | FailedRunItem
-  | JoinRequestItem;
+  | JoinRequestItem
+  | IssueItem;
 
 interface RulesHomeBundle {
   issueId: string;
@@ -113,6 +129,7 @@ interface RulesHomeBundle {
 const KIND_LABEL: Record<ItemKind, string> = {
   approval: "Approval pending",
   draft: "Draft awaiting tap",
+  issue: "Issue",
   email_review_sender: "Email sender",
   failed_run: "Failed run",
   join_request: "Join request",
@@ -121,14 +138,16 @@ const KIND_LABEL: Record<ItemKind, string> = {
 const KIND_FILTER_LABEL: Record<ItemKind, string> = {
   approval: "Approvals",
   draft: "Drafts",
+  issue: "Issues",
   email_review_sender: "Email senders",
   failed_run: "Failed runs",
   join_request: "Join requests",
 };
 
-const KIND_TONE: Record<ItemKind, "amber" | "sky" | "red" | "violet"> = {
+const KIND_TONE: Record<ItemKind, "amber" | "sky" | "red" | "violet" | "slate"> = {
   approval: "amber",
   draft: "amber",
+  issue: "slate",
   email_review_sender: "sky",
   failed_run: "red",
   join_request: "violet",
@@ -137,6 +156,7 @@ const KIND_TONE: Record<ItemKind, "amber" | "sky" | "red" | "violet"> = {
 const KIND_ICON: Record<ItemKind, typeof Mail> = {
   approval: ClipboardCheck,
   draft: Pencil,
+  issue: FileText,
   email_review_sender: Mail,
   failed_run: AlertOctagon,
   join_request: UserPlus,
@@ -219,6 +239,42 @@ export function UnifiedInbox() {
     enabled: !!selectedCompanyId,
     queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, HEARTBEAT_LIMIT),
   });
+
+  // mineIssues = touched-by-me with the inbox-archived-by-me filter, matching
+  // the sidebar badge formula. Drives the Active count for unread issues.
+  const { data: mineIssuesRaw = [] } = useQuery({
+    queryKey: [...queryKeys.issues.listMineByMe(selectedCompanyId!), "with-routine-executions"],
+    enabled: !!selectedCompanyId,
+    queryFn: () =>
+      issuesApi.list(selectedCompanyId!, {
+        touchedByUserId: "me",
+        inboxArchivedByUserId: "me",
+        status: INBOX_ISSUE_STATUSES,
+        includeRoutineExecutions: true,
+        limit: INBOX_ISSUE_LIST_LIMIT,
+      }),
+  });
+
+  // touchedIssues = everything I've been involved with, including ones I
+  // archived from my inbox. Drives the All view so read history is visible.
+  const { data: touchedIssuesRaw = [] } = useQuery({
+    queryKey: [...queryKeys.issues.listTouchedByMe(selectedCompanyId!), "with-routine-executions"],
+    enabled: !!selectedCompanyId,
+    queryFn: () =>
+      issuesApi.list(selectedCompanyId!, {
+        touchedByUserId: "me",
+        status: INBOX_ISSUE_STATUSES,
+        includeRoutineExecutions: true,
+        limit: INBOX_ISSUE_LIST_LIMIT,
+      }),
+  });
+
+  const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
+  const touchedIssues = useMemo(() => getRecentTouchedIssues(touchedIssuesRaw), [touchedIssuesRaw]);
+  const unreadIssueIds = useMemo(
+    () => new Set(mineIssues.filter((i) => i.isUnreadForMe).map((i) => i.id)),
+    [mineIssues],
+  );
 
   const allItems: InboxItem[] = useMemo(() => {
     const out: InboxItem[] = [];
@@ -317,13 +373,31 @@ export function UnifiedInbox() {
       } satisfies JoinRequestItem);
     }
 
+    // Touched issues. Unread ones rank with approvals/drafts so they surface
+    // in Active; read ones drop to the bottom and only show in All.
+    for (const issue of touchedIssues) {
+      const isUnread = unreadIssueIds.has(issue.id);
+      out.push({
+        id: `issue:${issue.id}`,
+        kind: "issue",
+        createdAt: new Date(issueLastActivityTimestamp(issue)).toISOString(),
+        title: issue.title,
+        subtitle: issueSubtitle(issue),
+        meta: issue.identifier ?? undefined,
+        rankWeight: isUnread ? 75 : 30,
+        issueId: issue.id,
+        identifier: issue.identifier,
+        isUnread,
+      } satisfies IssueItem);
+    }
+
     return out
       .filter((it) => !dismissedAtByKey.has(it.id))
       .sort((a, b) => {
         if (b.rankWeight !== a.rankWeight) return b.rankWeight - a.rankWeight;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
-  }, [approvals, rulesBundles, heartbeats, joinRequests, dismissedAtByKey]);
+  }, [approvals, rulesBundles, heartbeats, joinRequests, touchedIssues, unreadIssueIds, dismissedAtByKey]);
 
   const items = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -333,6 +407,8 @@ export function UnifiedInbox() {
         if (it.kind === "approval" || it.kind === "draft") {
           if (!ACTIONABLE_APPROVAL_STATUSES.has(it.status)) return false;
         }
+        // Read issues are history; only unread ones are actionable.
+        if (it.kind === "issue" && !it.isUnread) return false;
       }
       if (kindFilter.size > 0 && !kindFilter.has(it.kind)) return false;
       if (q) {
@@ -348,6 +424,7 @@ export function UnifiedInbox() {
       if (it.kind === "approval" || it.kind === "draft") {
         return ACTIONABLE_APPROVAL_STATUSES.has(it.status);
       }
+      if (it.kind === "issue") return it.isUnread;
       return true;
     }).length;
     return { active, all: allItems.length };
@@ -657,12 +734,14 @@ function InboxItemRow({
 }: InboxItemRowProps) {
   const tone = KIND_TONE[item.kind];
   const Icon = KIND_ICON[item.kind];
+  const isReadIssue = item.kind === "issue" && !item.isUnread;
   const accentClass = {
     amber: "bg-amber-500/55 group-hover:bg-amber-500/80",
     sky: "bg-sky-500/55 group-hover:bg-sky-500/80",
     red: "bg-red-500/55 group-hover:bg-red-500/80",
     violet: "bg-violet-500/55 group-hover:bg-violet-500/80",
     emerald: "bg-emerald-500/55 group-hover:bg-emerald-500/80",
+    slate: "bg-slate-400/55 group-hover:bg-slate-400/80",
   }[tone];
   const chipClass = {
     amber: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
@@ -670,6 +749,7 @@ function InboxItemRow({
     red: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
     violet: "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
     emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    slate: "border-slate-400/40 bg-slate-400/10 text-slate-600 dark:text-slate-400",
   }[tone];
 
   return (
@@ -689,7 +769,7 @@ function InboxItemRow({
             >
               {KIND_LABEL[item.kind]}
             </span>
-            <span className="font-medium truncate">{item.title}</span>
+            <span className={cn("truncate", isReadIssue ? "font-normal text-muted-foreground" : "font-medium")}>{item.title}</span>
             <span className="text-[11px] text-muted-foreground/70 shrink-0">
               · {timeAgo(item.createdAt)}
             </span>
@@ -809,7 +889,19 @@ function openTitle(item: InboxItem): string {
       return "Open the agent's run detail to see logs and errors.";
     case "join_request":
       return "Open the join request queue to approve or reject.";
+    case "issue":
+      return "Open the issue.";
   }
+}
+
+function issueSubtitle(issue: Issue): string | undefined {
+  const status = issue.status?.replaceAll("_", " ");
+  const description = issue.description?.trim();
+  if (description) {
+    const firstLine = description.split("\n")[0]!.trim();
+    if (firstLine) return status ? `${status} — ${firstLine}` : firstLine;
+  }
+  return status || undefined;
 }
 
 function approvalShortTitle(a: Approval, isDraft: boolean): string {
@@ -834,6 +926,9 @@ function openItem(item: InboxItem, navigate: ReturnType<typeof useNavigate>) {
       return;
     case "join_request":
       navigate(`/inbox/requests`);
+      return;
+    case "issue":
+      navigate(`/issues/${item.issueId}`);
       return;
   }
 }
