@@ -83,6 +83,61 @@ export interface DraftGate {
 }
 
 /**
+ * Synthetic agentId prefix used by chat-Agent (Clippy) and the plugin MCP
+ * bridge when a real agent run isn't available. Format: `clippy:<userId>`.
+ * The suffix is the auth user id (text, not a UUID), so the synthetic id
+ * fails to cast into the `uuid` columns on `approvals.requested_by_agent_id`
+ * and `activity_log.agent_id`. Detect it here and route the attribution to
+ * the user-id columns instead.
+ */
+const CLIPPY_AGENT_PREFIX = "clippy:";
+
+interface ResolvedRunActor {
+  /** Real agent UUID, or null when the caller is Clippy / unknown. */
+  agentUuid: string | null;
+  /** Real heartbeat run UUID, or null when the caller is Clippy / unknown. */
+  runUuid: string | null;
+  /** Auth user id, when the caller is Clippy. */
+  userId: string | null;
+  /** Activity-log actor classification. */
+  actorType: "agent" | "user" | "system";
+  actorId: string;
+}
+
+function resolveRunActor(runContext: ToolRunContext): ResolvedRunActor {
+  const rawAgentId = runContext.agentId ?? "";
+  if (rawAgentId.startsWith(CLIPPY_AGENT_PREFIX)) {
+    const userId = rawAgentId.slice(CLIPPY_AGENT_PREFIX.length) || null;
+    return {
+      agentUuid: null,
+      // The synthetic runId from chat-tools is a randomUUID() that doesn't
+      // exist in heartbeat_runs, so the FK would reject it the same way the
+      // agent_id cast rejects the prefixed string. Drop it.
+      runUuid: null,
+      userId,
+      actorType: userId ? "user" : "system",
+      actorId: userId ?? "system",
+    };
+  }
+  if (rawAgentId) {
+    return {
+      agentUuid: rawAgentId,
+      runUuid: runContext.runId ?? null,
+      userId: null,
+      actorType: "agent",
+      actorId: rawAgentId,
+    };
+  }
+  return {
+    agentUuid: null,
+    runUuid: null,
+    userId: null,
+    actorType: "system",
+    actorId: "system",
+  };
+}
+
+/**
  * Generate a short human-readable summary from the call parameters, used as
  * the approval payload `summary` so it renders without requiring the user
  * to expand the full args. Best-effort: pulls common fields like `to`,
@@ -170,6 +225,7 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       }
 
       const summary = buildSummary(namespacedName, parameters);
+      const actor = resolveRunActor(runContext);
       const payload = {
         toolName: namespacedName,
         parameters: parameters ?? null,
@@ -182,8 +238,8 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       const approval = await approvals.create(runContext.companyId, {
         type: "outbound_tool_draft",
         status: "pending",
-        requestedByAgentId: runContext.agentId ?? null,
-        requestedByUserId: null,
+        requestedByAgentId: actor.agentUuid,
+        requestedByUserId: actor.userId,
         payload,
         decisionNote: null,
         decidedByUserId: null,
@@ -196,13 +252,13 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       try {
         await logActivity(db, {
           companyId: runContext.companyId,
-          actorType: runContext.agentId ? "agent" : "system",
-          actorId: runContext.agentId ?? "system",
+          actorType: actor.actorType,
+          actorId: actor.actorId,
           action: "approval.created",
           entityType: "approval",
           entityId: approval.id,
-          agentId: runContext.agentId ?? null,
-          runId: runContext.runId ?? null,
+          agentId: actor.agentUuid,
+          runId: actor.runUuid,
           details: {
             type: "outbound_tool_draft",
             tool: namespacedName,
