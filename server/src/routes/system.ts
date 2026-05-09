@@ -42,10 +42,33 @@ import { checkForRemoteUpdate } from "../services/check-for-updates.js";
 const SHUTDOWN_DELAY_MS = 250;
 const RESTART_TRAMPOLINE_DELAY_MS = 2000;
 
-function launcherScriptPath(): string {
-  // Convention: launch-paperclip.bat sits in ~/.paperclip/launchers/.
-  // Falls back to nothing if missing.
-  return path.join(os.homedir(), ".paperclip", "launchers", "launch-paperclip.bat");
+/**
+ * Pick the best available Windows launcher for a UI-driven restart.
+ *
+ * Preference order:
+ *   1. `<repo>\scripts\launchers\windows\paperclip.exe` — silent (no console
+ *      window). This is what `install-paperclip.bat` recommends for the
+ *      default no-terminal launch, so a UI restart should match.
+ *   2. `<repo>\scripts\launchers\windows\launch-paperclip.bat` — opens its
+ *      own console window with verbose server logs. Older fallback.
+ *   3. `~/.paperclip/launchers/launch-paperclip.bat` — legacy install layout
+ *      kept for back-compat with installs that predate the in-repo launcher.
+ *
+ * Returns `null` if none are found (caller falls back to re-execing node).
+ */
+function findWindowsRestartLauncher(): { path: string; kind: "exe" | "bat" } | null {
+  if (process.platform !== "win32") return null;
+
+  const exe = repoLauncherScriptPath("paperclip.exe");
+  if (exe) return { path: exe, kind: "exe" };
+
+  const repoBat = repoLauncherScriptPath("launch-paperclip.bat");
+  if (repoBat) return { path: repoBat, kind: "bat" };
+
+  const legacyBat = path.join(os.homedir(), ".paperclip", "launchers", "launch-paperclip.bat");
+  if (existsSync(legacyBat)) return { path: legacyBat, kind: "bat" };
+
+  return null;
 }
 
 /**
@@ -82,20 +105,31 @@ function spawnRestartTrampoline(): void {
   // process to host the delay + spawn — that lets us avoid the cmd.exe
   // quoting hell that `cmd /c "timeout & start "" "<bat>""` runs into when
   // a path contains nested quotes.
-  const launcher = launcherScriptPath();
-  const useLauncher = process.platform === "win32" && existsSync(launcher);
+  const launcher = findWindowsRestartLauncher();
 
   let spawnCmd: string;
   let spawnArgs: string[];
   let spawnOpts: Record<string, unknown>;
 
-  if (useLauncher) {
-    // Open the launcher .bat in a brand-new console window. On Windows,
+  if (launcher && launcher.kind === "exe") {
+    // paperclip.exe is a silent Windows launcher — no console window.
+    // Spawn it directly with stdio:"ignore" + windowsHide:true so the
+    // restart is invisible to the user (the UI already shows progress).
+    spawnCmd = launcher.path;
+    spawnArgs = [];
+    spawnOpts = {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      cwd: os.homedir(),
+    };
+  } else if (launcher && launcher.kind === "bat") {
+    // The .bat opens its own console window for verbose logs. On Windows,
     // `cmd /c start "" "<bat>"` opens the bat in its own window and lets
     // the spawned cmd die. We pass the path as a separate argv element
     // (not interpolated into a command string) so quoting can't bite.
     spawnCmd = "cmd.exe";
-    spawnArgs = ["/c", "start", "", launcher];
+    spawnArgs = ["/c", "start", "", launcher.path];
     spawnOpts = {
       detached: true,
       stdio: "ignore",
@@ -106,14 +140,21 @@ function spawnRestartTrampoline(): void {
     };
   } else {
     // Cross-platform fallback: re-exec the same node binary + flags + script
-    // + args. No new console window — useful for headless deploys.
+    // + args. On Windows, `stdio:"inherit"` from the console-less trampoline
+    // parent causes the OS to allocate a new console window for every
+    // node.exe in the boot chain (pnpm/tsx spawn helpers), which is the
+    // surprise the user sees as a stack of node windows. Use stdio:"ignore"
+    // + windowsHide:true on Windows so the new server boots silently.
+    // Non-Windows still inherits stdio so terminal-launched paperclip keeps
+    // logging to the same terminal.
     spawnCmd = process.execPath;
     spawnArgs = [...process.execArgv, ...process.argv.slice(1)];
     spawnOpts = {
       cwd: process.cwd(),
       env: { ...process.env },
       detached: true,
-      stdio: "inherit",
+      stdio: process.platform === "win32" ? "ignore" : "inherit",
+      windowsHide: true,
     };
   }
 
@@ -312,8 +353,7 @@ export function systemRoutes() {
       action: "restart",
       message:
         "Paperclip is restarting. The server will exit and a fresh instance will boot in a few seconds.",
-      usedLauncher:
-        process.platform === "win32" && existsSync(launcherScriptPath()),
+      usedLauncher: findWindowsRestartLauncher() !== null,
     });
     killSelfGracefully();
   });
