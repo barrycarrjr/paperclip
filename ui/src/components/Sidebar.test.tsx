@@ -11,6 +11,10 @@ const mockHeartbeatsApi = vi.hoisted(() => ({
   liveRunsForCompany: vi.fn(),
 }));
 
+const mockAgentsApi = vi.hoisted(() => ({
+  list: vi.fn(),
+}));
+
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
 }));
@@ -55,6 +59,10 @@ vi.mock("../api/heartbeats", () => ({
   heartbeatsApi: mockHeartbeatsApi,
 }));
 
+vi.mock("../api/agents", () => ({
+  agentsApi: mockAgentsApi,
+}));
+
 vi.mock("../api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
 }));
@@ -75,10 +83,6 @@ vi.mock("./SidebarProjects", () => ({
   SidebarProjects: () => null,
 }));
 
-vi.mock("./SidebarAgents", () => ({
-  SidebarAgents: () => null,
-}));
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -96,6 +100,7 @@ describe("Sidebar", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockAgentsApi.list.mockResolvedValue([]);
   });
 
   afterEach(() => {

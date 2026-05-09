@@ -20,9 +20,9 @@ import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarProjects } from "./SidebarProjects";
-import { SidebarAgents } from "./SidebarAgents";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -48,6 +48,18 @@ export function Sidebar() {
     refetchInterval: 10_000,
   });
   const liveRunCount = liveRuns?.length ?? 0;
+
+  // Agent count drives the "8 agents" hint next to the Org chart link in
+  // the TEAM section. We don't list agents in the sidebar — the canonical
+  // hierarchy view is /org.
+  const { data: agents } = useQuery({
+    queryKey: queryKeys.agents.list(selectedCompanyId!),
+    queryFn: () => agentsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const activeAgentCount = (agents ?? []).filter(
+    (a) => a.status !== "terminated",
+  ).length;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
 
   function openSearch() {
@@ -198,7 +210,22 @@ export function Sidebar() {
 
         <SidebarProjects />
 
-        <SidebarAgents />
+        <SidebarSection
+          label="Team"
+          info="The roster for this company. Agents and their reporting structure live on the Org chart; assistants you talk to directly are listed here for quick access."
+        >
+          <SidebarNavItem
+            to="/org"
+            label="Org chart"
+            icon={Network}
+            textBadge={
+              activeAgentCount > 0
+                ? `${activeAgentCount} agent${activeAgentCount === 1 ? "" : "s"}`
+                : undefined
+            }
+            info="Visualise how agents in this company report to each other — who delegates to whom, and where the CEO sits."
+          />
+        </SidebarSection>
 
         <PluginSlotOutlet
           slotTypes={["sidebar"]}
@@ -212,12 +239,6 @@ export function Sidebar() {
           label="Company"
           info="How this company is configured: who works here, what they can do, and what it costs."
         >
-          <SidebarNavItem
-            to="/org"
-            label="Org"
-            icon={Network}
-            info="Visualise how agents in this company report to each other — who delegates to whom, and where the CEO sits."
-          />
           <SidebarNavItem
             to="/skills"
             label="Skills"
