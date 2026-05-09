@@ -8,6 +8,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { agentUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
+import { InfoPopoverButton } from "../components/InfoPopoverButton";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { Download, Maximize2, Minus, Network, Plus, Upload } from "lucide-react";
@@ -496,7 +497,46 @@ export function OrgChart() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-9rem)] min-h-[420px] flex-col md:h-full md:min-h-0">
+    <div className="flex h-[calc(100dvh-13rem)] min-h-[420px] flex-col md:h-full md:min-h-0">
+      <div className="mb-3 shrink-0 space-y-1">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">Org chart</h1>
+          <InfoPopoverButton
+            title="What the org chart shows"
+            info={
+              <>
+                <p>
+                  Every agent in this company drawn by reporting line. The
+                  shape comes from each agent's manager field — change a
+                  manager on the agent profile to restructure.
+                </p>
+                <p className="font-medium text-foreground">Status dot</p>
+                <ul className="ml-4 list-disc space-y-1">
+                  <li><span className="font-medium">green</span> — active</li>
+                  <li><span className="font-medium">cyan</span> — currently running</li>
+                  <li><span className="font-medium">yellow</span> — paused or idle</li>
+                  <li><span className="font-medium">red</span> — error</li>
+                  <li><span className="font-medium">grey</span> — terminated</li>
+                </ul>
+                <p className="font-medium text-foreground">"No manager" cluster</p>
+                <p>
+                  Agents without an assigned manager sit in a separate row
+                  underneath, so they don't read as peers of the CEO.
+                </p>
+                <p className="font-medium text-foreground">Import / Export</p>
+                <p>
+                  Bundle the entire company structure (agents, roles, skills)
+                  for moving to another instance or seeding a new one.
+                </p>
+              </>
+            }
+            contentClassName="w-96"
+          />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Reporting hierarchy of the agents staffing this company. Click a card to open that agent.
+        </p>
+      </div>
       <div className="mb-2 flex shrink-0 flex-wrap items-center justify-start gap-2">
         <Link to="/company/import">
           <Button variant="outline" size="sm">

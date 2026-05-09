@@ -10,7 +10,6 @@ import {
   Power,
   RefreshCw,
   Settings,
-  UserRound,
   Sun,
   UserRoundPen,
 } from "lucide-react";
@@ -349,59 +348,71 @@ export function SidebarAccountMenu({
           side="top"
           align="start"
           sideOffset={10}
+          onOpenAutoFocus={(event) => event.preventDefault()}
           className="w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
         >
           <div className="h-24 bg-[linear-gradient(135deg,hsl(var(--primary))_0%,hsl(var(--accent))_55%,hsl(var(--muted))_100%)]" />
           <div className="-mt-8 px-4 pb-4">
             <div className="flex items-start gap-3">
-              <div className="rounded-2xl border-4 border-popover bg-popover p-0.5 shadow-sm">
-                <Avatar size="lg">
-                  {session?.user.image ? <AvatarImage src={session.user.image} alt={displayName} /> : null}
-                  <AvatarFallback>{initials}</AvatarFallback>
-                </Avatar>
-              </div>
-              <div className="min-w-0 flex-1 pt-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-foreground">{displayName}</h2>
-                  <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {accountBadge}
-                  </span>
+              <Link
+                to={profileHref}
+                onClick={closeNavigationChrome}
+                aria-label="View profile"
+                className="group -m-1 flex min-w-0 flex-1 items-start gap-3 rounded-xl p-1 transition-colors hover:bg-accent/40"
+              >
+                <div className="shrink-0 rounded-2xl border-4 border-popover bg-popover p-0.5 shadow-sm">
+                  <Avatar size="lg">
+                    {session?.user.image ? <AvatarImage src={session.user.image} alt={displayName} /> : null}
+                    <AvatarFallback>{initials}</AvatarFallback>
+                  </Avatar>
                 </div>
-                <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
-                {version || shortCommit ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {version ? <>Paperclip v{version}</> : null}
-                    {version && shortCommit ? " · " : null}
-                    {shortCommit ? (
-                      <span className="font-mono" title={commit ?? undefined}>
-                        {shortCommit}
-                      </span>
-                    ) : null}
-                  </p>
-                ) : null}
-                {updateAvailable ? (
-                  <p className="mt-1 text-xs font-medium text-amber-500">
-                    Update available — pull origin/master to apply.
-                  </p>
-                ) : null}
-              </div>
+                <div className="min-w-0 flex-1 pt-1">
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-foreground decoration-muted-foreground/50 underline-offset-2 group-hover:underline">{displayName}</h2>
+                    <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {accountBadge}
+                    </span>
+                  </div>
+                  <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
+                  {version || shortCommit ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {version ? <>Paperclip v{version}</> : null}
+                      {version && shortCommit ? " · " : null}
+                      {shortCommit ? (
+                        <span className="font-mono" title={commit ?? undefined}>
+                          {shortCommit}
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  {updateAvailable ? (
+                    <p className="mt-1 text-xs font-medium text-amber-500">
+                      Update available — pull origin/master to apply.
+                    </p>
+                  ) : null}
+                </div>
+              </Link>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to={PROFILE_SETTINGS_PATH}
+                    onClick={closeNavigationChrome}
+                    aria-label="Edit profile"
+                    className="mt-1 shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <UserRoundPen className="size-4" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={6} className="max-w-[220px]">
+                  <p className="font-medium">Edit profile</p>
+                  <p className="text-[10px] opacity-80">Update your display name and avatar.</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
 
-            <div className="mt-4 space-y-1">
-              <MenuAction
-                label="View profile"
-                description="Open your activity, task, and usage ledger."
-                icon={UserRound}
-                href={profileHref}
-                onClick={closeNavigationChrome}
-              />
-              <MenuAction
-                label="Edit profile"
-                description="Update your display name and avatar."
-                icon={UserRoundPen}
-                href={PROFILE_SETTINGS_PATH}
-                onClick={closeNavigationChrome}
-              />
+            <div className="my-3 border-t border-border/60" />
+
+            <div className="space-y-1">
               <MenuAction
                 label="Instance settings"
                 description="Jump back to the last settings page you opened."

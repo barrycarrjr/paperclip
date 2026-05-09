@@ -539,9 +539,22 @@ export async function executePluginChatTool(
   try {
     const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext);
     if (exec.result.error) return { ok: false, error: exec.result.error };
+    // For drafted tools (intercepted by the trust-loop gate), the synthesized
+    // result carries the "Do not retry the tool — end your turn" instruction in
+    // `content` and the structured metadata in `data`. We must surface the
+    // content; otherwise the LLM only sees `{drafted:true,...}` and re-calls
+    // the same tool on the next loop iteration, queueing duplicate approvals.
+    const data = exec.result.data;
+    const isDraft =
+      typeof data === "object" &&
+      data !== null &&
+      (data as Record<string, unknown>).drafted === true;
+    if (isDraft && typeof exec.result.content === "string") {
+      return { ok: true, result: exec.result.content };
+    }
     return {
       ok: true,
-      result: exec.result.data ?? exec.result.content ?? null,
+      result: data ?? exec.result.content ?? null,
     };
   } catch (err) {
     logger.error(

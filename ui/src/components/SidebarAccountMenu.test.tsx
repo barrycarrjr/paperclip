@@ -119,7 +119,12 @@ describe("SidebarAccountMenu", () => {
     });
     await flushReact();
 
-    expect(document.body.textContent).toContain("Edit profile");
+    // View / Edit profile have been folded into the hero row: the whole
+    // identity row links to View profile and a small pencil icon links to
+    // Edit profile. Both have aria-labels; the visible "Edit profile" text
+    // lives in a portalled TooltipContent that only mounts on hover.
+    expect(document.body.querySelector('[aria-label="View profile"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-label="Edit profile"]')).not.toBeNull();
     // Tooltip-only labels (Documentation, Update Paperclip, etc.) live in
     // portalled TooltipContent that only mounts on hover, so we look at the
     // trigger button's aria-label instead.

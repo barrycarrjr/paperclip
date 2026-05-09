@@ -76,7 +76,7 @@ describe("SidebarCompanyMenu", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the requested company actions and signs out through the dropdown", async () => {
+  it("shows the requested company actions and does not include a sign-out (sign-out belongs in the account menu)", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -104,19 +104,40 @@ describe("SidebarCompanyMenu", () => {
     await flushReact();
 
     expect(document.body.textContent).toContain("Invite people to Acme Labs");
+    expect(document.body.textContent).toContain("Skills");
+    expect(document.body.textContent).toContain("Costs");
     expect(document.body.textContent).toContain("Company settings");
-    expect(document.body.textContent).toContain("Sign out");
+    expect(document.body.textContent).not.toContain("Sign out");
 
     const signOutButton = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-item"]'))
       .find((element) => element.textContent?.includes("Sign out"));
-    expect(signOutButton).toBeTruthy();
+    expect(signOutButton).toBeFalsy();
 
     await act(async () => {
-      signOutButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      root.unmount();
+    });
+  });
+
+  it("renders a settings shortcut next to the company name that links to /company/settings", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarCompanyMenu />
+        </QueryClientProvider>,
+      );
     });
     await flushReact();
+    await flushReact();
 
-    expect(mockAuthApi.signOut).toHaveBeenCalledTimes(1);
+    const shortcut = container.querySelector('a[aria-label="Company settings"]')
+      ?? container.querySelector('button[aria-label="Company settings"] a');
+    expect(shortcut).not.toBeNull();
+    expect(shortcut?.getAttribute("href")).toBe("/company/settings");
 
     await act(async () => {
       root.unmount();

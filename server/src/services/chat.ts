@@ -12,6 +12,7 @@ import {
   type ToolActor,
   type ToolContext,
 } from "./chat-tools.js";
+import { DRAFT_RESULT_HEADER } from "./tool-draft-gate.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { chatPermissions } from "./chat-permissions.js";
 import {
@@ -198,6 +199,27 @@ function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { name?: string; message?: string };
   return e.name === "AbortError" || /aborted|abort/i.test(e.message ?? "");
+}
+
+/**
+ * True when a chat tool outcome was synthesized by the outbound-tool draft
+ * gate (the call was queued for human approval, not actually executed).
+ * Used by `runTurn` to force-end the turn after a draft is queued — without
+ * this guard, an LLM that ignores the prompt's "do not retry" instruction
+ * would loop on the same tool every iteration, creating a fresh pending
+ * approval each time the user resolves the previous one.
+ *
+ * Detects both shapes the gate can produce: the human-readable string
+ * (chat-tools surfaces this for plugin tools) and the structured object
+ * (`{ drafted: true, ... }`) for any future caller that bypasses the
+ * content preference in `executePluginChatTool`.
+ */
+function isDraftedToolOutcome(result: unknown): boolean {
+  if (typeof result === "string") return result.startsWith(DRAFT_RESULT_HEADER);
+  if (result && typeof result === "object" && "drafted" in result) {
+    return (result as { drafted?: unknown }).drafted === true;
+  }
+  return false;
 }
 
 function buildCanonicalMessages(messages: ChatMessage[]): CanonicalMessage[] {
@@ -650,6 +672,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       }
 
       const toolResults: CanonicalContentBlock[] = [];
+      let draftedThisIteration = false;
       for (const block of toolUseBlocks) {
         if (aborted) return;
         const def = CHAT_TOOLS.find((t) => t.name === block.name);
@@ -699,6 +722,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
           pluginToolDispatcher,
         );
         if (outcome.ok) {
+          if (isDraftedToolOutcome(outcome.result)) draftedThisIteration = true;
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -727,6 +751,21 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       }
 
       await appendToolResults(sessionId, toolResults);
+
+      // Trust-loop safety net: a tool was intercepted by the outbound draft
+      // gate (queued as an approval). End the turn now so the LLM cannot
+      // re-fire the same gated tool on the next iteration. The user resolves
+      // the draft in the inbox; `appendApprovedDraftResultToChatSession`
+      // wakes the conversation by appending a tool-role message they will
+      // see on their next turn.
+      if (draftedThisIteration) {
+        yield { type: "done", stopReason: "tool_drafted" };
+        if (mcpBridgeToken && pluginMcpBridge) {
+          pluginMcpBridge.revokeToken(mcpBridgeToken);
+        }
+        return;
+      }
+
       session = await getSession(actor, sessionId);
     }
 

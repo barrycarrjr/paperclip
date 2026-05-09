@@ -79,10 +79,6 @@ vi.mock("./SidebarCompanyMenu", () => ({
   SidebarCompanyMenu: () => <div>Company menu</div>,
 }));
 
-vi.mock("./SidebarProjects", () => ({
-  SidebarProjects: () => null,
-}));
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -126,6 +122,32 @@ describe("Sidebar", () => {
     await flushReact();
 
     expect(container.textContent).not.toContain("Workspaces");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("renders Projects as a top-level nav item linking to /projects", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({});
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Sidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const projectsLink = [...container.querySelectorAll("a")].find(
+      (anchor) => anchor.textContent?.trim() === "Projects",
+    );
+    expect(projectsLink?.getAttribute("href")).toBe("/projects");
 
     await act(async () => {
       root.unmount();

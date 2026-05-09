@@ -7,19 +7,17 @@ import {
   Search,
   SquarePen,
   Network,
-  Boxes,
   Repeat,
   GitBranch,
-  Settings,
   MessageSquare,
   Globe2,
   Bot,
   Sunrise,
+  FolderKanban,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
-import { SidebarProjects } from "./SidebarProjects";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { agentsApi } from "../api/agents";
@@ -187,6 +185,12 @@ export function Sidebar() {
             info="Higher-level objectives this company is working toward. Goals can have sub-goals and link to the issues that contribute to them."
           />
           <SidebarNavItem
+            to="/projects"
+            label="Projects"
+            icon={FolderKanban}
+            info="Group related issues, routines, and goals together. Each project gets its own scoped view."
+          />
+          <SidebarNavItem
             to="/work-queues"
             label="Work queues"
             icon={Inbox}
@@ -207,8 +211,6 @@ export function Sidebar() {
             />
           ) : null}
         </SidebarSection>
-
-        <SidebarProjects />
 
         <SidebarSection
           label="Team"
@@ -234,30 +236,6 @@ export function Sidebar() {
           itemClassName="text-[13px] font-medium"
           missingBehavior="placeholder"
         />
-
-        <SidebarSection
-          label="Company"
-          info="How this company is configured: who works here, what they can do, and what it costs."
-        >
-          <SidebarNavItem
-            to="/skills"
-            label="Skills"
-            icon={Boxes}
-            info="Reusable capabilities agents can call on. Each skill is a packaged tool, instruction, or behaviour that any agent in the company can use."
-          />
-          <SidebarNavItem
-            to="/costs"
-            label="Costs"
-            icon={DollarSign}
-            info="Track LLM and infrastructure spend across agents and runs, so you can see where the money is going."
-          />
-          <SidebarNavItem
-            to="/company/settings"
-            label="Settings"
-            icon={Settings}
-            info="Company-level configuration: secrets, integrations, governance rules, and other settings that apply to all agents."
-          />
-        </SidebarSection>
 
         <PluginSlotOutlet
           slotTypes={["sidebarPanel"]}

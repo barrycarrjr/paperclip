@@ -108,4 +108,83 @@ describe("chat-tools registry", () => {
     // the handler returns only { ok, name } and never echoes the value.
     expect(getChatTool("set_secret")).toBeUndefined();
   });
+
+  it("plugin tool drafted via the trust-loop gate surfaces the human-readable guidance to the LLM", async () => {
+    // When the dispatcher's draft gate intercepts a mutating outbound call it
+    // returns BOTH `content` (the human-readable "do not retry — end your
+    // turn" instruction) and `data` (`{drafted: true, approvalId, ...}`).
+    // The chat-tools wrapper used to prefer `data` unconditionally, which
+    // hid the guidance from the model and caused Clippy to re-fire the same
+    // tool on the next loop iteration — a fresh pending approval would
+    // appear every time the user resolved the previous one.
+    const dispatcher = {
+      executeTool: async () => ({
+        pluginId: "3cx-tools",
+        toolName: "3cx-tools:pbx_click_to_call",
+        result: {
+          content: [
+            "[paperclip:tool-draft] queued for human approval",
+            "Tool: 3cx-tools:pbx_click_to_call",
+            "Approval ID: approval-1",
+            "",
+            "The user must approve this draft before it executes. Do not retry the tool. Tell the user it is queued and end your turn — you will not be woken when they approve.",
+          ].join("\n"),
+          data: {
+            drafted: true,
+            approvalId: "approval-1",
+            status: "pending",
+            tool: "3cx-tools:pbx_click_to_call",
+            summary: "to 7175771023",
+          },
+        },
+      }),
+    } as unknown as Parameters<typeof executeChatTool>[3];
+
+    const outcome = await executeChatTool(
+      "3cx-tools__pbx_click_to_call",
+      { toNumber: "7175771023", fromExtension: "200" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+      dispatcher,
+    );
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(typeof outcome.result).toBe("string");
+    expect(outcome.result as string).toMatch(/\[paperclip:tool-draft\]/);
+    expect(outcome.result as string).toMatch(/Do not retry the tool/);
+  });
+
+  it("plugin tool that returned structured data without `drafted: true` keeps the data shape", async () => {
+    // Sanity check: non-drafted plugin tools should still surface the
+    // structured `data` field, since that's what the LLM is wired against.
+    const dispatcher = {
+      executeTool: async () => ({
+        pluginId: "demo",
+        toolName: "demo:list_things",
+        result: {
+          content: "human readable",
+          data: { things: [{ id: 1 }] },
+        },
+      }),
+    } as unknown as Parameters<typeof executeChatTool>[3];
+
+    const outcome = await executeChatTool(
+      "demo__list_things",
+      {},
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+      dispatcher,
+    );
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.result).toEqual({ things: [{ id: 1 }] });
+  });
 });
