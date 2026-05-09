@@ -152,6 +152,8 @@ export function UnifiedInbox() {
   const [view, setView] = useState<ViewMode>("active");
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<Set<ItemKind>>(new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionFlash, setActionFlash] = useState<string | null>(null);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }, { label: "Unified (preview)" }]);
@@ -360,12 +362,27 @@ export function UnifiedInbox() {
     });
   }
 
+  // Flash a brief confirmation so the user sees feedback even when a fresh
+  // identical draft replaces the row at the same moment (Clippy can re-fire
+  // the same tool call between the approve POST and the list refetch).
+  function flash(message: string) {
+    setActionError(null);
+    setActionFlash(message);
+    window.setTimeout(() => {
+      setActionFlash((current) => (current === message ? null : current));
+    }, 2500);
+  }
+
   const approveMutation = useMutation({
     mutationFn: (id: string) => approvalsApi.approve(id),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.approvals.list(selectedCompanyId!),
       });
+      flash("Approved.");
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Approve failed");
     },
   });
 
@@ -375,6 +392,10 @@ export function UnifiedInbox() {
       queryClient.invalidateQueries({
         queryKey: queryKeys.approvals.list(selectedCompanyId!),
       });
+      flash("Rejected.");
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Reject failed");
     },
   });
 
@@ -509,6 +530,31 @@ export function UnifiedInbox() {
           setSearch("");
         }}
       />
+
+      {actionError && (
+        <div
+          role="alert"
+          className="border border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300 px-3 py-2 text-[12px] flex items-center justify-between gap-3"
+        >
+          <span>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-[11px] underline hover:no-underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {actionFlash && !actionError && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-3 py-2 text-[12px]"
+        >
+          {actionFlash}
+        </div>
+      )}
 
       {items.length === 0 ? (
         <EmptyState

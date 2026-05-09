@@ -279,13 +279,21 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         "outbound tool drafted as approval",
       );
 
+      // Real agent runs get an `approval_approved` heartbeat wake when the
+      // user resolves the draft (see approvals.ts approve route). Chat-Agent
+      // (Clippy) callers don't — there's no chat-session wake hook — so tell
+      // them to end the turn cleanly instead of "wait for the wake".
+      const guidance = actor.actorType === "agent"
+        ? "The user must approve this draft before it executes. Do not retry the tool — wait for the approval.resolved wake."
+        : "The user must approve this draft before it executes. Do not retry the tool. Tell the user it is queued and end your turn — you will not be woken when they approve.";
+
       const content = [
         DRAFT_RESULT_HEADER,
         `Tool: ${namespacedName}`,
         `Approval ID: ${approval.id}`,
         summary ? `Summary: ${summary}` : null,
         "",
-        "The user must approve this draft before it executes. Do not retry the tool — wait for the approval.resolved wake.",
+        guidance,
       ]
         .filter((line): line is string => line !== null)
         .join("\n");

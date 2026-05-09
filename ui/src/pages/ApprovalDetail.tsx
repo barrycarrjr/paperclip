@@ -146,6 +146,9 @@ export function ApprovalDetail() {
 
   const payload = approval.payload as Record<string, unknown>;
   const linkedAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
+  // Synthetic chat-Agent ids look like `clippy:<userId>` — they aren't real
+  // agents and `/agents/<id>` 404s. Route to the Clippy page instead.
+  const isClippyAgent = linkedAgentId?.startsWith("clippy:") ?? false;
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
   const isBudgetApproval = approval.type === "budget_override_required";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
@@ -160,15 +163,20 @@ export function ApprovalDetail() {
               : "Review linked issue",
           to: `/issues/${primaryLinkedIssue.identifier ?? primaryLinkedIssue.id}`,
         }
-      : linkedAgentId
+      : isClippyAgent
         ? {
-            label: "Open hired agent",
-            to: `/agents/${linkedAgentId}`,
+            label: "Open Clippy",
+            to: "/clippy",
           }
-        : {
-            label: "Back to approvals",
-            to: "/approvals",
-          };
+        : linkedAgentId
+          ? {
+              label: "Open hired agent",
+              to: `/agents/${linkedAgentId}`,
+            }
+          : {
+              label: "Back to approvals",
+              to: "/approvals",
+            };
 
   return (
     <div className="space-y-6 max-w-3xl">
