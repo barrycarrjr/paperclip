@@ -124,12 +124,13 @@ function normaliseSql(input: string): string {
 function extractQualifiedRefs(statement: string): SqlRef[] {
   const refs: SqlRef[] = [];
   const patterns = [
-    // `on` covers `create index ... on <schema>.<table>` and
-    // `create trigger ... on <schema>.<table>`. Other contexts (`on conflict`,
-    // join `on` clauses) don't follow the keyword with a `<schema>.<table>`
-    // pattern, so they're naturally filtered out by the regex shape.
-    /\b(from|join|references|into|update|on)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+    /\b(from|join|references|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
     /\b(alter\s+table|create\s+table|create\s+view|drop\s+table|truncate\s+table)\s+(?:if\s+(?:not\s+)?exists\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+    // CREATE [UNIQUE] [CONCURRENTLY] INDEX [IF NOT EXISTS] <name> ON <schema>.<table>
+    // Targeted instead of a generic `on` keyword so JOIN ... ON alias.column
+    // doesn't false-positive (alias.column isn't schema.table). The keyword
+    // captured is "on" so downstream code treats this like a reference.
+    /\bcreate\s+(?:unique\s+)?(?:concurrently\s+)?index\s+(?:if\s+not\s+exists\s+)?[A-Za-z_][A-Za-z0-9_]*\s+(on)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
   ];
 
   for (const pattern of patterns) {
