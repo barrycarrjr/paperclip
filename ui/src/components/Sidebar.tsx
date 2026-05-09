@@ -150,13 +150,6 @@ export function Sidebar() {
             icon={MessageSquare}
             info="Talk to Clippy — Paperclip's in-app assistant. Switch to Agent mode to let it run tools and make changes for you."
           />
-          <PluginSlotOutlet
-            slotTypes={["sidebar"]}
-            context={pluginContext}
-            className="flex flex-col gap-0.5"
-            itemClassName="text-[13px] font-medium"
-            missingBehavior="placeholder"
-          />
         </div>
 
         <SidebarSection
@@ -206,6 +199,14 @@ export function Sidebar() {
         <SidebarProjects />
 
         <SidebarAgents />
+
+        <PluginSlotOutlet
+          slotTypes={["sidebar"]}
+          context={pluginContext}
+          className="flex flex-col gap-0.5"
+          itemClassName="text-[13px] font-medium"
+          missingBehavior="placeholder"
+        />
 
         <SidebarSection
           label="Company"

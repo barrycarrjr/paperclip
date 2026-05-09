@@ -49,6 +49,8 @@ import { ExternalMcpServers } from "./pages/ExternalMcpServers";
 import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
+import { AssistantsList } from "./pages/AssistantsList";
+import { AssistantWizard } from "./pages/AssistantWizard";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
@@ -98,6 +100,8 @@ function boardRoutes() {
       <Route path="agents/:agentId" element={<AgentDetail />} />
       <Route path="agents/:agentId/:tab" element={<AgentDetail />} />
       <Route path="agents/:agentId/runs/:runId" element={<AgentDetail />} />
+      <Route path="assistants" element={<AssistantsList />} />
+      <Route path="assistants/new" element={<AssistantWizard />} />
       <Route path="projects" element={<Projects />} />
       <Route path="projects/:projectId" element={<ProjectDetail />} />
       <Route path="projects/:projectId/overview" element={<ProjectDetail />} />
@@ -332,6 +336,8 @@ export function App() {
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId/:tab" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId/runs/:runId" element={<UnprefixedBoardRedirect />} />
+          <Route path="assistants" element={<UnprefixedBoardRedirect />} />
+          <Route path="assistants/new" element={<UnprefixedBoardRedirect />} />
           <Route path="projects" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/overview" element={<UnprefixedBoardRedirect />} />

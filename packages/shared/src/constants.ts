@@ -50,6 +50,7 @@ export const AGENT_ROLES = [
   "devops",
   "researcher",
   "general",
+  "assistant",
 ] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
@@ -66,6 +67,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   devops: "DevOps",
   researcher: "Researcher",
   general: "General",
+  assistant: "Assistant",
 };
 
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 5;
@@ -723,6 +725,7 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "plugins",
   "org",
   "agents",
+  "assistants",
   "projects",
   "issues",
   "goals",
