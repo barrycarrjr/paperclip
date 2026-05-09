@@ -100,6 +100,71 @@ function rowToMessage(row: typeof chatMessages.$inferSelect): ChatMessage {
   };
 }
 
+/**
+ * Standalone helper for resuming a chat session after a drafted outbound tool
+ * call (queued by the tool draft gate) has been resolved by the user. The
+ * approve route calls this for Clippy-attributed approvals so the LLM can pick
+ * up where it left off — the message gets sent to the model on the user's
+ * next turn (see `buildCanonicalMessages`, which maps role="tool" → user).
+ *
+ * No actor authentication: the approve route already verified the user can
+ * resolve the approval. This is server-internal plumbing, not a user-facing
+ * route — that's why it lives outside `chatService` and skips the actor check.
+ *
+ * Returns the appended message id, or `{ skipped: "session_not_found" }` if
+ * the chat session was deleted between draft and approve. Failures inside the
+ * insert bubble up; the caller decides whether to log-and-swallow.
+ */
+export async function appendApprovedDraftResultToChatSession(
+  db: Db,
+  args: {
+    chatSessionId: string;
+    toolName: string;
+    summary: string;
+    outcome:
+      | { ok: true; content: string | null }
+      | { ok: false; error: string };
+  },
+): Promise<{ messageId: string } | { skipped: "session_not_found" }> {
+  const sessionRow = await db
+    .select({ id: chatSessions.id })
+    .from(chatSessions)
+    .where(eq(chatSessions.id, args.chatSessionId))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!sessionRow) {
+    return { skipped: "session_not_found" };
+  }
+
+  // Build a single text block describing the resolved outcome. We use a
+  // tool-role chat_messages row so the canonical-message builder maps it to
+  // the Anthropic "user with tool_result-or-text content" convention. The
+  // message is plain text (not a tool_result block) because the original
+  // tool_use_id in the transcript already has its matching tool_result block
+  // (the synthesized "queued for human approval" one); adding a second
+  // tool_result for the same id would violate the API's pairing rule.
+  const headline = args.outcome.ok
+    ? `[Paperclip] The user approved your earlier \`${args.toolName}\` draft (${args.summary}). The tool ran${args.outcome.content ? ` and returned: ${args.outcome.content}` : " successfully."}`
+    : `[Paperclip] The user approved your earlier \`${args.toolName}\` draft (${args.summary}), but the tool failed: ${args.outcome.error}`;
+
+  const block: CanonicalContentBlock = { type: "text", text: headline };
+  const created = await db
+    .insert(chatMessages)
+    .values({ sessionId: args.chatSessionId, role: "tool", content: [block] })
+    .returning()
+    .then((rows) => rows[0]);
+
+  // Bump the session's updatedAt so the chat list re-sorts and any open
+  // client refetch picks up the new message via existing list/messages
+  // queries. No real-time push wired up here — see plan v2.
+  await db
+    .update(chatSessions)
+    .set({ updatedAt: new Date() })
+    .where(eq(chatSessions.id, args.chatSessionId));
+
+  return { messageId: created.id };
+}
+
 export interface ChatActor extends ToolActor {}
 
 function systemPromptFor(session: ChatSession, defaultCompanyId: string | null): string {
@@ -465,7 +530,12 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       chatPermissions.cancelSession(sessionId);
     });
 
-    const toolCtx: ToolContext = { db, actor, defaultCompanyId };
+    const toolCtx: ToolContext = {
+      db,
+      actor,
+      defaultCompanyId,
+      chatSessionId: sessionId,
+    };
     let tools: ReturnType<typeof listChatToolSpecs> | undefined;
     if (session.mode === "agent") {
       const builtIn = listChatToolSpecs();

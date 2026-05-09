@@ -23,6 +23,12 @@ export interface ToolContext {
   db: Db;
   actor: ToolActor;
   defaultCompanyId: string | null;
+  /**
+   * Chat session id, when this ToolContext is built from a chat-Agent
+   * (Clippy) turn. Plugin tool calls thread this into `runContext.chatSessionId`
+   * so the draft gate can record which session a queued tool call came from.
+   */
+  chatSessionId?: string;
 }
 
 export interface AnthropicToolSpec {
@@ -528,6 +534,7 @@ export async function executePluginChatTool(
     runId: randomUUID(),
     companyId: ctx.defaultCompanyId,
     projectId: "",
+    chatSessionId: ctx.chatSessionId,
   };
   try {
     const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext);

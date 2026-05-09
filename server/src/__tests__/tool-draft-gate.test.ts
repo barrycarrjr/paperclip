@@ -9,7 +9,24 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
   getGeneral: vi.fn(async () => ({ outboundToolDraftMode: true })),
 }));
 
-const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+// Typed signature so `mockLogActivity.mock.calls[N][1]` is the activity
+// payload (not `undefined`) under noUncheckedIndexedAccess. Matches the real
+// `logActivity(db, input)` shape from services/activity-log.ts loosely; only
+// the fields the tests assert on are needed.
+type LogActivityArgs = {
+  companyId: string;
+  actorType: "agent" | "user" | "system" | "plugin";
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  agentId?: string | null;
+  runId?: string | null;
+  details?: Record<string, unknown> | null;
+};
+const mockLogActivity = vi.hoisted(() =>
+  vi.fn(async (_db: unknown, _args: LogActivityArgs) => undefined),
+);
 
 vi.mock("../services/approvals.js", () => ({
   approvalService: () => mockApprovalService,
@@ -102,5 +119,30 @@ describe("tool draft gate — synthetic agent id handling", () => {
     expect(logArgs.actorId).toBe(realAgentId);
     expect(logArgs.agentId).toBe(realAgentId);
     expect(logArgs.runId).toBe(realRunId);
+  });
+
+  it("persists chatSessionId on the approval payload when present", async () => {
+    const gate = await loadDraftGate();
+    const sessionId = "44444444-4444-4444-4444-444444444444";
+    await gate.intercept(
+      "3cx-tools:pbx_click_to_call",
+      { toNumber: "+15555550199", fromExtension: "200" },
+      ctx({ agentId: "clippy:user-abc-123", chatSessionId: sessionId }),
+    );
+
+    const createArgs = mockApprovalService.create.mock.calls[0]![1];
+    expect((createArgs.payload as Record<string, unknown>).chatSessionId).toBe(sessionId);
+  });
+
+  it("stores chatSessionId as null when the caller did not set one", async () => {
+    const gate = await loadDraftGate();
+    await gate.intercept(
+      "3cx-tools:pbx_click_to_call",
+      { toNumber: "+15555550199", fromExtension: "200" },
+      ctx({ agentId: "22222222-2222-2222-2222-222222222222" }),
+    );
+
+    const createArgs = mockApprovalService.create.mock.calls[0]![1];
+    expect((createArgs.payload as Record<string, unknown>).chatSessionId).toBeNull();
   });
 });

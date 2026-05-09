@@ -214,6 +214,13 @@ export interface ToolRunContext {
    * companies) omit this. When present, it must belong to the same company.
    */
   projectId?: string;
+  /**
+   * UUID of the chat session this call originated from, when the caller is
+   * the in-app chat agent (Clippy). Used by the tool draft gate to associate
+   * a drafted approval with the chat session so the approve route can append
+   * a follow-up message into the transcript. Absent for ordinary agent runs.
+   */
+  chatSessionId?: string;
 }
 
 /**

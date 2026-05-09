@@ -29,6 +29,10 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
+const mockAppendChatResult = vi.hoisted(() =>
+  vi.fn(async () => ({ messageId: "msg-1" })),
+);
+
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     approvalService: () => mockApprovalService,
@@ -42,6 +46,11 @@ function registerModuleMocks() {
   // direct path too so the route's re-dispatch path uses the same fakes.
   vi.doMock("../services/approvals.js", () => ({
     approvalService: () => mockApprovalService,
+  }));
+  // Stub the chat-session wake helper so we can assert it was (or wasn't)
+  // called without standing up the full chat service or a database.
+  vi.doMock("../services/chat.js", () => ({
+    appendApprovedDraftResultToChatSession: mockAppendChatResult,
   }));
 }
 
@@ -98,6 +107,7 @@ describe("approval routes idempotent retries", () => {
     vi.resetModules();
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/approvals.js");
+    vi.doUnmock("../services/chat.js");
     vi.doUnmock("../routes/approvals.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
@@ -120,6 +130,8 @@ describe("approval routes idempotent retries", () => {
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
     mockLogActivity.mockResolvedValue(undefined);
+    mockAppendChatResult.mockReset();
+    mockAppendChatResult.mockResolvedValue({ messageId: "msg-1" });
   });
 
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
@@ -388,5 +400,139 @@ describe("approval routes idempotent retries", () => {
       expect.any(Object),
       { bypassDraftGate: true },
     );
+    // No chatSessionId on payload → no chat-session wake.
+    expect(mockAppendChatResult).not.toHaveBeenCalled();
+  });
+
+  it("appends a chat-session wake message when an approved draft carries chatSessionId", async () => {
+    const draftedApproval = {
+      id: "approval-clippy",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "3cx-tools:pbx_click_to_call",
+        parameters: { toNumber: "+15555550199", fromExtension: "200" },
+        summary: "to +15555550199",
+        agentId: "clippy:user-1",
+        runId: null,
+        chatSessionId: "session-abc",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: "user-1",
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    const executeTool = vi.fn().mockResolvedValue({
+      pluginId: "3cx-tools",
+      toolName: "3cx-tools:pbx_click_to_call",
+      result: { content: "call dispatched, ringing extension 200" },
+    });
+    const dispatcher = { executeTool };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-clippy/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockAppendChatResult).toHaveBeenCalledTimes(1);
+    expect(mockAppendChatResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        chatSessionId: "session-abc",
+        toolName: "3cx-tools:pbx_click_to_call",
+        summary: "to +15555550199",
+        outcome: { ok: true, content: "call dispatched, ringing extension 200" },
+      }),
+    );
+  });
+
+  it("appends a wake message with ok:false when the underlying tool execution returns an error", async () => {
+    const draftedApproval = {
+      id: "approval-clippy-err",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "3cx-tools:pbx_click_to_call",
+        parameters: { toNumber: "+15555550199", fromExtension: "200" },
+        summary: "to +15555550199",
+        agentId: "clippy:user-1",
+        runId: null,
+        chatSessionId: "session-xyz",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: "user-1",
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    const executeTool = vi.fn().mockResolvedValue({
+      pluginId: "3cx-tools",
+      toolName: "3cx-tools:pbx_click_to_call",
+      result: { error: "PBX rejected: extension 200 is offline" },
+    });
+    const dispatcher = { executeTool };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-clippy-err/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockAppendChatResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        outcome: { ok: false, error: "PBX rejected: extension 200 is offline" },
+      }),
+    );
+  });
+
+  it("does not fail the approve response when the chat-session wake append throws", async () => {
+    const draftedApproval = {
+      id: "approval-clippy-throw",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "3cx-tools:pbx_click_to_call",
+        parameters: { toNumber: "+15555550199", fromExtension: "200" },
+        summary: "to +15555550199",
+        agentId: "clippy:user-1",
+        runId: null,
+        chatSessionId: "session-broken",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: "user-1",
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    mockAppendChatResult.mockRejectedValueOnce(new Error("db down"));
+    const executeTool = vi.fn().mockResolvedValue({
+      pluginId: "3cx-tools",
+      toolName: "3cx-tools:pbx_click_to_call",
+      result: { content: "called" },
+    });
+    const dispatcher = { executeTool };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-clippy-throw/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockAppendChatResult).toHaveBeenCalledTimes(1);
   });
 });

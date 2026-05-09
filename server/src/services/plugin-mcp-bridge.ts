@@ -265,6 +265,7 @@ export function createPluginMcpBridge(
           runId: randomUUID(),
           companyId: session.companyId,
           projectId: "",
+          chatSessionId: session.chatSessionId,
         };
 
         try {

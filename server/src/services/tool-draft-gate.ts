@@ -232,6 +232,12 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         summary,
         agentId: runContext.agentId ?? null,
         runId: runContext.runId ?? null,
+        // Set when the gate is invoked from a chat-Agent (Clippy) turn — see
+        // chat-tools.ts and plugin-mcp-bridge.ts. Used by the approve route to
+        // append a follow-up tool-result message into the chat transcript so
+        // Clippy can pick up where it left off after the user resolves the
+        // draft. Null/absent for ordinary agent runs (those wake via heartbeat).
+        chatSessionId: runContext.chatSessionId ?? null,
         draftedAt: new Date().toISOString(),
       } satisfies Record<string, unknown>;
 

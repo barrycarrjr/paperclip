@@ -22,6 +22,7 @@ import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 import { executeDraftedApproval } from "../services/tool-draft-gate.js";
+import { appendApprovedDraftResultToChatSession } from "../services/chat.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -248,6 +249,56 @@ export function approvalRoutes(
               hadError: !!exec.toolResult?.error,
             },
           });
+
+          // Chat-session wake: if the draft was queued from a Clippy chat
+          // turn, append a follow-up message into the transcript so the LLM
+          // sees the resolved outcome on the user's next turn. Real agent
+          // runs are woken via the heartbeat branch below; chat sessions
+          // have no heartbeat, so this append is their only resume signal.
+          const payload = (approval.payload ?? {}) as Record<string, unknown>;
+          const chatSessionId =
+            typeof payload.chatSessionId === "string" ? payload.chatSessionId : null;
+          if (chatSessionId) {
+            const toolName =
+              typeof payload.toolName === "string" ? payload.toolName : "tool";
+            const summary =
+              typeof payload.summary === "string" ? payload.summary : toolName;
+            const outcome: Parameters<typeof appendApprovedDraftResultToChatSession>[1]["outcome"] =
+              !exec.ok
+                ? { ok: false, error: exec.reason ?? "execution_failed" }
+                : exec.toolResult?.error
+                  ? { ok: false, error: exec.toolResult.error }
+                  : {
+                      ok: true,
+                      content:
+                        typeof exec.toolResult?.content === "string"
+                          ? exec.toolResult.content
+                          : exec.toolResult?.data !== undefined
+                            ? JSON.stringify(exec.toolResult.data)
+                            : null,
+                    };
+            try {
+              const result = await appendApprovedDraftResultToChatSession(db, {
+                chatSessionId,
+                toolName,
+                summary,
+                outcome,
+              });
+              if ("skipped" in result) {
+                logger.warn(
+                  { approvalId: approval.id, chatSessionId, reason: result.skipped },
+                  "chat-session wake skipped — chat session no longer exists",
+                );
+              }
+            } catch (err) {
+              // Don't fail the approve response if the chat append fails;
+              // the underlying tool already ran. Log and move on.
+              logger.warn(
+                { err, approvalId: approval.id, chatSessionId },
+                "chat-session wake append failed (non-fatal)",
+              );
+            }
+          }
         } else {
           logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
         }
