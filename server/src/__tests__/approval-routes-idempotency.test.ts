@@ -37,9 +37,18 @@ function registerModuleMocks() {
     logActivity: mockLogActivity,
     secretService: () => mockSecretService,
   }));
+  // executeDraftedApproval (in tool-draft-gate.js) imports approvalService
+  // directly from ./approvals.js, bypassing the services barrel — mock the
+  // direct path too so the route's re-dispatch path uses the same fakes.
+  vi.doMock("../services/approvals.js", () => ({
+    approvalService: () => mockApprovalService,
+  }));
 }
 
-async function createApp(actorOverrides: Record<string, unknown> = {}) {
+async function createApp(
+  actorOverrides: Record<string, unknown> = {},
+  routeOptions: Record<string, unknown> = {},
+) {
   const [{ errorHandler }, { approvalRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/approvals.js"),
@@ -57,7 +66,7 @@ async function createApp(actorOverrides: Record<string, unknown> = {}) {
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes({} as any, routeOptions as any));
   app.use(errorHandler);
   return app;
 }
@@ -88,6 +97,7 @@ describe("approval routes idempotent retries", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("../services/index.js");
+    vi.doUnmock("../services/approvals.js");
     vi.doUnmock("../routes/approvals.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
@@ -334,6 +344,49 @@ describe("approval routes idempotent retries", () => {
         actorId: "agent-1",
         action: "approval.created",
       }),
+    );
+  });
+
+  it("re-dispatches an approved outbound_tool_draft with bypassDraftGate so the gate does not loop", async () => {
+    const draftedApproval = {
+      id: "approval-loop",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "3cx-tools:pbx_click_to_call",
+        parameters: { toNumber: "+15555550199", fromExtension: "200" },
+        agentId: null,
+        runId: null,
+      },
+      requestedByAgentId: null,
+      requestedByUserId: "user-1",
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    const executeTool = vi.fn().mockResolvedValue({
+      pluginId: "3cx-tools",
+      toolName: "3cx-tools:pbx_click_to_call",
+      result: { content: "called" },
+    });
+    const dispatcher = { executeTool };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-loop/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledWith(
+      "3cx-tools:pbx_click_to_call",
+      { toNumber: "+15555550199", fromExtension: "200" },
+      expect.any(Object),
+      { bypassDraftGate: true },
     );
   });
 });

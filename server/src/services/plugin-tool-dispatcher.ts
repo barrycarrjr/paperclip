@@ -99,6 +99,20 @@ export interface PluginToolDispatcherOptions {
 }
 
 /**
+ * Per-call flags for `executeTool`.
+ */
+export interface ExecuteToolOptions {
+  /**
+   * When true, the dispatcher skips the outbound tool draft gate even if the
+   * tool is in the gated set. Set by `executeDraftedApproval` when re-running
+   * a tool whose draft has already been approved — without this, the gate
+   * would intercept the re-dispatch and queue a fresh pending approval,
+   * looping on every approve click.
+   */
+  bypassDraftGate?: boolean;
+}
+
+/**
  * Filter shape extended to support per-company external MCP tool listing.
  */
 export interface AgentToolListFilter extends ToolListFilter {
@@ -170,6 +184,7 @@ export interface PluginToolDispatcher {
    * @param namespacedName - Fully qualified tool name
    * @param parameters - Input parameters matching the tool's schema
    * @param runContext - Agent run context
+   * @param options - Optional execution flags
    * @returns The execution result with routing metadata
    * @throws {Error} if the tool is not found, the worker is not running,
    *   or the tool execution fails
@@ -178,6 +193,7 @@ export interface PluginToolDispatcher {
     namespacedName: string,
     parameters: unknown,
     runContext: ToolRunContext,
+    options?: ExecuteToolOptions,
   ): Promise<ToolExecutionResult>;
 
   /**
@@ -477,6 +493,7 @@ export function createPluginToolDispatcher(
       namespacedName: string,
       parameters: unknown,
       runContext: ToolRunContext,
+      options?: ExecuteToolOptions,
     ): Promise<ToolExecutionResult> {
       log.debug(
         {
@@ -491,8 +508,9 @@ export function createPluginToolDispatcher(
       // phone_call_make, ...) are intercepted by the draft gate, queued as
       // approvals, and a synthesized "drafted" result is returned to the agent.
       // The actual side effect runs only when the user approves the draft, via
-      // the approve route's hook into `executeDraftedApproval()`.
-      if (draftGate) {
+      // the approve route's hook into `executeDraftedApproval()`, which sets
+      // `bypassDraftGate` so the gate does not re-intercept the re-dispatch.
+      if (draftGate && !options?.bypassDraftGate) {
         const gateResult = await draftGate.intercept(namespacedName, parameters, runContext);
         if (gateResult.intercepted && gateResult.result) {
           // Resolve the pluginId so the synthesized result still attributes

@@ -216,10 +216,12 @@ export function approvalRoutes(
       });
 
       // Trust loop: if this was a drafted outbound tool call, re-dispatch
-      // it now that the user has approved. The dispatcher's draft gate will
-      // not re-intercept because the draft has already been resolved. Log a
-      // separate "approval.executed" activity so the receipt feed shows
-      // both the draft (created on the agent's call) and the actual send.
+      // it now that the user has approved. The re-dispatch must pass
+      // `bypassDraftGate: true`, otherwise the dispatcher's gate will
+      // re-intercept the gated tool name and queue a fresh pending approval
+      // — the user would approve, a new pending appears, approve, repeat.
+      // Log a separate "approval.executed" activity so the receipt feed
+      // shows both the draft (created on the agent's call) and the actual send.
       if (approval.type === "outbound_tool_draft") {
         const dispatcher = options.getToolDispatcher?.() ?? null;
         if (dispatcher) {
@@ -227,7 +229,9 @@ export function approvalRoutes(
             approvalId: approval.id,
             decidedByUserId: req.actor.userId ?? "board",
             executeTool: (toolName, params, runContext) =>
-              dispatcher.executeTool(toolName, params, runContext),
+              dispatcher.executeTool(toolName, params, runContext, {
+                bypassDraftGate: true,
+              }),
             db,
           });
           await logActivity(db, {

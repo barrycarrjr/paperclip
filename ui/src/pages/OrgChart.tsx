@@ -88,24 +88,79 @@ function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
   };
 }
 
-/** Layout all root nodes side by side. */
-function layoutForest(roots: OrgNode[]): LayoutNode[] {
-  if (roots.length === 0) return [];
+interface ForestLayout {
+  nodes: LayoutNode[];
+  /** y at which the orphan cluster begins, or null if there are no orphans. */
+  orphanRowY: number | null;
+  /** x range of the orphan cluster, used to position the divider label. */
+  orphanRowBounds: { left: number; right: number } | null;
+}
 
-  const totalW = roots.reduce((sum, r) => sum + subtreeWidth(r), 0);
-  const gaps = (roots.length - 1) * GAP_X;
-  let x = PADDING;
-  const y = PADDING;
-
-  const result: LayoutNode[] = [];
-  for (const root of roots) {
-    const w = subtreeWidth(root);
-    result.push(layoutTree(root, x, y));
-    x += w + GAP_X;
+/**
+ * Lay out the forest. Roots with reports become the primary tree(s) at the
+ * top. Roots that are leaves (no manager, no reports) are clustered in a
+ * separate row underneath so they read as a distinct group rather than as
+ * peers of the CEO. Without this split a single Assistant ends up floating
+ * far to the right of an N-deep CEO subtree, with no visible relationship.
+ */
+function layoutForest(roots: OrgNode[]): ForestLayout {
+  if (roots.length === 0) {
+    return { nodes: [], orphanRowY: null, orphanRowBounds: null };
   }
 
-  // Compute bounds and return
-  return result;
+  const primaryRoots = roots.filter((r) => r.reports.length > 0);
+  const orphanRoots = roots.filter((r) => r.reports.length === 0);
+
+  // If everything is orphan (small companies w/ no manager chain), keep the
+  // simple side-by-side layout — no need for a divider.
+  const onlyOrphans = primaryRoots.length === 0 && orphanRoots.length > 0;
+  const primaryGroup = onlyOrphans ? orphanRoots : primaryRoots;
+  const orphanGroup = onlyOrphans ? [] : orphanRoots;
+
+  const result: LayoutNode[] = [];
+  let primaryMaxBottom = PADDING;
+  let primaryMaxRight = PADDING;
+  let x = PADDING;
+
+  for (const root of primaryGroup) {
+    const w = subtreeWidth(root);
+    const node = layoutTree(root, x, PADDING);
+    result.push(node);
+    x += w + GAP_X;
+
+    // Track the lowest point in the primary tree(s) so the orphan row
+    // sits below them with a labeled gap.
+    const flat: LayoutNode[] = [];
+    (function walk(n: LayoutNode) {
+      flat.push(n);
+      n.children.forEach(walk);
+    })(node);
+    for (const f of flat) {
+      primaryMaxBottom = Math.max(primaryMaxBottom, f.y + CARD_H);
+      primaryMaxRight = Math.max(primaryMaxRight, f.x + CARD_W);
+    }
+  }
+
+  if (orphanGroup.length === 0) {
+    return { nodes: result, orphanRowY: null, orphanRowBounds: null };
+  }
+
+  // Lay out orphans in a single row underneath the primary tree, left-aligned
+  // with the primary content so the cluster reads as a related sub-section.
+  const orphanY = primaryMaxBottom + GAP_Y;
+  let orphanX = PADDING;
+  const orphanLeft = orphanX;
+  for (const root of orphanGroup) {
+    result.push(layoutTree(root, orphanX, orphanY));
+    orphanX += CARD_W + GAP_X;
+  }
+  const orphanRight = Math.max(orphanX - GAP_X, orphanLeft + CARD_W);
+
+  return {
+    nodes: result,
+    orphanRowY: orphanY,
+    orphanRowBounds: { left: orphanLeft, right: orphanRight },
+  };
 }
 
 /** Flatten layout tree to list of nodes. */
@@ -199,8 +254,8 @@ export function OrgChart() {
 
   // Layout computation
   const layout = useMemo(() => layoutForest(orgTree ?? []), [orgTree]);
-  const allNodes = useMemo(() => flattenLayout(layout), [layout]);
-  const edges = useMemo(() => collectEdges(layout), [layout]);
+  const allNodes = useMemo(() => flattenLayout(layout.nodes), [layout]);
+  const edges = useMemo(() => collectEdges(layout.nodes), [layout]);
 
   // Compute SVG bounds
   const bounds = useMemo(() => {
@@ -545,6 +600,31 @@ export function OrgChart() {
                 />
               );
             })}
+            {layout.orphanRowY !== null && layout.orphanRowBounds && (
+              <g>
+                <line
+                  x1={layout.orphanRowBounds.left - PADDING / 2}
+                  x2={Math.max(
+                    layout.orphanRowBounds.right + PADDING / 2,
+                    bounds.width - PADDING / 2,
+                  )}
+                  y1={layout.orphanRowY - GAP_Y / 2}
+                  y2={layout.orphanRowY - GAP_Y / 2}
+                  stroke="var(--border)"
+                  strokeWidth={1}
+                  strokeDasharray="4 4"
+                />
+                <text
+                  x={layout.orphanRowBounds.left}
+                  y={layout.orphanRowY - GAP_Y / 2 - 6}
+                  fill="var(--muted-foreground)"
+                  fontSize={11}
+                  fontFamily="inherit"
+                >
+                  No manager
+                </text>
+              </g>
+            )}
           </g>
         </svg>
 

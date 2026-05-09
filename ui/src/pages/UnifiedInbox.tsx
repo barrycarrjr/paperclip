@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,9 +9,12 @@ import {
   Mail,
   Pencil,
   RefreshCcw,
+  Search,
+  UserPlus,
   X,
 } from "lucide-react";
 import type { Approval, IssueDocument } from "@paperclipai/shared";
+import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { ApiError } from "../api/client";
@@ -31,6 +34,10 @@ import {
   keepAlwaysSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
+import {
+  ACTIONABLE_APPROVAL_STATUSES,
+  getLatestFailedRunsByAgent,
+} from "../lib/inbox";
 import { isUnifiedInboxEnabled, setUnifiedInboxEnabled } from "../lib/unified-inbox-flag";
 
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
@@ -40,7 +47,18 @@ type ItemKind =
   | "approval"
   | "draft"
   | "email_review_sender"
-  | "failed_run";
+  | "failed_run"
+  | "join_request";
+
+const ITEM_KINDS: ItemKind[] = [
+  "approval",
+  "draft",
+  "email_review_sender",
+  "failed_run",
+  "join_request",
+];
+
+type ViewMode = "active" | "all";
 
 interface BaseItem {
   id: string;
@@ -55,6 +73,7 @@ interface BaseItem {
 interface ApprovalItem extends BaseItem {
   kind: "approval" | "draft";
   approvalId: string;
+  status: Approval["status"];
 }
 
 interface EmailReviewSenderItem extends BaseItem {
@@ -72,10 +91,16 @@ interface FailedRunItem extends BaseItem {
   retryPayload: Record<string, unknown>;
 }
 
+interface JoinRequestItem extends BaseItem {
+  kind: "join_request";
+  joinRequestId: string;
+}
+
 type InboxItem =
   | ApprovalItem
   | EmailReviewSenderItem
-  | FailedRunItem;
+  | FailedRunItem
+  | JoinRequestItem;
 
 interface RulesHomeBundle {
   issueId: string;
@@ -90,13 +115,23 @@ const KIND_LABEL: Record<ItemKind, string> = {
   draft: "Draft awaiting tap",
   email_review_sender: "Email sender",
   failed_run: "Failed run",
+  join_request: "Join request",
 };
 
-const KIND_TONE: Record<ItemKind, "amber" | "sky" | "red"> = {
+const KIND_FILTER_LABEL: Record<ItemKind, string> = {
+  approval: "Approvals",
+  draft: "Drafts",
+  email_review_sender: "Email senders",
+  failed_run: "Failed runs",
+  join_request: "Join requests",
+};
+
+const KIND_TONE: Record<ItemKind, "amber" | "sky" | "red" | "violet"> = {
   approval: "amber",
   draft: "amber",
   email_review_sender: "sky",
   failed_run: "red",
+  join_request: "violet",
 };
 
 const KIND_ICON: Record<ItemKind, typeof Mail> = {
@@ -104,6 +139,7 @@ const KIND_ICON: Record<ItemKind, typeof Mail> = {
   draft: Pencil,
   email_review_sender: Mail,
   failed_run: AlertOctagon,
+  join_request: UserPlus,
 };
 
 export function UnifiedInbox() {
@@ -113,14 +149,37 @@ export function UnifiedInbox() {
   const queryClient = useQueryClient();
   const { dismissedAtByKey, dismiss } = useInboxDismissals(selectedCompanyId);
 
+  const [view, setView] = useState<ViewMode>("active");
+  const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<Set<ItemKind>>(new Set());
+
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }, { label: "Unified (preview)" }]);
   }, [setBreadcrumbs]);
 
   const { data: approvals, isLoading: approvalsLoading } = useQuery({
-    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
-    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending"),
+    // Fetch ALL approvals so the "All" view can show decided items as
+    // history. The "Active" view filters down to actionable in the items
+    // memo below, matching the sidebar badge formula.
+    queryKey: queryKeys.approvals.list(selectedCompanyId!),
+    queryFn: () => approvalsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  const { data: joinRequests = [] } = useQuery({
+    queryKey: queryKeys.access.joinRequests(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    retry: false,
+    queryFn: async () => {
+      try {
+        return await accessApi.listJoinRequests(selectedCompanyId!, "pending_approval");
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          return [];
+        }
+        throw err;
+      }
+    },
   });
 
   const { data: rulesBundles } = useQuery<RulesHomeBundle[]>({
@@ -150,13 +209,16 @@ export function UnifiedInbox() {
     },
   });
 
+  const HEARTBEAT_LIMIT = 200;
   const { data: heartbeats } = useQuery({
-    queryKey: queryKeys.heartbeats(selectedCompanyId!),
+    // Match the sidebar-badge window so the unified count and the badge
+    // agree on which failed runs are visible.
+    queryKey: [...queryKeys.heartbeats(selectedCompanyId!), "limit", HEARTBEAT_LIMIT],
     enabled: !!selectedCompanyId,
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, 30),
+    queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, HEARTBEAT_LIMIT),
   });
 
-  const items: InboxItem[] = useMemo(() => {
+  const allItems: InboxItem[] = useMemo(() => {
     const out: InboxItem[] = [];
 
     for (const a of approvals ?? []) {
@@ -173,9 +235,10 @@ export function UnifiedInbox() {
         createdAt: String(a.createdAt),
         title: approvalShortTitle(a, isDraft),
         subtitle: summary || undefined,
-        meta: a.requestedByAgentId ? `from agent` : undefined,
+        meta: a.status !== "pending" ? a.status : a.requestedByAgentId ? "from agent" : undefined,
         rankWeight: isDraft ? 70 : 90,
         approvalId: a.id,
+        status: a.status,
       } satisfies ApprovalItem);
     }
 
@@ -203,8 +266,11 @@ export function UnifiedInbox() {
       }
     }
 
-    for (const run of heartbeats ?? []) {
-      if (run.status !== "failed" && run.status !== "timed_out") continue;
+    // Dedupe to latest run per agent and keep only the ones whose latest
+    // run is actually failed — same logic the badge uses, so the count
+    // here matches the sidebar count.
+    const failedRuns = getLatestFailedRunsByAgent(heartbeats ?? []);
+    for (const run of failedRuns) {
       const triggerLabel =
         typeof run.triggerDetail === "object" && run.triggerDetail
           ? ((run.triggerDetail as Record<string, unknown>).reason as string | undefined) ??
@@ -231,7 +297,22 @@ export function UnifiedInbox() {
         agentId: run.agentId,
         retryPayload,
       } satisfies FailedRunItem);
-      if (out.filter((x) => x.kind === "failed_run").length >= 5) break;
+    }
+
+    for (const jr of joinRequests) {
+      const subject =
+        jr.requestType === "agent"
+          ? jr.requestEmailSnapshot ?? "Agent join request"
+          : jr.requestEmailSnapshot ?? "Member join request";
+      out.push({
+        id: `join:${jr.id}`,
+        kind: "join_request",
+        createdAt: String(jr.createdAt),
+        title: subject,
+        subtitle: jr.requestType === "agent" ? "Agent requesting access" : "Person requesting access",
+        rankWeight: 85,
+        joinRequestId: jr.id,
+      } satisfies JoinRequestItem);
     }
 
     return out
@@ -240,13 +321,50 @@ export function UnifiedInbox() {
         if (b.rankWeight !== a.rankWeight) return b.rankWeight - a.rankWeight;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
-  }, [approvals, rulesBundles, heartbeats, dismissedAtByKey]);
+  }, [approvals, rulesBundles, heartbeats, joinRequests, dismissedAtByKey]);
+
+  const items = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allItems.filter((it) => {
+      if (view === "active") {
+        // Active = items that need a human action right now.
+        if (it.kind === "approval" || it.kind === "draft") {
+          if (!ACTIONABLE_APPROVAL_STATUSES.has(it.status)) return false;
+        }
+      }
+      if (kindFilter.size > 0 && !kindFilter.has(it.kind)) return false;
+      if (q) {
+        const haystack = `${it.title} ${it.subtitle ?? ""} ${it.meta ?? ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allItems, view, kindFilter, search]);
+
+  const counts = useMemo(() => {
+    const active = allItems.filter((it) => {
+      if (it.kind === "approval" || it.kind === "draft") {
+        return ACTIONABLE_APPROVAL_STATUSES.has(it.status);
+      }
+      return true;
+    }).length;
+    return { active, all: allItems.length };
+  }, [allItems]);
+
+  function toggleKind(kind: ItemKind) {
+    setKindFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => approvalsApi.approve(id),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
+        queryKey: queryKeys.approvals.list(selectedCompanyId!),
       });
     },
   });
@@ -255,7 +373,7 @@ export function UnifiedInbox() {
     mutationFn: (id: string) => approvalsApi.reject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
+        queryKey: queryKeys.approvals.list(selectedCompanyId!),
       });
     },
   });
@@ -339,7 +457,10 @@ export function UnifiedInbox() {
 
   function disablePreview() {
     setUnifiedInboxEnabled(false);
-    navigate("/inbox/mine", { replace: true });
+    // Mirror the enable-side reload: the legacy page checks the flag on mount
+    // and won't re-render on a same-route navigate, so a hard reload is the
+    // simplest reliable switch.
+    window.location.reload();
   }
 
   if (!selectedCompanyId) {
@@ -358,12 +479,12 @@ export function UnifiedInbox() {
         <div>
           <h1 className="text-xl font-semibold">Inbox</h1>
           <p className="text-[12px] text-muted-foreground">
-            One queue: approvals, drafts, email review, and failed runs. Ranked by urgency.
+            One queue: approvals, drafts, email review, failed runs, and join requests. Ranked by urgency.
           </p>
         </div>
         <div className="flex flex-col items-end gap-0.5">
           <span className="text-[12px] text-muted-foreground tabular-nums">
-            {items.length} item{items.length === 1 ? "" : "s"}
+            {items.length} of {view === "active" ? counts.active : counts.all} item{items.length === 1 ? "" : "s"}
           </span>
           <Link
             to="/issues"
@@ -373,6 +494,21 @@ export function UnifiedInbox() {
           </Link>
         </div>
       </header>
+
+      <InboxToolbar
+        view={view}
+        onViewChange={setView}
+        activeCount={counts.active}
+        allCount={counts.all}
+        search={search}
+        onSearchChange={setSearch}
+        kindFilter={kindFilter}
+        onToggleKind={toggleKind}
+        onClearFilters={() => {
+          setKindFilter(new Set());
+          setSearch("");
+        }}
+      />
 
       {items.length === 0 ? (
         <EmptyState
@@ -625,6 +761,8 @@ function openTitle(item: InboxItem): string {
       return "Open the email triage rules document for this mailbox.";
     case "failed_run":
       return "Open the agent's run detail to see logs and errors.";
+    case "join_request":
+      return "Open the join request queue to approve or reject.";
   }
 }
 
@@ -648,7 +786,114 @@ function openItem(item: InboxItem, navigate: ReturnType<typeof useNavigate>) {
     case "failed_run":
       navigate(`/agents/${item.agentId}/runs/${item.runId}`);
       return;
+    case "join_request":
+      navigate(`/inbox/requests`);
+      return;
   }
+}
+
+interface InboxToolbarProps {
+  view: ViewMode;
+  onViewChange: (view: ViewMode) => void;
+  activeCount: number;
+  allCount: number;
+  search: string;
+  onSearchChange: (q: string) => void;
+  kindFilter: Set<ItemKind>;
+  onToggleKind: (kind: ItemKind) => void;
+  onClearFilters: () => void;
+}
+
+function InboxToolbar({
+  view,
+  onViewChange,
+  activeCount,
+  allCount,
+  search,
+  onSearchChange,
+  kindFilter,
+  onToggleKind,
+  onClearFilters,
+}: InboxToolbarProps) {
+  const hasActiveFilters = kindFilter.size > 0 || search.length > 0;
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex border border-border bg-card overflow-hidden">
+          <button
+            type="button"
+            onClick={() => onViewChange("active")}
+            className={cn(
+              "px-3 py-1 text-[12px] font-medium transition-colors",
+              view === "active"
+                ? "bg-foreground text-background"
+                : "text-foreground hover:bg-accent",
+            )}
+            title="Items needing a human action right now."
+          >
+            Active <span className="text-[11px] opacity-70 tabular-nums">({activeCount})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onViewChange("all")}
+            className={cn(
+              "px-3 py-1 text-[12px] font-medium border-l border-border transition-colors",
+              view === "all"
+                ? "bg-foreground text-background"
+                : "text-foreground hover:bg-accent",
+            )}
+            title="Active items plus history (decided approvals etc.)."
+          >
+            All <span className="text-[11px] opacity-70 tabular-nums">({allCount})</span>
+          </button>
+        </div>
+
+        <div className="relative flex-1 min-w-[200px] max-w-md">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search inbox…"
+            className="w-full border border-border bg-card pl-7 pr-2 py-1 text-[12px] focus:outline-none focus:ring-1 focus:ring-foreground/30"
+          />
+        </div>
+
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={onClearFilters}
+            className="text-[11px] text-muted-foreground hover:text-foreground underline"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] text-muted-foreground/70">Filter:</span>
+        {ITEM_KINDS.map((kind) => {
+          const active = kindFilter.has(kind);
+          return (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => onToggleKind(kind)}
+              className={cn(
+                "px-2 py-0.5 text-[11px] font-medium border transition-colors",
+                active
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent",
+              )}
+            >
+              {KIND_FILTER_LABEL[kind]}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export { isUnifiedInboxEnabled };

@@ -37,13 +37,13 @@ function SortableCompanyItem({
   company,
   isSelected,
   hasLiveAgents,
-  hasUnreadInbox,
+  inboxCount,
   onSelect,
 }: {
   company: Company;
   isSelected: boolean;
   hasLiveAgents: boolean;
-  hasUnreadInbox: boolean;
+  inboxCount: number;
   onSelect: () => void;
 }) {
   const {
@@ -109,14 +109,24 @@ function SortableCompanyItem({
                   </span>
                 </span>
               )}
-              {hasUnreadInbox && (
-                <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 z-10 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background" />
+              {inboxCount > 0 && (
+                <span
+                  className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
+                  aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+                >
+                  {inboxCount > 99 ? "99+" : inboxCount}
+                </span>
               )}
             </div>
           </a>
         </TooltipTrigger>
         <TooltipContent side="right" sideOffset={8}>
           <p>{company.name}</p>
+          {inboxCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+            </p>
+          )}
         </TooltipContent>
       </Tooltip>
     </div>
@@ -132,13 +142,13 @@ function PinnedHqItem({
   company,
   isSelected,
   hasLiveAgents,
-  hasUnreadInbox,
+  inboxCount,
   onSelect,
 }: {
   company: Company;
   isSelected: boolean;
   hasLiveAgents: boolean;
-  hasUnreadInbox: boolean;
+  inboxCount: number;
   onSelect: () => void;
 }) {
   return (
@@ -176,8 +186,13 @@ function PinnedHqItem({
                   </span>
                 </span>
               )}
-              {hasUnreadInbox && (
-                <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 z-10 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background" />
+              {inboxCount > 0 && (
+                <span
+                  className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
+                  aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+                >
+                  {inboxCount > 99 ? "99+" : inboxCount}
+                </span>
               )}
             </div>
           </a>
@@ -185,6 +200,11 @@ function PinnedHqItem({
         <TooltipContent side="right" sideOffset={8}>
           <p className="font-medium">{company.name}</p>
           <p className="text-xs text-muted-foreground">Portfolio root</p>
+          {inboxCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+            </p>
+          )}
         </TooltipContent>
       </Tooltip>
     </div>
@@ -238,10 +258,10 @@ export function CompanyRail() {
     });
     return result;
   }, [companyIds, liveRunsQueries]);
-  const hasUnreadInboxByCompanyId = useMemo(() => {
-    const result = new Map<string, boolean>();
+  const inboxCountByCompanyId = useMemo(() => {
+    const result = new Map<string, number>();
     companyIds.forEach((companyId, index) => {
-      result.set(companyId, (sidebarBadgeQueries[index]?.data?.inbox ?? 0) > 0);
+      result.set(companyId, sidebarBadgeQueries[index]?.data?.inbox ?? 0);
     });
     return result;
   }, [companyIds, sidebarBadgeQueries]);
@@ -289,7 +309,7 @@ export function CompanyRail() {
               company={hqCompany}
               isSelected={hqCompany.id === highlightedCompanyId}
               hasLiveAgents={hasLiveAgentsByCompanyId.get(hqCompany.id) ?? false}
-              hasUnreadInbox={hasUnreadInboxByCompanyId.get(hqCompany.id) ?? false}
+              inboxCount={inboxCountByCompanyId.get(hqCompany.id) ?? 0}
               onSelect={() => {
                 setSelectedCompanyId(hqCompany.id);
                 if (isInstanceRoute) {
@@ -317,7 +337,7 @@ export function CompanyRail() {
                 company={company}
                 isSelected={company.id === highlightedCompanyId}
                 hasLiveAgents={hasLiveAgentsByCompanyId.get(company.id) ?? false}
-                hasUnreadInbox={hasUnreadInboxByCompanyId.get(company.id) ?? false}
+                inboxCount={inboxCountByCompanyId.get(company.id) ?? 0}
                 onSelect={() => {
                   setSelectedCompanyId(company.id);
                   if (isInstanceRoute) {
