@@ -64,6 +64,15 @@ interface BridgeSession {
    *  company chat, this grows to a list. */
   companyId: string;
   actor: ToolActor;
+  /** When set, plugin-tool calls dispatch under this agent identity instead
+   *  of the synthesized `clippy:<userId>` chat-actor identity. Used by
+   *  routine/heartbeat-driven runs so plugin tools see the real agentId +
+   *  heartbeat runId for audit. */
+  agentRunContext?: {
+    agentId: string;
+    runId: string;
+    projectId?: string;
+  };
   expiresAt: number;
 }
 
@@ -88,6 +97,13 @@ export interface MintTokenInput {
   actor: ToolActor;
   /** Override TTL (ms). Defaults to TOKEN_TTL_MS. */
   ttlMs?: number;
+  /** Optional agent-run identity. When set, plugin tool calls run under
+   *  this agentId + runId rather than the synthesized chat-actor identity. */
+  agentRunContext?: {
+    agentId: string;
+    runId: string;
+    projectId?: string;
+  };
 }
 
 export interface BridgeStatus {
@@ -149,12 +165,12 @@ export function createPluginMcpBridge(
   if (typeof gc.unref === "function") gc.unref();
 
   return {
-    mintToken({ chatSessionId, companyId, actor, ttlMs }) {
+    mintToken({ chatSessionId, companyId, actor, ttlMs, agentRunContext }) {
       const token = randomUUID();
       const expiresAt = Date.now() + (ttlMs ?? TOKEN_TTL_MS);
-      tokenStore.set(token, { token, chatSessionId, companyId, actor, expiresAt });
+      tokenStore.set(token, { token, chatSessionId, companyId, actor, agentRunContext, expiresAt });
       totalMinted += 1;
-      log.debug({ chatSessionId, companyId, expiresAt }, "minted MCP bridge token");
+      log.debug({ chatSessionId, companyId, expiresAt, agentRunContext: !!agentRunContext }, "minted MCP bridge token");
       return token;
     },
 
@@ -260,13 +276,21 @@ export function createPluginMcpBridge(
             })()
           : incomingName;
 
-        const runContext: ToolRunContext = {
-          agentId: `clippy:${session.actor.userId}`,
-          runId: randomUUID(),
-          companyId: session.companyId,
-          projectId: "",
-          chatSessionId: session.chatSessionId,
-        };
+        const runContext: ToolRunContext = session.agentRunContext
+          ? {
+              agentId: session.agentRunContext.agentId,
+              runId: session.agentRunContext.runId,
+              companyId: session.companyId,
+              projectId: session.agentRunContext.projectId ?? "",
+              chatSessionId: session.chatSessionId,
+            }
+          : {
+              agentId: `clippy:${session.actor.userId}`,
+              runId: randomUUID(),
+              companyId: session.companyId,
+              projectId: "",
+              chatSessionId: session.chatSessionId,
+            };
 
         try {
           const exec = await pluginToolDispatcher.executeTool(

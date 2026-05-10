@@ -37,6 +37,7 @@ import {
 import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
+import { getPluginMcpBridge } from "./plugin-mcp-bridge.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
@@ -4658,6 +4659,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       run = claimed;
     }
 
+    // Hoisted to executeRun scope so the outer finally can revoke it after
+    // adapter.execute even if setup or the inner try threw before assignment.
+    let pluginMcpToken: string | null = null;
     activeRunExecutions.add(run.id);
 
     try {
@@ -5493,6 +5497,39 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
         );
       }
+      // Plugin MCP bridge — mint a per-run token so the spawned LLM
+      // subprocess (claude_local) can call Paperclip plugin tools as MCP
+      // tools. Without this, --strict-mcp-config in the adapter leaves the
+      // agent with no plugin tools at all (and previously, with no strict
+      // flag, the CLI silently fell back to the operator's personal
+      // ~/.claude.json MCP servers — leaking personal Gmail/Slack/etc.
+      // into every routine-driven agent run).
+      const pluginMcpBridge = getPluginMcpBridge();
+      if (pluginMcpBridge) {
+        try {
+          pluginMcpToken = pluginMcpBridge.mintToken({
+            chatSessionId: `heartbeat:${run.id}`,
+            companyId: agent.companyId,
+            actor: {
+              userId: `agent:${agent.id}`,
+              isInstanceAdmin: false,
+              companyIds: [agent.companyId],
+            },
+            agentRunContext: {
+              agentId: agent.id,
+              runId: run.id,
+              projectId: readNonEmptyString(context.projectId) ?? undefined,
+            },
+          });
+          const port = process.env.PAPERCLIP_LISTEN_PORT ?? "3100";
+          context.pluginMcpUrl = `http://127.0.0.1:${port}/api/internal/mcp/${pluginMcpToken}`;
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : String(err), agentId: agent.id, runId: run.id },
+            "Failed to mint MCP bridge token; agent will run without plugin tools",
+          );
+        }
+      }
       const adapterResult = await adapter.execute({
         runId: run.id,
         agent,
@@ -5895,6 +5932,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             );
           }
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
+          // Revoke the per-run plugin MCP bridge token if we minted one.
+          // The bridge GCs abandoned tokens on TTL too, but explicit revoke
+          // keeps the activeTokenCount accurate for the operator health UI.
+          if (pluginMcpToken) {
+            try {
+              getPluginMcpBridge()?.revokeToken(pluginMcpToken);
+            } catch {
+              // best-effort
+            }
+          }
           activeRunExecutions.delete(run.id);
           await startNextQueuedRunForAgent(run.agentId);
         }
