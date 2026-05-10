@@ -557,8 +557,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     args.push("--add-dir", effectivePromptBundleAddDir);
     // Plugin MCP bridge: makes Paperclip plugin tools callable from
     // inside the spawned Claude Code session as MCP tools.
+    // --strict-mcp-config isolates spawned agents from the operator's personal
+    // ~/.claude.json MCP servers (claude.ai Gmail/Slack/Atlassian/etc.) so an
+    // agent in company A can't reach into the operator's personal Gmail and
+    // call it "their inbox". Without it, the CLI merges configs and tools like
+    // mcp__claude_ai_Gmail__search_threads leak in alongside Paperclip's own
+    // company-scoped equivalents.
     if (mcpConfigFilePath) {
-      args.push("--mcp-config", mcpConfigFilePath);
+      args.push("--mcp-config", mcpConfigFilePath, "--strict-mcp-config");
+    } else {
+      args.push("--strict-mcp-config");
     }
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
