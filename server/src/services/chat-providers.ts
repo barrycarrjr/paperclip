@@ -1035,7 +1035,13 @@ class AdapterExecuteProvider implements ChatProvider {
     const executePromise = (async () => {
       const runId = randomId();
       const authToken = adapter.supportsLocalAgentJwt
-        ? createLocalAgentJwt(`clippy-${ctx.sessionId}`, ctx.companyId ?? "", decoded.adapterType, runId)
+        ? createLocalAgentJwt(
+            `clippy-${ctx.sessionId}`,
+            ctx.companyId ?? "",
+            decoded.adapterType,
+            runId,
+            { userId: ctx.boardUserId },
+          )
         : null;
       if (adapter.supportsLocalAgentJwt && !authToken) {
         logger.warn(

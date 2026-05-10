@@ -10,11 +10,11 @@ import { instanceSettingsService } from "../services/instance-settings.js";
 import { readInstallCommit, serverVersion } from "../version.js";
 
 function shouldExposeFullHealthDetails(
-  actorType: "none" | "board" | "agent" | null | undefined,
+  actorType: "none" | "board" | "agent" | "tool_session" | null | undefined,
   deploymentMode: DeploymentMode,
 ) {
   if (deploymentMode !== "authenticated") return true;
-  return actorType === "board" || actorType === "agent";
+  return actorType === "board" || actorType === "agent" || actorType === "tool_session";
 }
 
 function hasDevServerStatusToken(providedToken: string | undefined) {

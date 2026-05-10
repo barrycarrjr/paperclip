@@ -10,11 +10,22 @@ export interface LocalAgentJwtClaims {
   company_id: string;
   adapter_type: string;
   run_id: string;
+  /**
+   * Optional board user id. Set on tool-session JWTs (e.g. Clippy chat
+   * sessions) so the server attributes writes to the user driving the
+   * tool. Omitted on legacy agent JWTs where `sub` is a real agents.id.
+   */
+  user_id?: string;
   iat: number;
   exp: number;
   iss?: string;
   aud?: string;
   jti?: string;
+}
+
+export interface CreateLocalAgentJwtOptions {
+  /** Board user id to embed as `user_id`. Required for tool-session JWTs. */
+  userId?: string;
 }
 
 const JWT_ALGORITHM = "HS256";
@@ -65,7 +76,13 @@ function safeCompare(a: string, b: string) {
   return timingSafeEqual(left, right);
 }
 
-export function createLocalAgentJwt(agentId: string, companyId: string, adapterType: string, runId: string) {
+export function createLocalAgentJwt(
+  agentId: string,
+  companyId: string,
+  adapterType: string,
+  runId: string,
+  options: CreateLocalAgentJwtOptions = {},
+) {
   const config = jwtConfig();
   if (!config) return null;
 
@@ -80,6 +97,7 @@ export function createLocalAgentJwt(agentId: string, companyId: string, adapterT
     iss: config.issuer,
     aud: config.audience,
   };
+  if (options.userId) claims.user_id = options.userId;
 
   const header = {
     alg: JWT_ALGORITHM,
@@ -133,6 +151,7 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
     company_id: companyId,
     adapter_type: adapterType,
     run_id: runId,
+    user_id: typeof claims.user_id === "string" ? claims.user_id : undefined,
     iat,
     exp,
     iss: claims.iss,

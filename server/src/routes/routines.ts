@@ -10,7 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { accessService, companyService, logActivity, routineService } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
 import { forbidden, unauthorized } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -36,7 +36,7 @@ export function routineRoutes(
 
   function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
+    if (isUserDrivenActor(req)) return;
     if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
     if (assigneeAgentId !== req.actor.agentId) {
       throw forbidden("Agents can only manage routines assigned to themselves");
@@ -47,7 +47,7 @@ export function routineRoutes(
     const routine = await svc.get(routineId);
     if (!routine) return null;
     assertCompanyAccess(req, routine.companyId);
-    if (req.actor.type === "board") return routine;
+    if (isUserDrivenActor(req)) return routine;
     if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
     if (routine.assigneeAgentId !== req.actor.agentId) {
       throw forbidden("Agents can only manage routines assigned to themselves");
@@ -74,7 +74,7 @@ export function routineRoutes(
     }
 
     const isPortfolioRootAccess =
-      req.actor.type === "agent"
+      req.actor.type === "agent" || req.actor.type === "tool_session"
         ? req.actor.isPortfolioRootAgent
         : req.actor.type === "board" && (
             req.actor.source === "local_implicit" ||
@@ -115,7 +115,7 @@ export function routineRoutes(
     assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
     const created = await svc.create(companyId, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-      userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
+      userId: isUserDrivenActor(req) ? req.actor.userId ?? "board" : null,
     });
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -170,7 +170,7 @@ export function routineRoutes(
     }
     const updated = await svc.update(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-      userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
+      userId: isUserDrivenActor(req) ? req.actor.userId ?? "board" : null,
     });
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -208,7 +208,7 @@ export function routineRoutes(
     await assertBoardCanAssignTasks(req, routine.companyId);
     const created = await svc.createTrigger(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-      userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
+      userId: isUserDrivenActor(req) ? req.actor.userId ?? "board" : null,
     });
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -239,7 +239,7 @@ export function routineRoutes(
     await assertBoardCanAssignTasks(req, routine.companyId);
     const updated = await svc.updateTrigger(trigger.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-      userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
+      userId: isUserDrivenActor(req) ? req.actor.userId ?? "board" : null,
     });
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -299,7 +299,7 @@ export function routineRoutes(
       }
       const rotated = await svc.rotateTriggerSecret(trigger.id, {
         agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-        userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
+        userId: isUserDrivenActor(req) ? req.actor.userId ?? "board" : null,
       });
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -326,7 +326,7 @@ export function routineRoutes(
     await assertBoardCanAssignTasks(req, routine.companyId);
     const run = await svc.runRoutine(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
-      userId: req.actor.type === "board" ? req.actor.userId ?? null : null,
+      userId: isUserDrivenActor(req) ? req.actor.userId ?? null : null,
     });
     const actor = getActorInfo(req);
     await logActivity(db, {

@@ -78,6 +78,7 @@ type LatestIssueRun = Pick<
 type WatchdogDecisionActor =
   | { type: "board"; userId?: string | null; runId?: string | null }
   | { type: "agent"; agentId?: string | null; runId?: string | null }
+  | { type: "tool_session"; userId?: string | null; runId?: string | null }
   | { type: "none" };
 
 export type RunOutputSilenceSummary = {
@@ -1184,7 +1185,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         snoozedUntil: effectiveSnoozedUntil,
         reason: input.reason ?? null,
         createdByAgentId: input.actor.type === "agent" ? input.actor.agentId ?? null : null,
-        createdByUserId: input.actor.type === "board" ? input.actor.userId ?? null : null,
+        createdByUserId:
+          input.actor.type === "board" || input.actor.type === "tool_session"
+            ? input.actor.userId ?? null
+            : null,
         createdByRunId,
       })
       .returning();
@@ -1194,8 +1198,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       actorType: input.actor.type === "agent" ? "agent" : "user",
       actorId: input.actor.type === "agent"
         ? input.actor.agentId ?? "agent"
-        : input.actor.type === "board"
-          ? input.actor.userId ?? "board"
+        : input.actor.type === "board" || input.actor.type === "tool_session"
+          ? input.actor.userId ?? "tool_session"
           : "unknown",
       agentId: input.actor.type === "agent" ? input.actor.agentId ?? null : null,
       runId: run.id,

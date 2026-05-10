@@ -104,6 +104,61 @@ describe("assertCompanyAccess", () => {
 
     expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
   });
+
+  it("allows tool_session writes within its own company", () => {
+    const req = makeReq({
+      method: "POST",
+      actor: {
+        type: "tool_session",
+        userId: "user-1",
+        companyId: "company-1",
+        toolSessionId: "clippy-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        source: "tool_session_jwt",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1", "write")).not.toThrow();
+  });
+
+  it("rejects tool_session access to a different company", () => {
+    const req = makeReq({
+      method: "GET",
+      actor: {
+        type: "tool_session",
+        userId: "user-1",
+        companyId: "company-1",
+        toolSessionId: "clippy-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        source: "tool_session_jwt",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-2", "write")).toThrow(
+      "Tool session cannot access another company",
+    );
+    expect(() => assertCompanyAccess(req, "company-2", "read")).toThrow(
+      "Tool session cannot access another company",
+    );
+  });
+
+  it("permits cross-company READ for a portfolio-root tool_session", () => {
+    const req = makeReq({
+      method: "GET",
+      actor: {
+        type: "tool_session",
+        userId: "user-1",
+        companyId: "hq-company",
+        toolSessionId: "clippy-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        isPortfolioRootAgent: true,
+        source: "tool_session_jwt",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1", "read")).not.toThrow();
+    // Writes are still company-scoped even for portfolio-root tool sessions.
+    expect(() => assertCompanyAccess(req, "company-1", "write")).toThrow(
+      "Tool session cannot access another company",
+    );
+  });
 });
 
 describe("assertBoardOrgAccess", () => {

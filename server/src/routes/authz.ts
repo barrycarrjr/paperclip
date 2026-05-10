@@ -9,6 +9,18 @@ export function assertAuthenticated(req: Request) {
   }
 }
 
+/**
+ * True for actors that represent a human user driving the system —
+ * either signed-in via the board UI (`board`) or via a tool session
+ * (`tool_session`, e.g. Clippy) acting on the user's behalf. Use at
+ * authorization sites that previously gated on `actor.type === "board"`
+ * so tool sessions inherit the same affordances within their JWT's
+ * company.
+ */
+export function isUserDrivenActor(req: Request): boolean {
+  return req.actor.type === "board" || req.actor.type === "tool_session";
+}
+
 export function assertBoard(req: Request) {
   if (req.actor.type !== "board") {
     throw forbidden("Board access required");
@@ -53,6 +65,12 @@ export function assertCompanyAccess(
     }
     throw forbidden("Agent key cannot access another company");
   }
+  if (req.actor.type === "tool_session" && req.actor.companyId !== companyId) {
+    if (mode === "read" && req.actor.isPortfolioRootAgent) {
+      return;
+    }
+    throw forbidden("Tool session cannot access another company");
+  }
   if (req.actor.type === "board" && req.actor.source !== "local_implicit") {
     const allowedCompanies = req.actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
@@ -82,6 +100,19 @@ export function getActorInfo(req: Request) {
       actorType: "agent" as const,
       actorId: req.actor.agentId ?? "unknown-agent",
       agentId: req.actor.agentId ?? null,
+      runId: req.actor.runId ?? null,
+    };
+  }
+
+  // Tool sessions act on behalf of the driving user. Audit as the user so
+  // writes are attributable to a real `users.id` foreign key — there is no
+  // agents row to point at, and the synthetic toolSessionId is not a key
+  // into any audit-eligible table.
+  if (req.actor.type === "tool_session") {
+    return {
+      actorType: "user" as const,
+      actorId: req.actor.userId ?? "tool_session",
+      agentId: null,
       runId: req.actor.runId ?? null,
     };
   }

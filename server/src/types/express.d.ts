@@ -4,7 +4,7 @@ declare global {
   namespace Express {
     interface Request {
       actor: {
-        type: "board" | "agent" | "none";
+        type: "board" | "agent" | "tool_session" | "none";
         userId?: string;
         userName?: string | null;
         userEmail?: string | null;
@@ -23,7 +23,16 @@ declare global {
         isPortfolioRootUserAdmin?: boolean;
         keyId?: string;
         runId?: string;
-        source?: "local_implicit" | "session" | "board_key" | "agent_key" | "agent_jwt" | "none";
+        /** Synthetic identity carried in tool_session JWTs, e.g. `clippy-<sessionId>`. Never a foreign key into `agents`. */
+        toolSessionId?: string;
+        source?:
+          | "local_implicit"
+          | "session"
+          | "board_key"
+          | "agent_key"
+          | "agent_jwt"
+          | "tool_session_jwt"
+          | "none";
       };
     }
   }

@@ -17,13 +17,21 @@ function hashToken(token: string) {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Synthetic identity carried in tool-session JWTs. Currently only used by
+ * Clippy chat sessions, which mint `sub = clippy-<sessionId>` in
+ * services/chat-providers.ts. New tool integrations should reuse this
+ * `<tool>-<uuid>` shape rather than inventing a parallel format.
+ */
+const TOOL_SESSION_SUB_PATTERN = /^clippy-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Populate `actor.isPortfolioRootAgent` / `actor.isPortfolioRootUserAdmin`
  * from already-loaded actor data. The HQ company id is cached in process,
  * so this is essentially free after the first call.
  */
 async function annotateHqStatus(req: Request, db: Db): Promise<void> {
   const actor = req.actor;
-  if (actor.type === "agent" && actor.companyId) {
+  if ((actor.type === "agent" || actor.type === "tool_session") && actor.companyId) {
     const rootId = await getPortfolioRootCompanyId(db);
     if (rootId && actor.companyId === rootId) {
       actor.isPortfolioRootAgent = true;
@@ -167,11 +175,34 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
-      // The agents.id column is uuid-typed, so a non-UUID sub (e.g. the
-      // synthetic `clippy-<sessionId>` sub minted for chat sessions in
-      // chat-providers.ts) crashes the query with `invalid input syntax
-      // for type uuid` and turns every request into a 500. Treat it as
-      // an unknown agent and fall through to unauthenticated.
+      // Tool-session JWTs carry a synthetic sub (e.g. `clippy-<sessionId>`)
+      // rather than a real agents.id. The driving user is in `user_id` and
+      // the company in `company_id`. Authenticate as a `tool_session` actor
+      // scoped to that single company, attributing writes to the user.
+      if (TOOL_SESSION_SUB_PATTERN.test(claims.sub)) {
+        if (!UUID_PATTERN.test(claims.company_id)) {
+          next();
+          return;
+        }
+        const userId = typeof claims.user_id === "string" && claims.user_id.length > 0
+          ? claims.user_id
+          : undefined;
+        req.actor = {
+          type: "tool_session",
+          userId,
+          companyId: claims.company_id,
+          toolSessionId: claims.sub,
+          runId: runIdHeader || claims.run_id || undefined,
+          source: "tool_session_jwt",
+        };
+        await annotateHqStatus(req, db);
+        next();
+        return;
+      }
+
+      // Legacy agent JWT path: sub MUST be a UUID since it indexes agents.id
+      // (uuid-typed). A non-UUID sub from an unrecognized tool would crash
+      // the query with `22P02 invalid input syntax for type uuid`.
       if (!UUID_PATTERN.test(claims.sub)) {
         next();
         return;
