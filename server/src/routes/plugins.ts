@@ -487,6 +487,10 @@ export function pluginRoutes(
     if (route.auth === "webhook") {
       throw unprocessable("Webhook-scoped plugin API routes require a signature verifier and are not enabled");
     }
+    if (route.auth === "instance-admin") {
+      assertInstanceAdmin(req);
+      return;
+    }
     assertAuthenticated(req);
     if (req.actor.type !== "board" && req.actor.type !== "agent") {
       throw forbidden("Board or agent access required");

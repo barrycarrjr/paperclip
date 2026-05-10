@@ -38,6 +38,10 @@ import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
 } from "./routes/instance-database-backups.js";
+import {
+  systemSnapshotRoutes,
+  type SystemSnapshotService,
+} from "./routes/system-snapshot.js";
 import { llmRoutes } from "./routes/llms.js";
 import { chatRoutes } from "./routes/chat.js";
 import { authRoutes } from "./routes/auth.js";
@@ -146,6 +150,7 @@ export async function createApp(
       }): Promise<unknown>;
     };
     databaseBackupService?: InstanceDatabaseBackupService;
+    systemSnapshotService?: SystemSnapshotService;
     deploymentMode: DeploymentMode;
     deploymentExposure: DeploymentExposure;
     allowedHostnames: string[];
@@ -256,6 +261,9 @@ export async function createApp(
   api.use(systemRoutes());
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
+  }
+  if (opts.systemSnapshotService) {
+    api.use(systemSnapshotRoutes(opts.systemSnapshotService));
   }
   const pluginRegistry = pluginRegistryService(db);
   const eventBus = createPluginEventBus();

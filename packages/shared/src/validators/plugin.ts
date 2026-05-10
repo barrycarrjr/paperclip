@@ -364,6 +364,7 @@ export const pluginDatabaseDeclarationSchema = z.object({
     { message: "migrationsDir must be a relative package path without '..' or backslashes" },
   ),
   coreReadTables: z.array(z.enum(PLUGIN_DATABASE_CORE_READ_TABLES)).optional(),
+  includeInBackup: z.boolean().optional(),
 });
 
 export type PluginDatabaseDeclarationInput = z.infer<typeof pluginDatabaseDeclarationSchema>;

@@ -242,6 +242,17 @@ export interface PluginDatabaseDeclaration {
   migrationsDir: string;
   /** Public core tables this plugin may read or join at runtime. */
   coreReadTables?: PluginDatabaseCoreReadTable[];
+  /**
+   * Whether this plugin's database namespace should be included in
+   * instance-wide system snapshots produced by `/api/system/snapshot`.
+   *
+   * Default: `true`. Set to `false` for plugins whose data is cache-only,
+   * derived/regenerable, or contains PII the operator does not want
+   * to ship to backup destinations.
+   *
+   * @default true
+   */
+  includeInBackup?: boolean;
 }
 
 export type PluginApiRouteCompanyResolution =

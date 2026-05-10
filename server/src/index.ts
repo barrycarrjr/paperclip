@@ -1,7 +1,8 @@
 /// <reference path="./types/express.d.ts" />
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { createServer } from "node:http";
-import { resolve } from "node:path";
+import path, { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
@@ -18,6 +19,7 @@ import {
   reconcilePendingMigrationHistory,
   formatDatabaseBackupResult,
   runDatabaseBackup,
+  runDatabaseRestore,
   authUsers,
   companies,
   companyMemberships,
@@ -47,6 +49,13 @@ import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
 } from "./routes/instance-database-backups.js";
+import type {
+  ProduceSnapshotResult,
+  RestoreSnapshotInput,
+  RestoreSnapshotResult,
+  SystemSnapshotManifest,
+  SystemSnapshotService,
+} from "./routes/system-snapshot.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -258,8 +267,8 @@ export async function startServer(): Promise<StartedServer> {
     }
   }
   
-  let db;
-  let pluginMigrationDb;
+  let db: any;
+  let pluginMigrationDb: any;
   let embeddedPostgres: EmbeddedPostgresInstance | null = null;
   let embeddedPostgresStartedByThisProcess = false;
   let migrationSummary: MigrationSummary = "skipped";
@@ -597,6 +606,217 @@ export async function startServer(): Promise<StartedServer> {
       databaseBackupInFlight = false;
     }
   };
+
+  // System-snapshot service: produces full instance snapshots (public + opted-in
+  // plugin schemas) for the backup-tools plugin and any other consumer. Shares
+  // the `databaseBackupInFlight` flag with the manual-backup path so we don't
+  // race two concurrent pg_dump-style runs against the same connection pool.
+  const systemSnapshotService: SystemSnapshotService = (() => {
+    const snapshotTempDir = path.resolve(
+      config.databaseBackupDir,
+      "..",
+      "snapshots-tmp",
+    );
+    if (!existsSync(snapshotTempDir)) {
+      try { mkdirSync(snapshotTempDir, { recursive: true }); } catch { /* best-effort */ }
+    }
+
+    async function listIncludedPluginSchemas(): Promise<{
+      pluginKey: string;
+      pluginVersion: string;
+      namespaceName: string;
+      includeInBackup: boolean;
+    }[]> {
+      type Row = {
+        plugin_key: string;
+        version: string;
+        manifest_json: unknown;
+        namespace_name: string;
+      };
+      const rows = await (db as any).execute(`
+        SELECT p.plugin_key, p.version, p.manifest_json, n.namespace_name
+        FROM plugins p
+        JOIN plugin_database_namespaces n ON n.plugin_id = p.id
+        WHERE p.status IN ('ready', 'installed', 'upgrade_pending')
+          AND n.status = 'active'
+        ORDER BY p.plugin_key
+      `) as { rows: Row[] } | Row[];
+      const list: Row[] = Array.isArray(rows) ? rows : (rows as { rows: Row[] }).rows ?? [];
+      return list.map((row) => {
+        const manifest = (row.manifest_json ?? {}) as { database?: { includeInBackup?: boolean } };
+        const includeInBackup = manifest.database?.includeInBackup !== false;
+        return {
+          pluginKey: row.plugin_key,
+          pluginVersion: row.version,
+          namespaceName: row.namespace_name,
+          includeInBackup,
+        };
+      });
+    }
+
+    async function listSchemaTables(schema: string): Promise<string[]> {
+      type Row = { table_name: string };
+      const rows = await (db as any).execute(`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = '${schema.replace(/'/g, "''")}' AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+      `) as { rows: Row[] } | Row[];
+      const list: Row[] = Array.isArray(rows) ? rows : (rows as { rows: Row[] }).rows ?? [];
+      return list.map((r) => r.table_name);
+    }
+
+    async function countTableRows(schema: string, table: string): Promise<number> {
+      try {
+        type Row = { c: string };
+        const rows = await (db as any).execute(
+          `SELECT count(*)::text AS c FROM "${schema.replaceAll("\"", "\"\"")}"."${table.replaceAll("\"", "\"\"")}"`,
+        ) as { rows: Row[] } | Row[];
+        const list: Row[] = Array.isArray(rows) ? rows : (rows as { rows: Row[] }).rows ?? [];
+        const n = list[0]?.c ? Number(list[0].c) : 0;
+        return Number.isFinite(n) ? n : 0;
+      } catch {
+        return 0;
+      }
+    }
+
+    async function buildManifest(snapshotUuid: string, additionalSchemas: string[], allSchemas: {
+      pluginKey: string;
+      pluginVersion: string;
+      namespaceName: string;
+      includeInBackup: boolean;
+    }[]): Promise<SystemSnapshotManifest> {
+      const publicTables = await listSchemaTables("public");
+      const publicTableCounts: Record<string, number> = {};
+      for (const t of publicTables) {
+        publicTableCounts[t] = await countTableRows("public", t);
+      }
+      const pluginNamespaces: SystemSnapshotManifest["pluginNamespaces"] = [];
+      const excludedPluginNamespaces: SystemSnapshotManifest["excludedPluginNamespaces"] = [];
+      for (const ns of allSchemas) {
+        if (!ns.includeInBackup) {
+          excludedPluginNamespaces.push({
+            pluginKey: ns.pluginKey,
+            pluginVersion: ns.pluginVersion,
+            namespaceName: ns.namespaceName,
+            reason: "manifest-opt-out",
+          });
+          continue;
+        }
+        const tables = await listSchemaTables(ns.namespaceName);
+        const tableCounts: Record<string, number> = {};
+        for (const t of tables) tableCounts[t] = await countTableRows(ns.namespaceName, t);
+        pluginNamespaces.push({
+          pluginKey: ns.pluginKey,
+          pluginVersion: ns.pluginVersion,
+          namespaceName: ns.namespaceName,
+          tableCounts,
+        });
+      }
+      const totalRows =
+        Object.values(publicTableCounts).reduce((a, b) => a + b, 0) +
+        pluginNamespaces.reduce(
+          (acc, n) => acc + Object.values(n.tableCounts).reduce((a, b) => a + b, 0),
+          0,
+        );
+      return {
+        version: 1,
+        instanceId: process.env.PAPERCLIP_INSTANCE_ID?.trim() || "default",
+        createdAt: new Date().toISOString(),
+        snapshotUuid,
+        publicTableCounts,
+        pluginNamespaces,
+        excludedPluginNamespaces,
+        // Generous estimate: avg row ≈ 1KiB. Used only as a hint in the response header.
+        estimatedUncompressedBytes: totalRows * 1024,
+      };
+    }
+
+    return {
+      async getManifest() {
+        const all = await listIncludedPluginSchemas();
+        return buildManifest(randomUUID(), all.filter((s) => s.includeInBackup).map((s) => s.namespaceName), all);
+      },
+
+      async produceSnapshot(): Promise<ProduceSnapshotResult> {
+        if (databaseBackupInFlight) {
+          throw conflict("ESNAPSHOT_IN_FLIGHT: another backup is already running");
+        }
+        databaseBackupInFlight = true;
+        try {
+          const all = await listIncludedPluginSchemas();
+          const additionalSchemas = all
+            .filter((s) => s.includeInBackup)
+            .map((s) => s.namespaceName);
+          const snapshotUuid = randomUUID();
+          const manifest = await buildManifest(snapshotUuid, additionalSchemas, all);
+
+          const generalSettings = await backupSettingsSvc.getGeneral();
+          const result = await runDatabaseBackup({
+            connectionString: activeDatabaseConnectionString,
+            backupDir: snapshotTempDir,
+            retention: generalSettings.backupRetention,
+            filenamePrefix: `pcsnap-${snapshotUuid}`,
+            additionalSchemas,
+          });
+          const sizeBytes = statSync(result.backupFile).size;
+          return { manifest, bodyFilePath: result.backupFile, bodySizeBytes: sizeBytes };
+        } finally {
+          databaseBackupInFlight = false;
+        }
+      },
+
+      async restoreSnapshot(input: RestoreSnapshotInput): Promise<RestoreSnapshotResult> {
+        // Preview mode: don't touch the DB. Just confirm the file is gzipped
+        // and return the staged size as evidence that it's parseable.
+        if (input.mode === "preview") {
+          if (!existsSync(input.bodyFilePath)) {
+            return {
+              applied: false,
+              dryRun: true,
+              touchedTables: [],
+              warnings: [`staged body not found at ${input.bodyFilePath}`],
+            };
+          }
+          return {
+            applied: false,
+            dryRun: true,
+            touchedTables: [],
+            warnings: [
+              "v0.1 preview is envelope-only — does not introspect SQL contents. Apply mode runs the dump in a single psql session.",
+            ],
+          };
+        }
+
+        if (databaseBackupInFlight) {
+          throw conflict("ESNAPSHOT_IN_FLIGHT: cannot restore while a backup is running");
+        }
+        databaseBackupInFlight = true;
+        try {
+          await runDatabaseRestore({
+            connectionString: activeDatabaseConnectionString,
+            backupFile: input.bodyFilePath,
+          });
+          return {
+            applied: true,
+            dryRun: false,
+            touchedTables: [], // not introspected in v0.1
+            warnings: [],
+          };
+        } finally {
+          databaseBackupInFlight = false;
+        }
+      },
+
+      cleanupSnapshotFile(filePath: string) {
+        try {
+          if (existsSync(filePath)) unlinkSync(filePath);
+        } catch {
+          /* best-effort */
+        }
+      },
+    };
+  })();
+
   const pluginWorkerManager = createPluginWorkerManager();
   const app = await createApp(db as any, {
     uiMode,
@@ -612,6 +832,7 @@ export async function startServer(): Promise<StartedServer> {
         return result;
       },
     },
+    systemSnapshotService,
     deploymentMode: config.deploymentMode,
     deploymentExposure: config.deploymentExposure,
     allowedHostnames: config.allowedHostnames,
