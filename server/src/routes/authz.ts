@@ -108,12 +108,17 @@ export function getActorInfo(req: Request) {
   // writes are attributable to a real `users.id` foreign key — there is no
   // agents row to point at, and the synthetic toolSessionId is not a key
   // into any audit-eligible table.
+  //
+  // runId is intentionally null: the JWT's run_id is the chat session's
+  // ephemeral run id, not a `heartbeat_runs.id`, and `activity_log.run_id`
+  // has an FK to that table. Pretending the chat run is a heartbeat run
+  // would 23503 every audited write.
   if (req.actor.type === "tool_session") {
     return {
       actorType: "user" as const,
       actorId: req.actor.userId ?? "tool_session",
       agentId: null,
-      runId: req.actor.runId ?? null,
+      runId: null,
     };
   }
 
