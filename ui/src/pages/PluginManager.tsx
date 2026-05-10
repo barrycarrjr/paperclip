@@ -90,6 +90,7 @@ export function PluginManager() {
   const [uninstallPluginId, setUninstallPluginId] = useState<string | null>(null);
   const [uninstallPluginName, setUninstallPluginName] = useState<string>("");
   const [errorDetailsPlugin, setErrorDetailsPlugin] = useState<PluginRecord | null>(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -283,6 +284,31 @@ export function PluginManager() {
     );
   }, [installedPlugins, libraryQuery.data]);
 
+  const updatableRows = useMemo(
+    () =>
+      unifiedRows.filter((row) => {
+        const installed = row.installedPlugin;
+        const lib = row.libraryEntry;
+        const installedVersion = installed?.manifestJson.version ?? installed?.version ?? null;
+        const libraryVersion = lib?.version ?? null;
+        return !!(installed && lib && installedVersion && libraryVersion && isVersionNewer(libraryVersion, installedVersion));
+      }),
+    [unifiedRows],
+  );
+
+  async function handleUpdateAll() {
+    if (bulkUpdating || updatableRows.length === 0) return;
+    setBulkUpdating(true);
+    for (const row of updatableRows) {
+      try {
+        await installFromLibraryMutation.mutateAsync(row.pluginKey);
+      } catch {
+        // individual onError toast already fired
+      }
+    }
+    setBulkUpdating(false);
+  }
+
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading plugins...</div>;
   if (error) return <div className="p-4 text-sm text-destructive">Failed to load plugins.</div>;
 
@@ -293,31 +319,45 @@ export function PluginManager() {
           <Puzzle className="h-6 w-6 text-muted-foreground" />
           <h1 className="text-xl font-semibold">Plugin Manager</h1>
         </div>
-        
-        <Dialog
-          open={installDialogOpen}
-          onOpenChange={(open) => {
-            setInstallDialogOpen(open);
-            if (!open) {
-              setInstallPackage("");
-              setInstallFile(null);
-              setInstallDragOver(false);
-            }
-          }}
-        >
-          <DialogTrigger asChild>
-            <Button size="sm" className="gap-2">
-              <Plus className="h-4 w-4" />
-              Install Plugin
+
+        <div className="flex items-center gap-2">
+          {updatableRows.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={handleUpdateAll}
+              disabled={bulkUpdating}
+            >
+              <RefreshCw className={cn("h-4 w-4", bulkUpdating && "animate-spin")} />
+              {bulkUpdating ? "Updating…" : `Update All (${updatableRows.length})`}
             </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Install Plugin</DialogTitle>
-              <DialogDescription>
-                Install from npm or upload a packed `.pcplugin` archive.
-              </DialogDescription>
-            </DialogHeader>
+          )}
+
+          <Dialog
+            open={installDialogOpen}
+            onOpenChange={(open) => {
+              setInstallDialogOpen(open);
+              if (!open) {
+                setInstallPackage("");
+                setInstallFile(null);
+                setInstallDragOver(false);
+              }
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button size="sm" className="gap-2">
+                <Plus className="h-4 w-4" />
+                Install Plugin
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Install Plugin</DialogTitle>
+                <DialogDescription>
+                  Install from npm or upload a packed `.pcplugin` archive.
+                </DialogDescription>
+              </DialogHeader>
 
             <div className="flex gap-1 rounded-md border p-1 text-xs">
               <button
@@ -445,6 +485,7 @@ export function PluginManager() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <section className="space-y-3">
@@ -536,15 +577,14 @@ export function PluginManager() {
                               installed.status === "ready" ? "bg-green-600 hover:bg-green-700" : "",
                             )}
                           >
-                            {installed.status}
+                            {installed.status === "ready"
+                              ? "Active"
+                              : installed.status === "upgrade_pending"
+                                ? "Upgrade pending"
+                                : installed.status}
                           </Badge>
                         ) : (
                           <Badge variant="secondary">Not installed</Badge>
-                        )}
-                        {upgradeAvailable && (
-                          <Badge variant="secondary">
-                            Update available (v{libraryVersion})
-                          </Badge>
                         )}
                         {!installed && !lib && (
                           <Badge variant="outline">Local only</Badge>
@@ -606,7 +646,7 @@ export function PluginManager() {
                             size="sm"
                             className="gap-2 bg-green-600 text-white hover:bg-green-700"
                             onClick={() => installFromLibraryMutation.mutate(row.pluginKey)}
-                            disabled={libraryInFlight}
+                            disabled={libraryInFlight || bulkUpdating}
                           >
                             <RefreshCw className={cn("h-4 w-4", libraryInFlight && "animate-spin")} />
                             {libraryInFlight ? "Updating…" : `Update to v${libraryVersion}`}
