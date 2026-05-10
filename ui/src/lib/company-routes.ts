@@ -33,7 +33,20 @@ const BOARD_ROUTE_ROOTS = new Set([
   "design-guide",
 ]);
 
-const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);
+const GLOBAL_ROUTE_ROOTS = new Set([
+  "auth",
+  "invite",
+  "board-claim",
+  "cli-auth",
+  "docs",
+  "instance",
+  // /clippy-popup is the pop-out drawer route registered at the top level
+  // (outside the :companyPrefix parent). Without listing it here,
+  // extractCompanyPrefixFromPath would mis-read "clippy-popup" as a company
+  // slug and our Link wrapper would prefix every relative link inside the
+  // popup with /CLIPPY-POPUP/ — e.g. /CLIPPY-POPUP/issues/IND-44.
+  "clippy-popup",
+]);
 
 export function normalizeCompanyPrefix(prefix: string): string {
   return prefix.trim().toUpperCase();

@@ -649,12 +649,14 @@ export function UnifiedInbox() {
                 item={item}
                 onDismiss={isReviewSender ? undefined : () => dismiss(item.id)}
                 onApprove={
-                  item.kind === "approval" || item.kind === "draft"
+                  (item.kind === "approval" || item.kind === "draft") &&
+                  ACTIONABLE_APPROVAL_STATUSES.has(item.status)
                     ? () => approveMutation.mutate(item.approvalId)
                     : undefined
                 }
                 onReject={
-                  item.kind === "approval" || item.kind === "draft"
+                  (item.kind === "approval" || item.kind === "draft") &&
+                  ACTIONABLE_APPROVAL_STATUSES.has(item.status)
                     ? () => rejectMutation.mutate(item.approvalId)
                     : undefined
                 }
@@ -735,6 +737,11 @@ function InboxItemRow({
   const tone = KIND_TONE[item.kind];
   const Icon = KIND_ICON[item.kind];
   const isReadIssue = item.kind === "issue" && !item.isUnread;
+  const chipLabel =
+    (item.kind === "approval" || item.kind === "draft") &&
+    !ACTIONABLE_APPROVAL_STATUSES.has(item.status)
+      ? item.status.charAt(0).toUpperCase() + item.status.slice(1)
+      : KIND_LABEL[item.kind];
   const accentClass = {
     amber: "bg-amber-500/55 group-hover:bg-amber-500/80",
     sky: "bg-sky-500/55 group-hover:bg-sky-500/80",
@@ -767,7 +774,7 @@ function InboxItemRow({
                 chipClass,
               )}
             >
-              {KIND_LABEL[item.kind]}
+              {chipLabel}
             </span>
             <span className={cn("truncate", isReadIssue ? "font-normal text-muted-foreground" : "font-medium")}>{item.title}</span>
             <span className="text-[11px] text-muted-foreground/70 shrink-0">

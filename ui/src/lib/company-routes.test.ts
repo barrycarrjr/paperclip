@@ -20,4 +20,11 @@ describe("company routes", () => {
       "/execution-workspaces/workspace-123",
     );
   });
+
+  it("does not mistake the /clippy-popup pop-out route for a company slug", () => {
+    expect(extractCompanyPrefixFromPath("/clippy-popup")).toBeNull();
+    // Once Link/NavLink resolution sees no active prefix in the URL, it must
+    // not prepend "CLIPPY-POPUP" to issue links rendered inside the popup.
+    expect(applyCompanyPrefix("/issues/IND-44", null)).toBe("/issues/IND-44");
+  });
 });

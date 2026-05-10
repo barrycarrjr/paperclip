@@ -9,7 +9,44 @@ const SECTION_HEADERS = {
   reviewQueue: "## Review queue",
 } as const;
 
-const REVIEW_LINE_RE = /^(\d+)\s+messages?\s+from\s+(.+?)\s*$/i;
+// Canonical line: "5 messages from foo@bar.com" (what the SKILL.md describes).
+const COUNTED_LINE_RE = /^(\d+)\s+messages?\s+from\s+(.+?)\s*$/i;
+
+// Extract the first sender token (full email, @domain, or `subject:` form)
+// from a line. Used as a fallback when agents write entries in a richer
+// "<sender> | <description> | <recommendation>" format that doesn't carry
+// an explicit count. Different per-company COOs have drifted into slightly
+// different formats; the parser tolerates both so the operator UI can
+// still render rows + Auto-triage / Keep / Dismiss buttons either way.
+const SENDER_TOKEN_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|subject:\s*[^|]+?)(?=\s*\||\s*$)/i;
+
+function stripBullet(line: string): string {
+  return line.replace(/^[-*+]\s+/, "");
+}
+
+function parseReviewLine(rawLine: string): ReviewQueueEntry | null {
+  const line = rawLine.trim();
+  if (!line) return null;
+  if (line.startsWith("<!--") || line.startsWith("-->") || line.startsWith("#")) return null;
+  if (line.startsWith("`<count>")) return null;
+
+  const stripped = stripBullet(line);
+  const counted = COUNTED_LINE_RE.exec(stripped);
+  if (counted) {
+    const count = Number.parseInt(counted[1], 10);
+    const senderRaw = counted[2].trim();
+    // Senders may still carry a trailing "| description | recommendation".
+    const sender = senderRaw.split("|")[0]!.trim();
+    if (Number.isFinite(count) && sender) return { count, sender };
+    return null;
+  }
+
+  const senderMatch = SENDER_TOKEN_RE.exec(stripped);
+  if (senderMatch) {
+    return { count: 1, sender: senderMatch[1]!.trim() };
+  }
+  return null;
+}
 
 function getSectionRange(body: string, header: string): { start: number; end: number } | null {
   const start = body.indexOf(header);
@@ -26,16 +63,8 @@ export function parseReviewQueue(body: string): ReviewQueueEntry[] {
   const section = body.slice(range.start, range.end);
   const entries: ReviewQueueEntry[] = [];
   for (const rawLine of section.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    if (line.startsWith("<!--") || line.startsWith("-->") || line.startsWith("#")) continue;
-    if (line.startsWith("`<count>")) continue;
-    const m = REVIEW_LINE_RE.exec(line);
-    if (!m) continue;
-    const count = Number.parseInt(m[1], 10);
-    const sender = m[2].trim();
-    if (!Number.isFinite(count) || !sender) continue;
-    entries.push({ count, sender });
+    const entry = parseReviewLine(rawLine);
+    if (entry) entries.push(entry);
   }
   return entries.sort((a, b) => b.count - a.count);
 }
@@ -51,9 +80,9 @@ function removeFromReviewQueue(body: string, sender: string): string {
   const filtered = section
     .split("\n")
     .filter((line) => {
-      const m = REVIEW_LINE_RE.exec(line.trim());
-      if (!m) return true;
-      return m[2].trim().toLowerCase() !== trimmed.toLowerCase();
+      const entry = parseReviewLine(line);
+      if (!entry) return true;
+      return entry.sender.toLowerCase() !== trimmed.toLowerCase();
     })
     .join("\n");
   return before + filtered + tail;
