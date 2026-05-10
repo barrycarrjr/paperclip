@@ -14,6 +14,8 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Populate `actor.isPortfolioRootAgent` / `actor.isPortfolioRootUserAdmin`
  * from already-loaded actor data. The HQ company id is cached in process,
@@ -161,6 +163,16 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (!key) {
       const claims = verifyLocalAgentJwt(token);
       if (!claims) {
+        next();
+        return;
+      }
+
+      // The agents.id column is uuid-typed, so a non-UUID sub (e.g. the
+      // synthetic `clippy-<sessionId>` sub minted for chat sessions in
+      // chat-providers.ts) crashes the query with `invalid input syntax
+      // for type uuid` and turns every request into a 500. Treat it as
+      // an unknown agent and fall through to unauthenticated.
+      if (!UUID_PATTERN.test(claims.sub)) {
         next();
         return;
       }
