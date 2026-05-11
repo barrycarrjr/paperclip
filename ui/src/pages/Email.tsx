@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mail,
+  MailOpen,
   ChevronRight,
   Inbox,
   FolderOpen,
@@ -312,6 +313,23 @@ export function Email() {
     },
   });
 
+  const markReadMutation = useMutation({
+    mutationFn: async (msg: MailHeader) => {
+      optimisticallyRemove(msg.uid);
+      await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+    },
+    onSuccess: (_, msg) => {
+      showToast(`Marked read: ${msg.subject || "(no subject)"}`);
+    },
+    onError: (_err, msg) => {
+      setOptimisticallyRemovedUids((prev) => {
+        const next = new Set(prev);
+        next.delete(msg.uid);
+        return next;
+      });
+    },
+  });
+
   const moveToFolderMutation = useMutation({
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
       optimisticallyRemove(msg.uid);
@@ -545,12 +563,29 @@ export function Email() {
       dismissMutation.isPending && dismissMutation.variables?.uid === msg.uid;
     const isMovePending =
       moveToFolderMutation.isPending && moveToFolderMutation.variables?.msg.uid === msg.uid;
+    const isMarkReadPending =
+      markReadMutation.isPending && markReadMutation.variables?.uid === msg.uid;
 
     return (
       <div
         className="flex items-center gap-0.5 shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Mark as read"
+          disabled={isMarkReadPending}
+          onClick={() => markReadMutation.mutate(msg)}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          {isMarkReadPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <MailOpen className="h-3.5 w-3.5" />
+          )}
+        </Button>
+
         <Button
           size="icon-sm"
           variant="ghost"
@@ -753,6 +788,21 @@ export function Email() {
               <>
                 {/* Action bar */}
                 <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border flex-wrap">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { if (selectedMsg) markReadMutation.mutate(selectedMsg); }}
+                    disabled={markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid}
+                    title="Mark this message as read"
+                  >
+                    {markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <MailOpen className="h-3.5 w-3.5" />
+                    )}
+                    Mark read
+                  </Button>
+
                   <Button
                     size="sm"
                     variant="default"
