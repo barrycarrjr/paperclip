@@ -31,8 +31,6 @@ import { cn, formatCents } from "../lib/utils";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import {
   dismissReviewSender,
-  graduateSender,
-  keepAlwaysSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -320,17 +318,19 @@ export function PortfolioBrief() {
 
   const graduateMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      // DB is the source of truth for sender rules. Markdown is dual-written
-      // until the COO/triage agent migrates to read rules from the DB.
+      // DB is the source of truth for sender rules. The Markdown's rule
+      // sections are no longer written — the agent reads rules from the DB
+      // via email_list_rules. We still remove the row from the Markdown's
+      // Review queue section so it doesn't keep appearing.
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "auto-triage");
-      await applyReviewTransform(row, graduateSender);
+      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
   const keepMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
-      await applyReviewTransform(row, keepAlwaysSender);
+      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });

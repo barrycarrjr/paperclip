@@ -41,10 +41,7 @@ import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
-import {
-  graduateSender,
-  keepAlwaysSender,
-} from "../lib/email-triage-rules";
+import { dismissReviewSender } from "../lib/email-triage-rules";
 import type { IssueDocument } from "@paperclipai/shared";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
@@ -203,6 +200,26 @@ export function Email() {
     });
   }
 
+  // Mark-read / Reply / Hand-off all imply "this sender matters" — if they
+  // didn't, the operator would have auto-triaged. Auto-add a keep-always
+  // rule, but only when the sender isn't already classified (don't flip
+  // an existing auto-triage rule into keep-always).
+  async function maybeAddImplicitKeepAlways(msg: MailHeader): Promise<void> {
+    if (!emailApi || !selectedMailbox) return;
+    if (
+      senderMatchesPattern(msg, autoTriageSet) ||
+      senderMatchesPattern(msg, keepAlwaysSet)
+    ) {
+      return;
+    }
+    const sender = extractSender(msg);
+    try {
+      await emailApi.setRule(selectedMailbox, sender, "keep-always");
+    } catch {
+      // Best-effort — don't block the primary action on rule write.
+    }
+  }
+
   // ── Full message body ─────────────────────────────────────────────────────
 
   const { data: fullMessage, isLoading: messageLoading } = useQuery({
@@ -296,7 +313,7 @@ export function Email() {
       const sender = extractSender(msg);
       // DB is the source of truth; Markdown doc is dual-written for legacy routines.
       await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
-      await applyRulesTransform(sender, graduateSender);
+      await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: (_, msg) => {
       invalidateRules();
@@ -319,7 +336,7 @@ export function Email() {
       // Records the rule; the email itself stays unread in INBOX so it still
       // shows up as needing action (reply / handoff / move) on next refresh.
       await emailApi!.setRule(selectedMailbox!, sender, "keep-always");
-      await applyRulesTransform(sender, keepAlwaysSender);
+      await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: (_, msg) => {
       invalidateRules();
@@ -338,8 +355,10 @@ export function Email() {
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
       await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+      await maybeAddImplicitKeepAlways(msg);
     },
     onSuccess: (_, msg) => {
+      invalidateRules();
       showToast(`Marked read: ${msg.subject || "(no subject)"}`);
     },
     onError: (_err, msg) => {
@@ -392,10 +411,15 @@ export function Email() {
       });
       // Issue tracks it now — mark read so it leaves the unread view.
       try { await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder); } catch {}
+      // Hand off implies the sender matters enough to involve an agent —
+      // promote to keep-always so future mail from them isn't auto-triaged.
+      const header = messages.find((m) => m.uid === msg.uid);
+      if (header) await maybeAddImplicitKeepAlways(header);
       return { issueId: issue.id, alreadyExisted: false, uid: msg.uid };
     },
     onSuccess: ({ issueId, uid }) => {
       optimisticallyRemove(uid);
+      invalidateRules();
       setHandoffDialogOpen(false);
       showToast("Handed off — issue created", issueId);
     },
@@ -407,9 +431,12 @@ export function Email() {
       // Replied = taken care of. Mark read so it disappears from the unread view
       // (both here and in Outlook).
       try { await emailApi!.markRead(selectedMailbox!, uid, selectedFolder); } catch {}
+      const msg = messages.find((m) => m.uid === uid);
+      if (msg) await maybeAddImplicitKeepAlways(msg);
     },
     onSuccess: (_, { uid }) => {
       optimisticallyRemove(uid);
+      invalidateRules();
       setReplyOpen(false);
       setReplyBody("");
       showToast("Reply sent");

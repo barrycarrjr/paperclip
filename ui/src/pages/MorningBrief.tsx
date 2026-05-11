@@ -49,8 +49,6 @@ import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import {
   dismissReviewSender,
-  graduateSender,
-  keepAlwaysSender,
   parseReviewQueue,
   type ReviewQueueEntry,
 } from "../lib/email-triage-rules";
@@ -241,17 +239,19 @@ export function MorningBrief() {
 
   const graduateMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      // DB is the source of truth for sender rules. Markdown is dual-written
-      // until the COO/triage agent migrates to read rules from the DB.
+      // DB is the source of truth for sender rules. The Markdown's rule
+      // sections are no longer written — the agent reads rules from the DB
+      // via email_list_rules. We still remove the row from the Markdown's
+      // Review queue section so it doesn't keep appearing.
       if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "auto-triage");
-      await applyReviewTransform(row, graduateSender);
+      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
   const keepMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "keep-always");
-      await applyReviewTransform(row, keepAlwaysSender);
+      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });

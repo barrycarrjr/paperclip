@@ -31,8 +31,6 @@ import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import {
   dismissReviewSender,
-  graduateSender,
-  keepAlwaysSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -525,17 +523,19 @@ export function UnifiedInbox() {
 
   const graduateMutation = useMutation({
     mutationFn: async (item: EmailReviewSenderItem) => {
-      // DB is the source of truth for sender rules. Markdown is dual-written
-      // until the COO/triage agent migrates to read rules from the DB.
+      // DB is the source of truth for sender rules. The Markdown's rule
+      // sections are no longer written — the agent reads rules from the DB
+      // via email_list_rules. We still remove the row from the Markdown's
+      // Review queue section so it doesn't keep appearing.
       if (emailApi) await emailApi.setRule(item.mailbox, item.sender, "auto-triage");
-      await applyReviewSenderTransform(item, graduateSender);
+      await applyReviewSenderTransform(item, dismissReviewSender);
     },
     ...reviewSenderMutationOptions,
   });
   const keepMutation = useMutation({
     mutationFn: async (item: EmailReviewSenderItem) => {
       if (emailApi) await emailApi.setRule(item.mailbox, item.sender, "keep-always");
-      await applyReviewSenderTransform(item, keepAlwaysSender);
+      await applyReviewSenderTransform(item, dismissReviewSender);
     },
     ...reviewSenderMutationOptions,
   });
