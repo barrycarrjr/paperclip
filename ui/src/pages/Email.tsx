@@ -82,6 +82,7 @@ export function Email() {
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
+  const [handoffNote, setHandoffNote] = useState("");
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
@@ -386,7 +387,15 @@ export function Email() {
   });
 
   const handoffMutation = useMutation({
-    mutationFn: async ({ msg, agentId }: { msg: ParsedEmailMessage; agentId: string }) => {
+    mutationFn: async ({
+      msg,
+      agentId,
+      note,
+    }: {
+      msg: ParsedEmailMessage;
+      agentId: string;
+      note: string;
+    }) => {
       const originId = msg.messageId ? `message-id:${msg.messageId}` : null;
       if (originId) {
         const existing = await issuesApi.list(selectedCompanyId!, {
@@ -398,8 +407,12 @@ export function Email() {
           return { issueId: existing[0]!.id, alreadyExisted: true, uid: msg.uid };
         }
       }
+      const trimmedNote = note.trim();
+      const noteBlock = trimmedNote
+        ? `## Operator note\n\n${trimmedNote}\n\n---\n\n`
+        : "";
       const body =
-        `${msg.markdown || msg.text || "(no body)"}\n\n---\n` +
+        `${noteBlock}${msg.markdown || msg.text || "(no body)"}\n\n---\n` +
         `**From:** ${msg.from}\n` +
         `**Subject:** ${msg.subject}\n` +
         `**Date:** ${msg.date}`;
@@ -421,6 +434,8 @@ export function Email() {
       optimisticallyRemove(uid);
       invalidateRules();
       setHandoffDialogOpen(false);
+      setHandoffNote("");
+      setHandoffAgentId(null);
       showToast("Handed off — issue created", issueId);
     },
   });
@@ -1135,7 +1150,16 @@ export function Email() {
       </Dialog>
 
       {/* ── Hand off to agent dialog ──────────────────────────────────────── */}
-      <Dialog open={handoffDialogOpen} onOpenChange={setHandoffDialogOpen}>
+      <Dialog
+        open={handoffDialogOpen}
+        onOpenChange={(open) => {
+          setHandoffDialogOpen(open);
+          if (!open) {
+            setHandoffNote("");
+            setHandoffAgentId(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Hand off to agent</DialogTitle>
@@ -1145,7 +1169,7 @@ export function Email() {
               A Paperclip issue will be created with this email as context and assigned to the
               selected agent.
             </p>
-            <div className="space-y-1 max-h-60 overflow-y-auto">
+            <div className="space-y-1 max-h-48 overflow-y-auto">
               {activeAgents.length === 0 ? (
                 <div className="text-sm text-muted-foreground px-2">No agents found.</div>
               ) : (
@@ -1165,6 +1189,17 @@ export function Email() {
                 ))
               )}
             </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground block">
+                Note for agent (optional)
+              </label>
+              <Textarea
+                value={handoffNote}
+                onChange={(e) => setHandoffNote(e.target.value)}
+                placeholder="e.g. This notice came to my personal email but it's for B2 Industries — please handle accordingly."
+                className="min-h-[80px] text-sm resize-none"
+              />
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setHandoffDialogOpen(false)}>
@@ -1174,7 +1209,11 @@ export function Email() {
               disabled={!handoffAgentId || handoffMutation.isPending}
               onClick={() => {
                 if (handoffMessage && handoffAgentId) {
-                  handoffMutation.mutate({ msg: handoffMessage, agentId: handoffAgentId });
+                  handoffMutation.mutate({
+                    msg: handoffMessage,
+                    agentId: handoffAgentId,
+                    note: handoffNote,
+                  });
                 }
               }}
             >
