@@ -4,6 +4,7 @@ import {
   CircleDot,
   Target,
   DollarSign,
+  Mail,
   Search,
   SquarePen,
   Network,
@@ -25,6 +26,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -59,6 +61,7 @@ export function Sidebar() {
     (a) => a.status !== "terminated",
   ).length;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
+  const { hasMailboxForCompany: showEmailNav } = useEmailToolsPlugin(selectedCompanyId);
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -160,6 +163,14 @@ export function Sidebar() {
             icon={MessageSquare}
             info="Talk to Clippy — Paperclip's in-app assistant. Switch to Agent mode to let it run tools and make changes for you."
           />
+          {showEmailNav && (
+            <SidebarNavItem
+              to="/email"
+              label="Email"
+              icon={Mail}
+              info="View and triage your inbox. Triage actions move mail immediately and update your rules so future messages follow automatically."
+            />
+          )}
         </div>
 
         <SidebarSection

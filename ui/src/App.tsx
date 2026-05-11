@@ -26,6 +26,7 @@ import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
 import { MorningBrief } from "./pages/MorningBrief";
+import { Email } from "./pages/Email";
 import { Receipts } from "./pages/Receipts";
 import { Inbox } from "./pages/Inbox";
 import { CompanySettings } from "./pages/CompanySettings";
@@ -145,6 +146,7 @@ function boardRoutes() {
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="brief" element={<MorningBrief />} />
+      <Route path="email" element={<Email />} />
       <Route path="receipts" element={<Receipts />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/mine" element={<Inbox />} />
