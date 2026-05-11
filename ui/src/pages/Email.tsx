@@ -400,14 +400,14 @@ export function Email() {
       const noteBlock = trimmedNote
         ? `## Operator note\n\n${trimmedNote}\n\n---\n\n`
         : "";
-      const body =
+      const description =
         `${noteBlock}${msg.markdown || msg.text || "(no body)"}\n\n---\n` +
         `**From:** ${msg.from}\n` +
         `**Subject:** ${msg.subject}\n` +
         `**Date:** ${msg.date}`;
       const issue = await issuesApi.create(selectedCompanyId!, {
         title: `Email from ${msg.from}: ${msg.subject}`.slice(0, 200),
-        body,
+        description,
         assigneeAgentId: agentId,
       });
       // Wake the agent so it actually picks the issue up. Creating the issue
