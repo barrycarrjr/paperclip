@@ -166,6 +166,44 @@ export function Email() {
     setReplyOpen(false);
   }, [selectedMailbox, selectedFolder]);
 
+  // ── Sender rules (used to highlight per-row action icons) ─────────────────
+
+  const { data: rulesData } = useQuery({
+    queryKey: ["email", pluginId, selectedCompanyId, selectedMailbox, "rules"],
+    queryFn: () => emailApi!.listRules(selectedMailbox!),
+    enabled: !!emailApi && !!selectedMailbox,
+    staleTime: 60_000,
+  });
+
+  const { autoTriageSet, keepAlwaysSet } = useMemo(() => {
+    const auto = new Set<string>();
+    const keep = new Set<string>();
+    for (const r of rulesData?.rules ?? []) {
+      const p = r.senderPattern.toLowerCase();
+      if (r.ruleType === "auto-triage") auto.add(p);
+      else if (r.ruleType === "keep-always") keep.add(p);
+    }
+    return { autoTriageSet: auto, keepAlwaysSet: keep };
+  }, [rulesData]);
+
+  function senderMatchesPattern(msg: MailHeader, patterns: Set<string>): boolean {
+    if (patterns.size === 0) return false;
+    const sender = extractSender(msg).toLowerCase();
+    if (patterns.has(sender)) return true;
+    const at = sender.indexOf("@");
+    if (at >= 0) {
+      const domain = `@${sender.slice(at + 1)}`;
+      if (patterns.has(domain)) return true;
+    }
+    return false;
+  }
+
+  function invalidateRules() {
+    queryClient.invalidateQueries({
+      queryKey: ["email", pluginId, selectedCompanyId, selectedMailbox, "rules"],
+    });
+  }
+
   // ── Full message body ─────────────────────────────────────────────────────
 
   const { data: fullMessage, isLoading: messageLoading } = useQuery({
@@ -262,6 +300,7 @@ export function Email() {
       await applyRulesTransform(sender, graduateSender);
     },
     onSuccess: (_, msg) => {
+      invalidateRules();
       showToast(`Auto-triaged: ${extractSender(msg)}`);
     },
     onError: (_err, msg) => {
@@ -284,6 +323,7 @@ export function Email() {
       await applyRulesTransform(sender, keepAlwaysSender);
     },
     onSuccess: (_, msg) => {
+      invalidateRules();
       showToast(`Keep always: ${extractSender(msg)}`);
     },
     onError: (_err, msg) => {
@@ -565,6 +605,8 @@ export function Email() {
       moveToFolderMutation.isPending && moveToFolderMutation.variables?.msg.uid === msg.uid;
     const isMarkReadPending =
       markReadMutation.isPending && markReadMutation.variables?.uid === msg.uid;
+    const hasAutoTriageRule = senderMatchesPattern(msg, autoTriageSet);
+    const hasKeepAlwaysRule = senderMatchesPattern(msg, keepAlwaysSet);
 
     return (
       <div
@@ -589,30 +631,44 @@ export function Email() {
         <Button
           size="icon-sm"
           variant="ghost"
-          title="Auto-triage"
+          title={hasAutoTriageRule ? "Auto-triage (rule active for this sender)" : "Auto-triage"}
           disabled={isAutoTriagePending}
           onClick={() => autoTriageMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-foreground"
+          className={cn(
+            hasAutoTriageRule
+              ? "text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
         >
           {isAutoTriagePending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Archive className="h-3.5 w-3.5" />
+            <Archive
+              className={cn("h-3.5 w-3.5", hasAutoTriageRule && "fill-current")}
+              strokeWidth={hasAutoTriageRule ? 2.5 : 2}
+            />
           )}
         </Button>
 
         <Button
           size="icon-sm"
           variant="ghost"
-          title="Keep always"
+          title={hasKeepAlwaysRule ? "Keep always (rule active for this sender)" : "Keep always"}
           disabled={isKeepPending}
           onClick={() => keepAlwaysMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-foreground"
+          className={cn(
+            hasKeepAlwaysRule
+              ? "text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
         >
           {isKeepPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Check className="h-3.5 w-3.5" />
+            <Check
+              className="h-3.5 w-3.5"
+              strokeWidth={hasKeepAlwaysRule ? 3.5 : 2}
+            />
           )}
         </Button>
 
@@ -808,12 +864,22 @@ export function Email() {
                     variant="default"
                     onClick={() => { if (selectedMsg) autoTriageMutation.mutate(selectedMsg); }}
                     disabled={autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid}
-                    title={`Move to ${TRIAGE_FOLDER} and add sender to auto-triage rules`}
+                    title={
+                      selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet)
+                        ? `Rule active — already auto-triages this sender`
+                        : `Move to ${TRIAGE_FOLDER} and add sender to auto-triage rules`
+                    }
                   >
                     {autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Archive className="h-3.5 w-3.5" />
+                      <Archive
+                        className={cn(
+                          "h-3.5 w-3.5",
+                          selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) && "fill-current",
+                        )}
+                        strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) ? 2.5 : 2}
+                      />
                     )}
                     Auto-triage
                   </Button>
@@ -823,12 +889,19 @@ export function Email() {
                     variant="outline"
                     onClick={() => { if (selectedMsg) keepAlwaysMutation.mutate(selectedMsg); }}
                     disabled={keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid}
-                    title="Add sender to Keep-always rule (no IMAP action)"
+                    title={
+                      selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet)
+                        ? `Rule active — sender is on the keep-always list`
+                        : "Add sender to Keep-always rule (no IMAP action)"
+                    }
                   >
                     {keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Check className="h-3.5 w-3.5" />
+                      <Check
+                        className="h-3.5 w-3.5"
+                        strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet) ? 3.5 : 2}
+                      />
                     )}
                     Keep always
                   </Button>
