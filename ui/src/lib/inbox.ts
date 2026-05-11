@@ -1066,7 +1066,7 @@ export function computeInboxBadgeData({
   const visibleMineIssues = mineIssues.filter(
     (issue) =>
       issue.isUnreadForMe &&
-      !isInboxEntityDismissed(dismissedAtByKey, `issue:${issue.id}`, issue.updatedAt),
+      !isInboxEntityDismissed(dismissedAtByKey, `issue:${issue.id}`, new Date(issueLastActivityTimestamp(issue))),
   ).length;
   const agentErrorCount = dashboard?.agents.error ?? 0;
   const monthBudgetCents = dashboard?.costs.monthBudgetCents ?? 0;

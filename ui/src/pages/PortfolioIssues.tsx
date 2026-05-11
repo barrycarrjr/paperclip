@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, Check } from "lucide-react";
-import type { Company, Issue, IssuePriority, IssueStatus } from "@paperclipai/shared";
+import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight, Plus, Check, Tag } from "lucide-react";
+import type { Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
 import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
 import { useCompany } from "../context/CompanyContext";
@@ -265,6 +265,10 @@ interface BulkActionsBarProps {
   setCommentText: (text: string) => void;
   onSubmitComment: () => void;
   isPending: boolean;
+  labelsByCompanyId: Map<string, IssueLabel[]>;
+  companies: Company[];
+  selectedIssues: Issue[];
+  onToggleLabel: (labelId: string, companyId: string) => void;
 }
 
 function BulkActionsBar({
@@ -278,7 +282,39 @@ function BulkActionsBar({
   setCommentText,
   onSubmitComment,
   isPending,
+  labelsByCompanyId,
+  companies,
+  selectedIssues,
+  onToggleLabel,
 }: BulkActionsBarProps) {
+  const [labelOpen, setLabelOpen] = useState(false);
+
+  const labelRows = useMemo(() => {
+    const rows: Array<{ label: IssueLabel; company: Company; state: "all" | "some" | "none" }> = [];
+    for (const company of companies) {
+      const labels = labelsByCompanyId.get(company.id);
+      if (!labels || labels.length === 0) continue;
+      const companyIssues = selectedIssues.filter((i) => i.companyId === company.id);
+      if (companyIssues.length === 0) continue;
+      for (const label of labels) {
+        const withLabel = companyIssues.filter((i) => (i.labelIds ?? []).includes(label.id));
+        const state =
+          withLabel.length === companyIssues.length
+            ? "all"
+            : withLabel.length > 0
+              ? "some"
+              : "none";
+        rows.push({ label, company, state });
+      }
+    }
+    return rows;
+  }, [labelsByCompanyId, companies, selectedIssues]);
+
+  const multiCompany = useMemo(() => {
+    const ids = new Set(labelRows.map((r) => r.company.id));
+    return ids.size > 1;
+  }, [labelRows]);
+
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5">
       <span className="text-sm font-medium text-muted-foreground mr-1">
@@ -300,6 +336,54 @@ function BulkActionsBar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Popover open={labelOpen} onOpenChange={setLabelOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+            <Tag className="h-3 w-3 opacity-70" />
+            Add Label
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="center" side="top" className="w-56 mb-1 p-1">
+          {labelRows.length === 0 ? (
+            <p className="text-xs text-muted-foreground px-2 py-1.5">No labels found</p>
+          ) : (
+            <div className="flex flex-col">
+              {(() => {
+                const elements: React.ReactNode[] = [];
+                let lastCompanyId: string | null = null;
+                for (const { label, company, state } of labelRows) {
+                  if (multiCompany && company.id !== lastCompanyId) {
+                    lastCompanyId = company.id;
+                    elements.push(
+                      <p key={`hdr-${company.id}`} className="text-[10px] font-medium text-muted-foreground px-2 pt-2 pb-0.5 first:pt-1">
+                        {company.name}
+                      </p>,
+                    );
+                  }
+                  elements.push(
+                    <button
+                      key={label.id}
+                      type="button"
+                      className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-sm hover:bg-accent text-left"
+                      onClick={() => onToggleLabel(label.id, company.id)}
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: label.color }}
+                      />
+                      <span className="flex-1 truncate">{label.name}</span>
+                      {state === "all" && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                      {state === "some" && <span className="h-1.5 w-1.5 rounded-full bg-primary/50 shrink-0" />}
+                    </button>,
+                  );
+                }
+                return elements;
+              })()}
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
 
       <Popover open={commentOpen} onOpenChange={setCommentOpen}>
         <PopoverTrigger asChild>
@@ -409,6 +493,42 @@ export function PortfolioIssues() {
     return map;
   }, [issues, companies]);
 
+  const issueById = useMemo(() => {
+    const map = new Map<string, Issue>();
+    for (const issue of issues) map.set(issue.id, issue);
+    return map;
+  }, [issues]);
+
+  const selectedCompanyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of selectedIds) {
+      const issue = issueById.get(id);
+      if (issue) ids.add(issue.companyId);
+    }
+    return [...ids];
+  }, [selectedIds, issueById]);
+
+  const labelQueries = useQueries({
+    queries: selectedCompanyIds.map((companyId) => ({
+      queryKey: ["labels", companyId],
+      queryFn: () => issuesApi.listLabels(companyId),
+    })),
+  });
+
+  const labelsByCompanyId = useMemo(() => {
+    const map = new Map<string, IssueLabel[]>();
+    for (let i = 0; i < selectedCompanyIds.length; i++) {
+      const data = labelQueries[i]?.data;
+      if (data) map.set(selectedCompanyIds[i], data);
+    }
+    return map;
+  }, [selectedCompanyIds, labelQueries]);
+
+  const selectedIssues = useMemo(
+    () => [...selectedIds].map((id) => issueById.get(id)).filter((i): i is Issue => !!i),
+    [selectedIds, issueById],
+  );
+
   const updateMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
       issuesApi.update(id, { status }),
@@ -475,6 +595,23 @@ export function PortfolioIssues() {
     setSelectedIds(new Set());
     setCommentText("");
     setCommentOpen(false);
+  }
+
+  async function handleBulkToggleLabel(labelId: string, labelCompanyId: string) {
+    const companyIssues = selectedIssues.filter((i) => i.companyId === labelCompanyId);
+    const allHave = companyIssues.every((i) => (i.labelIds ?? []).includes(labelId));
+    await Promise.all(
+      companyIssues.map((issue) => {
+        const current = issue.labelIds ?? [];
+        const next = allHave
+          ? current.filter((l) => l !== labelId)
+          : current.includes(labelId)
+            ? current
+            : [...current, labelId];
+        return issuesApi.update(issue.id, { labelIds: next });
+      }),
+    );
+    queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
   }
 
   function handleNewIssue(companyId: string) {
@@ -570,6 +707,10 @@ export function PortfolioIssues() {
           setCommentText={setCommentText}
           onSubmitComment={handleBulkComment}
           isPending={commentMutation.isPending}
+          labelsByCompanyId={labelsByCompanyId}
+          companies={companies}
+          selectedIssues={selectedIssues}
+          onToggleLabel={handleBulkToggleLabel}
         />
       )}
     </div>

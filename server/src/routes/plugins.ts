@@ -1098,6 +1098,9 @@ export function pluginRoutes(
     capabilities?: string[];
     fileName?: string;
     sizeBytes?: number;
+    // Placeholder entries surface plugin ideas in the manager UI without a
+    // packed .pcplugin asset. Install attempts are rejected server-side.
+    comingSoon?: boolean;
   }
 
   interface GitHubReleaseAsset {
@@ -1250,6 +1253,12 @@ export function pluginRoutes(
     const entry = library.plugins.find((p) => p.id === id);
     if (!entry) {
       res.status(404).json({ error: `Plugin "${id}" not found in library ${library.repo}.` });
+      return;
+    }
+    if (entry.comingSoon) {
+      res.status(400).json({
+        error: `Plugin "${id}" is marked Coming Soon and is not yet available to install.`,
+      });
       return;
     }
     if (!entry.downloadUrl) {

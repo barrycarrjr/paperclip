@@ -39,6 +39,7 @@ import {
   ACTIONABLE_APPROVAL_STATUSES,
   getLatestFailedRunsByAgent,
   getRecentTouchedIssues,
+  isInboxEntityDismissed,
   issueLastActivityTimestamp,
 } from "../lib/inbox";
 import { isUnifiedInboxEnabled, setUnifiedInboxEnabled } from "../lib/unified-inbox-flag";
@@ -72,6 +73,7 @@ interface BaseItem {
   id: string;
   kind: ItemKind;
   createdAt: string;
+  activityAt: string;
   title: string;
   subtitle?: string;
   meta?: string;
@@ -300,6 +302,7 @@ export function UnifiedInbox() {
         id: `approval:${a.id}`,
         kind: isDraft ? "draft" : "approval",
         createdAt: String(a.createdAt),
+        activityAt: String(a.updatedAt ?? a.createdAt),
         title: approvalShortTitle(a, isDraft),
         subtitle: summary || undefined,
         meta: a.status !== "pending" ? a.status : a.requestedByAgentId ? "from agent" : undefined,
@@ -319,6 +322,7 @@ export function UnifiedInbox() {
           id: `email_review_sender:${bundle.issueId}::${entry.sender}`,
           kind: "email_review_sender",
           createdAt: new Date().toISOString(),
+          activityAt: new Date().toISOString(),
           title: entry.sender,
           subtitle: `${entry.count} message${entry.count === 1 ? "" : "s"} from this sender · ${bundle.mailbox} mailbox`,
           meta: `${bundle.mailbox} mailbox`,
@@ -354,6 +358,7 @@ export function UnifiedInbox() {
         id: `run:${run.id}`,
         kind: "failed_run",
         createdAt: String(run.createdAt),
+        activityAt: String(run.createdAt),
         title: triggerLabel
           ? `${triggerLabel} — run failed`
           : `Run ${run.id.slice(0, 8)} ${run.status === "timed_out" ? "timed out" : "failed"}`,
@@ -375,6 +380,7 @@ export function UnifiedInbox() {
         id: `join:${jr.id}`,
         kind: "join_request",
         createdAt: String(jr.createdAt),
+        activityAt: String(jr.updatedAt ?? jr.createdAt),
         title: subject,
         subtitle: jr.requestType === "agent" ? "Agent requesting access" : "Person requesting access",
         rankWeight: 85,
@@ -390,6 +396,7 @@ export function UnifiedInbox() {
         id: `issue:${issue.id}`,
         kind: "issue",
         createdAt: new Date(issueLastActivityTimestamp(issue)).toISOString(),
+        activityAt: new Date(issueLastActivityTimestamp(issue)).toISOString(),
         title: issue.title,
         subtitle: issueSubtitle(issue),
         meta: issue.identifier ?? undefined,
@@ -401,7 +408,7 @@ export function UnifiedInbox() {
     }
 
     return out
-      .filter((it) => !dismissedAtByKey.has(it.id))
+      .filter((it) => !isInboxEntityDismissed(dismissedAtByKey, it.id, it.activityAt))
       .sort((a, b) => {
         if (b.rankWeight !== a.rankWeight) return b.rankWeight - a.rankWeight;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();

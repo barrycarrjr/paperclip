@@ -152,6 +152,11 @@ export interface PluginLibraryEntry {
   capabilities?: string[];
   fileName?: string;
   sizeBytes?: number;
+  /**
+   * Placeholder entry for a plugin idea that isn't shipped yet. The Plugin
+   * Manager renders these with a "Coming soon" badge and no Install action.
+   */
+  comingSoon?: boolean;
   /** Direct URL to the .pcplugin asset on the GitHub release. */
   downloadUrl: string;
   /** True when a plugin with this id is currently installed (any version). */

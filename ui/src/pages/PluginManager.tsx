@@ -556,7 +556,7 @@ export function PluginManager() {
                         {installedVersion && (
                           <Badge variant="outline">v{installedVersion}</Badge>
                         )}
-                        {!installed && libraryVersion && (
+                        {!installed && libraryVersion && !lib?.comingSoon && (
                           <Badge variant="outline">v{libraryVersion}</Badge>
                         )}
                         {installed && installed.packageName &&
@@ -582,6 +582,13 @@ export function PluginManager() {
                               : installed.status === "upgrade_pending"
                                 ? "Upgrade pending"
                                 : installed.status}
+                          </Badge>
+                        ) : lib?.comingSoon ? (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          >
+                            Coming soon
                           </Badge>
                         ) : (
                           <Badge variant="secondary">Not installed</Badge>
@@ -630,7 +637,7 @@ export function PluginManager() {
                     </div>
                     <div className="flex shrink-0 self-center flex-col items-end gap-2">
                       <div className="flex items-center gap-2">
-                        {!installed && lib && (
+                        {!installed && lib && !lib.comingSoon && (
                           <Button
                             size="sm"
                             className="gap-2 bg-green-600 text-white hover:bg-green-700"
