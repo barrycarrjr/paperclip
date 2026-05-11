@@ -75,40 +75,136 @@ const OUTCOME_TABLE: Record<
 };
 
 /**
- * Actions that exist in the activity log but are pure machinery (heartbeats,
- * checkouts, runtime sessions, cost ticks). The Receipt feed and Morning
- * Brief filter these out so the user sees outcomes, not noise.
+ * Whole action namespaces that are infrastructure/admin only — never a
+ * user-facing outcome. Filtering at the namespace level keeps the Brief and
+ * Receipt feeds curated as new sub-events get added to these subsystems.
+ */
+const NOISE_NAMESPACES = new Set<string>([
+  "plugin",                 // plugin install/upgrade/enable/reinstall lifecycle
+  "environment",            // workspace lease + env CRUD
+  "routine",                // routine + trigger CRUD + scheduler firings
+  "heartbeat",              // heartbeat invocations / cancellations
+  "cost",                   // cost meter ticks
+  "run",                    // raw run lifecycle
+  "inbox",                  // user dismissing inbox items (UI side-effect)
+  "secret",                 // secret CRUD
+  "board_api_key",          // API key admin
+  "agent_api_key",          // API key admin
+  "external_mcp_server",    // MCP server config
+  "execution_workspace",    // workspace state
+  "hire_hook",              // hire hook plumbing
+  "sidebar_preferences",    // UI prefs
+  "test",                   // test fixtures
+  "work_queue",             // queue CRUD
+  "label",                  // label CRUD
+  "memory",                 // memory store CRUD
+  "invite",                 // invitation flow admin
+  "join",                   // join request flow admin
+  "budget",                 // budget policy + threshold pings
+  "company_member",         // member admin
+  "asset",                  // asset CRUD
+  "finance_event",          // internal finance reporting
+]);
+
+/**
+ * Specific noisy actions inside mixed-purpose namespaces where some siblings
+ * are real outcomes (issue / agent / company / project / approval / goal).
+ * Adding a sibling action to the OUTCOME_TABLE is the way to surface it.
  */
 const NOISE_ACTIONS = new Set<string>([
+  // issue.* — outcome-flavored ones live in OUTCOME_TABLE; everything else is
+  // run-machinery (checkouts, holds, wakeups, indexing tweaks, read state).
   "issue.checked_out",
   "issue.released",
-  "issue.updated", // generic updates produce a lot of churn — show only specific ones
-  "issue.comment_cancelled",
+  "issue.updated",
+  "issue.admin_force_release",
+  "issue.approval_linked",
+  "issue.approval_unlinked",
+  "issue.approvers_updated",
+  "issue.assignment_wakeup_requested",
   "issue.attachment_removed",
+  "issue.blockers_updated",
+  "issue.checkout_lock_adopted",
+  "issue.child_created",
+  "issue.comment_cancelled",
   "issue.document_deleted",
+  "issue.document_restored",
+  "issue.document_upserted",
   "issue.feedback_vote_saved",
-  "agent.updated",
-  "agent.key_created",
+  "issue.harness_liveness_escalation_created",
+  "issue.inbox_archived",
+  "issue.inbox_unarchived",
+  "issue.read_marked",
+  "issue.read_unmarked",
+  "issue.reviewers_updated",
+  "issue.thread_interaction_answered",
+  "issue.thread_interaction_created",
+  "issue.thread_interaction_expired",
+  "issue.tree_cancel_status_updated",
+  "issue.tree_control_previewed",
+  "issue.tree_hold_created",
+  "issue.tree_hold_released",
+  "issue.tree_hold_run_interrupt_failed",
+  "issue.tree_hold_run_interrupted",
+  "issue.tree_hold_wakeup_deferred",
+  "issue.tree_restore_status_updated",
+  "issue.tree_restore_wakeup_requested",
+  "issue.work_product_created",
+  "issue.work_product_deleted",
+  "issue.work_product_updated",
+
+  // agent.* — admin and key-management; lifecycle (paused/resumed/terminated/
+  // created) is what surfaces.
+  "agent.approved",
   "agent.budget_updated",
+  "agent.config_rolled_back",
+  "agent.deleted",
+  "agent.forbidden_write_paths_updated",
+  "agent.hire_created",
+  "agent.instructions_bundle_updated",
+  "agent.instructions_file_deleted",
+  "agent.instructions_file_updated",
+  "agent.instructions_path_updated",
+  "agent.key_created",
+  "agent.key_revoked",
+  "agent.permissions_updated",
   "agent.runtime_session_reset",
-  "heartbeat.invoked",
-  "heartbeat.cancelled",
-  "cost.recorded",
-  "cost.reported",
-  "company.updated",
+  "agent.skills_synced",
+  "agent.updated",
+  "agent.updated_from_join_replay",
+
+  // approval.* — wakeup plumbing isn't part of the trust-loop surface.
+  "approval.requester_wakeup_failed",
+  "approval.requester_wakeup_queued",
+
+  // company.* — outcomes are created/archived; the rest is admin.
+  "company.branding_updated",
   "company.budget_updated",
-  "project.updated",
+  "company.feedback_data_sharing_updated",
+  "company.imported",
+  "company.skill_created",
+  "company.skill_deleted",
+  "company.skill_file_updated",
+  "company.skill_update_installed",
+  "company.skills_imported",
+  "company.skills_scanned",
+  "company.updated",
+
+  // project.* — only project.created is the outcome.
   "project.deleted",
+  "project.updated",
+  "project.workspace_created",
+  "project.workspace_deleted",
+  "project.workspace_updated",
+
+  // goal.* — only created/updated are outcomes.
   "goal.deleted",
 ]);
 
 export function isOutcomeAction(action: string): boolean {
+  const namespace = action.split(".", 1)[0];
+  if (NOISE_NAMESPACES.has(namespace)) return false;
   if (NOISE_ACTIONS.has(action)) return false;
-  // Plugin, environment, and routine lifecycle/admin events are infrastructure
-  // noise (lease acquired/released, plugin reinstalled, routine run triggered).
-  if (action.startsWith("plugin.")) return false;
-  if (action.startsWith("environment.")) return false;
-  if (action.startsWith("routine.")) return false;
   if (action in OUTCOME_TABLE) return true;
   // Unknown actions: keep them, but mark as "other" so the feed can show them
   // rather than swallowing genuinely new event types.

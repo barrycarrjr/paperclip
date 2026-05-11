@@ -97,6 +97,33 @@ export function Email() {
     try { localStorage.setItem("email-groupBySender", String(v)); } catch {}
     setGroupBySender(v);
   };
+  const [leftPaneWidth, setLeftPaneWidth] = useState(() => {
+    try { return parseInt(localStorage.getItem("email-leftPaneWidth") || "176", 10); } catch { return 176; }
+  });
+  const leftPaneDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const startLeftPaneDrag = (e: React.MouseEvent) => {
+    leftPaneDragRef.current = { startX: e.clientX, startWidth: leftPaneWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!leftPaneDragRef.current) return;
+      const next = Math.max(120, Math.min(400, leftPaneDragRef.current.startWidth + ev.clientX - leftPaneDragRef.current.startX));
+      setLeftPaneWidth(next);
+    };
+    let lastWidth = leftPaneWidth;
+    const onMove2 = (ev: MouseEvent) => {
+      if (!leftPaneDragRef.current) return;
+      lastWidth = Math.max(120, Math.min(400, leftPaneDragRef.current.startWidth + ev.clientX - leftPaneDragRef.current.startX));
+    };
+    window.addEventListener("mousemove", onMove2);
+    const onUp = () => {
+      leftPaneDragRef.current = null;
+      try { localStorage.setItem("email-leftPaneWidth", String(lastWidth)); } catch {}
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mousemove", onMove2);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   // Reply panel state
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -579,7 +606,7 @@ export function Email() {
   // ── Shared: left pane ─────────────────────────────────────────────────────
 
   const leftPane = (
-    <div className="w-44 shrink-0 border-r border-border flex flex-col bg-sidebar">
+    <div className="shrink-0 border-r border-border flex flex-col bg-sidebar" style={{ width: leftPaneWidth }}>
       <div className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
         Mailboxes
       </div>
@@ -1026,6 +1053,12 @@ export function Email() {
   return (
     <div className="flex h-full overflow-hidden">
       {leftPane}
+
+      {/* Drag handle for left pane */}
+      <div
+        className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+        onMouseDown={startLeftPaneDrag}
+      />
 
       {selectedUid ? (
         // ── 3-pane view: narrow list + detail ──────────────────────────────
