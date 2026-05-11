@@ -1063,7 +1063,11 @@ export function computeInboxBadgeData({
   const visibleJoinRequests = joinRequests.filter(
     (jr) => !isInboxEntityDismissed(dismissedAtByKey, `join:${jr.id}`, jr.updatedAt ?? jr.createdAt),
   ).length;
-  const visibleMineIssues = mineIssues.filter((issue) => issue.isUnreadForMe).length;
+  const visibleMineIssues = mineIssues.filter(
+    (issue) =>
+      issue.isUnreadForMe &&
+      !isInboxEntityDismissed(dismissedAtByKey, `issue:${issue.id}`, issue.updatedAt),
+  ).length;
   const agentErrorCount = dashboard?.agents.error ?? 0;
   const monthBudgetCents = dashboard?.costs.monthBudgetCents ?? 0;
   const monthUtilizationPercent = dashboard?.costs.monthUtilizationPercent ?? 0;

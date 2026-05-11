@@ -478,6 +478,56 @@ describe("inbox helpers", () => {
     expect(result.approvals).toBe(1);
   });
 
+  it("does not count unread mineIssues that have been dismissed since their last activity", () => {
+    // The Pennsylvania-Annual-Report-Reminder bug: an unread issue (status=done,
+    // assigneeAgentId set) was dismissed by the operator from the Unified Inbox,
+    // but the badge kept counting it because computeInboxBadgeData wasn't
+    // checking the dismissals map for issues — only for approvals/runs/joins.
+    const issue = makeIssue("dismissed-and-unread", true);
+    issue.updatedAt = new Date("2026-05-11T03:43:42.914Z");
+
+    const dismissedAtByKey = new Map<string, number>([
+      [`issue:${issue.id}`, new Date("2026-05-11T14:36:11.539Z").getTime()],
+    ]);
+
+    const result = computeInboxBadgeData({
+      approvals: [],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [issue],
+      dismissedAlerts: new Set<string>(),
+      dismissedAtByKey,
+      currentUserId: "user-1",
+    });
+
+    expect(result.mineIssues).toBe(0);
+    expect(result.inbox).toBe(0);
+  });
+
+  it("re-counts a dismissed issue once newer activity occurs (timestamp-aware)", () => {
+    const issue = makeIssue("dismissed-but-touched-again", true);
+    // Dismissed 9am, then updated 10am — should count again.
+    issue.updatedAt = new Date("2026-05-11T10:00:00.000Z");
+    const dismissedAtByKey = new Map<string, number>([
+      [`issue:${issue.id}`, new Date("2026-05-11T09:00:00.000Z").getTime()],
+    ]);
+
+    const result = computeInboxBadgeData({
+      approvals: [],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [issue],
+      dismissedAlerts: new Set<string>(),
+      dismissedAtByKey,
+      currentUserId: "user-1",
+    });
+
+    expect(result.mineIssues).toBe(1);
+    expect(result.inbox).toBe(1);
+  });
+
   it("does not count company-wide alerts in the personal inbox badge", () => {
     const result = computeInboxBadgeData({
       approvals: [],
