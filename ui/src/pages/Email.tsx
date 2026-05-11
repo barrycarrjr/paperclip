@@ -371,6 +371,23 @@ export function Email() {
     },
   });
 
+  const markUnreadMutation = useMutation({
+    mutationFn: async (msg: MailHeader) => {
+      await emailApi!.markUnread(selectedMailbox!, msg.uid, selectedFolder);
+    },
+    onSuccess: (_, msg) => {
+      invalidateMessageList();
+      showToast(`Marked unread: ${msg.subject || "(no subject)"}`);
+    },
+    onError: (_err, msg) => {
+      setOptimisticallyRemovedUids((prev) => {
+        const next = new Set(prev);
+        next.delete(msg.uid);
+        return next;
+      });
+    },
+  });
+
   const moveToFolderMutation = useMutation({
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
       optimisticallyRemove(msg.uid);
@@ -634,6 +651,8 @@ export function Email() {
       moveToFolderMutation.isPending && moveToFolderMutation.variables?.msg.uid === msg.uid;
     const isMarkReadPending =
       markReadMutation.isPending && markReadMutation.variables?.uid === msg.uid;
+    const isMarkUnreadPending =
+      markUnreadMutation.isPending && markUnreadMutation.variables?.uid === msg.uid;
     const hasAutoTriageRule = senderMatchesPattern(msg, autoTriageSet);
     const hasKeepAlwaysRule = senderMatchesPattern(msg, keepAlwaysSet);
 
@@ -642,20 +661,37 @@ export function Email() {
         className="flex items-center gap-0.5 shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          title="Mark as read"
-          disabled={isMarkReadPending}
-          onClick={() => markReadMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          {isMarkReadPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <MailOpen className="h-3.5 w-3.5" />
-          )}
-        </Button>
+        {msg.unseen ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="Mark as read"
+            disabled={isMarkReadPending}
+            onClick={() => markReadMutation.mutate(msg)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {isMarkReadPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <MailOpen className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        ) : (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="Mark as unread"
+            disabled={isMarkUnreadPending}
+            onClick={() => markUnreadMutation.mutate(msg)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {isMarkUnreadPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Mail className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        )}
 
         <Button
           size="icon-sm"
@@ -858,20 +894,37 @@ export function Email() {
               <>
                 {/* Action bar */}
                 <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border flex-wrap">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { if (selectedMsg) markReadMutation.mutate(selectedMsg); }}
-                    disabled={markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid}
-                    title="Mark this message as read"
-                  >
-                    {markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <MailOpen className="h-3.5 w-3.5" />
-                    )}
-                    Mark read
-                  </Button>
+                  {selectedMsg?.unseen ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { if (selectedMsg) markReadMutation.mutate(selectedMsg); }}
+                      disabled={markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid}
+                      title="Mark this message as read"
+                    >
+                      {markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <MailOpen className="h-3.5 w-3.5" />
+                      )}
+                      Mark read
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { if (selectedMsg) markUnreadMutation.mutate(selectedMsg); }}
+                      disabled={markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid}
+                      title="Mark this message as unread (brings it back into the unread view)"
+                    >
+                      {markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Mail className="h-3.5 w-3.5" />
+                      )}
+                      Mark unread
+                    </Button>
+                  )}
 
                   <Button
                     size="sm"

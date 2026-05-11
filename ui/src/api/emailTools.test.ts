@@ -130,6 +130,19 @@ describe("makeEmailToolsApi", () => {
     });
   });
 
+  describe("markUnread", () => {
+    it("calls bridgePerformAction with mailbox, uid, and folder", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      await api.markUnread("personal", 55, "INBOX");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.mark-unread",
+        { companyId: COMPANY_ID, mailbox: "personal", uid: 55, folder: "INBOX" },
+        COMPANY_ID,
+      );
+    });
+  });
+
   describe("listRules", () => {
     it("calls bridgeGetData with mailbox", async () => {
       mockBridgeGetData.mockResolvedValue({ data: { rules: [] } });

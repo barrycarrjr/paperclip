@@ -114,6 +114,16 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    markUnread: async (mailbox: string, uid: number, folder: string): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.mark-unread",
+        { companyId, mailbox, uid, folder },
+        companyId,
+      );
+      return extract(result);
+    },
+
     recordTriage: async (
       mailbox: string,
       uid: number,
