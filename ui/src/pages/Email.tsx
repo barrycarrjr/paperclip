@@ -265,6 +265,8 @@ export function Email() {
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, TRIAGE_FOLDER);
       await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "auto-triage");
       const sender = extractSender(msg);
+      // DB is the source of truth; Markdown doc is dual-written for legacy routines.
+      await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
       await applyRulesTransform(sender, graduateSender);
     },
     onSuccess: (_, msg) => {
@@ -285,6 +287,8 @@ export function Email() {
       optimisticallyRemove(msg.uid);
       await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "keep-always");
       const sender = extractSender(msg);
+      // DB is the source of truth; Markdown doc is dual-written for legacy routines.
+      await emailApi!.setRule(selectedMailbox!, sender, "keep-always");
       await applyRulesTransform(sender, keepAlwaysSender);
     },
     onSuccess: (_, msg) => {

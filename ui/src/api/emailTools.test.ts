@@ -129,4 +129,65 @@ describe("makeEmailToolsApi", () => {
       );
     });
   });
+
+  describe("listRules", () => {
+    it("calls bridgeGetData with mailbox", async () => {
+      mockBridgeGetData.mockResolvedValue({ data: { rules: [] } });
+      const result = await api.listRules("personal");
+      expect(mockBridgeGetData).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.list-rules",
+        { companyId: COMPANY_ID, mailbox: "personal" },
+        COMPANY_ID,
+      );
+      expect(result.rules).toEqual([]);
+    });
+  });
+
+  describe("setRule", () => {
+    it("upserts an auto-triage rule", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      await api.setRule("personal", "spammer@example.com", "auto-triage");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.set-rule",
+        {
+          companyId: COMPANY_ID,
+          mailbox: "personal",
+          senderPattern: "spammer@example.com",
+          ruleType: "auto-triage",
+        },
+        COMPANY_ID,
+      );
+    });
+
+    it("upserts a keep-always rule", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      await api.setRule("personal", "important@example.com", "keep-always");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.set-rule",
+        {
+          companyId: COMPANY_ID,
+          mailbox: "personal",
+          senderPattern: "important@example.com",
+          ruleType: "keep-always",
+        },
+        COMPANY_ID,
+      );
+    });
+  });
+
+  describe("deleteRule", () => {
+    it("calls bridgePerformAction with mailbox and senderPattern", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      await api.deleteRule("personal", "spammer@example.com");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.delete-rule",
+        { companyId: COMPANY_ID, mailbox: "personal", senderPattern: "spammer@example.com" },
+        COMPANY_ID,
+      );
+    });
+  });
 });

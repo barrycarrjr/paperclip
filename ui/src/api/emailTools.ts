@@ -41,6 +41,13 @@ export interface ListMessagesOptions {
   limit?: number;
 }
 
+export interface SenderRule {
+  senderPattern: string;
+  ruleType: "auto-triage" | "keep-always";
+  createdAt: string;
+  updatedAt: string;
+}
+
 function extract<T>(result: { data: unknown }): T {
   return result.data as T;
 }
@@ -150,6 +157,50 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.send-new",
         { companyId, mailbox, to, subject, body, ...opts },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    listRules: async (mailbox: string): Promise<{ rules: SenderRule[] }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "email.list-rules",
+        { companyId, mailbox },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    setRule: async (
+      mailbox: string,
+      senderPattern: string,
+      ruleType: "auto-triage" | "keep-always",
+    ): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.set-rule",
+        { companyId, mailbox, senderPattern, ruleType },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    importRules: async (mailbox: string, docBody: string): Promise<{ ok: boolean; imported: number }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.import-rules",
+        { companyId, mailbox, docBody },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    deleteRule: async (mailbox: string, senderPattern: string): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.delete-rule",
+        { companyId, mailbox, senderPattern },
         companyId,
       );
       return extract(result);
