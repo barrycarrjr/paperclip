@@ -25,7 +25,7 @@ alerts@td.com
 const BULLETED_RICH_FORMAT = `# rules
 ## Auto-triage senders
 
-- jira@autoprint-software.atlassian.net
+- abc@someemail.net
 
 ## Keep-always senders
 
