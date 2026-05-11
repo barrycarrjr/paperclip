@@ -14,11 +14,18 @@ const COUNTED_LINE_RE = /^(\d+)\s+messages?\s+from\s+(.+?)\s*$/i;
 
 // Extract the first sender token (full email, @domain, or `subject:` form)
 // from a line. Used as a fallback when agents write entries in a richer
-// "<sender> | <description> | <recommendation>" format that doesn't carry
-// an explicit count. Different per-company COOs have drifted into slightly
-// different formats; the parser tolerates both so the operator UI can
-// still render rows + Auto-triage / Keep / Dismiss buttons either way.
-const SENDER_TOKEN_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|subject:\s*[^|]+?)(?=\s*\||\s*$)/i;
+// "<sender> <separator> <description> [<separator> <recommendation>]"
+// format that doesn't carry an explicit count. Different per-company
+// COOs have drifted into slightly different formats — some use `|` as
+// the separator, some use em-dash `—`, some use ` - `. The parser
+// tolerates all of them so the operator UI can still render rows +
+// Auto-triage / Keep / Dismiss buttons either way.
+//
+// Email / @domain patterns are well-bounded on their own and don't need
+// a separator lookahead. `subject:` is freeform text so it stops at the
+// first separator (pipe, em-dash, or end of line).
+const EMAIL_OR_DOMAIN_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i;
+const SUBJECT_RE = /(subject:\s*[^|—]+?)(?=\s*[|—]|\s*$)/i;
 
 function stripBullet(line: string): string {
   return line.replace(/^[-*+]\s+/, "");
@@ -35,15 +42,19 @@ function parseReviewLine(rawLine: string): ReviewQueueEntry | null {
   if (counted) {
     const count = Number.parseInt(counted[1], 10);
     const senderRaw = counted[2].trim();
-    // Senders may still carry a trailing "| description | recommendation".
-    const sender = senderRaw.split("|")[0]!.trim();
+    // Senders may still carry a trailing " | description ..." or " — description ...".
+    const sender = senderRaw.split(/\s*[|—]\s*/)[0]!.trim();
     if (Number.isFinite(count) && sender) return { count, sender };
     return null;
   }
 
-  const senderMatch = SENDER_TOKEN_RE.exec(stripped);
-  if (senderMatch) {
-    return { count: 1, sender: senderMatch[1]!.trim() };
+  const emailMatch = EMAIL_OR_DOMAIN_RE.exec(stripped);
+  if (emailMatch) {
+    return { count: 1, sender: emailMatch[1]!.trim() };
+  }
+  const subjectMatch = SUBJECT_RE.exec(stripped);
+  if (subjectMatch) {
+    return { count: 1, sender: subjectMatch[1]!.trim() };
   }
   return null;
 }

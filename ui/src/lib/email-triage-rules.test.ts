@@ -37,6 +37,21 @@ const BULLETED_RICH_FORMAT = `# rules
 - 6 messages from no-reply@pbslabelsolutions.com
 `;
 
+// Matches a third format some agents have drifted into, using em-dash
+// instead of pipe as the separator.
+const EMDASH_FORMAT = `# rules
+## Auto-triage senders
+
+## Keep-always senders
+
+## Review queue
+
+<!-- Added 2026-05-11 by COO routine run -->
+- compass@autoprint-software.atlassian.net — Atlassian Compass weekly digest. **Recommend: Auto-triage**.
+- no-reply@vantage.sh — Vantage cloud cost report (weekly). **Recommend: Auto-triage**.
+- 4 messages from no-reply@example.com — Mixed counted + em-dash format
+`;
+
 describe("parseReviewQueue", () => {
   it("parses the canonical Personal '<count> messages from <sender>' format", () => {
     expect(parseReviewQueue(PERSONAL_FORMAT)).toEqual([
@@ -52,6 +67,16 @@ describe("parseReviewQueue", () => {
       { count: 6, sender: "no-reply@pbslabelsolutions.com" },
       { count: 1, sender: "no-reply@rs.email.nextdoor.com" },
       { count: 1, sender: "info@coversandall.com" },
+    ]);
+  });
+
+  it("parses em-dash separator format (newer COO drift)", () => {
+    const entries = parseReviewQueue(EMDASH_FORMAT);
+    // Count = 4 sorts first; the two em-dash entries default to 1.
+    expect(entries).toEqual([
+      { count: 4, sender: "no-reply@example.com" },
+      { count: 1, sender: "compass@autoprint-software.atlassian.net" },
+      { count: 1, sender: "no-reply@vantage.sh" },
     ]);
   });
 
