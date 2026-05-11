@@ -130,6 +130,22 @@ describe("makeEmailToolsApi", () => {
     });
   });
 
+  describe("deleteMessage", () => {
+    it("calls bridgePerformAction with mailbox, uid, and folder", async () => {
+      mockBridgePerformAction.mockResolvedValue({
+        data: { ok: true, movedCount: 1, trashFolder: "[Gmail]/Trash" },
+      });
+      const result = await api.deleteMessage("personal", 88, "INBOX");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.delete-message",
+        { companyId: COMPANY_ID, mailbox: "personal", uid: 88, folder: "INBOX" },
+        COMPANY_ID,
+      );
+      expect(result.trashFolder).toBe("[Gmail]/Trash");
+    });
+  });
+
   describe("markUnread", () => {
     it("calls bridgePerformAction with mailbox, uid, and folder", async () => {
       mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });

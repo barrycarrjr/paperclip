@@ -124,6 +124,20 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    deleteMessage: async (
+      mailbox: string,
+      uid: number,
+      folder: string,
+    ): Promise<{ ok: boolean; movedCount: number; trashFolder: string }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.delete-message",
+        { companyId, mailbox, uid, folder },
+        companyId,
+      );
+      return extract(result);
+    },
+
     sendReply: async (
       mailbox: string,
       uid: number,

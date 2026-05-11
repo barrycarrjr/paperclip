@@ -18,6 +18,7 @@ import {
   Reply,
   Send,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -392,6 +393,25 @@ export function Email() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (msg: MailHeader) => {
+      optimisticallyRemove(msg.uid);
+      const result = await emailApi!.deleteMessage(selectedMailbox!, msg.uid, selectedFolder);
+      return result;
+    },
+    onSuccess: () => {
+      showToast("Deleted");
+    },
+    onError: (_err, msg) => {
+      setOptimisticallyRemovedUids((prev) => {
+        const next = new Set(prev);
+        next.delete(msg.uid);
+        return next;
+      });
+      invalidateMessageList();
+    },
+  });
+
   const moveToFolderMutation = useMutation({
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
       optimisticallyRemove(msg.uid);
@@ -653,6 +673,8 @@ export function Email() {
       keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === msg.uid;
     const isMovePending =
       moveToFolderMutation.isPending && moveToFolderMutation.variables?.msg.uid === msg.uid;
+    const isDeletePending =
+      deleteMutation.isPending && deleteMutation.variables?.uid === msg.uid;
     const isMarkReadPending =
       markReadMutation.isPending && markReadMutation.variables?.uid === msg.uid;
     const isMarkUnreadPending =
@@ -738,6 +760,21 @@ export function Email() {
               className="h-3.5 w-3.5"
               strokeWidth={hasKeepAlwaysRule ? 3.5 : 2}
             />
+          )}
+        </Button>
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Delete (move to Trash)"
+          disabled={isDeletePending}
+          onClick={() => deleteMutation.mutate(msg)}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          {isDeletePending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
           )}
         </Button>
 
@@ -975,6 +1012,22 @@ export function Email() {
                       />
                     )}
                     Keep always
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { if (selectedMsg) deleteMutation.mutate(selectedMsg); }}
+                    disabled={deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid}
+                    title="Delete (move to Trash)"
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    {deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                    Delete
                   </Button>
 
                   <DropdownMenu
