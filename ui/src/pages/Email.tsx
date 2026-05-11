@@ -44,7 +44,6 @@ import { cn } from "../lib/utils";
 import {
   graduateSender,
   keepAlwaysSender,
-  dismissReviewSender,
 } from "../lib/email-triage-rules";
 import type { IssueDocument } from "@paperclipai/shared";
 
@@ -335,24 +334,6 @@ export function Email() {
     },
   });
 
-  const dismissMutation = useMutation({
-    mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
-      const sender = extractSender(msg);
-      await applyRulesTransform(sender, dismissReviewSender);
-    },
-    onSuccess: (_, msg) => {
-      showToast(`Dismissed: ${extractSender(msg)}`);
-    },
-    onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
-    },
-  });
-
   const markReadMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
@@ -599,8 +580,6 @@ export function Email() {
       autoTriageMutation.isPending && autoTriageMutation.variables?.uid === msg.uid;
     const isKeepPending =
       keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === msg.uid;
-    const isDismissPending =
-      dismissMutation.isPending && dismissMutation.variables?.uid === msg.uid;
     const isMovePending =
       moveToFolderMutation.isPending && moveToFolderMutation.variables?.msg.uid === msg.uid;
     const isMarkReadPending =
@@ -669,21 +648,6 @@ export function Email() {
               className="h-3.5 w-3.5"
               strokeWidth={hasKeepAlwaysRule ? 3.5 : 2}
             />
-          )}
-        </Button>
-
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          title="Dismiss"
-          disabled={isDismissPending}
-          onClick={() => dismissMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          {isDismissPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <X className="h-3.5 w-3.5" />
           )}
         </Button>
 
@@ -904,16 +868,6 @@ export function Email() {
                       />
                     )}
                     Keep always
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => { if (selectedMsg) dismissMutation.mutate(selectedMsg); }}
-                    disabled={dismissMutation.isPending && dismissMutation.variables?.uid === selectedMsg?.uid}
-                    title="Remove from review queue without a rule"
-                  >
-                    Dismiss
                   </Button>
 
                   <DropdownMenu
