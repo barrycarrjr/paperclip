@@ -309,6 +309,7 @@ export function NewIssueDialog() {
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executionWorkspaceDefaultProjectId = useRef<string | null>(null);
+  const dialogInitialized = useRef(false);
 
   const effectiveCompanyId = dialogCompanyId ?? selectedCompanyId;
   const dialogCompany = companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
@@ -326,6 +327,8 @@ export function NewIssueDialog() {
   const [startDate, setStartDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [companyOpen, setCompanyOpen] = useState(false);
+  const companyDropdownRef = useRef<HTMLDivElement | null>(null);
+  const companyBadgeRef = useRef<HTMLButtonElement | null>(null);
   const descriptionEditorRef = useRef<MarkdownEditorRef>(null);
   const stageFileInputRef = useRef<HTMLInputElement | null>(null);
   const assigneeSelectorRef = useRef<HTMLButtonElement | null>(null);
@@ -519,8 +522,14 @@ export function NewIssueDialog() {
 
   // Restore draft or apply defaults when dialog opens
   useEffect(() => {
-    if (!newIssueOpen) return;
-    setDialogCompanyId(newIssueDefaults.companyId ?? selectedCompanyId);
+    if (!newIssueOpen) {
+      dialogInitialized.current = false;
+      return;
+    }
+    if (!dialogInitialized.current) {
+      dialogInitialized.current = true;
+      setDialogCompanyId(newIssueDefaults.companyId ?? selectedCompanyId);
+    }
     executionWorkspaceDefaultProjectId.current = null;
 
     const draft = loadDraft();
@@ -909,6 +918,18 @@ export function NewIssueDialog() {
   }, [orderedProjects]);
 
   useEffect(() => {
+    if (!companyOpen) return;
+    function handleOutsidePointerDown(e: PointerEvent) {
+      const target = e.target as Node | null;
+      if (companyDropdownRef.current?.contains(target)) return;
+      if (companyBadgeRef.current?.contains(target)) return;
+      setCompanyOpen(false);
+    }
+    document.addEventListener("pointerdown", handleOutsidePointerDown, { capture: true });
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown, { capture: true });
+  }, [companyOpen]);
+
+  useEffect(() => {
     if (!newIssueOpen || !projectId || executionWorkspaceDefaultProjectId.current === projectId) {
       return;
     }
@@ -976,64 +997,82 @@ export function NewIssueDialog() {
             event.preventDefault();
           }
         }}
+        onInteractOutside={(event) => {
+          // Same guard as onPointerDownOutside: allow interact events that land
+          // inside a Radix portal (e.g. the company-switcher Popover) so that
+          // clicks on popover items aren't eaten by the Dialog's DismissableLayer.
+          const target = event.detail.originalEvent.target as HTMLElement | null;
+          if (target?.closest("[data-radix-popper-content-wrapper]")) {
+            event.preventDefault();
+          }
+        }}
       >
         {/* Header bar */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Popover open={companyOpen} onOpenChange={setCompanyOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-semibold cursor-pointer hover:opacity-80 transition-opacity",
-                    !dialogCompany?.brandColor && "bg-muted",
-                  )}
-                  disabled={isSubIssueMode}
-                  style={
-                    dialogCompany?.brandColor
-                      ? {
-                          backgroundColor: dialogCompany.brandColor,
-                          color: pickTextColorForSolidBg(dialogCompany.brandColor),
-                        }
-                      : undefined
-                  }
-                >
-                  {(dialogCompany?.name ?? "").slice(0, 3).toUpperCase()}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-48 p-1" align="start">
-                {companies.filter((c) => c.status !== "archived").map((c) => (
-                  <button
-                    key={c.id}
-                    className={cn(
-                      "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
-                      c.id === effectiveCompanyId && "bg-accent",
-                    )}
-                    onClick={() => {
-                      handleCompanyChange(c.id);
-                      setCompanyOpen(false);
-                    }}
-                  >
-                    <span
-                      className={cn(
-                        "px-1 py-0.5 rounded text-[10px] font-semibold leading-none",
-                        !c.brandColor && "bg-muted",
-                      )}
-                      style={
-                        c.brandColor
-                          ? {
-                              backgroundColor: c.brandColor,
-                              color: pickTextColorForSolidBg(c.brandColor),
-                            }
-                          : undefined
+            <div className="relative">
+              <button
+                ref={companyBadgeRef}
+                className={cn(
+                  "px-1.5 py-0.5 rounded text-xs font-semibold cursor-pointer hover:opacity-80 transition-opacity",
+                  !dialogCompany?.brandColor && "bg-muted",
+                )}
+                disabled={isSubIssueMode}
+                style={
+                  dialogCompany?.brandColor
+                    ? {
+                        backgroundColor: dialogCompany.brandColor,
+                        color: pickTextColorForSolidBg(dialogCompany.brandColor),
                       }
+                    : undefined
+                }
+                onClick={() => {
+                  if (!isSubIssueMode) setCompanyOpen((o) => !o);
+                }}
+              >
+                {(dialogCompany?.name ?? "").slice(0, 3).toUpperCase()}
+              </button>
+              {companyOpen && (
+                <div
+                  ref={companyDropdownRef}
+                  className="absolute left-0 top-full mt-1 z-[200] w-48 rounded-md border bg-popover p-1 shadow-md"
+                >
+                  {companies.filter((c) => c.status !== "archived").map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={cn(
+                        "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+                        c.id === effectiveCompanyId && "bg-accent",
+                      )}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        handleCompanyChange(c.id);
+                        setCompanyOpen(false);
+                      }}
                     >
-                      {c.name.slice(0, 3).toUpperCase()}
-                    </span>
-                    <span className="truncate">{c.name}</span>
-                  </button>
-                ))}
-              </PopoverContent>
-            </Popover>
+                      <span
+                        className={cn(
+                          "px-1 py-0.5 rounded text-[10px] font-semibold leading-none",
+                          !c.brandColor && "bg-muted",
+                        )}
+                        style={
+                          c.brandColor
+                            ? {
+                                backgroundColor: c.brandColor,
+                                color: pickTextColorForSolidBg(c.brandColor),
+                              }
+                            : undefined
+                        }
+                      >
+                        {c.name.slice(0, 3).toUpperCase()}
+                      </span>
+                      <span className="truncate">{c.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <span className="text-muted-foreground/60">&rsaquo;</span>
             <span>{isSubIssueMode ? "New sub-issue" : "New issue"}</span>
           </div>
@@ -1757,7 +1796,7 @@ export function NewIssueDialog() {
             </div>
             <Button
               size="sm"
-              className="min-w-[8.5rem] disabled:opacity-100"
+              className={cn("min-w-[8.5rem]", createIssue.isPending && "disabled:opacity-100")}
               disabled={!title.trim() || createIssue.isPending}
               onClick={handleSubmit}
               aria-busy={createIssue.isPending}
