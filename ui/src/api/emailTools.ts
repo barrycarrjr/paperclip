@@ -52,7 +52,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
-    listMessages: async (mailbox: string, opts?: ListMessagesOptions): Promise<{ messages: MailHeader[] }> => {
+    listMessages: async (mailbox: string, opts?: ListMessagesOptions): Promise<{ messages: MailHeader[]; uidValidity: number }> => {
       const result = await pluginsApi.bridgeGetData(
         pluginId,
         "email.list-messages",
@@ -102,6 +102,54 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.mark-read",
         { companyId, mailbox, uid, folder },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    recordTriage: async (
+      mailbox: string,
+      uid: number,
+      uidValidity: number,
+      folder: string,
+      action: string,
+    ): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.record-triage",
+        { companyId, mailbox, uid, uid_validity: uidValidity, folder, action },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    sendReply: async (
+      mailbox: string,
+      uid: number,
+      folder: string,
+      body: string,
+      opts?: { body_html?: string; replyAll?: boolean },
+    ): Promise<{ ok: boolean; messageId: string }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.send-reply",
+        { companyId, mailbox, uid, folder, body, ...opts },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    sendNew: async (
+      mailbox: string,
+      to: string | string[],
+      subject: string,
+      body: string,
+      opts?: { cc?: string; bcc?: string; body_html?: string },
+    ): Promise<{ ok: boolean; messageId: string }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.send-new",
+        { companyId, mailbox, to, subject, body, ...opts },
         companyId,
       );
       return extract(result);

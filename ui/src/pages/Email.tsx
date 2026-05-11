@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mail,
   ChevronRight,
@@ -14,6 +14,9 @@ import {
   UserCheck,
   Check,
   X,
+  Reply,
+  Send,
+  Pencil,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -25,6 +28,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -83,6 +88,18 @@ export function Email() {
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
+  // UID_VALIDITY for the current folder (from list-messages response)
+  const [uidValidity, setUidValidity] = useState<number>(0);
+  // Reply panel state
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyBody, setReplyBody] = useState("");
+  const [replyAll, setReplyAll] = useState(false);
+  // Compose dialog state
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeTo, setComposeTo] = useState("");
+  const [composeSubject, setComposeSubject] = useState("");
+  const [composeBody, setComposeBody] = useState("");
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Mailbox list ──────────────────────────────────────────────────────────
 
@@ -145,8 +162,15 @@ export function Email() {
   const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
 
   useEffect(() => {
+    if (messagesData?.uidValidity) {
+      setUidValidity(messagesData.uidValidity);
+    }
+  }, [messagesData?.uidValidity]);
+
+  useEffect(() => {
     setSelectedUid(null);
     setOptimisticallyRemovedUids(new Set());
+    setReplyOpen(false);
   }, [selectedMailbox, selectedFolder]);
 
   // ── Full message body ─────────────────────────────────────────────────────
@@ -239,6 +263,7 @@ export function Email() {
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, TRIAGE_FOLDER);
+      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "auto-triage");
       const sender = extractSender(msg);
       await applyRulesTransform(sender, graduateSender);
     },
@@ -258,8 +283,7 @@ export function Email() {
   const keepAlwaysMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
-      // Mark read so the message no longer appears in the unseen filter after refresh
-      await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "keep-always");
       const sender = extractSender(msg);
       await applyRulesTransform(sender, keepAlwaysSender);
     },
@@ -278,10 +302,12 @@ export function Email() {
   const dismissMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
-      // Mark read so the message no longer appears in the unseen filter after refresh
-      await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "dismiss");
       const sender = extractSender(msg);
       await applyRulesTransform(sender, dismissReviewSender);
+    },
+    onSuccess: (_, msg) => {
+      showToast(`Dismissed: ${extractSender(msg)}`);
     },
     onError: (_err, msg) => {
       setOptimisticallyRemovedUids((prev) => {
@@ -296,6 +322,7 @@ export function Email() {
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
       optimisticallyRemove(msg.uid);
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
+      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, `move:${targetFolder}`);
     },
     onError: (_err, { msg }) => {
       setOptimisticallyRemovedUids((prev) => {
@@ -336,6 +363,30 @@ export function Email() {
     onSuccess: ({ issueId }) => {
       setHandoffDialogOpen(false);
       showToast("Handed off — issue created", issueId);
+    },
+  });
+
+  const replyMutation = useMutation({
+    mutationFn: async ({ uid, body, rAll }: { uid: number; body: string; rAll: boolean }) => {
+      await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, { replyAll: rAll });
+    },
+    onSuccess: () => {
+      setReplyOpen(false);
+      setReplyBody("");
+      showToast("Reply sent");
+    },
+  });
+
+  const composeMutation = useMutation({
+    mutationFn: async ({ to, subject, body }: { to: string; subject: string; body: string }) => {
+      await emailApi!.sendNew(selectedMailbox!, to, subject, body);
+    },
+    onSuccess: () => {
+      setComposeOpen(false);
+      setComposeTo("");
+      setComposeSubject("");
+      setComposeBody("");
+      showToast("Message sent");
     },
   });
 
@@ -469,6 +520,16 @@ export function Email() {
             <EyeOff className="h-3.5 w-3.5" />
           )}
         </Button>
+        {selectedMailbox && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setComposeOpen(true)}
+            title="Compose new message"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -776,6 +837,19 @@ export function Email() {
                     <Bot className="h-3.5 w-3.5" />
                     Hand off…
                   </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setReplyOpen((v) => !v);
+                      setReplyBody("");
+                      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+                    }}
+                  >
+                    <Reply className="h-3.5 w-3.5" />
+                    Reply
+                  </Button>
                 </div>
 
                 {/* Message header */}
@@ -791,14 +865,26 @@ export function Email() {
                 </div>
 
                 {/* Message body */}
-                <ScrollArea className="flex-1 px-4 py-3">
-                  <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
-                    {fullMessage.markdown || fullMessage.text || (
-                      <span className="text-muted-foreground italic">(no body)</span>
-                    )}
-                  </div>
+                <div className="flex-1 overflow-hidden flex flex-col">
+                  {fullMessage.html ? (
+                    <iframe
+                      key={fullMessage.uid}
+                      srcDoc={fullMessage.html}
+                      sandbox="allow-same-origin"
+                      className="flex-1 w-full border-0 bg-white"
+                      title="Email body"
+                    />
+                  ) : (
+                    <ScrollArea className="flex-1 px-4 py-3">
+                      <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
+                        {fullMessage.text || (
+                          <span className="text-muted-foreground italic">(no body)</span>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  )}
                   {fullMessage.attachments.length > 0 && (
-                    <div className="mt-4 space-y-1 border-t border-border pt-3">
+                    <div className="shrink-0 px-4 py-2 border-t border-border space-y-1">
                       <div className="text-xs font-medium text-muted-foreground">Attachments</div>
                       {fullMessage.attachments.map((a) => (
                         <div
@@ -811,7 +897,61 @@ export function Email() {
                       ))}
                     </div>
                   )}
-                </ScrollArea>
+                </div>
+
+                {/* Inline reply panel */}
+                {replyOpen && (
+                  <div className="shrink-0 border-t border-border p-3 space-y-2 bg-background">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Reply to {fullMessage.from}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={replyAll}
+                            onChange={(e) => setReplyAll(e.target.checked)}
+                            className="h-3 w-3"
+                          />
+                          Reply all
+                        </label>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => setReplyOpen(false)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                    <Textarea
+                      ref={replyTextareaRef}
+                      value={replyBody}
+                      onChange={(e) => setReplyBody(e.target.value)}
+                      placeholder="Write your reply…"
+                      className="min-h-[100px] text-sm resize-none"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        disabled={!replyBody.trim() || replyMutation.isPending}
+                        onClick={() => {
+                          if (selectedUid && replyBody.trim()) {
+                            replyMutation.mutate({ uid: selectedUid, body: replyBody.trim(), rAll: replyAll });
+                          }
+                        }}
+                      >
+                        {replyMutation.isPending ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Send className="h-3.5 w-3.5" />
+                        )}
+                        Send
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -831,6 +971,64 @@ export function Email() {
           {actionToast.text}
         </div>
       )}
+
+      {/* ── Compose dialog ───────────────────────────────────────────────── */}
+      <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New message</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
+              <Input
+                value={composeTo}
+                onChange={(e) => setComposeTo(e.target.value)}
+                placeholder="recipient@example.com"
+                className="text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Subject</label>
+              <Input
+                value={composeSubject}
+                onChange={(e) => setComposeSubject(e.target.value)}
+                placeholder="Subject"
+                className="text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Message</label>
+              <Textarea
+                value={composeBody}
+                onChange={(e) => setComposeBody(e.target.value)}
+                placeholder="Write your message…"
+                className="min-h-[160px] text-sm resize-none"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setComposeOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!composeTo.trim() || !composeSubject.trim() || !composeBody.trim() || composeMutation.isPending}
+              onClick={() => {
+                if (composeTo.trim() && composeSubject.trim() && composeBody.trim()) {
+                  composeMutation.mutate({ to: composeTo.trim(), subject: composeSubject.trim(), body: composeBody.trim() });
+                }
+              }}
+            >
+              {composeMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Hand off to agent dialog ──────────────────────────────────────── */}
       <Dialog open={handoffDialogOpen} onOpenChange={setHandoffDialogOpen}>
