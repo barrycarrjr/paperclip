@@ -396,17 +396,6 @@ export function Email() {
       agentId: string;
       note: string;
     }) => {
-      const originId = msg.messageId ? `message-id:${msg.messageId}` : null;
-      if (originId) {
-        const existing = await issuesApi.list(selectedCompanyId!, {
-          originKind: "operator:email-handoff",
-          originId,
-          limit: 1,
-        });
-        if (existing.length > 0) {
-          return { issueId: existing[0]!.id, alreadyExisted: true, uid: msg.uid };
-        }
-      }
       const trimmedNote = note.trim();
       const noteBlock = trimmedNote
         ? `## Operator note\n\n${trimmedNote}\n\n---\n\n`
@@ -420,15 +409,34 @@ export function Email() {
         title: `Email from ${msg.from}: ${msg.subject}`.slice(0, 200),
         body,
         assigneeAgentId: agentId,
-        ...(originId ? { originKind: "operator:email-handoff", originId } : {}),
       });
+      // Wake the agent so it actually picks the issue up. Creating the issue
+      // alone just assigns it — the agent won't run until its next scheduled
+      // tick (or never, if it isn't on a routine). source: "assignment" tells
+      // the agent it should look at its inbox for new work.
+      try {
+        await agentsApi.wakeup(
+          agentId,
+          {
+            source: "assignment",
+            triggerDetail: "manual",
+            reason: "operator_email_handoff",
+            payload: { issueId: issue.id },
+            idempotencyKey: `email-handoff:${issue.id}`,
+          },
+          selectedCompanyId!,
+        );
+      } catch (err) {
+        // Issue exists; agent didn't wake. Surface but don't fail the handoff.
+        console.error("Failed to wake agent after handoff", err);
+      }
       // Issue tracks it now — mark read so it leaves the unread view.
       try { await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder); } catch {}
       // Hand off implies the sender matters enough to involve an agent —
       // promote to keep-always so future mail from them isn't auto-triaged.
       const header = messages.find((m) => m.uid === msg.uid);
       if (header) await maybeAddImplicitKeepAlways(header);
-      return { issueId: issue.id, alreadyExisted: false, uid: msg.uid };
+      return { issueId: issue.id, uid: msg.uid };
     },
     onSuccess: ({ issueId, uid }) => {
       optimisticallyRemove(uid);
