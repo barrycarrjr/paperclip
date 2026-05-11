@@ -1107,7 +1107,7 @@ export function Email() {
 
                   <Button
                     size="sm"
-                    variant="default"
+                    variant="outline"
                     onClick={() => { if (selectedMsg) autoTriageMutation.mutate(selectedMsg); }}
                     disabled={autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid}
                     title={
