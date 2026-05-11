@@ -28,6 +28,27 @@ const DEFAULT_STATUS_FILTER: IssueStatus[] = ISSUE_STATUSES.filter(
   (s) => s !== "done" && s !== "cancelled",
 );
 
+const LS_STATUS_KEY = "paperclip:portfolio-issues:statusFilter";
+const LS_PRIORITY_KEY = "paperclip:portfolio-issues:priorityFilter";
+const LS_COMPANY_KEY = "paperclip:portfolio-issues:companyFilter";
+
+function readLsFilter<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLsFilter(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore quota errors
+  }
+}
+
 function statusLabel(status: string) {
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -337,9 +358,19 @@ export function PortfolioIssues() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
 
-  const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(DEFAULT_STATUS_FILTER);
-  const [priorityFilter, setPriorityFilter] = useState<IssuePriority[]>([]);
-  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(() =>
+    readLsFilter<IssueStatus[]>(LS_STATUS_KEY, DEFAULT_STATUS_FILTER),
+  );
+  const [priorityFilter, setPriorityFilter] = useState<IssuePriority[]>(() =>
+    readLsFilter<IssuePriority[]>(LS_PRIORITY_KEY, []),
+  );
+  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>(() =>
+    readLsFilter<string[]>(LS_COMPANY_KEY, []),
+  );
+
+  useEffect(() => { writeLsFilter(LS_STATUS_KEY, statusFilter); }, [statusFilter]);
+  useEffect(() => { writeLsFilter(LS_PRIORITY_KEY, priorityFilter); }, [priorityFilter]);
+  useEffect(() => { writeLsFilter(LS_COMPANY_KEY, companyIdFilter); }, [companyIdFilter]);
 
   const [commentText, setCommentText] = useState("");
   const [commentOpen, setCommentOpen] = useState(false);
