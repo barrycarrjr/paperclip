@@ -374,23 +374,13 @@ export function Email() {
 
   const keepAlwaysMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
       const sender = extractSender(msg);
-      // Records the rule; the email itself stays unread in INBOX so it still
-      // shows up as needing action (reply / handoff / move) on next refresh.
       await emailApi!.setRule(selectedMailbox!, sender, "keep-always");
       await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: (_, msg) => {
       invalidateRules();
       showToast(`Keep always: ${extractSender(msg)}`);
-    },
-    onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
     },
   });
 
