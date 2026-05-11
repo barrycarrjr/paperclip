@@ -97,16 +97,16 @@ function addSenderToSection(body: string, sender: string, sectionHeader: string)
     const before = body.slice(0, range.end);
     const after = body.slice(range.end);
     const sectionBody = body.slice(range.start, range.end);
-    const senderEscaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const alreadyPresent = new RegExp(`(^|\\n)\\s*${senderEscaped}\\s*(\\n|$)`, "i").test(
-      sectionBody,
-    );
+    // Strip bullet prefix before comparing so "- foo@bar.com" and "foo@bar.com" are treated as the same.
+    const alreadyPresent = sectionBody
+      .split("\n")
+      .some((line) => stripBullet(line).trim().toLowerCase() === trimmed.toLowerCase());
     if (alreadyPresent) return body;
     const trailingNl = sectionBody.endsWith("\n\n") ? "" : sectionBody.endsWith("\n") ? "\n" : "\n\n";
-    return before.replace(/\n*$/, "") + "\n" + trimmed + trailingNl + after.replace(/^\n+/, "\n");
+    return before.replace(/\n*$/, "") + "\n- " + trimmed + trailingNl + after.replace(/^\n+/, "\n");
   }
 
-  return body.replace(/\s*$/, "") + `\n\n${sectionHeader}\n\n${trimmed}\n`;
+  return body.replace(/\s*$/, "") + `\n\n${sectionHeader}\n\n- ${trimmed}\n`;
 }
 
 export function graduateSender(body: string, sender: string): string {

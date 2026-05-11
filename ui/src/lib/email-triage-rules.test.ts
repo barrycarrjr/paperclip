@@ -67,11 +67,26 @@ describe("parseReviewQueue", () => {
 });
 
 describe("review-queue mutations", () => {
+  it("adds sender with bullet prefix when graduating", () => {
+    const next = graduateSender(BULLETED_RICH_FORMAT, "no-reply@rs.email.nextdoor.com");
+    const autoSection = next.slice(
+      next.indexOf("## Auto-triage senders"),
+      next.indexOf("## Keep-always senders"),
+    );
+    expect(autoSection).toContain("- no-reply@rs.email.nextdoor.com");
+    // not added without bullet
+    expect(autoSection).not.toMatch(/^[^-].*no-reply@rs\.email\.nextdoor\.com/m);
+  });
+
+  it("adds sender with bullet prefix when keeping always", () => {
+    const next = keepAlwaysSender(PERSONAL_FORMAT, "no-reply@nextdoor.com");
+    const keepSection = next.slice(next.indexOf("## Keep-always senders"));
+    expect(keepSection).toContain("- no-reply@nextdoor.com");
+  });
+
   it("removes bulleted-rich entries when graduating a sender", () => {
     const next = graduateSender(BULLETED_RICH_FORMAT, "no-reply@rs.email.nextdoor.com");
-    // sender added to Auto-triage section
-    expect(next).toContain("no-reply@rs.email.nextdoor.com");
-    // and dropped from Review queue (the bulleted+piped line is gone)
+    // dropped from Review queue (the bulleted+piped line is gone)
     const reviewSectionStart = next.indexOf("## Review queue");
     expect(next.slice(reviewSectionStart)).not.toContain("Nextdoor neighborhood post digest");
   });
@@ -82,6 +97,17 @@ describe("review-queue mutations", () => {
     // verify the Review-queue line for that sender was removed
     const reviewSectionStart = next.indexOf("## Review queue");
     expect(next.slice(reviewSectionStart)).not.toContain("no-reply@nextdoor.com");
+  });
+
+  it("does not duplicate a sender already present with a bullet prefix", () => {
+    const base = graduateSender(BULLETED_RICH_FORMAT, "no-reply@rs.email.nextdoor.com");
+    const again = graduateSender(base, "no-reply@rs.email.nextdoor.com");
+    const autoSection = again.slice(
+      again.indexOf("## Auto-triage senders"),
+      again.indexOf("## Keep-always senders"),
+    );
+    const count = (autoSection.match(/no-reply@rs\.email\.nextdoor\.com/g) ?? []).length;
+    expect(count).toBe(1);
   });
 
   it("dismisses without adding the sender to any other section", () => {
