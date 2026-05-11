@@ -124,22 +124,6 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
-    recordTriage: async (
-      mailbox: string,
-      uid: number,
-      uidValidity: number,
-      folder: string,
-      action: string,
-    ): Promise<{ ok: boolean }> => {
-      const result = await pluginsApi.bridgePerformAction(
-        pluginId,
-        "email.record-triage",
-        { companyId, mailbox, uid, uid_validity: uidValidity, folder, action },
-        companyId,
-      );
-      return extract(result);
-    },
-
     sendReply: async (
       mailbox: string,
       uid: number,
