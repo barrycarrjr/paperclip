@@ -21,6 +21,7 @@ import {
   Trash2,
   Users,
   AlignLeft,
+  RefreshCw,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -89,7 +90,13 @@ export function Email() {
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
-  const [groupBySender, setGroupBySender] = useState(false);
+  const [groupBySender, setGroupBySender] = useState(() => {
+    try { return localStorage.getItem("email-groupBySender") === "true"; } catch { return false; }
+  });
+  const toggleGroupBySender = (v: boolean) => {
+    try { localStorage.setItem("email-groupBySender", String(v)); } catch {}
+    setGroupBySender(v);
+  };
   // Reply panel state
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -122,7 +129,7 @@ export function Email() {
 
   // ── Folder list ───────────────────────────────────────────────────────────
 
-  const { data: folderData } = useQuery({
+  const { data: folderData, refetch: refetchFolders, isFetching: foldersFetching } = useQuery({
     queryKey: ["email", pluginId, selectedCompanyId, selectedMailbox, "folders"],
     queryFn: () => emailApi!.listFolders(selectedMailbox!),
     enabled: !!emailApi && !!selectedMailbox,
@@ -558,6 +565,17 @@ export function Email() {
 
   const selectedMsg = messages.find((m) => m.uid === selectedUid) ?? null;
 
+  // ── Mailbox name helpers ──────────────────────────────────────────────────
+  // Name format: "Display Name - email@domain.com"
+  const mailboxEmail = (mb: { name: string; key: string }) => {
+    const m = mb.name?.match(/\S+@\S+/);
+    return m ? m[0] : mb.key;
+  };
+  const mailboxLabel = (mb: { name: string; key: string }) => {
+    const m = mb.name?.match(/^(.+?)\s+-\s+\S+@\S+$/);
+    return m ? m[1] : mb.name || mb.key;
+  };
+
   // ── Shared: left pane ─────────────────────────────────────────────────────
 
   const leftPane = (
@@ -587,7 +605,7 @@ export function Email() {
                 )}
               >
                 <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{mb.name || mb.key}</span>
+                <span className="truncate">{mailboxEmail(mb)}</span>
               </button>
             ))}
           </div>
@@ -595,8 +613,17 @@ export function Email() {
 
         {selectedMailbox && folders.length > 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center justify-between">
               Folders
+              <button
+                type="button"
+                onClick={() => refetchFolders()}
+                disabled={foldersFetching}
+                className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+                title="Refresh folder list"
+              >
+                <RefreshCw className={cn("h-3 w-3", foldersFetching && "animate-spin")} />
+              </button>
             </div>
             <div className="space-y-0.5 px-2 pb-2">
               {folders.map((f) => (
@@ -628,7 +655,7 @@ export function Email() {
   const listHeader = (
     <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
       <span className="text-sm font-medium truncate">
-        {selectedMailboxInfo?.name || selectedMailbox || "Select a mailbox"}
+        {selectedMailboxInfo ? mailboxLabel(selectedMailboxInfo) : selectedMailbox || "Select a mailbox"}
       </span>
       <div className="flex items-center gap-1">
         {selectedUid && (
@@ -656,7 +683,7 @@ export function Email() {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => setGroupBySender((v) => !v)}
+          onClick={() => toggleGroupBySender(!groupBySender)}
           title={groupBySender ? "Group by sender — click to flatten" : "Flat list — click to group by sender"}
         >
           {groupBySender ? (
