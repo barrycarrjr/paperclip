@@ -312,13 +312,17 @@ export function Email() {
       optimisticallyRemove(msg.uid);
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, TRIAGE_FOLDER);
       const sender = extractSender(msg);
-      // DB is the source of truth; Markdown doc is dual-written for legacy routines.
-      await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
+      // DB is the source of truth; setRule also sweeps unread INBOX for any
+      // existing mail matching the new rule (plugin v0.13.0+).
+      const ruleResult = await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
       await applyRulesTransform(sender, dismissReviewSender);
+      return { sender, sweptCount: ruleResult.sweptCount ?? 0 };
     },
-    onSuccess: (_, msg) => {
+    onSuccess: ({ sender, sweptCount }) => {
       invalidateRules();
-      showToast(`Auto-triaged: ${extractSender(msg)}`);
+      invalidateMessageList();
+      const tail = sweptCount > 0 ? ` (+ ${sweptCount} existing)` : "";
+      showToast(`Auto-triaged: ${sender}${tail}`);
     },
     onError: (_err, msg) => {
       setOptimisticallyRemovedUids((prev) => {

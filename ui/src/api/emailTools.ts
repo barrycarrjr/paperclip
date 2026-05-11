@@ -186,7 +186,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       mailbox: string,
       senderPattern: string,
       ruleType: "auto-triage" | "keep-always",
-    ): Promise<{ ok: boolean }> => {
+    ): Promise<{ ok: boolean; sweptCount?: number }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,
         "email.set-rule",
