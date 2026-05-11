@@ -104,6 +104,11 @@ const NOISE_ACTIONS = new Set<string>([
 
 export function isOutcomeAction(action: string): boolean {
   if (NOISE_ACTIONS.has(action)) return false;
+  // Plugin, environment, and routine lifecycle/admin events are infrastructure
+  // noise (lease acquired/released, plugin reinstalled, routine run triggered).
+  if (action.startsWith("plugin.")) return false;
+  if (action.startsWith("environment.")) return false;
+  if (action.startsWith("routine.")) return false;
   if (action in OUTCOME_TABLE) return true;
   // Unknown actions: keep them, but mark as "other" so the feed can show them
   // rather than swallowing genuinely new event types.
