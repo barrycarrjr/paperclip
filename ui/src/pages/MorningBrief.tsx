@@ -54,6 +54,8 @@ import {
   parseReviewQueue,
   type ReviewQueueEntry,
 } from "../lib/email-triage-rules";
+import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { makeEmailToolsApi } from "../api/emailTools";
 import type { Agent, ActivityEvent, Approval, Issue, IssueDocument } from "@paperclipai/shared";
 
 const OVERNIGHT_HOURS = 14;
@@ -140,6 +142,15 @@ export function MorningBrief() {
   const queryClient = useQueryClient();
   const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
+
+  const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
+  const emailApi = useMemo(
+    () =>
+      emailPluginId && selectedCompanyId
+        ? makeEmailToolsApi(emailPluginId, selectedCompanyId)
+        : null,
+    [emailPluginId, selectedCompanyId],
+  );
 
   const { data: rulesBundles } = useQuery<RulesHomeBundle[]>({
     queryKey: ["morningBrief", "emailTriageRules", selectedCompanyId],
@@ -229,11 +240,19 @@ export function MorningBrief() {
   }
 
   const graduateMutation = useMutation({
-    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, graduateSender),
+    mutationFn: async (row: ReviewQueueRow) => {
+      // DB is the source of truth for sender rules. Markdown is dual-written
+      // until the COO/triage agent migrates to read rules from the DB.
+      if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "auto-triage");
+      await applyReviewTransform(row, graduateSender);
+    },
     ...reviewMutationOptions,
   });
   const keepMutation = useMutation({
-    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, keepAlwaysSender),
+    mutationFn: async (row: ReviewQueueRow) => {
+      if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "keep-always");
+      await applyReviewTransform(row, keepAlwaysSender);
+    },
     ...reviewMutationOptions,
   });
   const dismissMutation = useMutation({

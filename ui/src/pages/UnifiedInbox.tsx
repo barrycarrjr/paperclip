@@ -35,6 +35,8 @@ import {
   keepAlwaysSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
+import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { makeEmailToolsApi } from "../api/emailTools";
 import {
   ACTIONABLE_APPROVAL_STATUSES,
   getLatestFailedRunsByAgent,
@@ -178,6 +180,15 @@ export function UnifiedInbox() {
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }, { label: "Unified (preview)" }]);
   }, [setBreadcrumbs]);
+
+  const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
+  const emailApi = useMemo(
+    () =>
+      emailPluginId && selectedCompanyId
+        ? makeEmailToolsApi(emailPluginId, selectedCompanyId)
+        : null,
+    [emailPluginId, selectedCompanyId],
+  );
 
   const { data: approvals, isLoading: approvalsLoading } = useQuery({
     // Fetch ALL approvals so the "All" view can show decided items as
@@ -513,13 +524,19 @@ export function UnifiedInbox() {
   }
 
   const graduateMutation = useMutation({
-    mutationFn: (item: EmailReviewSenderItem) =>
-      applyReviewSenderTransform(item, graduateSender),
+    mutationFn: async (item: EmailReviewSenderItem) => {
+      // DB is the source of truth for sender rules. Markdown is dual-written
+      // until the COO/triage agent migrates to read rules from the DB.
+      if (emailApi) await emailApi.setRule(item.mailbox, item.sender, "auto-triage");
+      await applyReviewSenderTransform(item, graduateSender);
+    },
     ...reviewSenderMutationOptions,
   });
   const keepMutation = useMutation({
-    mutationFn: (item: EmailReviewSenderItem) =>
-      applyReviewSenderTransform(item, keepAlwaysSender),
+    mutationFn: async (item: EmailReviewSenderItem) => {
+      if (emailApi) await emailApi.setRule(item.mailbox, item.sender, "keep-always");
+      await applyReviewSenderTransform(item, keepAlwaysSender);
+    },
     ...reviewSenderMutationOptions,
   });
   const dismissReviewMutation = useMutation({

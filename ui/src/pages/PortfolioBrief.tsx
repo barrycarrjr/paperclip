@@ -35,6 +35,8 @@ import {
   keepAlwaysSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
+import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { pluginsApi } from "../api/plugins";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 400;
@@ -176,6 +178,24 @@ export function PortfolioBrief() {
   const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState<Record<string, boolean>>({});
 
+  // Portfolio-wide view — rows can belong to any company. Use the bridge
+  // directly with each row's companyId rather than a per-company emailApi.
+  const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
+  async function writeRuleToDb(
+    rowCompanyId: string,
+    mailbox: string,
+    sender: string,
+    ruleType: "auto-triage" | "keep-always",
+  ): Promise<void> {
+    if (!emailPluginId) return;
+    await pluginsApi.bridgePerformAction(
+      emailPluginId,
+      "email.set-rule",
+      { companyId: rowCompanyId, mailbox, senderPattern: sender, ruleType },
+      rowCompanyId,
+    );
+  }
+
   const overnightCutoff = useMemo(() => {
     const d = new Date();
     d.setHours(d.getHours() - OVERNIGHT_HOURS);
@@ -299,11 +319,19 @@ export function PortfolioBrief() {
   };
 
   const graduateMutation = useMutation({
-    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, graduateSender),
+    mutationFn: async (row: ReviewQueueRow) => {
+      // DB is the source of truth for sender rules. Markdown is dual-written
+      // until the COO/triage agent migrates to read rules from the DB.
+      await writeRuleToDb(row.companyId, row.mailbox, row.sender, "auto-triage");
+      await applyReviewTransform(row, graduateSender);
+    },
     ...reviewMutationOptions,
   });
   const keepMutation = useMutation({
-    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, keepAlwaysSender),
+    mutationFn: async (row: ReviewQueueRow) => {
+      await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
+      await applyReviewTransform(row, keepAlwaysSender);
+    },
     ...reviewMutationOptions,
   });
   const dismissMutation = useMutation({
