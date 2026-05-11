@@ -1196,7 +1196,7 @@ export function Email() {
               <Textarea
                 value={handoffNote}
                 onChange={(e) => setHandoffNote(e.target.value)}
-                placeholder="e.g. This notice came to my personal email but it's for B2 Industries — please handle accordingly."
+                placeholder="Optional context for the agent — who the email is for, what to do, etc."
                 className="min-h-[80px] text-sm resize-none"
               />
             </div>
