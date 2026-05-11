@@ -19,6 +19,8 @@ import {
   Send,
   Pencil,
   Trash2,
+  Users,
+  AlignLeft,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -87,6 +89,7 @@ export function Email() {
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
+  const [groupBySender, setGroupBySender] = useState(false);
   // Reply panel state
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -650,6 +653,18 @@ export function Email() {
             <EyeOff className="h-3.5 w-3.5" />
           )}
         </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => setGroupBySender((v) => !v)}
+          title={groupBySender ? "Group by sender — click to flatten" : "Flat list — click to group by sender"}
+        >
+          {groupBySender ? (
+            <Users className="h-3.5 w-3.5" />
+          ) : (
+            <AlignLeft className="h-3.5 w-3.5" />
+          )}
+        </Button>
         {selectedMailbox && (
           <Button
             variant="ghost"
@@ -824,6 +839,45 @@ export function Email() {
 
   // ── Message list body (shared between both modes) ─────────────────────────
 
+  function renderRow(msg: MailHeader, compact: boolean) {
+    return (
+      <div
+        key={msg.uid}
+        className={cn(
+          "flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
+          selectedUid === msg.uid && "bg-accent",
+          compact ? "py-2.5" : "py-3",
+        )}
+        onClick={() => setSelectedUid(msg.uid)}
+      >
+        <span
+          className={cn(
+            "shrink-0 h-1.5 w-1.5 rounded-full",
+            msg.unseen ? "bg-blue-500" : "bg-transparent",
+          )}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className={cn("text-xs truncate", msg.unseen && "font-semibold")}>
+              {msg.from}
+            </span>
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {timeAgo(new Date(msg.date))}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
+        </div>
+        <div
+          className={cn(
+            compact ? "opacity-0 group-hover:opacity-100 transition-opacity" : "opacity-100",
+          )}
+        >
+          <RowActions msg={msg} />
+        </div>
+      </div>
+    );
+  }
+
   function MessageListBody({ compact }: { compact: boolean }) {
     if (messagesError) {
       return (
@@ -850,57 +904,91 @@ export function Email() {
       );
     }
 
+    if (!groupBySender) {
+      return (
+        <ScrollArea className="flex-1">
+          <div className="divide-y divide-border">
+            {messages.map((msg) => renderRow(msg, compact))}
+          </div>
+        </ScrollArea>
+      );
+    }
+
+    // Group by canonical sender email address. Within each group sort by
+    // date desc (newest first), and sort groups by their newest message.
+    const groupsMap = new Map<string, MailHeader[]>();
+    for (const msg of messages) {
+      const sender = extractSender(msg);
+      const existing = groupsMap.get(sender);
+      if (existing) existing.push(msg);
+      else groupsMap.set(sender, [msg]);
+    }
+    const groups = Array.from(groupsMap.entries())
+      .map(([sender, msgs]) => ({
+        sender,
+        msgs: msgs.slice().sort((a, b) => (b.date < a.date ? -1 : 1)),
+        latestDate: msgs.reduce((max, m) => (m.date > max ? m.date : max), msgs[0]!.date),
+      }))
+      .sort((a, b) => (b.latestDate < a.latestDate ? -1 : 1));
+
     return (
       <ScrollArea className="flex-1">
         <div className="divide-y divide-border">
-          {messages.map((msg) => (
-            <div
-              key={msg.uid}
-              className={cn(
-                "flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
-                selectedUid === msg.uid && "bg-accent",
-                compact ? "py-2.5" : "py-3",
-              )}
-              onClick={() => setSelectedUid(msg.uid)}
-            >
-              {/* Unread indicator */}
-              <span
-                className={cn(
-                  "shrink-0 h-1.5 w-1.5 rounded-full",
-                  msg.unseen ? "bg-blue-500" : "bg-transparent",
-                )}
-              />
-
-              {/* Message info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span
-                    className={cn(
-                      "text-xs truncate",
-                      msg.unseen && "font-semibold",
-                    )}
-                  >
-                    {msg.from}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0">
-                    {timeAgo(new Date(msg.date))}
-                  </span>
+          {groups.map((g) => {
+            const senderHasAutoTriage = autoTriageSet.has(g.sender.toLowerCase()) ||
+              (g.sender.includes("@") && autoTriageSet.has(`@${g.sender.split("@")[1]!.toLowerCase()}`));
+            return (
+              <div key={g.sender} className="divide-y divide-border/60">
+                <div
+                  className="flex items-center gap-2 px-3 py-2 bg-muted/40 sticky top-0 z-10"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold truncate">{g.sender}</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {g.msgs.length} {g.msgs.length === 1 ? "message" : "messages"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      title={senderHasAutoTriage ? "Auto-triage all (rule already exists)" : "Auto-triage all from this sender"}
+                      onClick={() => {
+                        // setRule + sweep does all the work in one shot via v0.13.0.
+                        // Use the first (newest) message in the group as the "subject"
+                        // — autoTriageMutation moves it + writes the rule + sweeps the rest.
+                        if (g.msgs.length > 0) autoTriageMutation.mutate(g.msgs[0]!);
+                      }}
+                      className={cn(
+                        senderHasAutoTriage ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Archive
+                        className={cn("h-3.5 w-3.5", senderHasAutoTriage && "fill-current")}
+                        strokeWidth={senderHasAutoTriage ? 2.5 : 2}
+                      />
+                    </Button>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      title="Delete all from this sender"
+                      onClick={() => {
+                        for (const m of g.msgs) deleteMutation.mutate(m);
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
+                {g.msgs.map((msg) => renderRow(msg, compact))}
               </div>
-
-              {/* Per-row action buttons — visible on hover in compact mode, always in expanded */}
-              <div
-                className={cn(
-                  compact
-                    ? "opacity-0 group-hover:opacity-100 transition-opacity"
-                    : "opacity-100",
-                )}
-              >
-                <RowActions msg={msg} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </ScrollArea>
     );
