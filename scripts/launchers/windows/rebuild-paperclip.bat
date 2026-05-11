@@ -76,9 +76,11 @@ if errorlevel 2 (
   exit /b 0
 )
 
-REM Chain into paperclip.exe (hidden launcher) so the post-rebuild server
-REM runs invisibly. The rebuild window closes immediately after spawning
-REM the exe, and the browser pops once port 3100 is bound.
+REM Exit any running tray instance before spawning a fresh one. paperclip.exe
+REM holds a single-instance lock on port 53100; a second launch finds it bound,
+REM treats it as a duplicate, and silently opens the dead browser tab instead of
+REM starting the server. Killing the tray here releases that lock cleanly.
+powershell -NoProfile -Command "Get-Process -Name paperclip -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
 endlocal
 start "" "%~dp0paperclip.exe"
 exit /b 0

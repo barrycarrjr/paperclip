@@ -102,11 +102,11 @@ if errorlevel 2 (
   exit /b 0
 )
 
-REM Chain into paperclip.exe (hidden launcher) so the post-update server
-REM runs invisibly — no terminal window left on the desktop. paperclip.exe
-REM is built from tools\paperclip-launcher (GUI subsystem, fire-and-forget);
-REM cmd returns immediately after spawning it, this update window closes,
-REM and the browser pops once the server has bound port 3100.
+REM Exit any running tray instance before spawning a fresh one. paperclip.exe
+REM holds a single-instance lock on port 53100; a second launch finds it bound,
+REM treats it as a duplicate, and silently opens the dead browser tab instead of
+REM starting the server. Killing the tray here releases that lock cleanly.
+powershell -NoProfile -Command "Get-Process -Name paperclip -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
 endlocal
 start "" "%~dp0paperclip.exe"
 exit /b 0
