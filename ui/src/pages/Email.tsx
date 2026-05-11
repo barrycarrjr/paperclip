@@ -88,8 +88,6 @@ export function Email() {
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
-  // UID_VALIDITY for the current folder (from list-messages response)
-  const [uidValidity, setUidValidity] = useState<number>(0);
   // Reply panel state
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -160,12 +158,6 @@ export function Email() {
 
   const allMessages = messagesData?.messages ?? [];
   const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
-
-  useEffect(() => {
-    if (messagesData?.uidValidity) {
-      setUidValidity(messagesData.uidValidity);
-    }
-  }, [messagesData?.uidValidity]);
 
   useEffect(() => {
     setSelectedUid(null);
@@ -263,7 +255,6 @@ export function Email() {
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, TRIAGE_FOLDER);
-      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "auto-triage");
       const sender = extractSender(msg);
       // DB is the source of truth; Markdown doc is dual-written for legacy routines.
       await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
@@ -285,9 +276,9 @@ export function Email() {
   const keepAlwaysMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
-      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "keep-always");
       const sender = extractSender(msg);
-      // DB is the source of truth; Markdown doc is dual-written for legacy routines.
+      // Records the rule; the email itself stays unread in INBOX so it still
+      // shows up as needing action (reply / handoff / move) on next refresh.
       await emailApi!.setRule(selectedMailbox!, sender, "keep-always");
       await applyRulesTransform(sender, keepAlwaysSender);
     },
@@ -306,7 +297,6 @@ export function Email() {
   const dismissMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
       optimisticallyRemove(msg.uid);
-      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, "dismiss");
       const sender = extractSender(msg);
       await applyRulesTransform(sender, dismissReviewSender);
     },
@@ -326,7 +316,6 @@ export function Email() {
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
       optimisticallyRemove(msg.uid);
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
-      await emailApi!.recordTriage(selectedMailbox!, msg.uid, uidValidity, selectedFolder, `move:${targetFolder}`);
     },
     onError: (_err, { msg }) => {
       setOptimisticallyRemovedUids((prev) => {
@@ -348,7 +337,7 @@ export function Email() {
           limit: 1,
         });
         if (existing.length > 0) {
-          return { issueId: existing[0]!.id, alreadyExisted: true };
+          return { issueId: existing[0]!.id, alreadyExisted: true, uid: msg.uid };
         }
       }
       const body =
@@ -362,9 +351,12 @@ export function Email() {
         assigneeAgentId: agentId,
         ...(originId ? { originKind: "operator:email-handoff", originId } : {}),
       });
-      return { issueId: issue.id, alreadyExisted: false };
+      // Issue tracks it now — mark read so it leaves the unread view.
+      try { await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder); } catch {}
+      return { issueId: issue.id, alreadyExisted: false, uid: msg.uid };
     },
-    onSuccess: ({ issueId }) => {
+    onSuccess: ({ issueId, uid }) => {
+      optimisticallyRemove(uid);
       setHandoffDialogOpen(false);
       showToast("Handed off — issue created", issueId);
     },
@@ -373,8 +365,12 @@ export function Email() {
   const replyMutation = useMutation({
     mutationFn: async ({ uid, body, rAll }: { uid: number; body: string; rAll: boolean }) => {
       await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, { replyAll: rAll });
+      // Replied = taken care of. Mark read so it disappears from the unread view
+      // (both here and in Outlook).
+      try { await emailApi!.markRead(selectedMailbox!, uid, selectedFolder); } catch {}
     },
-    onSuccess: () => {
+    onSuccess: (_, { uid }) => {
+      optimisticallyRemove(uid);
       setReplyOpen(false);
       setReplyBody("");
       showToast("Reply sent");
