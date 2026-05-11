@@ -6,6 +6,7 @@ import {
   Hammer,
   LogOut,
   type LucideIcon,
+  Map as MapIcon,
   Moon,
   Power,
   RefreshCw,
@@ -150,7 +151,7 @@ function IconAction({
             : "text-muted-foreground hover:bg-accent/60 hover:text-foreground";
 
   const className = cn(
-    "flex flex-1 items-center justify-center rounded-lg p-2.5 transition-colors",
+    "flex min-w-0 flex-1 items-center justify-center rounded-lg p-2 transition-colors",
     toneClass,
     disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
   );
@@ -422,13 +423,20 @@ export function SidebarAccountMenu({
               />
               <div className="my-1 border-t border-border/60" />
 
-              <div className="flex items-center gap-1 rounded-xl bg-muted/30 p-1">
+              <div className="flex items-center gap-0.5 rounded-xl bg-muted/30 p-1">
                 <IconAction
                   label="Documentation"
                   description="Open Paperclip docs in a new tab."
                   icon={BookOpen}
                   href={DOCS_URL}
                   external
+                  onClick={() => setOpen(false)}
+                />
+                <IconAction
+                  label="Roadmap"
+                  description="See what's planned, in-progress, and shipped across skills, agents, routines, features, and plugins."
+                  icon={MapIcon}
+                  href="/instance/settings/roadmap"
                   onClick={() => setOpen(false)}
                 />
                 <IconAction

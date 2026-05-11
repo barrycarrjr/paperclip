@@ -179,4 +179,7 @@ export const queryKeys = {
     all: ["adapters"] as const,
     authStatuses: ["adapters", "auth-statuses"] as const,
   },
+  roadmap: {
+    all: ["roadmap"] as const,
+  },
 };

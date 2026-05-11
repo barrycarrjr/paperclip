@@ -45,6 +45,7 @@ import { InstanceAgentDefaults } from "./pages/InstanceAgentDefaults";
 import { ProfileSettings } from "./pages/ProfileSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
+import { Roadmap } from "./pages/Roadmap";
 import { AdapterManager } from "./pages/AdapterManager";
 import { ExternalMcpServers } from "./pages/ExternalMcpServers";
 import { PluginPage } from "./pages/PluginPage";
@@ -318,6 +319,7 @@ export function App() {
             <Route path="agent-defaults" element={<InstanceAgentDefaults />} />
             <Route path="plugins" element={<PluginManager />} />
             <Route path="plugins/:pluginId" element={<PluginSettings />} />
+            <Route path="roadmap" element={<Roadmap />} />
             <Route path="adapters" element={<AdapterManager />} />
             <Route path="external-mcp" element={<ExternalMcpServers />} />
           </Route>

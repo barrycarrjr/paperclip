@@ -1224,6 +1224,134 @@ export function pluginRoutes(
     }
   });
 
+  // ===========================================================================
+  // Roadmap — read-only cross-portfolio idea board
+  //
+  // Sibling to /plugins/library. Fetches `roadmap.json` from the latest
+  // GitHub release of the same configured extensions repo. Used by the
+  // /roadmap page in the host UI to render planned/in-flight/shipped work
+  // across skills, agents, routines, features, plugins, etc.
+  //
+  // The roadmap.json artifact is produced by the extensions repo's
+  // scripts/pack-all.mjs at release time — it merges built plugins (shipped),
+  // coming-soon.json stubs (planned), and the curated roadmap.json items.
+  // ===========================================================================
+
+  type RoadmapItemType =
+    | "skill"
+    | "agent"
+    | "routine"
+    | "feature"
+    | "plugin"
+    | "other";
+  type RoadmapItemStatus =
+    | "idea"
+    | "planned"
+    | "in-progress"
+    | "shipped"
+    | "wont-do";
+
+  interface RoadmapItem {
+    id: string;
+    type: RoadmapItemType;
+    title: string;
+    description: string;
+    status: RoadmapItemStatus;
+    addedAt?: string;
+    linkedPluginId?: string;
+    notes?: string;
+  }
+
+  interface RoadmapResponse {
+    repo: string;
+    release: {
+      tag: string;
+      name: string;
+      url: string;
+      publishedAt: string | null;
+    };
+    items: RoadmapItem[];
+  }
+
+  let cachedRoadmap: { fetchedAt: number; data: RoadmapResponse } | null = null;
+
+  async function fetchLatestRoadmap(): Promise<RoadmapResponse> {
+    if (cachedRoadmap && Date.now() - cachedRoadmap.fetchedAt < LIBRARY_CACHE_TTL_MS) {
+      return cachedRoadmap.data;
+    }
+
+    const releaseUrl = `https://api.github.com/repos/${PLUGIN_LIBRARY_REPO}/releases/latest`;
+    const releaseRes = await fetch(releaseUrl, {
+      headers: { accept: "application/vnd.github+json" },
+    });
+    if (!releaseRes.ok) {
+      throw new Error(
+        `Roadmap: GitHub returned ${releaseRes.status} for ${releaseUrl}. ` +
+          `Verify PAPERCLIP_PLUGIN_LIBRARY_REPO points at a public repo with at least one release.`,
+      );
+    }
+    const release = (await releaseRes.json()) as GitHubRelease;
+    const assets = release.assets ?? [];
+    const roadmapAsset = assets.find((a) => a.name === "roadmap.json");
+
+    const releaseSummary = {
+      tag: release.tag_name,
+      name: release.name ?? release.tag_name,
+      url: release.html_url ?? "",
+      publishedAt: release.published_at ?? null,
+    };
+
+    // No roadmap.json on this release (e.g. an older release predating the
+    // feature). Return an empty roadmap so the UI renders an empty-state
+    // rather than a 502.
+    if (!roadmapAsset) {
+      const empty: RoadmapResponse = {
+        repo: PLUGIN_LIBRARY_REPO,
+        release: releaseSummary,
+        items: [],
+      };
+      cachedRoadmap = { fetchedAt: Date.now(), data: empty };
+      return empty;
+    }
+
+    const roadmapRes = await fetch(roadmapAsset.browser_download_url, {
+      headers: { accept: "application/json" },
+    });
+    if (!roadmapRes.ok) {
+      throw new Error(
+        `Roadmap: failed to fetch roadmap.json (${roadmapRes.status}) from ${roadmapAsset.browser_download_url}.`,
+      );
+    }
+    const roadmapJson = (await roadmapRes.json()) as { items?: RoadmapItem[] };
+    const items = Array.isArray(roadmapJson.items) ? roadmapJson.items : [];
+
+    const data: RoadmapResponse = {
+      repo: PLUGIN_LIBRARY_REPO,
+      release: releaseSummary,
+      items,
+    };
+    cachedRoadmap = { fetchedAt: Date.now(), data };
+    return data;
+  }
+
+  /**
+   * GET /api/roadmap
+   *
+   * Returns the merged roadmap artifact (built plugins + coming-soon stubs
+   * + curated roadmap.json items) attached to the latest GitHub release of
+   * the configured extensions repo. Cached for 60s server-side.
+   */
+  router.get("/roadmap", async (req, res) => {
+    assertInstanceAdmin(req);
+    try {
+      const data = await fetchLatestRoadmap();
+      res.json(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: message });
+    }
+  });
+
   /**
    * POST /api/plugins/library/install
    *
