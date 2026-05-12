@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, Check, Tag } from "lucide-react";
-import type { Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
+import { Bot, ChevronDown, ChevronRight, Plus, Check, Tag, User } from "lucide-react";
+import type { Agent, Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
 import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
+import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialog } from "../context/DialogContext";
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -118,55 +120,166 @@ interface IssueRowProps {
   issue: Issue;
   companyPrefix: string;
   selected: boolean;
+  agentName: string | null;
+  labels: IssueLabel[];
   onToggle: () => void;
   onStatusChange: (status: string) => void;
 }
 
-function PortfolioIssueRow({ issue, companyPrefix, selected, onToggle, onStatusChange }: IssueRowProps) {
+const PREVIEW_DESCRIPTION_CHARS = 500;
+
+function statusBadgeLabel(status: string) {
+  return status.replace(/_/g, " ");
+}
+
+function PortfolioIssueRow({
+  issue,
+  companyPrefix,
+  selected,
+  agentName,
+  labels,
+  onToggle,
+  onStatusChange,
+}: IssueRowProps) {
+  const issueLabels = (issue.labelIds ?? [])
+    .map((id) => labels.find((l) => l.id === id))
+    .filter((l): l is IssueLabel => !!l);
+  const description = (issue.description ?? "").trim();
+  const descriptionPreview = description.length > PREVIEW_DESCRIPTION_CHARS
+    ? description.slice(0, PREVIEW_DESCRIPTION_CHARS).trimEnd() + "…"
+    : description;
+
+  const assigneeLabel = agentName
+    ? agentName
+    : issue.assigneeUserId
+      ? "User"
+      : null;
+  const AssigneeIcon = agentName ? Bot : User;
+
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group",
-        selected && "bg-accent/60",
-      )}
-    >
-      <Checkbox
-        checked={selected}
-        onCheckedChange={onToggle}
-        className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100"
-      />
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group cursor-default",
+            selected && "bg-accent/60",
+          )}
+        >
+          <Checkbox
+            checked={selected}
+            onCheckedChange={onToggle}
+            className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100"
+            onClick={(e) => e.stopPropagation()}
+          />
 
-      <StatusIcon
-        status={issue.status}
-        blockerAttention={issue.blockerAttention}
-        onChange={onStatusChange}
-        className="h-4 w-4 shrink-0"
-      />
+          <StatusIcon
+            status={issue.status}
+            blockerAttention={issue.blockerAttention}
+            onChange={onStatusChange}
+            className="h-4 w-4 shrink-0"
+          />
 
-      <span className="text-[10px] font-mono text-muted-foreground shrink-0 w-16 hidden sm:block">
-        {issue.identifier ?? ""}
-      </span>
+          <span className="text-[10px] font-mono text-muted-foreground shrink-0 w-16 hidden sm:block">
+            {issue.identifier ?? ""}
+          </span>
 
-      <Link
-        to={`/${companyPrefix}/issues/${issue.id}`}
-        className="flex-1 truncate font-medium hover:underline"
-      >
-        {issue.title}
-      </Link>
+          <Link
+            to={`/${companyPrefix}/issues/${issue.id}`}
+            className="flex-1 min-w-0 truncate font-medium hover:underline"
+          >
+            {issue.title}
+          </Link>
 
-      <span
-        className={cn(
-          "text-[10px] font-semibold uppercase shrink-0",
-          priorityColor[issue.priority] ?? priorityColorDefault,
-        )}
-      >
-        {issue.priority?.slice(0, 4).toUpperCase()}
-      </span>
+          {issueLabels.length > 0 && (
+            <span className="hidden md:flex items-center gap-1 shrink-0">
+              {issueLabels.slice(0, 3).map((l) => (
+                <span
+                  key={l.id}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-full border border-border bg-background"
+                  title={l.name}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: l.color || "#888" }}
+                    aria-hidden
+                  />
+                  <span className="max-w-[80px] truncate">{l.name}</span>
+                </span>
+              ))}
+              {issueLabels.length > 3 && (
+                <span className="text-[10px] text-muted-foreground">+{issueLabels.length - 3}</span>
+              )}
+            </span>
+          )}
 
-      <span className="text-[11px] text-muted-foreground shrink-0 w-14 text-right">
-        {timeAgo(issue.updatedAt)}
-      </span>
-    </div>
+          {assigneeLabel ? (
+            <span
+              className="hidden lg:inline-flex items-center gap-1 text-[11px] text-muted-foreground shrink-0 max-w-[120px]"
+              title={`Assigned to ${assigneeLabel}`}
+            >
+              <AssigneeIcon className="h-3 w-3 shrink-0" />
+              <span className="truncate">{assigneeLabel}</span>
+            </span>
+          ) : (
+            <span className="hidden lg:inline-flex items-center text-[11px] text-muted-foreground/50 shrink-0 italic">
+              unassigned
+            </span>
+          )}
+
+          <span
+            className={cn(
+              "text-[10px] font-semibold uppercase shrink-0",
+              priorityColor[issue.priority] ?? priorityColorDefault,
+            )}
+          >
+            {issue.priority?.slice(0, 4).toUpperCase()}
+          </span>
+
+          <span className="text-[11px] text-muted-foreground shrink-0 w-14 text-right">
+            {timeAgo(issue.updatedAt)}
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-lg p-3 text-left whitespace-normal">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-[11px] opacity-80">
+            <span className="font-mono">{issue.identifier ?? ""}</span>
+            <span>·</span>
+            <span>{statusBadgeLabel(issue.status)}</span>
+            <span>·</span>
+            <span className={cn(priorityColor[issue.priority] ?? priorityColorDefault)}>
+              {issue.priority?.toUpperCase()}
+            </span>
+          </div>
+          <div className="text-[13px] font-medium leading-snug break-words">
+            {issue.title}
+          </div>
+          {descriptionPreview ? (
+            <div className="text-[12px] leading-snug break-words whitespace-pre-wrap opacity-80 max-h-48 overflow-hidden">
+              {descriptionPreview}
+            </div>
+          ) : (
+            <div className="text-[12px] italic opacity-60">No description.</div>
+          )}
+          {issueLabels.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 pt-1">
+              {issueLabels.map((l) => (
+                <span
+                  key={l.id}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-full"
+                  style={{ backgroundColor: (l.color || "#888") + "33", color: l.color || "inherit" }}
+                >
+                  {l.name}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="text-[11px] opacity-70 pt-1">
+            {assigneeLabel ? `Assigned to ${assigneeLabel}` : "Unassigned"} · updated {timeAgo(issue.updatedAt)}
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -174,6 +287,8 @@ interface CompanySectionProps {
   company: Company;
   issues: Issue[];
   selectedIds: Set<string>;
+  agentNameById: Map<string, string>;
+  labels: IssueLabel[];
   onToggleIssue: (id: string) => void;
   onToggleAll: (companyId: string, issueIds: string[]) => void;
   collapsed: boolean;
@@ -186,6 +301,8 @@ function CompanySection({
   company,
   issues,
   selectedIds,
+  agentNameById,
+  labels,
   onToggleIssue,
   onToggleAll,
   collapsed,
@@ -241,6 +358,8 @@ function CompanySection({
               issue={issue}
               companyPrefix={company.issuePrefix}
               selected={selectedIds.has(issue.id)}
+              agentName={issue.assigneeAgentId ? agentNameById.get(issue.assigneeAgentId) ?? null : null}
+              labels={labels}
               onToggle={() => onToggleIssue(issue.id)}
               onStatusChange={(status) => onStatusChange(issue.id, status)}
             />
@@ -508,21 +627,42 @@ export function PortfolioIssues() {
     return [...ids];
   }, [selectedIds, issueById]);
 
+  // Fetch labels for every visible company so the inline label chips on each
+  // row resolve, not just the ones with currently-selected issues.
+  const visibleCompanyIds = useMemo(() => companies.map((c) => c.id), [companies]);
   const labelQueries = useQueries({
-    queries: selectedCompanyIds.map((companyId) => ({
+    queries: visibleCompanyIds.map((companyId) => ({
       queryKey: ["labels", companyId],
       queryFn: () => issuesApi.listLabels(companyId),
+      staleTime: 5 * 60_000,
     })),
   });
 
   const labelsByCompanyId = useMemo(() => {
     const map = new Map<string, IssueLabel[]>();
-    for (let i = 0; i < selectedCompanyIds.length; i++) {
+    for (let i = 0; i < visibleCompanyIds.length; i++) {
       const data = labelQueries[i]?.data;
-      if (data) map.set(selectedCompanyIds[i], data);
+      if (data) map.set(visibleCompanyIds[i]!, data);
     }
     return map;
-  }, [selectedCompanyIds, labelQueries]);
+  }, [visibleCompanyIds, labelQueries]);
+
+  // Portfolio-wide agent map so we can show assignee names without one
+  // per-company round trip per row. Stale-times a minute since names change
+  // rarely; the inbox refetches the list itself on a faster cadence.
+  const { data: portfolioAgentsData } = useQuery({
+    queryKey: ["portfolio-issues", "agents", selectedCompanyId],
+    queryFn: () => agentsApi.listPortfolio(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    staleTime: 60_000,
+  });
+  const agentNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of (portfolioAgentsData?.agents as Agent[] | undefined) ?? []) {
+      map.set(a.id, a.name);
+    }
+    return map;
+  }, [portfolioAgentsData]);
 
   const selectedIssues = useMemo(
     () => [...selectedIds].map((id) => issueById.get(id)).filter((i): i is Issue => !!i),
@@ -683,6 +823,8 @@ export function PortfolioIssues() {
                 company={company}
                 issues={companyIssues}
                 selectedIds={selectedIds}
+                agentNameById={agentNameById}
+                labels={labelsByCompanyId.get(company.id) ?? []}
                 onToggleIssue={handleToggleIssue}
                 onToggleAll={handleToggleAll}
                 collapsed={collapsedIds.has(company.id)}

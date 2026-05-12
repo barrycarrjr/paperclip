@@ -1,18 +1,23 @@
 import { useState, useMemo, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, Users } from "lucide-react";
+import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight, Plus, Users, Heart } from "lucide-react";
 import type { Agent, AgentRole, AgentStatus, Company } from "@paperclipai/shared";
 import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
+import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { LiveRunIndicator } from "../components/LiveRunIndicator";
 import { Link } from "@/lib/router";
 import { timeAgo } from "../lib/timeAgo";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
+import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { agentRouteRef } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -91,18 +96,21 @@ interface AgentRowProps {
   agent: Agent;
   companyPrefix: string;
   selected: boolean;
+  liveRun: { runId: string; liveCount: number } | null;
   onToggle: () => void;
 }
 
-function PortfolioAgentRow({ agent, companyPrefix, selected, onToggle }: AgentRowProps) {
+function PortfolioAgentRow({ agent, companyPrefix, selected, liveRun, onToggle }: AgentRowProps) {
   const dotClass = agentStatusDot[agent.status] ?? agentStatusDotDefault;
   const heartbeatLabel = agent.lastHeartbeatAt ? timeAgo(agent.lastHeartbeatAt) : null;
+  const adapterLabel = getAdapterLabel(agent.adapterType);
 
   return (
     <div
       className={cn(
         "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group",
         selected && "bg-accent/60",
+        agent.pausedAt && "opacity-60",
       )}
     >
       <Checkbox
@@ -119,18 +127,43 @@ function PortfolioAgentRow({ agent, companyPrefix, selected, onToggle }: AgentRo
 
       <Link
         to={`/${companyPrefix}/agents/${agent.id}`}
-        className="flex-1 truncate font-medium hover:underline"
+        className="flex-1 min-w-0 hover:underline"
       >
-        {agent.name}
+        <div className="truncate font-medium">{agent.name}</div>
+        {agent.title && (
+          <div className="truncate text-[11px] text-muted-foreground/80 font-normal">
+            {agent.title}
+          </div>
+        )}
       </Link>
 
-      <span className="text-[11px] text-muted-foreground shrink-0 hidden md:block">
-        {statusLabel(agent.status)}
+      {liveRun && (
+        <LiveRunIndicator
+          agentRef={agentRouteRef(agent)}
+          runId={liveRun.runId}
+          liveCount={liveRun.liveCount}
+        />
+      )}
+
+      <span className="hidden lg:block w-28 text-right font-mono text-[11px] text-muted-foreground/80 truncate">
+        {adapterLabel}
       </span>
 
-      <span className="text-[11px] text-muted-foreground shrink-0 w-16 text-right">
-        {heartbeatLabel ? `♡ ${heartbeatLabel}` : "—"}
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="text-[11px] text-muted-foreground shrink-0 w-20 text-right inline-flex items-center justify-end gap-1 cursor-default">
+            <Heart className="h-2.5 w-2.5" aria-hidden />
+            {heartbeatLabel ?? "—"}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="text-xs">
+          {agent.lastHeartbeatAt
+            ? `Last heartbeat ${new Date(agent.lastHeartbeatAt).toLocaleString()}`
+            : "Never reported a heartbeat"}
+          {" · "}
+          <span className="opacity-70">{statusLabel(agent.status)}</span>
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -139,6 +172,7 @@ interface CompanySectionProps {
   company: Company;
   agents: Agent[];
   selectedIds: Set<string>;
+  liveRunByAgent: Map<string, { runId: string; liveCount: number }>;
   onToggleAgent: (id: string) => void;
   onToggleAll: (companyId: string, agentIds: string[]) => void;
   collapsed: boolean;
@@ -149,6 +183,7 @@ function CompanySection({
   company,
   agents,
   selectedIds,
+  liveRunByAgent,
   onToggleAgent,
   onToggleAll,
   collapsed,
@@ -204,6 +239,7 @@ function CompanySection({
               agent={agent}
               companyPrefix={company.issuePrefix}
               selected={selectedIds.has(agent.id)}
+              liveRun={liveRunByAgent.get(agent.id) ?? null}
               onToggle={() => onToggleAgent(agent.id)}
             />
           ))}
@@ -316,6 +352,35 @@ export function PortfolioAgents() {
     }
     return map;
   }, [agents, companies]);
+
+  // Live runs are queried per-company (no portfolio endpoint). Each result is
+  // an array of running/queued runs we use to pulse a "Live" indicator on the
+  // row. 15s refetch matches the per-company Agents page.
+  const liveRunQueries = useQueries({
+    queries: companies.map((c) => ({
+      queryKey: ["portfolio-agents", "live-runs", c.id],
+      queryFn: () => heartbeatsApi.liveRunsForCompany(c.id),
+      enabled: !!c.id,
+      refetchInterval: 15_000,
+    })),
+  });
+
+  const liveRunByAgent = useMemo(() => {
+    const map = new Map<string, { runId: string; liveCount: number }>();
+    companies.forEach((_company, idx) => {
+      const runs = liveRunQueries[idx]?.data ?? [];
+      for (const r of runs) {
+        if (r.status !== "running" && r.status !== "queued") continue;
+        const existing = map.get(r.agentId);
+        if (existing) {
+          existing.liveCount += 1;
+          continue;
+        }
+        map.set(r.agentId, { runId: r.id, liveCount: 1 });
+      }
+    });
+    return map;
+  }, [companies, liveRunQueries]);
 
   const pauseMutation = useMutation({
     mutationFn: (id: string) => agentsApi.pause(id),
@@ -438,6 +503,7 @@ export function PortfolioAgents() {
                 company={company}
                 agents={companyAgents}
                 selectedIds={selectedIds}
+                liveRunByAgent={liveRunByAgent}
                 onToggleAgent={handleToggleAgent}
                 onToggleAll={handleToggleAll}
                 collapsed={collapsedIds.has(company.id)}
