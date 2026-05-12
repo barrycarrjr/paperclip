@@ -107,6 +107,15 @@ REM holds a single-instance lock on port 53100; a second launch finds it bound,
 REM treats it as a duplicate, and silently opens the dead browser tab instead of
 REM starting the server. Killing the tray here releases that lock cleanly.
 powershell -NoProfile -Command "Get-Process -Name paperclip -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+
+REM Wait for port 3100 to actually be free before re-launching. paperclip.exe
+REM does a one-shot port-bound check at startup; if it sees a still-shutting-
+REM down server (or a postgres on its way out) it assumes the server is fine,
+REM opens the browser, and exits without spawning anything. A moment later
+REM the lingering process dies and the tab points at a dead port. Polling here
+REM closes that race.
+powershell -NoProfile -Command "for ($i=0; $i -lt 15; $i++) { if (-not (Get-NetTCPConnection -LocalPort 3100 -State Listen -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Seconds 1 }" >nul 2>&1
+
 endlocal
 start "" "%~dp0paperclip.exe"
 exit /b 0

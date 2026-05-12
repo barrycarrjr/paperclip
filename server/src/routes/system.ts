@@ -159,18 +159,57 @@ function spawnRestartTrampoline(): void {
   }
 
   // Host the wait inside a Node process so port-release timing is robust
-  // and we don't depend on Windows `timeout` semantics. The trampoline
-  // sleeps RESTART_TRAMPOLINE_DELAY_MS and then spawns the actual launcher.
+  // and we don't depend on Windows `timeout` semantics. The trampoline:
+  //   1. Sleeps RESTART_TRAMPOLINE_DELAY_MS to let our SIGTERM handler get
+  //      going (postgres shutdown, worker drain, port release).
+  //   2. On Windows, kills any lingering paperclip.exe (the tray launcher).
+  //      paperclip.exe holds a single-instance lock on TCP 127.0.0.1:53100
+  //      that survives our server SIGTERM — it's a separate process from
+  //      the server. If we don't kill it, the new paperclip.exe we're about
+  //      to spawn fails the lock, just opens the browser, and exits without
+  //      starting a server. The user is left with a dead tab pointing at a
+  //      no-longer-listening port. Mirrors the manual workaround: tray
+  //      "Shut down" (which exits paperclip.exe) + re-run the EXE.
+  //   3. Polls port 3100 until it's actually free (up to 30s). paperclip.exe
+  //      decides whether to spawn a server based on a one-shot port-bound
+  //      check; if it sees the still-shutting-down server it skips the spawn
+  //      and just opens the browser — same dead-tab failure mode.
+  //   4. Spawns the launcher.
+  const isWin = process.platform === "win32";
   const trampolineSrc = `
-    setTimeout(() => {
-      const { spawn } = require('node:child_process');
+    const { spawn, spawnSync } = require('node:child_process');
+    const net = require('node:net');
+    function portIsBound(port) {
+      return new Promise((resolve) => {
+        const sock = new net.Socket();
+        sock.setTimeout(200);
+        sock.once('connect', () => { sock.destroy(); resolve(true); });
+        sock.once('timeout', () => { sock.destroy(); resolve(false); });
+        sock.once('error', () => { resolve(false); });
+        sock.connect(port, '127.0.0.1');
+      });
+    }
+    (async () => {
+      await new Promise((r) => setTimeout(r, ${RESTART_TRAMPOLINE_DELAY_MS}));
+      if (${JSON.stringify(isWin)}) {
+        try {
+          spawnSync('taskkill', ['/F', '/IM', 'paperclip.exe'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        } catch (_) {}
+      }
+      for (let i = 0; i < 30; i++) {
+        if (!(await portIsBound(3100))) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
       const child = spawn(
         ${JSON.stringify(spawnCmd)},
         ${JSON.stringify(spawnArgs)},
         ${JSON.stringify(spawnOpts)},
       );
       child.unref();
-    }, ${RESTART_TRAMPOLINE_DELAY_MS});
+    })();
   `;
 
   const child = spawn(process.execPath, ["-e", trampolineSrc], {
