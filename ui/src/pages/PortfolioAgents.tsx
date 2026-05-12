@@ -3,7 +3,7 @@ import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/rea
 import { ChevronDown, ChevronRight, GitBranch, Heart, List, Plus, Users } from "lucide-react";
 import type { Agent, AgentRole, AgentStatus, Company } from "@paperclipai/shared";
 import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
-import { agentsApi } from "../api/agents";
+import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -405,7 +405,7 @@ export function PortfolioAgents() {
     })),
   });
   const orgByCompanyId = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof orgQueries[number]>["data"]>();
+    const map = new Map<string, OrgNode[] | undefined>();
     companies.forEach((c, idx) => {
       map.set(c.id, orgQueries[idx]?.data);
     });
