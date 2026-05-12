@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { ChevronDown, ChevronRight } from "lucide-react";
 
-type SchedulePreset = "every_minute" | "every_hour" | "every_day" | "weekdays" | "weekly" | "monthly" | "custom";
+type SchedulePreset = "every_minute" | "every_hour" | "every_day" | "multiple_daily" | "weekdays" | "weekly" | "monthly" | "custom";
 
 const PRESETS: { value: SchedulePreset; label: string }[] = [
   { value: "every_minute", label: "Every minute" },
   { value: "every_hour", label: "Every hour" },
   { value: "every_day", label: "Every day" },
+  { value: "multiple_daily", label: "Multiple times daily" },
   { value: "weekdays", label: "Weekdays" },
   { value: "weekly", label: "Weekly" },
   { value: "monthly", label: "Monthly" },
@@ -41,6 +41,8 @@ const DAYS_OF_MONTH = Array.from({ length: 31 }, (_, i) => ({
   label: String(i + 1),
 }));
 
+const DEFAULT_MULTIPLE_DAILY_HOURS = "9,12,15,17";
+
 function parseCronToPreset(cron: string): {
   preset: SchedulePreset;
   hour: string;
@@ -69,6 +71,11 @@ function parseCronToPreset(cron: string): {
   // Every hour: "0 * * * *"
   if (hr === "*" && dom === "*" && dow === "*") {
     return { preset: "every_hour", ...defaults, minute: min === "*" ? "0" : min };
+  }
+
+  // Multiple times daily: "M H1,H2,... * * *"
+  if (dom === "*" && dow === "*" && hr.includes(",")) {
+    return { preset: "multiple_daily", ...defaults, hour: hr, minute: min === "*" ? "0" : min };
   }
 
   // Every day: "M H * * *"
@@ -102,6 +109,8 @@ function buildCron(preset: SchedulePreset, hour: string, minute: string, dayOfWe
       return `${minute} * * * *`;
     case "every_day":
       return `${minute} ${hour} * * *`;
+    case "multiple_daily":
+      return `${minute} ${hour} * * *`;
     case "weekdays":
       return `${minute} ${hour} * * 1-5`;
     case "weekly":
@@ -125,6 +134,11 @@ function describeSchedule(cron: string): string {
       return `Every hour at :${minute.padStart(2, "0")}`;
     case "every_day":
       return `Every day at ${timeStr}`;
+    case "multiple_daily": {
+      const hours = hour.split(",").map((h) => h.trim());
+      const labels = hours.map((h) => HOURS.find((x) => x.value === h)?.label ?? h);
+      return `${hours.length}x daily (${labels.join(", ")})`;
+    }
     case "weekdays":
       return `Weekdays at ${timeStr}`;
     case "weekly": {
@@ -187,9 +201,34 @@ export function ScheduleEditor({
     setPreset(newPreset);
     if (newPreset === "custom") {
       setCustomCron(value);
+    } else if (newPreset === "multiple_daily") {
+      const newHour = hour.includes(",") ? hour : DEFAULT_MULTIPLE_DAILY_HOURS;
+      setHour(newHour);
+      emitChange(newPreset, newHour, minute, dayOfWeek, dayOfMonth, customCron);
     } else {
-      emitChange(newPreset, hour, minute, dayOfWeek, dayOfMonth, customCron);
+      // If switching from multiple_daily, use the first selected hour
+      const singleHour = hour.split(",")[0] ?? "10";
+      if (singleHour !== hour) setHour(singleHour);
+      emitChange(newPreset, singleHour, minute, dayOfWeek, dayOfMonth, customCron);
     }
+  };
+
+  const selectedHours = useMemo(
+    () => new Set(hour.split(",").map((h) => h.trim()).filter(Boolean)),
+    [hour],
+  );
+
+  const toggleHour = (h: string) => {
+    const next = new Set(selectedHours);
+    if (next.has(h)) {
+      next.delete(h);
+    } else {
+      next.add(h);
+    }
+    if (next.size === 0) return;
+    const newHour = [...next].sort((a, b) => Number(a) - Number(b)).join(",");
+    setHour(newHour);
+    emitChange(preset, newHour, minute, dayOfWeek, dayOfMonth, customCron);
   };
 
   return (
@@ -221,6 +260,45 @@ export function ScheduleEditor({
           <p className="text-xs text-muted-foreground">
             Five fields: minute hour day-of-month month day-of-week
           </p>
+        </div>
+      ) : preset === "multiple_daily" ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">Select one or more times</p>
+          <div className="flex flex-wrap gap-1">
+            {HOURS.map((h) => (
+              <Button
+                key={h.value}
+                type="button"
+                variant={selectedHours.has(h.value) ? "default" : "outline"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => toggleHour(h.value)}
+              >
+                {h.label}
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">at minute</span>
+            <Select
+              value={minute}
+              onValueChange={(m) => {
+                setMinute(m);
+                emitChange(preset, hour, m, dayOfWeek, dayOfMonth, customCron);
+              }}
+            >
+              <SelectTrigger className="w-[80px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MINUTES.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    :{m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
