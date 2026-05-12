@@ -610,6 +610,13 @@
       "when": 1779700000000,
       "tag": "0086_chat_session_archived",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1779800000000,
+      "tag": "0087_template_source",
+      "breakpoints": true
     }
   ]
 }

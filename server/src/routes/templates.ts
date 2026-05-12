@@ -1,4 +1,5 @@
 import { Router, type Request } from "express";
+import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import {
   createAgentTemplateSchema,
@@ -13,9 +14,24 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { templateService } from "../services/index.js";
-import { forbidden } from "../errors.js";
+import { templatesLibraryService } from "../services/templates-library.js";
+import { badRequest, forbidden } from "../errors.js";
 import { assertBoard, isUserDrivenActor } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+
+const libraryInstallSchema = z.object({
+  kind: z.enum(["agent", "routine", "skill"]),
+  name: z.string().trim().min(1).max(120),
+});
+
+const libraryInstallBundleSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+});
+
+const libraryUpdateSchema = z.object({
+  kind: z.enum(["agent", "routine", "skill"]),
+  name: z.string().trim().min(1).max(120),
+});
 
 function assertCanManageTemplates(req: Request) {
   assertBoard(req);
@@ -49,6 +65,7 @@ export function templateRoutes(
 ) {
   const router = Router();
   const svc = templateService(db, { pluginWorkerManager: options.pluginWorkerManager });
+  const lib = templatesLibraryService(db);
 
   router.get("/templates/routine", async (req, res) => {
     assertCanManageTemplates(req);
@@ -210,6 +227,68 @@ export function templateRoutes(
     const deployments = await svc.listDeployments(type, req.params.id as string);
     res.json({ deployments });
   });
+
+  // ===========================================================================
+  // Templates Library — import from a GitHub release (paperclip-extensions)
+  //
+  // Sibling to /plugins/library. Lets the operator browse and install
+  // pre-baked agent / routine / skill / bundle templates from the same
+  // configured extensions repo. Imported rows carry a `source` JSONB so the
+  // host can later flag upstream changes and re-sync.
+  // ===========================================================================
+
+  router.get("/templates/library", async (req, res) => {
+    assertCanManageTemplates(req);
+    try {
+      const data = await lib.listLibrary();
+      res.json(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: message });
+    }
+  });
+
+  router.post("/templates/library/refresh", async (req, res) => {
+    assertCanManageTemplates(req);
+    lib.invalidate();
+    try {
+      const data = await lib.listLibrary();
+      res.json(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: message });
+    }
+  });
+
+  router.post("/templates/library/install", validate(libraryInstallSchema), async (req, res) => {
+    assertCanManageTemplates(req);
+    const { kind, name } = req.body as z.infer<typeof libraryInstallSchema>;
+    try {
+      const result = await lib.installSingle(kind, name, { userId: actorUserId(req) });
+      res.status(result.status === "created" ? 201 : 200).json(result);
+    } catch (err) {
+      if (err instanceof Error && "statusCode" in err) throw err;
+      throw badRequest(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  router.post("/templates/library/update", validate(libraryUpdateSchema), async (req, res) => {
+    assertCanManageTemplates(req);
+    const { kind, name } = req.body as z.infer<typeof libraryUpdateSchema>;
+    const result = await lib.updateFromLibrary(kind, name, { userId: actorUserId(req) });
+    res.json({ status: "updated", template: result });
+  });
+
+  router.post(
+    "/templates/library/install-bundle",
+    validate(libraryInstallBundleSchema),
+    async (req, res) => {
+      assertCanManageTemplates(req);
+      const { name } = req.body as z.infer<typeof libraryInstallBundleSchema>;
+      const result = await lib.installBundle(name, { userId: actorUserId(req) });
+      res.status(201).json(result);
+    },
+  );
 
   return router;
 }

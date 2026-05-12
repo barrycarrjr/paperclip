@@ -18,6 +18,48 @@ import type {
 } from "@paperclipai/shared";
 import { api } from "./client";
 
+export type LibraryTemplateKind = "agent" | "routine" | "skill" | "bundle";
+
+/** One entry as returned by GET /templates/library. */
+export interface LibraryTemplate {
+  kind: LibraryTemplateKind;
+  name: string;
+  displayName: string;
+  description: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  contentHash: string;
+  sourcePath: string;
+  installed: boolean;
+  updateAvailable: boolean;
+  requiresPlugins: string[];
+  missingPlugins: string[];
+  expandsTo?: Array<{ kind: "agent" | "routine" | "skill"; name: string; found: boolean }>;
+}
+
+export interface LibraryListResponse {
+  repo: string;
+  release: { tag: string; name: string; url: string; publishedAt: string | null };
+  templates: LibraryTemplate[];
+}
+
+export interface LibraryInstallResult {
+  status: "created" | "updated" | "skipped";
+  template: AgentTemplateDetail | RoutineTemplateDetail | SkillTemplateDetail;
+}
+
+export interface LibraryBundleInstallResult {
+  bundle: { name: string; displayName: string };
+  items: Array<{
+    kind: "agent" | "routine" | "skill";
+    name: string;
+    status: "created" | "updated" | "skipped" | "error" | "missing";
+    templateId?: string;
+    error?: string;
+  }>;
+  missingPlugins: string[];
+}
+
 export const templatesApi = {
   listRoutine: () => api.get<{ templates: RoutineTemplate[] }>("/templates/routine"),
   listAgent: () => api.get<{ templates: AgentTemplate[] }>("/templates/agent"),
@@ -48,4 +90,17 @@ export const templatesApi = {
 
   listDeployments: (type: TemplateType, id: string) =>
     api.get<{ deployments: TemplateDeployment[] }>(`/templates/${type}/${id}/deployments`),
+
+  // ---- Library: import from paperclip-extensions GitHub release ----------
+  listLibrary: () => api.get<LibraryListResponse>("/templates/library"),
+  refreshLibrary: () => api.post<LibraryListResponse>("/templates/library/refresh", {}),
+  installFromLibrary: (kind: "agent" | "routine" | "skill", name: string) =>
+    api.post<LibraryInstallResult>("/templates/library/install", { kind, name }),
+  updateFromLibrary: (kind: "agent" | "routine" | "skill", name: string) =>
+    api.post<{ status: "updated"; template: AgentTemplateDetail | RoutineTemplateDetail | SkillTemplateDetail }>(
+      "/templates/library/update",
+      { kind, name },
+    ),
+  installBundle: (name: string) =>
+    api.post<LibraryBundleInstallResult>("/templates/library/install-bundle", { name }),
 };

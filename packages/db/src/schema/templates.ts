@@ -10,7 +10,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
-import type { RoutineVariable } from "@paperclipai/shared";
+import type { RoutineVariable, TemplateSource } from "@paperclipai/shared";
 
 export const routineTemplates = pgTable(
   "routine_templates",
@@ -25,6 +25,7 @@ export const routineTemplates = pgTable(
     catchUpPolicy: text("catch_up_policy").notNull().default("skip_missed"),
     variables: jsonb("variables").$type<RoutineVariable[]>().notNull().default([]),
     defaultAssigneeRole: text("default_assignee_role"),
+    source: jsonb("source").$type<TemplateSource | null>(),
     createdByUserId: text("created_by_user_id"),
     updatedByUserId: text("updated_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -73,6 +74,7 @@ export const agentTemplates = pgTable(
     permissions: jsonb("permissions").$type<Record<string, unknown>>().notNull().default({}),
     forbiddenWritePaths: jsonb("forbidden_write_paths").$type<string[]>().notNull().default([]),
     budgetMonthlyCents: integer("budget_monthly_cents").notNull().default(0),
+    source: jsonb("source").$type<TemplateSource | null>(),
     createdByUserId: text("created_by_user_id"),
     updatedByUserId: text("updated_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -93,6 +95,7 @@ export const skillTemplates = pgTable(
     skillName: text("skill_name").notNull(),
     skillDescription: text("skill_description"),
     markdown: text("markdown").notNull(),
+    source: jsonb("source").$type<TemplateSource | null>(),
     createdByUserId: text("created_by_user_id"),
     updatedByUserId: text("updated_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -12,6 +12,20 @@ export const TEMPLATE_TYPES = ["routine", "agent", "skill"] as const;
 
 export const templateTypeSchema = z.enum(TEMPLATE_TYPES);
 
+/** Metadata stamped onto templates imported from a library. Optional on
+ *  the create schemas — only the library installer populates this. The
+ *  user-facing form ignores it. */
+export const templateSourceSchema = z.object({
+  type: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.enum(["agent", "routine", "skill", "bundle"]),
+  version: z.string().min(1),
+  contentHash: z.string().min(1),
+  sourcePath: z.string().min(1),
+  importedAt: z.string().min(1),
+  bundleName: z.string().optional(),
+});
+
 const baseTemplateTriggerSchema = z.object({
   label: z.string().trim().max(120).optional().nullable(),
   enabled: z.boolean().optional().default(true),
@@ -46,6 +60,7 @@ export const createRoutineTemplateSchema = z.object({
   variables: z.array(routineVariableSchema).optional().default([]),
   defaultAssigneeRole: z.string().trim().max(50).optional().nullable(),
   triggers: z.array(routineTemplateTriggerInputSchema).optional().default([]),
+  source: templateSourceSchema.optional().nullable(),
 });
 export type CreateRoutineTemplate = z.infer<typeof createRoutineTemplateSchema>;
 
@@ -66,6 +81,7 @@ export const createAgentTemplateSchema = z.object({
   permissions: agentPermissionsSchema.partial().optional().default({}),
   forbiddenWritePaths: z.array(z.string().trim().min(1).max(500)).max(50).optional().default([]),
   budgetMonthlyCents: z.number().int().min(0).optional().default(0),
+  source: templateSourceSchema.optional().nullable(),
 });
 export type CreateAgentTemplate = z.infer<typeof createAgentTemplateSchema>;
 
@@ -79,6 +95,7 @@ export const createSkillTemplateSchema = z.object({
   skillName: z.string().trim().min(1).max(200),
   skillDescription: z.string().optional().nullable(),
   markdown: z.string().min(1),
+  source: templateSourceSchema.optional().nullable(),
 });
 export type CreateSkillTemplate = z.infer<typeof createSkillTemplateSchema>;
 

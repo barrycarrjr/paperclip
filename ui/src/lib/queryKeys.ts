@@ -187,5 +187,6 @@ export const queryKeys = {
     detail: (type: "routine" | "agent" | "skill", id: string) => ["templates", type, id] as const,
     deployments: (type: "routine" | "agent" | "skill", id: string) =>
       ["templates", type, id, "deployments"] as const,
+    library: () => ["templates", "library"] as const,
   },
 };

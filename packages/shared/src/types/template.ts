@@ -2,6 +2,30 @@ import type { RoutineVariable } from "./routine.js";
 
 export type TemplateType = "routine" | "agent" | "skill";
 
+/** Tracks the upstream origin of a template imported from a library. Null
+ *  on hand-authored templates. The Paperclip host compares `version` +
+ *  `contentHash` against the latest templates-index.json to surface
+ *  "Update available" badges and apply upstream changes. */
+export interface TemplateSource {
+  /** Library identifier. Currently always `"paperclip-extensions"`. */
+  type: string;
+  /** Canonical kebab-case id from the library (folder name). */
+  name: string;
+  /** Template kind in the library. May differ from where it landed in the
+   *  host (a bundle install creates rows of several kinds from one source). */
+  kind: "agent" | "routine" | "skill" | "bundle";
+  /** Release tag the import came from, e.g. `"v23"`. */
+  version: string;
+  /** SHA-256 of the raw source file at import time. */
+  contentHash: string;
+  /** Path within the library repo, e.g. `"agents/phone-assistant/AGENT.md"`. */
+  sourcePath: string;
+  /** ISO-8601 timestamp when the row was last imported / synced. */
+  importedAt: string;
+  /** If the row was created as part of a bundle install, the bundle name. */
+  bundleName?: string;
+}
+
 export interface RoutineTemplate {
   id: string;
   name: string;
@@ -13,6 +37,7 @@ export interface RoutineTemplate {
   catchUpPolicy: string;
   variables: RoutineVariable[];
   defaultAssigneeRole: string | null;
+  source: TemplateSource | null;
   createdByUserId: string | null;
   updatedByUserId: string | null;
   createdAt: Date;
@@ -54,6 +79,7 @@ export interface AgentTemplate {
   permissions: Record<string, unknown>;
   forbiddenWritePaths: string[];
   budgetMonthlyCents: number;
+  source: TemplateSource | null;
   createdByUserId: string | null;
   updatedByUserId: string | null;
   createdAt: Date;
@@ -72,6 +98,7 @@ export interface SkillTemplate {
   skillName: string;
   skillDescription: string | null;
   markdown: string;
+  source: TemplateSource | null;
   createdByUserId: string | null;
   updatedByUserId: string | null;
   createdAt: Date;

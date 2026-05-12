@@ -231,6 +231,7 @@ export type {
 } from "./routine.js";
 export type {
   TemplateType,
+  TemplateSource,
   RoutineTemplate,
   RoutineTemplateTrigger,
   RoutineTemplateDetail,

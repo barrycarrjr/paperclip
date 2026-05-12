@@ -949,6 +949,7 @@ export {
 
 export type {
   TemplateType,
+  TemplateSource,
   RoutineTemplate,
   RoutineTemplateTrigger,
   RoutineTemplateDetail,

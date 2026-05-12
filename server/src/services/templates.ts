@@ -162,6 +162,7 @@ export function templateService(
       catchUpPolicy: row.catchUpPolicy,
       variables: row.variables ?? [],
       defaultAssigneeRole: row.defaultAssigneeRole,
+      source: row.source ?? null,
       createdByUserId: row.createdByUserId,
       updatedByUserId: row.updatedByUserId,
       createdAt: row.createdAt,
@@ -185,6 +186,7 @@ export function templateService(
       permissions: (row.permissions ?? {}) as Record<string, unknown>,
       forbiddenWritePaths: row.forbiddenWritePaths ?? [],
       budgetMonthlyCents: row.budgetMonthlyCents,
+      source: row.source ?? null,
       createdByUserId: row.createdByUserId,
       updatedByUserId: row.updatedByUserId,
       createdAt: row.createdAt,
@@ -201,6 +203,7 @@ export function templateService(
       skillName: row.skillName,
       skillDescription: row.skillDescription,
       markdown: row.markdown,
+      source: row.source ?? null,
       createdByUserId: row.createdByUserId,
       updatedByUserId: row.updatedByUserId,
       createdAt: row.createdAt,
@@ -271,6 +274,7 @@ export function templateService(
         catchUpPolicy: input.catchUpPolicy,
         variables: normalizeRoutineVariables(input.variables),
         defaultAssigneeRole: input.defaultAssigneeRole ?? null,
+        source: input.source ?? null,
         createdByUserId: actor.userId ?? null,
         updatedByUserId: actor.userId ?? null,
       })
@@ -394,6 +398,7 @@ export function templateService(
         permissions: input.permissions,
         forbiddenWritePaths: input.forbiddenWritePaths,
         budgetMonthlyCents: input.budgetMonthlyCents,
+        source: input.source ?? null,
         createdByUserId: actor.userId ?? null,
         updatedByUserId: actor.userId ?? null,
       })
@@ -486,6 +491,7 @@ export function templateService(
         skillName: input.skillName,
         skillDescription: input.skillDescription ?? null,
         markdown: input.markdown,
+        source: input.source ?? null,
         createdByUserId: actor.userId ?? null,
         updatedByUserId: actor.userId ?? null,
       })

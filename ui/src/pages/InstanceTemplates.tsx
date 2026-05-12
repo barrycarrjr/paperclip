@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, ClipboardList, Plus, ScrollText, Sparkles } from "lucide-react";
+import { Bot, ClipboardList, Download, Plus, ScrollText, Sparkles } from "lucide-react";
 import type {
   AgentTemplate,
   RoutineTemplate,
@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { TemplateLibraryDialog } from "@/components/TemplateLibraryDialog";
 
 const TYPE_META: Record<TemplateType, { label: string; icon: typeof Bot; description: string }> = {
   routine: {
@@ -37,6 +38,7 @@ const TYPE_META: Record<TemplateType, { label: string; icon: typeof Bot; descrip
 export function InstanceTemplates() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const [tab, setTab] = useState<TemplateType>("routine");
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -57,6 +59,23 @@ export function InstanceTemplates() {
     queryKey: queryKeys.templates.list("agent"),
     queryFn: () => templatesApi.listAgent(),
   });
+
+  // Background-fetch the library so update-available state is correctly
+  // reflected on the per-row badges below.
+  const libraryQuery = useQuery({
+    queryKey: queryKeys.templates.library(),
+    queryFn: () => templatesApi.listLibrary(),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const upstreamHashByKindName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of libraryQuery.data?.templates ?? []) {
+      if (t.kind === "bundle") continue;
+      map.set(`${t.kind}:${t.name}`, t.contentHash);
+    }
+    return map;
+  }, [libraryQuery.data]);
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -84,23 +103,29 @@ export function InstanceTemplates() {
         </TabsList>
 
         <TabsContent value="routine" className="space-y-4">
-          <SectionHeader type="routine" />
-          <RoutineList query={routineQuery} />
+          <SectionHeader type="routine" onImport={() => setLibraryOpen(true)} />
+          <RoutineList query={routineQuery} upstreamHashByKindName={upstreamHashByKindName} />
         </TabsContent>
         <TabsContent value="skill" className="space-y-4">
-          <SectionHeader type="skill" />
-          <SkillList query={skillQuery} />
+          <SectionHeader type="skill" onImport={() => setLibraryOpen(true)} />
+          <SkillList query={skillQuery} upstreamHashByKindName={upstreamHashByKindName} />
         </TabsContent>
         <TabsContent value="agent" className="space-y-4">
-          <SectionHeader type="agent" />
-          <AgentList query={agentQuery} />
+          <SectionHeader type="agent" onImport={() => setLibraryOpen(true)} />
+          <AgentList query={agentQuery} upstreamHashByKindName={upstreamHashByKindName} />
         </TabsContent>
       </Tabs>
+
+      <TemplateLibraryDialog
+        open={libraryOpen}
+        onOpenChange={setLibraryOpen}
+        defaultTab={tab}
+      />
     </div>
   );
 }
 
-function SectionHeader({ type }: { type: TemplateType }) {
+function SectionHeader({ type, onImport }: { type: TemplateType; onImport: () => void }) {
   const meta = TYPE_META[type];
   const Icon = meta.icon;
   return (
@@ -109,11 +134,16 @@ function SectionHeader({ type }: { type: TemplateType }) {
         <Icon className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm text-muted-foreground">{meta.description}</span>
       </div>
-      <Button asChild size="sm">
-        <Link to={`/instance/settings/templates/${type}/new`}>
-          <Plus className="h-3.5 w-3.5" /> New {meta.label.slice(0, -1).toLowerCase()} template
-        </Link>
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={onImport}>
+          <Download className="h-3.5 w-3.5" /> Import from library
+        </Button>
+        <Button asChild size="sm">
+          <Link to={`/instance/settings/templates/${type}/new`}>
+            <Plus className="h-3.5 w-3.5" /> New {meta.label.slice(0, -1).toLowerCase()} template
+          </Link>
+        </Button>
+      </div>
     </div>
   );
 }
@@ -124,14 +154,37 @@ type ListQuery<T> = {
   error: unknown;
 };
 
-function RoutineList({ query }: { query: ListQuery<RoutineTemplate> }) {
+type WithSource = { source: { name: string; contentHash: string } | null };
+
+function hasUpdate(
+  template: WithSource,
+  kind: "routine" | "skill" | "agent",
+  upstreamHashByKindName: Map<string, string>,
+): boolean {
+  if (!template.source?.name) return false;
+  const upstreamHash = upstreamHashByKindName.get(`${kind}:${template.source.name}`);
+  return !!upstreamHash && upstreamHash !== template.source.contentHash;
+}
+
+function RoutineList({
+  query,
+  upstreamHashByKindName,
+}: {
+  query: ListQuery<RoutineTemplate>;
+  upstreamHashByKindName: Map<string, string>;
+}) {
   return (
     <TemplateListView
       type="routine"
       query={query}
       renderRow={(t) => (
         <>
-          <RowTitle name={t.name} description={t.description} />
+          <RowTitle
+            name={t.name}
+            description={t.description}
+            updateAvailable={hasUpdate(t, "routine", upstreamHashByKindName)}
+            imported={!!t.source}
+          />
           <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
             <Badge variant="outline">Routine: {t.routineTitle}</Badge>
             {t.defaultAssigneeRole && (
@@ -147,14 +200,25 @@ function RoutineList({ query }: { query: ListQuery<RoutineTemplate> }) {
   );
 }
 
-function SkillList({ query }: { query: ListQuery<SkillTemplate> }) {
+function SkillList({
+  query,
+  upstreamHashByKindName,
+}: {
+  query: ListQuery<SkillTemplate>;
+  upstreamHashByKindName: Map<string, string>;
+}) {
   return (
     <TemplateListView
       type="skill"
       query={query}
       renderRow={(t) => (
         <>
-          <RowTitle name={t.name} description={t.description} />
+          <RowTitle
+            name={t.name}
+            description={t.description}
+            updateAvailable={hasUpdate(t, "skill", upstreamHashByKindName)}
+            imported={!!t.source}
+          />
           <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
             <Badge variant="outline">key: {t.skillKey}</Badge>
             <Badge variant="outline">{t.skillName}</Badge>
@@ -165,14 +229,25 @@ function SkillList({ query }: { query: ListQuery<SkillTemplate> }) {
   );
 }
 
-function AgentList({ query }: { query: ListQuery<AgentTemplate> }) {
+function AgentList({
+  query,
+  upstreamHashByKindName,
+}: {
+  query: ListQuery<AgentTemplate>;
+  upstreamHashByKindName: Map<string, string>;
+}) {
   return (
     <TemplateListView
       type="agent"
       query={query}
       renderRow={(t) => (
         <>
-          <RowTitle name={t.name} description={t.description} />
+          <RowTitle
+            name={t.name}
+            description={t.description}
+            updateAvailable={hasUpdate(t, "agent", upstreamHashByKindName)}
+            imported={!!t.source}
+          />
           <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
             <Badge variant="outline">name: {t.agentName}</Badge>
             <Badge variant="outline">role: {t.role}</Badge>
@@ -184,10 +259,27 @@ function AgentList({ query }: { query: ListQuery<AgentTemplate> }) {
   );
 }
 
-function RowTitle({ name, description }: { name: string; description: string | null }) {
+function RowTitle({
+  name,
+  description,
+  updateAvailable,
+  imported,
+}: {
+  name: string;
+  description: string | null;
+  updateAvailable?: boolean;
+  imported?: boolean;
+}) {
   return (
     <div>
-      <div className="font-medium">{name}</div>
+      <div className="font-medium flex items-center gap-2 flex-wrap">
+        {name}
+        {updateAvailable ? (
+          <Badge variant="secondary" className="text-xs">Update available</Badge>
+        ) : imported ? (
+          <Badge variant="outline" className="text-xs">Imported</Badge>
+        ) : null}
+      </div>
       {description && (
         <div className="text-sm text-muted-foreground line-clamp-2">{description}</div>
       )}
