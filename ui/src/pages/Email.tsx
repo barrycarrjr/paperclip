@@ -1025,13 +1025,13 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           onClick={() => { for (const m of g.msgs) markReadMutation.mutate(m); }}
                           aria-label="Mark all read"
                           className="text-muted-foreground hover:text-foreground"
                         >
-                          <MailOpen className="h-4 w-4" />
+                          <MailOpen className="h-5 w-5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Mark all read</TooltipContent>
@@ -1039,7 +1039,7 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           onClick={() => {
                             if (g.msgs.length > 0) keepAlwaysMutation.mutate(g.msgs[0]!);
@@ -1050,7 +1050,7 @@ export function Email() {
                           )}
                         >
                           <Check
-                            className="h-4 w-4"
+                            className="h-5 w-5"
                             strokeWidth={senderHasKeepAlways ? 3.5 : 2}
                           />
                         </Button>
@@ -1062,7 +1062,7 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           onClick={() => {
                             if (g.msgs.length > 0) autoTriageMutation.mutate(g.msgs[0]!);
@@ -1073,7 +1073,7 @@ export function Email() {
                           )}
                         >
                           <Archive
-                            className={cn("h-4 w-4", senderHasAutoTriage && "fill-current")}
+                            className={cn("h-5 w-5", senderHasAutoTriage && "fill-current")}
                             strokeWidth={senderHasAutoTriage ? 2.5 : 2}
                           />
                         </Button>
@@ -1090,12 +1090,12 @@ export function Email() {
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
                             <Button
-                              size="icon-sm"
+                              size="icon"
                               variant="ghost"
                               aria-label="Move all to folder"
                               className="text-muted-foreground hover:text-foreground"
                             >
-                              <MoveRight className="h-4 w-4" />
+                              <MoveRight className="h-5 w-5" />
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
@@ -1125,13 +1125,13 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           onClick={() => { for (const m of g.msgs) deleteMutation.mutate(m); }}
                           aria-label="Delete all from this sender"
                           className="text-muted-foreground hover:text-destructive"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-5 w-5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Delete all from this sender</TooltipContent>
