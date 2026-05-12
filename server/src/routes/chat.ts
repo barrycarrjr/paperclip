@@ -27,18 +27,24 @@ function requireBoardActor(req: Request): ChatActor {
 const createSessionSchema = z.object({
   title: z.string().max(200).optional(),
   companyId: z.string().nullable().optional(),
-  mode: z.enum(["chat", "agent"]).optional(),
   permissionMode: z.enum(["ask", "bypass"]).optional(),
   model: z.string().max(100).optional(),
 });
 
 const patchSessionSchema = z.object({
   title: z.string().max(200).optional(),
-  mode: z.enum(["chat", "agent"]).optional(),
   permissionMode: z.enum(["ask", "bypass"]).optional(),
   effort: z.enum(["auto", "low", "medium", "high"]).optional(),
   companyId: z.string().nullable().optional(),
   model: z.string().max(100).optional(),
+  archived: z.boolean().optional(),
+});
+
+const listSessionsQuerySchema = z.object({
+  status: z.enum(["active", "archived", "all"]).optional(),
+  lastActivityDays: z.coerce.number().int().positive().max(3650).optional(),
+  companyId: z.string().uuid().optional(),
+  sort: z.enum(["recency", "title", "created"]).optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -82,7 +88,9 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
 
   router.get("/chat/sessions", async (req, res) => {
     const actor = requireBoardActor(req);
-    res.json({ sessions: await svc.listSessions(actor) });
+    const parsed = listSessionsQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+    res.json({ sessions: await svc.listSessions(actor, parsed.data) });
   });
 
   router.post("/chat/sessions", async (req, res) => {

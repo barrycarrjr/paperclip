@@ -3,8 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { File, Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Select as SelectPrimitive } from "radix-ui";
-import { CheckIcon } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -14,12 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   chatApi,
   type AvailableModel,
   type ChatAttachmentSummary,
-  type ChatMode,
   type EffortLevel,
   type PermissionMode,
 } from "../api/chat";
@@ -53,7 +49,6 @@ interface PendingUpload {
 
 interface Props {
   sessionId: string | null;
-  mode: ChatMode;
   permissionMode: PermissionMode;
   effort: EffortLevel;
   model: string;
@@ -62,7 +57,6 @@ interface Props {
   onStopAndSend?: (text: string, attachmentIds: string[]) => void;
   onAbort: () => void;
   onPatch: (patch: {
-    mode?: ChatMode;
     permissionMode?: PermissionMode;
     effort?: EffortLevel;
     model?: string;
@@ -181,37 +175,8 @@ function groupModels(models: AvailableModel[]): ModelGroup[] {
     });
 }
 
-function ModeSelectItem({
-  value,
-  label,
-  description,
-}: {
-  value: string;
-  label: string;
-  description: string;
-}) {
-  return (
-    <SelectPrimitive.Item
-      value={value}
-      className="focus:bg-accent focus:text-accent-foreground relative flex w-full cursor-default flex-col items-start gap-0.5 rounded-sm py-2 pr-8 pl-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
-    >
-      <span
-        data-slot="select-item-indicator"
-        className="absolute right-2 top-2.5 flex size-3.5 items-center justify-center"
-      >
-        <SelectPrimitive.ItemIndicator>
-          <CheckIcon className="size-4" />
-        </SelectPrimitive.ItemIndicator>
-      </span>
-      <SelectPrimitive.ItemText>{label}</SelectPrimitive.ItemText>
-      <span className="text-xs leading-snug text-muted-foreground">{description}</span>
-    </SelectPrimitive.Item>
-  );
-}
-
 export function ClippyComposer({
   sessionId,
-  mode,
   permissionMode,
   effort,
   model,
@@ -455,68 +420,18 @@ export function ClippyComposer({
               }}
             />
             <Select
-              value={mode}
-              onValueChange={(v) => onPatch({ mode: v as ChatMode })}
+              value={permissionMode}
+              onValueChange={(v) => onPatch({ permissionMode: v as PermissionMode })}
               disabled={streaming}
             >
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <SelectTrigger
-                    size="sm"
-                    className="h-7 w-auto gap-1 px-2 text-xs"
-                    aria-label={`Chat mode: ${mode === "agent" ? "Agent" : "Chat"}`}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-left">
-                  {mode === "agent" ? (
-                    <>
-                      <div className="font-medium">Agent mode</div>
-                      <div className="mt-0.5 opacity-80">
-                        Full tool access — plugin tools, Paperclip state, and external services.
-                        Mutating tools may require approval.
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="font-medium">Chat mode</div>
-                      <div className="mt-0.5 opacity-80">
-                        Read-only conversation. No tools, no state changes, no external calls.
-                        Switch to Agent to let Clippy act on your behalf.
-                      </div>
-                    </>
-                  )}
-                </TooltipContent>
-              </Tooltip>
-              <SelectContent className="w-72">
-                <ModeSelectItem
-                  value="chat"
-                  label="Chat"
-                  description="Read-only conversation. The model can answer questions about Paperclip but can't call tools, mutate state, or hit external services."
-                />
-                <ModeSelectItem
-                  value="agent"
-                  label="Agent"
-                  description="Full tool access. The model can use plugin tools (e.g. 3cx-tools, email-tools), read/write issues, and call external services on your behalf. Mutating tools may require approval."
-                />
+              <SelectTrigger size="sm" className="h-7 w-auto gap-1 px-2 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ask">Ask permission</SelectItem>
+                <SelectItem value="bypass">Bypass permissions</SelectItem>
               </SelectContent>
             </Select>
-            {mode === "agent" && (
-              <Select
-                value={permissionMode}
-                onValueChange={(v) => onPatch({ permissionMode: v as PermissionMode })}
-                disabled={streaming}
-              >
-                <SelectTrigger size="sm" className="h-7 w-auto gap-1 px-2 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ask">Ask permission</SelectItem>
-                  <SelectItem value="bypass">Bypass permissions</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
             <Select
               value={model}
               onValueChange={(v) => onPatch({ model: v })}

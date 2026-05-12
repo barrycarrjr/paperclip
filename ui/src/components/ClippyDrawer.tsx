@@ -96,11 +96,13 @@ export function ClippyDrawer() {
     writeActiveSessionId(activeSessionId);
   }, [activeSessionId]);
 
-  // Re-fetch sessions when drawer opens or after a create. Useful for the
-  // history dropdown so the user can switch to any prior chat.
+  // Re-fetch sessions when drawer opens or after a create. The dropdown is a
+  // "recent chats" affordance — archived chats only live on the full Clippy
+  // page, so we constrain to active here.
   const sessionsQuery = useQuery({
-    queryKey: ["clippy", "sessions"],
-    queryFn: () => chatApi.listSessions().then((r) => r.sessions),
+    queryKey: ["clippy", "sessions", { status: "active", sort: "recency" }],
+    queryFn: () =>
+      chatApi.listSessions({ status: "active", sort: "recency" }).then((r) => r.sessions),
     enabled: open,
   });
   const sessions = useMemo<ChatSession[]>(() => sessionsQuery.data ?? [], [sessionsQuery.data]);
@@ -307,9 +309,7 @@ export function ClippyDrawer() {
                       className={cn("flex flex-col items-start gap-0", s.id === activeSessionId && "bg-accent")}
                     >
                       <span className="w-full truncate text-sm">{s.title}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {s.mode === "agent" ? "Agent" : "Chat"} · {s.model}
-                      </span>
+                      <span className="text-[10px] text-muted-foreground">{s.model}</span>
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />

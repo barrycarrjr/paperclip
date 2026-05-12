@@ -40,7 +40,6 @@ export function ClippyConversation({ sessionId }: Props) {
       />
       <ClippyComposer
         sessionId={sessionId}
-        mode={session?.mode ?? "chat"}
         permissionMode={session?.permissionMode ?? "ask"}
         effort={session?.effort ?? "auto"}
         model={session?.model ?? "claude-opus-4-7"}

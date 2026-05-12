@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { chatMessages, chatSessions } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
@@ -46,8 +46,21 @@ export interface ChatSession {
   permissionMode: PermissionMode;
   effort: EffortLevel;
   adapterSessionParams: Record<string, unknown> | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type SessionListStatus = "active" | "archived" | "all";
+export type SessionListSort = "recency" | "title" | "created";
+
+export interface SessionListFilters {
+  status?: SessionListStatus;
+  /** Only return sessions with updatedAt newer than now - N days. */
+  lastActivityDays?: number;
+  /** Filter to sessions scoped to this company id (no match for null). */
+  companyId?: string;
+  sort?: SessionListSort;
 }
 
 export interface ChatMessage {
@@ -82,10 +95,14 @@ function rowToSession(row: typeof chatSessions.$inferSelect): ChatSession {
     companyId: row.companyId,
     title: row.title,
     model: row.model,
-    mode: row.mode as ChatMode,
+    // `mode` is a legacy field — the Chat/Agent toggle was removed in favor of
+    // permission_mode alone, so every session behaves as Agent. Old rows may
+    // still have 'chat' stored; coerce on read so the UI doesn't need to care.
+    mode: "agent",
     permissionMode: row.permissionMode as PermissionMode,
     effort: row.effort as EffortLevel,
     adapterSessionParams: row.adapterSessionParams ?? null,
+    archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -168,23 +185,13 @@ export async function appendApprovedDraftResultToChatSession(
 
 export interface ChatActor extends ToolActor {}
 
-function systemPromptFor(session: ChatSession, defaultCompanyId: string | null): string {
+function systemPromptFor(_session: ChatSession, defaultCompanyId: string | null): string {
   const lines = [
-    "You are Clippy, Paperclip's in-app assistant for board users. You can help the user understand the state of their Paperclip companies and, when in agent mode, take actions on their behalf via tools.",
+    "You are Clippy, Paperclip's in-app assistant for board users. You can help the user understand the state of their Paperclip companies and take actions on their behalf via tools.",
     "Be concise. Prefer short, direct answers. When you call a tool, briefly say what you are about to do.",
+    "You have access to tools that read and (when permitted) modify Paperclip state. Mutating tools may require the user to approve each call. If the user denies a tool, acknowledge it and stop.",
+    "Plugin tools (names containing '__', e.g. '3cx-tools__pbx_click_to_call') are bridged from installed Paperclip plugins. They take a runContext implicitly from this chat session — pass only the documented parameters; never include agentId/runId/companyId yourself. Plugin tool errors arrive as `[E<CODE>] message` strings — read the code, surface a helpful explanation to the user, and don't loop on the same failure.",
   ];
-  if (session.mode === "agent") {
-    lines.push(
-      "You have access to tools that read and (when permitted) modify Paperclip state. Mutating tools may require the user to approve each call. If the user denies a tool, acknowledge it and stop.",
-    );
-    lines.push(
-      "Plugin tools (names containing '__', e.g. '3cx-tools__pbx_click_to_call') are bridged from installed Paperclip plugins. They take a runContext implicitly from this chat session — pass only the documented parameters; never include agentId/runId/companyId yourself. Plugin tool errors arrive as `[E<CODE>] message` strings — read the code, surface a helpful explanation to the user, and don't loop on the same failure.",
-    );
-  } else {
-    lines.push(
-      "You are in chat mode and have no tools. If the user asks you to do something that would require a tool, tell them to switch to Agent mode in the composer.",
-    );
-  }
   if (defaultCompanyId) {
     lines.push(`Current company id (default for tools that take companyId): ${defaultCompanyId}`);
   } else {
@@ -309,13 +316,36 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     return map;
   }
 
-  async function listSessions(actor: ChatActor) {
+  async function listSessions(actor: ChatActor, filters: SessionListFilters = {}) {
+    const status: SessionListStatus = filters.status ?? "active";
+    const conditions = [eq(chatSessions.boardUserId, actor.userId)];
+    if (status === "active") {
+      conditions.push(isNull(chatSessions.archivedAt));
+    } else if (status === "archived") {
+      conditions.push(isNotNull(chatSessions.archivedAt));
+    }
+    if (typeof filters.lastActivityDays === "number" && filters.lastActivityDays > 0) {
+      const cutoff = new Date(Date.now() - filters.lastActivityDays * 24 * 60 * 60 * 1000);
+      conditions.push(gte(chatSessions.updatedAt, cutoff));
+    }
+    if (filters.companyId) {
+      conditions.push(eq(chatSessions.companyId, filters.companyId));
+    }
+
+    const sort = filters.sort ?? "recency";
+    const order =
+      sort === "title"
+        ? [asc(sql`lower(${chatSessions.title})`)]
+        : sort === "created"
+          ? [desc(chatSessions.createdAt)]
+          : [desc(chatSessions.updatedAt)];
+
     const rows = await db
       .select()
       .from(chatSessions)
-      .where(eq(chatSessions.boardUserId, actor.userId))
-      .orderBy(desc(chatSessions.updatedAt))
-      .limit(100);
+      .where(and(...conditions))
+      .orderBy(...order)
+      .limit(200);
     return rows.map(rowToSession);
   }
 
@@ -335,7 +365,6 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     input: {
       title?: string;
       companyId?: string | null;
-      mode?: ChatMode;
       permissionMode?: PermissionMode;
       model?: string;
     },
@@ -351,7 +380,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
         boardUserId: actor.userId,
         companyId: input.companyId ?? null,
         title: input.title?.slice(0, 200) ?? "New chat",
-        mode: input.mode ?? "chat",
+        mode: "agent",
         permissionMode: input.permissionMode ?? "ask",
         model: initialModel,
       })
@@ -365,21 +394,26 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     id: string,
     patch: {
       title?: string;
-      mode?: ChatMode;
       permissionMode?: PermissionMode;
       effort?: EffortLevel;
       companyId?: string | null;
       model?: string;
+      archived?: boolean;
     },
   ) {
     await getSession(actor, id);
-    const updates: Partial<typeof chatSessions.$inferInsert> = { updatedAt: new Date() };
+    // Drizzle infers `updatedAt` as `Date | SQL` because of the default; the
+    // partial type widens that to include `undefined` which the `set()` call
+    // rejects, so we build the update object as a plain record and cast.
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.title !== undefined) updates.title = patch.title.slice(0, 200);
-    if (patch.mode !== undefined) updates.mode = patch.mode;
     if (patch.permissionMode !== undefined) updates.permissionMode = patch.permissionMode;
     if (patch.effort !== undefined) updates.effort = patch.effort;
     if (patch.companyId !== undefined) updates.companyId = patch.companyId;
     if (patch.model !== undefined) updates.model = patch.model;
+    if (patch.archived !== undefined) {
+      updates.archivedAt = patch.archived ? new Date() : null;
+    }
     const updated = await db
       .update(chatSessions)
       .set(updates)
@@ -558,17 +592,12 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       defaultCompanyId,
       chatSessionId: sessionId,
     };
-    let tools: ReturnType<typeof listChatToolSpecs> | undefined;
-    if (session.mode === "agent") {
-      const builtIn = listChatToolSpecs();
-      const plugin = await listPluginToolSpecsForChat(
-        pluginToolDispatcher,
-        defaultCompanyId,
-      );
-      tools = [...builtIn, ...plugin];
-    } else {
-      tools = undefined;
-    }
+    // Every Clippy session runs as Agent now — tool access is gated only by
+    // permissionMode (`ask` vs `bypass`). See systemPromptFor + rowToSession
+    // for the rest of the always-Agent contract.
+    const builtIn = listChatToolSpecs();
+    const plugin = await listPluginToolSpecsForChat(pluginToolDispatcher, defaultCompanyId);
+    const tools: ReturnType<typeof listChatToolSpecs> = [...builtIn, ...plugin];
 
     // Plugin MCP bridge token is minted ONCE per turn-stream invocation
     // and reused across the tool-loop iterations below; revoked in the
@@ -578,7 +607,6 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     let mcpBridgeToken: string | null = null;
     let pluginMcpUrl: string | undefined;
     if (
-      session.mode === "agent" &&
       provider.name === "adapter" &&
       defaultCompanyId &&
       pluginMcpBridge

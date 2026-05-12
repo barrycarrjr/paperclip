@@ -4,6 +4,16 @@ export type ChatMode = "chat" | "agent";
 export type PermissionMode = "ask" | "bypass";
 export type EffortLevel = "auto" | "low" | "medium" | "high";
 
+export type ChatSessionStatus = "active" | "archived" | "all";
+export type ChatSessionSort = "recency" | "title" | "created";
+
+export interface ChatSessionListFilters {
+  status?: ChatSessionStatus;
+  lastActivityDays?: number;
+  companyId?: string;
+  sort?: ChatSessionSort;
+}
+
 export interface ChatSession {
   id: string;
   boardUserId: string;
@@ -13,6 +23,7 @@ export interface ChatSession {
   mode: ChatMode;
   permissionMode: PermissionMode;
   effort: EffortLevel;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,13 +92,26 @@ export interface AvailableModel {
   source?: string;
 }
 
+function buildSessionListQuery(filters?: ChatSessionListFilters): string {
+  if (!filters) return "";
+  const params = new URLSearchParams();
+  if (filters.status) params.set("status", filters.status);
+  if (filters.lastActivityDays !== undefined) {
+    params.set("lastActivityDays", String(filters.lastActivityDays));
+  }
+  if (filters.companyId) params.set("companyId", filters.companyId);
+  if (filters.sort) params.set("sort", filters.sort);
+  const qs = params.toString();
+  return qs.length > 0 ? `?${qs}` : "";
+}
+
 export const chatApi = {
-  listSessions: () => api.get<{ sessions: ChatSession[] }>("/chat/sessions"),
+  listSessions: (filters?: ChatSessionListFilters) =>
+    api.get<{ sessions: ChatSession[] }>(`/chat/sessions${buildSessionListQuery(filters)}`),
   getSession: (id: string) => api.get<{ session: ChatSession }>(`/chat/sessions/${id}`),
   createSession: (input: {
     title?: string;
     companyId?: string | null;
-    mode?: ChatMode;
     permissionMode?: PermissionMode;
     model?: string;
   }) => api.post<{ session: ChatSession }>("/chat/sessions", input),
@@ -95,11 +119,11 @@ export const chatApi = {
     id: string,
     patch: {
       title?: string;
-      mode?: ChatMode;
       permissionMode?: PermissionMode;
       effort?: EffortLevel;
       companyId?: string | null;
       model?: string;
+      archived?: boolean;
     },
   ) => api.patch<{ session: ChatSession }>(`/chat/sessions/${id}`, patch),
   deleteSession: (id: string) => api.delete<void>(`/chat/sessions/${id}`),

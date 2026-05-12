@@ -13,6 +13,7 @@ export const chatSessions = pgTable(
     permissionMode: text("permission_mode").notNull().default("ask"),
     effort: text("effort").notNull().default("auto"),
     adapterSessionParams: jsonb("adapter_session_params").$type<Record<string, unknown> | null>(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

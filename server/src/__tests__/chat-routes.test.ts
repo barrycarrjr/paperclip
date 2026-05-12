@@ -121,13 +121,13 @@ describe("chat routes", () => {
     expect(res.status).toBe(403);
   });
 
-  it("creates a chat session", async () => {
+  it("creates a chat session (mode is always agent now)", async () => {
     const state: MockChain = { rows: [], insertedRows: [], updates: [], deletes: 0 };
     const db = createMockDb(state);
     const app = buildApp(db);
     const res = await request(app)
       .post("/api/chat/sessions")
-      .send({ title: "First chat", mode: "agent", permissionMode: "bypass" });
+      .send({ title: "First chat", permissionMode: "bypass" });
     expect(res.status).toBe(201);
     expect(res.body.session.title).toBe("First chat");
     expect(res.body.session.mode).toBe("agent");
@@ -135,14 +135,45 @@ describe("chat routes", () => {
     expect(state.insertedRows).toHaveLength(1);
   });
 
-  it("rejects invalid mode in createSession", async () => {
+  it("rejects invalid permissionMode in createSession", async () => {
     const state: MockChain = { rows: [], insertedRows: [], updates: [], deletes: 0 };
     const db = createMockDb(state);
     const app = buildApp(db);
     const res = await request(app)
       .post("/api/chat/sessions")
-      .send({ mode: "rogue" });
+      .send({ permissionMode: "rogue" });
     expect(res.status).toBe(400);
+  });
+
+  it("archive flag patches the session", async () => {
+    const state: MockChain = {
+      rows: [
+        {
+          id: "sess-1",
+          boardUserId: "u1",
+          companyId: null,
+          title: "S1",
+          model: "claude-opus-4-7",
+          mode: "agent",
+          permissionMode: "ask",
+          effort: "auto",
+          archivedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+      insertedRows: [],
+      updates: [],
+      deletes: 0,
+    };
+    const db = createMockDb(state);
+    const app = buildApp(db);
+    const res = await request(app)
+      .patch("/api/chat/sessions/sess-1")
+      .send({ archived: true });
+    expect(res.status).toBe(200);
+    const update = state.updates[0] as { archivedAt?: Date | null };
+    expect(update.archivedAt).toBeInstanceOf(Date);
   });
 
   it("returns a well-formed models list (adapter-discovered models are surfaced even when no native key is set)", async () => {
