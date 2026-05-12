@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "@/lib/router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertOctagon,
   CheckCircle2,
@@ -31,10 +31,12 @@ import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import {
   dismissReviewSender,
+  headerMatchesSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
-import { makeEmailToolsApi } from "../api/emailTools";
+import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ACTIONABLE_APPROVAL_STATUSES,
   getLatestFailedRunsByAgent,
@@ -240,6 +242,61 @@ export function UnifiedInbox() {
         .filter((r): r is PromiseFulfilledResult<RulesHomeBundle> => r.status === "fulfilled")
         .map((r) => r.value);
     },
+  });
+
+  const uniqueReviewMailboxes = useMemo(() => {
+    const seen = new Set<string>();
+    for (const bundle of rulesBundles ?? []) {
+      const entries = parseReviewQueue(bundle.body);
+      if (entries.length > 0) seen.add(bundle.mailbox);
+    }
+    return Array.from(seen);
+  }, [rulesBundles]);
+
+  const previewMessageQueries = useQueries({
+    queries: uniqueReviewMailboxes.map((mailbox) => ({
+      queryKey: ["unifiedInbox", "reviewQueuePreview", selectedCompanyId, emailPluginId, mailbox],
+      queryFn: () => emailApi!.listMessages(mailbox, { limit: 200 }),
+      enabled: !!emailApi && !!selectedCompanyId,
+      staleTime: 60_000,
+    })),
+  });
+
+  const { reviewPreviewLookup, reviewMatchedUidsLookup } = useMemo(() => {
+    const headerMap = new Map<string, MailHeader>();
+    const uidsMap = new Map<string, number[]>();
+    uniqueReviewMailboxes.forEach((mailbox, idx) => {
+      const messages = previewMessageQueries[idx]?.data?.messages ?? [];
+      const bundle = rulesBundles?.find((b) => b.mailbox === mailbox);
+      const entries = bundle ? parseReviewQueue(bundle.body) : [];
+      for (const entry of entries) {
+        const matches = messages.filter((m) => headerMatchesSender(m, entry.sender));
+        if (matches.length === 0) continue;
+        matches.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const key = `${mailbox}::${entry.sender}`;
+        headerMap.set(key, matches[0]!);
+        uidsMap.set(key, matches.map((m) => m.uid));
+      }
+    });
+    return { reviewPreviewLookup: headerMap, reviewMatchedUidsLookup: uidsMap };
+  }, [uniqueReviewMailboxes, previewMessageQueries, rulesBundles]);
+
+  const [hoveredPreviewKey, setHoveredPreviewKey] = useState<string | null>(null);
+  const hoveredHeader = hoveredPreviewKey ? reviewPreviewLookup.get(hoveredPreviewKey) ?? null : null;
+  const hoveredMailbox = hoveredPreviewKey ? hoveredPreviewKey.split("::")[0]! : null;
+
+  const { data: hoveredFullMessage } = useQuery({
+    queryKey: [
+      "unifiedInbox",
+      "reviewQueueFullMessage",
+      selectedCompanyId,
+      emailPluginId,
+      hoveredMailbox,
+      hoveredHeader?.uid,
+    ],
+    queryFn: () => emailApi!.fetchMessage(hoveredMailbox!, hoveredHeader!.uid),
+    enabled: !!emailApi && !!hoveredMailbox && !!hoveredHeader,
+    staleTime: 10 * 60_000,
   });
 
   const HEARTBEAT_LIMIT = 200;
@@ -539,9 +596,24 @@ export function UnifiedInbox() {
     },
     ...reviewSenderMutationOptions,
   });
-  const keepMutation = useMutation({
+  const keepUnreadMutation = useMutation({
     mutationFn: async (item: EmailReviewSenderItem) => {
       if (emailApi) await emailApi.setRule(item.mailbox, item.sender, "keep-always");
+      await applyReviewSenderTransform(item, dismissReviewSender);
+    },
+    ...reviewSenderMutationOptions,
+  });
+  const keepReadMutation = useMutation({
+    mutationFn: async (item: EmailReviewSenderItem) => {
+      if (!emailApi) {
+        await applyReviewSenderTransform(item, dismissReviewSender);
+        return;
+      }
+      await emailApi.setRule(item.mailbox, item.sender, "keep-always");
+      const uids = reviewMatchedUidsLookup.get(`${item.mailbox}::${item.sender}`) ?? [];
+      await Promise.allSettled(
+        uids.map((uid) => emailApi.markRead(item.mailbox, uid, "INBOX")),
+      );
       await applyReviewSenderTransform(item, dismissReviewSender);
     },
     ...reviewSenderMutationOptions,
@@ -667,6 +739,14 @@ export function UnifiedInbox() {
           {items.map((item) => {
             const isReviewSender = item.kind === "email_review_sender";
             const isFailedRun = item.kind === "failed_run";
+            const previewKey = isReviewSender ? `${item.mailbox}::${item.sender}` : null;
+            const previewHeader = previewKey ? reviewPreviewLookup.get(previewKey) ?? null : null;
+            const isHovered = !!previewKey && hoveredPreviewKey === previewKey;
+            const messageHref = isReviewSender
+              ? previewHeader
+                ? `/email?mailbox=${encodeURIComponent(item.mailbox)}&folder=INBOX&uid=${previewHeader.uid}&all=1`
+                : `/email?mailbox=${encodeURIComponent(item.mailbox)}&folder=INBOX&all=1`
+              : undefined;
             return (
               <InboxItemRow
                 key={item.id}
@@ -687,8 +767,11 @@ export function UnifiedInbox() {
                 onGraduate={
                   isReviewSender ? () => graduateMutation.mutate(item) : undefined
                 }
-                onKeep={
-                  isReviewSender ? () => keepMutation.mutate(item) : undefined
+                onKeepRead={
+                  isReviewSender ? () => keepReadMutation.mutate(item) : undefined
+                }
+                onKeepUnread={
+                  isReviewSender ? () => keepUnreadMutation.mutate(item) : undefined
                 }
                 onDismissRule={
                   isReviewSender ? () => dismissReviewMutation.mutate(item) : undefined
@@ -696,11 +779,24 @@ export function UnifiedInbox() {
                 onRetry={
                   isFailedRun ? () => retryRunMutation.mutate(item) : undefined
                 }
-                onOpen={() => openItem(item, navigate)}
+                onOpen={() => openItem(item, navigate, messageHref)}
+                previewHeader={previewHeader}
+                fullBodyText={isHovered ? hoveredFullMessage?.text ?? null : null}
+                fullBodyLoading={isHovered && !!previewHeader && !hoveredFullMessage}
+                onHoverChange={
+                  previewKey
+                    ? (entered) => {
+                        if (entered) setHoveredPreviewKey(previewKey);
+                        else setHoveredPreviewKey((cur) => (cur === previewKey ? null : cur));
+                      }
+                    : undefined
+                }
+                messageHref={messageHref}
                 isPending={
                   (isReviewSender &&
                     (graduateMutation.isPending ||
-                      keepMutation.isPending ||
+                      keepReadMutation.isPending ||
+                      keepUnreadMutation.isPending ||
                       dismissReviewMutation.isPending)) ||
                   ((item.kind === "approval" || item.kind === "draft") &&
                     (approveMutation.isPending || rejectMutation.isPending)) ||
@@ -739,11 +835,25 @@ interface InboxItemRowProps {
   onApprove?: () => void;
   onReject?: () => void;
   onGraduate?: () => void;
-  onKeep?: () => void;
+  onKeepRead?: () => void;
+  onKeepUnread?: () => void;
   onDismissRule?: () => void;
   onRetry?: () => void;
   onOpen: () => void;
+  previewHeader?: MailHeader | null;
+  fullBodyText?: string | null;
+  fullBodyLoading?: boolean;
+  onHoverChange?: (entered: boolean) => void;
+  messageHref?: string;
   isPending: boolean;
+}
+
+const PREVIEW_BODY_CHARS = 700;
+
+function truncateBody(text: string, max: number): { text: string; truncated: boolean } {
+  const collapsed = text.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (collapsed.length <= max) return { text: collapsed, truncated: false };
+  return { text: collapsed.slice(0, max).trimEnd() + "…", truncated: true };
 }
 
 function InboxItemRow({
@@ -752,10 +862,16 @@ function InboxItemRow({
   onApprove,
   onReject,
   onGraduate,
-  onKeep,
+  onKeepRead,
+  onKeepUnread,
   onDismissRule,
   onRetry,
   onOpen,
+  previewHeader,
+  fullBodyText,
+  fullBodyLoading,
+  onHoverChange,
+  messageHref,
   isPending,
 }: InboxItemRowProps) {
   const tone = KIND_TONE[item.kind];
@@ -783,32 +899,122 @@ function InboxItemRow({
     slate: "border-slate-400/40 bg-slate-400/10 text-slate-600 dark:text-slate-400",
   }[tone];
 
+  const isReviewSender = item.kind === "email_review_sender";
+  const subjectLine = previewHeader?.subject?.trim() || "";
+  const snippet = previewHeader?.snippet?.trim() || "";
+  const fullBody = fullBodyText ? truncateBody(fullBodyText, PREVIEW_BODY_CHARS) : null;
+
+  const reviewBody = isReviewSender ? (
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span
+          className={cn(
+            "inline-flex items-center px-2 py-0.5 text-[10px] font-medium border whitespace-nowrap",
+            chipClass,
+          )}
+        >
+          {chipLabel}
+        </span>
+        <span className="truncate font-medium font-mono text-[13px]">{item.title}</span>
+        <span className="text-[11px] text-muted-foreground/70 shrink-0">
+          · {timeAgo(item.createdAt)}
+        </span>
+      </div>
+      <p className="mt-1 text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
+        {previewHeader ? (
+          subjectLine || <span className="italic">(no subject)</span>
+        ) : (
+          item.subtitle || ""
+        )}
+      </p>
+    </>
+  ) : null;
+
   return (
-    <div className="group relative pl-5 pr-4 py-3.5">
+    <div
+      className="group relative pl-5 pr-4 py-3.5"
+      onMouseEnter={onHoverChange ? () => onHoverChange(true) : undefined}
+      onMouseLeave={onHoverChange ? () => onHoverChange(false) : undefined}
+    >
       <span aria-hidden className={cn("absolute left-0 top-0 h-full w-[3px] transition-colors", accentClass)} />
       <div className="flex items-start gap-3">
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Icon className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span
-              className={cn(
-                "inline-flex items-center px-2 py-0.5 text-[10px] font-medium border whitespace-nowrap",
-                chipClass,
+          {isReviewSender && messageHref ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Link
+                  to={messageHref}
+                  title={previewHeader ? "Open this email" : "Open this mailbox (no recent message found in INBOX)"}
+                  className="block group/link cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/40 rounded-sm"
+                >
+                  {reviewBody}
+                </Link>
+              </TooltipTrigger>
+              <TooltipContent
+                side="bottom"
+                align="start"
+                className="max-w-lg p-3 text-left whitespace-normal"
+              >
+                {previewHeader ? (
+                  <div className="space-y-1.5">
+                    <div className="text-[13px] font-medium leading-snug break-words">
+                      {subjectLine || "(no subject)"}
+                    </div>
+                    {fullBody ? (
+                      <div className="text-[12px] leading-snug break-words whitespace-pre-wrap opacity-90 max-h-64 overflow-hidden">
+                        {fullBody.text}
+                      </div>
+                    ) : snippet ? (
+                      <div className="text-[12px] leading-snug break-words opacity-80">
+                        {snippet}
+                        {fullBodyLoading && <span className="ml-1 opacity-60">· loading more…</span>}
+                      </div>
+                    ) : fullBodyLoading ? (
+                      <div className="text-[12px] opacity-60">Loading preview…</div>
+                    ) : null}
+                    <div className="text-[11px] pt-1 opacity-70">
+                      {timeAgo(previewHeader.date)} · click to open
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1 text-[12px]">
+                    <div className="font-medium">No recent message preview</div>
+                    <div className="opacity-70">
+                      Couldn't find a recent message from{" "}
+                      <span className="font-mono">{isReviewSender ? item.sender : ""}</span> in the last 200 INBOX messages.
+                    </div>
+                    <div className="opacity-70">
+                      <span className="underline-offset-2 group-hover:underline">click to open mailbox</span>
+                    </div>
+                  </div>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span
+                  className={cn(
+                    "inline-flex items-center px-2 py-0.5 text-[10px] font-medium border whitespace-nowrap",
+                    chipClass,
+                  )}
+                >
+                  {chipLabel}
+                </span>
+                <span className={cn("truncate", isReadIssue ? "font-normal text-muted-foreground" : "font-medium")}>{item.title}</span>
+                <span className="text-[11px] text-muted-foreground/70 shrink-0">
+                  · {timeAgo(item.createdAt)}
+                </span>
+              </div>
+              {item.subtitle && (
+                <p className="mt-1 text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
+                  {item.subtitle}
+                </p>
               )}
-            >
-              {chipLabel}
-            </span>
-            <span className={cn("truncate", isReadIssue ? "font-normal text-muted-foreground" : "font-medium")}>{item.title}</span>
-            <span className="text-[11px] text-muted-foreground/70 shrink-0">
-              · {timeAgo(item.createdAt)}
-            </span>
-          </div>
-          {item.subtitle && (
-            <p className="mt-1 text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-              {item.subtitle}
-            </p>
+            </>
           )}
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -846,15 +1052,26 @@ function InboxItemRow({
                 Auto-triage
               </button>
             )}
-            {onKeep && (
+            {onKeepRead && (
               <button
                 type="button"
-                onClick={onKeep}
+                onClick={onKeepRead}
                 disabled={isPending}
-                title="Always leave mail from this sender in INBOX."
+                title="Keep this sender in INBOX going forward AND mark the existing messages as read."
                 className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50"
               >
-                Keep
+                Keep · read
+              </button>
+            )}
+            {onKeepUnread && (
+              <button
+                type="button"
+                onClick={onKeepUnread}
+                disabled={isPending}
+                title="Keep this sender in INBOX going forward and leave existing messages unread."
+                className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50"
+              >
+                Keep · unread
               </button>
             )}
             {onDismissRule && (
@@ -915,7 +1132,7 @@ function openTitle(item: InboxItem): string {
     case "draft":
       return "Open the approval detail page.";
     case "email_review_sender":
-      return "Open the email triage rules document for this mailbox.";
+      return "Open the actual email for this sender (or the mailbox if none was found).";
     case "failed_run":
       return "Open the agent's run detail to see logs and errors.";
     case "join_request":
@@ -943,14 +1160,18 @@ function approvalShortTitle(a: Approval, isDraft: boolean): string {
   return `Approval: ${a.type}`;
 }
 
-function openItem(item: InboxItem, navigate: ReturnType<typeof useNavigate>) {
+function openItem(
+  item: InboxItem,
+  navigate: ReturnType<typeof useNavigate>,
+  messageHrefOverride?: string,
+) {
   switch (item.kind) {
     case "approval":
     case "draft":
       navigate(`/approvals/${item.approvalId}`);
       return;
     case "email_review_sender":
-      navigate(`/issues/${item.rulesIssueId}`);
+      navigate(messageHrefOverride ?? `/issues/${item.rulesIssueId}`);
       return;
     case "failed_run":
       navigate(`/agents/${item.agentId}/runs/${item.runId}`);

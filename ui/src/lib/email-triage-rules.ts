@@ -3,6 +3,36 @@ export interface ReviewQueueEntry {
   sender: string;
 }
 
+interface SenderMatchableHeader {
+  from: string;
+  subject: string;
+}
+
+export function extractEmailAddress(from: string): string | null {
+  const angle = /<([^>]+)>/.exec(from);
+  if (angle) return angle[1]!.trim().toLowerCase();
+  if (/@/.test(from)) return from.trim().toLowerCase();
+  return null;
+}
+
+// Matches a message header against a review-queue sender pattern.
+// Patterns: full email (`foo@bar.com`), domain (`@bar.com`), or `subject:<text>`.
+export function headerMatchesSender(
+  header: SenderMatchableHeader,
+  sender: string,
+): boolean {
+  const s = sender.trim().toLowerCase();
+  if (!s) return false;
+  if (s.startsWith("subject:")) {
+    const needle = s.slice("subject:".length).trim();
+    return needle.length > 0 && header.subject.toLowerCase().includes(needle);
+  }
+  const addr = extractEmailAddress(header.from);
+  if (!addr) return false;
+  if (s.startsWith("@")) return addr.endsWith(s);
+  return addr === s;
+}
+
 const SECTION_HEADERS = {
   autoTriage: "## Auto-triage senders",
   keepAlways: "## Keep-always senders",

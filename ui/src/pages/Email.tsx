@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Mail,
   MailOpen,
@@ -76,10 +77,21 @@ export function Email() {
     [pluginId, selectedCompanyId],
   );
 
-  const [selectedMailbox, setSelectedMailbox] = useState<string | null>(null);
-  const [selectedFolder, setSelectedFolder] = useState<string>("INBOX");
-  const [selectedUid, setSelectedUid] = useState<number | null>(null);
-  const [showAllMessages, setShowAllMessages] = useState(false);
+  const [searchParams] = useSearchParams();
+  const initialUrlState = useRef({
+    mailbox: searchParams.get("mailbox"),
+    folder: searchParams.get("folder"),
+    uid: (() => {
+      const u = searchParams.get("uid");
+      const n = u ? parseInt(u, 10) : NaN;
+      return Number.isFinite(n) ? n : null;
+    })(),
+    all: searchParams.get("all") === "1",
+  }).current;
+  const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialUrlState.mailbox);
+  const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
+  const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
+  const [showAllMessages, setShowAllMessages] = useState(initialUrlState.all || !!initialUrlState.uid);
   const [optimisticallyRemovedUids, setOptimisticallyRemovedUids] = useState<Set<number>>(
     new Set(),
   );
@@ -195,7 +207,12 @@ export function Email() {
   const allMessages = messagesData?.messages ?? [];
   const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
 
+  const skipNextResetRef = useRef(initialUrlState.uid !== null);
   useEffect(() => {
+    if (skipNextResetRef.current) {
+      skipNextResetRef.current = false;
+      return;
+    }
     setSelectedUid(null);
     setOptimisticallyRemovedUids(new Set());
     setReplyOpen(false);
