@@ -10,6 +10,7 @@ import {
   ListChecks,
   Pencil,
   Mail,
+  Bot,
 } from "lucide-react";
 import type { ActivityEvent, Approval, Company, DashboardSummary, Issue, IssueDocument } from "@paperclipai/shared";
 import { ApiError } from "../api/client";
@@ -18,6 +19,10 @@ import { activityApi } from "../api/activity";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
+import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
+import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive } from "../components/ActiveAgentsPanel";
+import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
+import type { TranscriptEntry } from "../adapters";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -45,6 +50,8 @@ const OUTCOMES_PER_COMPANY = 5;
 const DRAFTS_PER_COMPANY = 4;
 const ISSUES_PER_COMPANY = 3;
 const REVIEW_QUEUE_PER_COMPANY = 5;
+const AGENT_RUNS_PER_COMPANY = 4;
+const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
 
@@ -229,6 +236,75 @@ export function PortfolioBrief() {
     }
     return map;
   }, [dashboardData]);
+
+  // Live agent runs across the portfolio — fan out one fetch per company so
+  // each call goes through normal per-company access control. The HQ operator
+  // is a member of every sub-company, so each request succeeds.
+  const liveRunsQueries = useQueries({
+    queries: companies.map((company) => ({
+      queryKey: [
+        ...queryKeys.liveRuns(company.id),
+        "portfolio-brief",
+        { minRunCount: AGENT_RUNS_PER_COMPANY },
+      ],
+      queryFn: () =>
+        heartbeatsApi.liveRunsForCompany(company.id, {
+          minCount: AGENT_RUNS_PER_COMPANY,
+        }),
+      enabled: isPortfolioRoot,
+    })),
+  });
+
+  const liveRunsByCompany = useMemo(() => {
+    const map = new Map<string, LiveRunForIssue[]>();
+    companies.forEach((company, idx) => {
+      map.set(company.id, liveRunsQueries[idx]?.data ?? []);
+    });
+    return map;
+  }, [companies, liveRunsQueries]);
+
+  const liveRunsAllFlat = useMemo(() => {
+    const all: LiveRunForIssue[] = [];
+    for (const runs of liveRunsByCompany.values()) all.push(...runs);
+    return all;
+  }, [liveRunsByCompany]);
+
+  const liveRunsTotal = liveRunsAllFlat.length;
+  const liveRunsActiveCount = useMemo(
+    () => liveRunsAllFlat.filter(isRunActive).length,
+    [liveRunsAllFlat],
+  );
+
+  // Per-company issues for resolving issue titles on agent run cards.
+  const portfolioAgentIssuesQueries = useQueries({
+    queries: companies.map((company) => {
+      const runs = liveRunsByCompany.get(company.id) ?? [];
+      return {
+        queryKey: [...queryKeys.issues.list(company.id), "with-routine-executions"],
+        queryFn: () => issuesApi.list(company.id, { includeRoutineExecutions: true }),
+        enabled: isPortfolioRoot && runs.length > 0,
+      };
+    }),
+  });
+
+  const issuesByIdAcrossPortfolio = useMemo(() => {
+    const map = new Map<string, Issue>();
+    for (const q of portfolioAgentIssuesQueries) {
+      for (const issue of q.data ?? []) map.set(issue.id, issue);
+    }
+    return map;
+  }, [portfolioAgentIssuesQueries]);
+
+  // One transcript subscription across all runs — fine because the realtime
+  // websocket is disabled in this view; only per-run log polling is used.
+  const { transcriptByRun, hasOutputForRun } = useLiveRunTranscripts({
+    runs: liveRunsAllFlat,
+    companyId: null,
+    maxChunksPerRun: DASHBOARD_AGENT_RUN_CONFIG.maxChunksPerRun,
+    logPollIntervalMs: DASHBOARD_AGENT_RUN_CONFIG.logPollIntervalMs,
+    logReadLimitBytes: DASHBOARD_AGENT_RUN_CONFIG.logReadLimitBytes,
+    enableRealtimeUpdates: false,
+  });
 
   // Outcomes: filter to overnight + outcome-shaped, then bucket by company.
   const outcomeBuckets: CompanyBucket<ActivityEvent>[] = useMemo(() => {
@@ -729,6 +805,84 @@ export function PortfolioBrief() {
                 )}
               </div>
             )}
+          </div>
+        )}
+      </section>
+
+      {/* Agents */}
+      <section aria-label="Agents">
+        <SectionHeader
+          label="Agents"
+          chip={
+            liveRunsActiveCount > 0
+              ? {
+                  text: `${liveRunsActiveCount} live`,
+                  tone: "emerald",
+                }
+              : null
+          }
+          right={{ label: "View all runs →", to: "/dashboard/live" }}
+        />
+        {liveRunsTotal === 0 ? (
+          <EmptySection
+            icon={Bot}
+            message="No recent agent runs across the portfolio."
+          />
+        ) : (
+          <div className="space-y-3">
+            {companies
+              .filter((c) => (liveRunsByCompany.get(c.id) ?? []).length > 0)
+              .map((company) => {
+                const runs = liveRunsByCompany.get(company.id) ?? [];
+                const visible = runs.slice(0, AGENT_RUNS_PER_COMPANY);
+                const activeForCompany = runs.filter(isRunActive).length;
+                return (
+                  <div
+                    key={company.id}
+                    className="border border-border bg-card overflow-hidden"
+                  >
+                    <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
+                      <Link
+                        to={`/${company.issuePrefix}/brief`}
+                        className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground no-underline"
+                      >
+                        <CompanyPatternIcon
+                          companyName={company.name}
+                          logoUrl={company.logoUrl}
+                          brandColor={company.brandColor}
+                          className="h-4 w-4 shrink-0 rounded-[2px]"
+                        />
+                        <span>{company.name}</span>
+                      </Link>
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        {activeForCompany > 0
+                          ? `${activeForCompany} live · `
+                          : ""}
+                        {runs.length} run{runs.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-3">
+                      {visible.map((run) => (
+                        <AgentRunCard
+                          key={run.id}
+                          companyId={company.id}
+                          run={run}
+                          issue={
+                            run.issueId
+                              ? issuesByIdAcrossPortfolio.get(run.issueId)
+                              : undefined
+                          }
+                          transcript={
+                            transcriptByRun.get(run.id) ?? EMPTY_TRANSCRIPT
+                          }
+                          hasOutput={hasOutputForRun(run.id)}
+                          isActive={isRunActive(run)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         )}
       </section>

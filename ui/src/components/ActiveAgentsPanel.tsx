@@ -19,7 +19,14 @@ const DASHBOARD_LOG_READ_LIMIT_BYTES = 64_000;
 const DASHBOARD_MAX_CHUNKS_PER_RUN = 40;
 const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 
-function isRunActive(run: LiveRunForIssue): boolean {
+export const DASHBOARD_AGENT_RUN_CONFIG = {
+  minRuns: MIN_DASHBOARD_RUNS,
+  logPollIntervalMs: DASHBOARD_LOG_POLL_INTERVAL_MS,
+  logReadLimitBytes: DASHBOARD_LOG_READ_LIMIT_BYTES,
+  maxChunksPerRun: DASHBOARD_MAX_CHUNKS_PER_RUN,
+} as const;
+
+export function isRunActive(run: LiveRunForIssue): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
@@ -115,7 +122,7 @@ export function ActiveAgentsPanel({
   );
 }
 
-const AgentRunCard = memo(function AgentRunCard({
+export const AgentRunCard = memo(function AgentRunCard({
   companyId,
   run,
   issue,
