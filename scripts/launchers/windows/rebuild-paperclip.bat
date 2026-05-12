@@ -41,6 +41,15 @@ REM returns immediately instead of waiting for a keypress.
 call "%~dp0stop-paperclip.bat" < nul >nul 2>&1
 timeout /t 1 /nobreak >nul
 
+REM Activate the in-repo pre-commit hook (.githooks/pre-commit) if it exists
+REM but hasn't been wired up yet. Normally package.json's `prepare` does this
+REM on `pnpm install`, but rebuild doesn't pnpm install — and a fresh clone
+REM that has only ever run rebuild would otherwise have an inactive hook.
+REM `git config` is idempotent, so this is harmless to run every time.
+if exist "%PAPERCLIP_SRC%\.githooks\pre-commit" (
+  git -C "%PAPERCLIP_SRC%" config core.hooksPath .githooks >nul 2>&1
+)
+
 echo.
 echo [2/4] pnpm build:runtime ^(skips in-repo example/scaffold plugins^)
 call pnpm --dir "%PAPERCLIP_SRC%" build:runtime

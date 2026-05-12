@@ -58,6 +58,15 @@ if exist "%PAPERCLIP_SRC%\pnpm-lock.yaml" (
   for /f "delims=" %%H in ('powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '%PAPERCLIP_SRC%\pnpm-lock.yaml').Hash"') do set "LOCK_AFTER=%%H"
 )
 
+REM Activate the in-repo pre-commit hook (.githooks/pre-commit). Normally
+REM package.json's `prepare` script does this on `pnpm install`, but we skip
+REM install below when the lockfile hasn't changed — and a pull-only update
+REM would otherwise leave a freshly-cloned dev without an active hook.
+REM `git config` is idempotent, so running it on every update is harmless.
+if exist "%PAPERCLIP_SRC%\.githooks\pre-commit" (
+  git -C "%PAPERCLIP_SRC%" config core.hooksPath .githooks >nul 2>&1
+)
+
 echo.
 echo [3/6] pnpm install (only if lockfile changed)
 if "!LOCK_BEFORE!"=="!LOCK_AFTER!" (
