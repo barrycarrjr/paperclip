@@ -1,0 +1,4 @@
+# Git hooks must keep LF line endings on Windows checkouts. A CRLF shebang
+# line (`#!/usr/bin/env bash\r`) is parsed by the kernel as the literal
+# program name `bash\r`, which doesn't exist — and the hook silently fails.
+.githooks/** text eol=lf

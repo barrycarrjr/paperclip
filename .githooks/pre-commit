@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Block commits that introduce TypeScript errors.
+#
+# Triggered on every `git commit` via core.hooksPath=.githooks, which the
+# package.json `prepare` script wires up on `pnpm install`. Anyone who
+# clones this repo and runs install gets this hook for free.
+#
+# Behavior:
+#   * If no .ts/.tsx files are staged, this is a no-op. Doc-only, config-only,
+#     and bat/ps1/rs commits skip the typecheck entirely.
+#   * Otherwise runs `pnpm typecheck` (which fans out to every workspace via
+#     `pnpm -r typecheck`). TypeScript's incremental build cache (tsbuildinfo)
+#     makes warm runs fast — usually <10s — even though we're checking the
+#     full monorepo.
+#   * Non-zero exit blocks the commit. The error message points at
+#     --no-verify for intentional bypass.
+#
+# To bypass intentionally (e.g. mid-refactor checkpoint commit):
+#   git commit --no-verify
+#
+# Cross-platform note: Windows runs this through Git Bash, which is bundled
+# with Git for Windows — no extra install needed.
+set -euo pipefail
+
+# Run from repo root regardless of how the hook was invoked (some tools
+# invoke from subdirs).
+cd "$(git rev-parse --show-toplevel)"
+
+# Cheap pre-filter: only typecheck when staged changes include TS source.
+# --diff-filter=ACMR = Added/Copied/Modified/Renamed (skip Deleted — a
+# deleted file can't introduce new TS errors).
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -qE '\.(ts|tsx)$'; then
+  exit 0
+fi
+
+echo "[pre-commit] TypeScript files staged — running pnpm typecheck."
+echo "[pre-commit] (skip with: git commit --no-verify)"
+echo ""
+
+if ! pnpm typecheck; then
+  echo ""
+  echo "============================================================"
+  echo "  [pre-commit] TypeScript check FAILED."
+  echo ""
+  echo "  Fix the errors above, then re-commit. Or, if this is an"
+  echo "  intentional checkpoint commit you'll clean up later:"
+  echo ""
+  echo "    git commit --no-verify"
+  echo "============================================================"
+  exit 1
+fi
