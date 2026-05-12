@@ -17,6 +17,7 @@ import {
   Check,
   X,
   Reply,
+  Forward,
   Send,
   Pencil,
   Trash2,
@@ -24,6 +25,7 @@ import {
   AlignLeft,
   RefreshCw,
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -101,6 +103,7 @@ export function Email() {
   const [handoffNote, setHandoffNote] = useState("");
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
+  const [moveDropdownSender, setMoveDropdownSender] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
   const [groupBySender, setGroupBySender] = useState(() => {
     try { return localStorage.getItem("email-groupBySender") === "true"; } catch { return false; }
@@ -798,28 +801,6 @@ export function Email() {
         <Button
           size="icon-sm"
           variant="ghost"
-          title={hasAutoTriageRule ? "Auto-triage (rule active for this sender)" : "Auto-triage"}
-          disabled={isAutoTriagePending}
-          onClick={() => autoTriageMutation.mutate(msg)}
-          className={cn(
-            hasAutoTriageRule
-              ? "text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {isAutoTriagePending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Archive
-              className={cn("h-3.5 w-3.5", hasAutoTriageRule && "fill-current")}
-              strokeWidth={hasAutoTriageRule ? 2.5 : 2}
-            />
-          )}
-        </Button>
-
-        <Button
-          size="icon-sm"
-          variant="ghost"
           title={hasKeepAlwaysRule ? "Keep always (rule active for this sender)" : "Keep always"}
           disabled={isKeepPending}
           onClick={() => keepAlwaysMutation.mutate(msg)}
@@ -842,15 +823,22 @@ export function Email() {
         <Button
           size="icon-sm"
           variant="ghost"
-          title="Delete (move to Trash)"
-          disabled={isDeletePending}
-          onClick={() => deleteMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-destructive"
+          title={hasAutoTriageRule ? "Auto-triage (rule active for this sender)" : "Auto-triage"}
+          disabled={isAutoTriagePending}
+          onClick={() => autoTriageMutation.mutate(msg)}
+          className={cn(
+            hasAutoTriageRule
+              ? "text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
         >
-          {isDeletePending ? (
+          {isAutoTriagePending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Trash2 className="h-3.5 w-3.5" />
+            <Archive
+              className={cn("h-3.5 w-3.5", hasAutoTriageRule && "fill-current")}
+              strokeWidth={hasAutoTriageRule ? 2.5 : 2}
+            />
           )}
         </Button>
 
@@ -894,6 +882,21 @@ export function Email() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Delete (move to Trash)"
+          disabled={isDeletePending}
+          onClick={() => deleteMutation.mutate(msg)}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          {isDeletePending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
+          )}
+        </Button>
       </div>
     );
   }
@@ -994,56 +997,145 @@ export function Email() {
 
     return (
       <ScrollArea className="flex-1">
-        <div className="divide-y divide-border">
+        <div className="space-y-3 p-2">
           {groups.map((g) => {
             const senderHasAutoTriage = autoTriageSet.has(g.sender.toLowerCase()) ||
               (g.sender.includes("@") && autoTriageSet.has(`@${g.sender.split("@")[1]!.toLowerCase()}`));
+            const senderHasKeepAlways = keepAlwaysSet.has(g.sender.toLowerCase()) ||
+              (g.sender.includes("@") && keepAlwaysSet.has(`@${g.sender.split("@")[1]!.toLowerCase()}`));
             return (
-              <div key={g.sender} className="divide-y divide-border/60">
+              <div
+                key={g.sender}
+                className="rounded-lg border border-border bg-card shadow-sm overflow-hidden divide-y divide-border/60"
+              >
                 <div
-                  className="flex items-center gap-2 px-3 py-2 bg-muted/40 sticky top-0 z-10"
+                  className="flex items-center gap-2 px-3 py-2.5 bg-muted border-b border-border"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <Users className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
-                      <span className="text-xs font-semibold truncate">{g.sender}</span>
-                      <span className="text-[10px] text-muted-foreground shrink-0">
+                      <span className="text-sm font-semibold truncate">{g.sender}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">
                         {g.msgs.length} {g.msgs.length === 1 ? "message" : "messages"}
                       </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      title={senderHasAutoTriage ? "Auto-triage all (rule already exists)" : "Auto-triage all from this sender"}
-                      onClick={() => {
-                        // setRule + sweep does all the work in one shot via v0.13.0.
-                        // Use the first (newest) message in the group as the "subject"
-                        // — autoTriageMutation moves it + writes the rule + sweeps the rest.
-                        if (g.msgs.length > 0) autoTriageMutation.mutate(g.msgs[0]!);
-                      }}
-                      className={cn(
-                        senderHasAutoTriage ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-                      )}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => { for (const m of g.msgs) markReadMutation.mutate(m); }}
+                          aria-label="Mark all read"
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <MailOpen className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Mark all read</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (g.msgs.length > 0) keepAlwaysMutation.mutate(g.msgs[0]!);
+                          }}
+                          aria-label="Keep always from this sender"
+                          className={cn(
+                            senderHasKeepAlways ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Check
+                            className="h-4 w-4"
+                            strokeWidth={senderHasKeepAlways ? 3.5 : 2}
+                          />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {senderHasKeepAlways ? "Keep always (rule already exists)" : "Keep always from this sender"}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (g.msgs.length > 0) autoTriageMutation.mutate(g.msgs[0]!);
+                          }}
+                          aria-label="Auto-triage from this sender"
+                          className={cn(
+                            senderHasAutoTriage ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Archive
+                            className={cn("h-4 w-4", senderHasAutoTriage && "fill-current")}
+                            strokeWidth={senderHasAutoTriage ? 2.5 : 2}
+                          />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {senderHasAutoTriage ? "Auto-triage (rule already exists)" : "Auto-triage all from this sender"}
+                      </TooltipContent>
+                    </Tooltip>
+                    <DropdownMenu
+                      open={moveDropdownSender === g.sender}
+                      onOpenChange={(open) => setMoveDropdownSender(open ? g.sender : null)}
                     >
-                      <Archive
-                        className={cn("h-3.5 w-3.5", senderHasAutoTriage && "fill-current")}
-                        strokeWidth={senderHasAutoTriage ? 2.5 : 2}
-                      />
-                    </Button>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      title="Delete all from this sender"
-                      onClick={() => {
-                        for (const m of g.msgs) deleteMutation.mutate(m);
-                      }}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label="Move all to folder"
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <MoveRight className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent>Move all to folder</TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="end" className="max-h-64 overflow-y-auto">
+                        {folders.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-muted-foreground">Loading folders…</div>
+                        ) : (
+                          folders
+                            .filter((f) => f !== selectedFolder)
+                            .map((f) => (
+                              <DropdownMenuItem
+                                key={f}
+                                onSelect={() => {
+                                  for (const m of g.msgs) moveToFolderMutation.mutate({ msg: m, targetFolder: f });
+                                  setMoveDropdownSender(null);
+                                }}
+                              >
+                                <FolderOpen className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                                {f}
+                              </DropdownMenuItem>
+                            ))
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => { for (const m of g.msgs) deleteMutation.mutate(m); }}
+                          aria-label="Delete all from this sender"
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete all from this sender</TooltipContent>
+                    </Tooltip>
                   </div>
                 </div>
                 {g.msgs.map((msg) => renderRow(msg, compact))}
@@ -1089,113 +1181,116 @@ export function Email() {
             ) : (
               <>
                 {/* Action bar */}
-                <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border flex-wrap">
+                <div className="shrink-0 flex items-center gap-1 px-4 py-2 border-b border-border flex-wrap">
                   {selectedMsg?.unseen ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { if (selectedMsg) markReadMutation.mutate(selectedMsg); }}
-                      disabled={markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid}
-                      title="Mark this message as read"
-                    >
-                      {markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <MailOpen className="h-3.5 w-3.5" />
-                      )}
-                      Mark read
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          onClick={() => { if (selectedMsg) markReadMutation.mutate(selectedMsg); }}
+                          disabled={markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid}
+                          aria-label="Mark as read"
+                        >
+                          {markReadMutation.isPending && markReadMutation.variables?.uid === selectedMsg?.uid ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <MailOpen className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Mark as read</TooltipContent>
+                    </Tooltip>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { if (selectedMsg) markUnreadMutation.mutate(selectedMsg); }}
-                      disabled={markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid}
-                      title="Mark this message as unread (brings it back into the unread view)"
-                    >
-                      {markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Mail className="h-3.5 w-3.5" />
-                      )}
-                      Mark unread
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          onClick={() => { if (selectedMsg) markUnreadMutation.mutate(selectedMsg); }}
+                          disabled={markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid}
+                          aria-label="Mark as unread"
+                        >
+                          {markUnreadMutation.isPending && markUnreadMutation.variables?.uid === selectedMsg?.uid ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Mail className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Mark as unread (brings it back to the unread view)</TooltipContent>
+                    </Tooltip>
                   )}
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { if (selectedMsg) autoTriageMutation.mutate(selectedMsg); }}
-                    disabled={autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid}
-                    title={
-                      selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet)
-                        ? `Rule active — already auto-triages this sender`
-                        : `Move to ${TRIAGE_FOLDER} and add sender to auto-triage rules`
-                    }
-                  >
-                    {autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Archive
-                        className={cn(
-                          "h-3.5 w-3.5",
-                          selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) && "fill-current",
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => { if (selectedMsg) keepAlwaysMutation.mutate(selectedMsg); }}
+                        disabled={keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid}
+                        aria-label="Keep always"
+                      >
+                        {keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Check
+                            className="h-3.5 w-3.5"
+                            strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet) ? 3.5 : 2}
+                          />
                         )}
-                        strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) ? 2.5 : 2}
-                      />
-                    )}
-                    Auto-triage
-                  </Button>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet)
+                        ? `Keep always — sender is on the keep-always list`
+                        : `Keep always — add sender to keep-always rule`}
+                    </TooltipContent>
+                  </Tooltip>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { if (selectedMsg) keepAlwaysMutation.mutate(selectedMsg); }}
-                    disabled={keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid}
-                    title={
-                      selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet)
-                        ? `Rule active — sender is on the keep-always list`
-                        : "Add sender to Keep-always rule (no IMAP action)"
-                    }
-                  >
-                    {keepAlwaysMutation.isPending && keepAlwaysMutation.variables?.uid === selectedMsg?.uid ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Check
-                        className="h-3.5 w-3.5"
-                        strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, keepAlwaysSet) ? 3.5 : 2}
-                      />
-                    )}
-                    Keep always
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { if (selectedMsg) deleteMutation.mutate(selectedMsg); }}
-                    disabled={deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid}
-                    title="Delete (move to Trash)"
-                    className="text-muted-foreground hover:text-destructive"
-                  >
-                    {deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3.5 w-3.5" />
-                    )}
-                    Delete
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => { if (selectedMsg) autoTriageMutation.mutate(selectedMsg); }}
+                        disabled={autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid}
+                        aria-label="Auto-triage"
+                      >
+                        {autoTriageMutation.isPending && autoTriageMutation.variables?.uid === selectedMsg?.uid ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Archive
+                            className={cn(
+                              "h-3.5 w-3.5",
+                              selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) && "fill-current",
+                            )}
+                            strokeWidth={selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet) ? 2.5 : 2}
+                          />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {selectedMsg && senderMatchesPattern(selectedMsg, autoTriageSet)
+                        ? `Auto-triage — rule already active for this sender`
+                        : `Auto-triage — move to ${TRIAGE_FOLDER} and add sender rule`}
+                    </TooltipContent>
+                  </Tooltip>
 
                   <DropdownMenu
                     open={moveDropdownUid === selectedUid}
                     onOpenChange={(open) => setMoveDropdownUid(open ? selectedUid : null)}
                   >
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm" variant="outline">
-                        <MoveRight className="h-3.5 w-3.5" />
-                        Move to…
-                        <ChevronRight className="h-3 w-3 ml-0.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon-sm" variant="outline" aria-label="Move to folder">
+                            <MoveRight className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>Move to folder</TooltipContent>
+                    </Tooltip>
                     <DropdownMenuContent align="start" className="max-h-64 overflow-y-auto">
                       {folders.length === 0 ? (
                         <div className="px-3 py-2 text-xs text-muted-foreground">Loading folders…</div>
@@ -1218,30 +1313,90 @@ export function Email() {
                     </DropdownMenuContent>
                   </DropdownMenu>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setHandoffMessage(fullMessage);
-                      setHandoffDialogOpen(true);
-                    }}
-                  >
-                    <Bot className="h-3.5 w-3.5" />
-                    Hand off…
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => { if (selectedMsg) deleteMutation.mutate(selectedMsg); }}
+                        disabled={deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid}
+                        aria-label="Delete"
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        {deleteMutation.isPending && deleteMutation.variables?.uid === selectedMsg?.uid ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete (move to Trash)</TooltipContent>
+                  </Tooltip>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setReplyOpen((v) => !v);
-                      setReplyBody("");
-                      setTimeout(() => replyTextareaRef.current?.focus(), 50);
-                    }}
-                  >
-                    <Reply className="h-3.5 w-3.5" />
-                    Reply
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => {
+                          setHandoffMessage(fullMessage);
+                          setHandoffDialogOpen(true);
+                        }}
+                        aria-label="Hand off to agent"
+                      >
+                        <Bot className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Hand off to agent</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!fullMessage) return;
+                          const subj = fullMessage.subject || "";
+                          const fwdSubj = /^fwd?:\s/i.test(subj) ? subj : `Fwd: ${subj}`;
+                          const header = [
+                            "---------- Forwarded message ----------",
+                            `From: ${fullMessage.from}`,
+                            `Date: ${new Date(fullMessage.date).toLocaleString()}`,
+                            `Subject: ${fullMessage.subject}`,
+                            fullMessage.to.length > 0 ? `To: ${fullMessage.to.join(", ")}` : null,
+                          ].filter((l): l is string => l !== null).join("\n");
+                          const body = `\n\n${header}\n\n${fullMessage.text || fullMessage.markdown || ""}`;
+                          setComposeTo("");
+                          setComposeSubject(fwdSubj);
+                          setComposeBody(body);
+                          setComposeOpen(true);
+                        }}
+                        aria-label="Forward"
+                      >
+                        <Forward className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Forward</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        onClick={() => {
+                          setReplyOpen((v) => !v);
+                          setReplyBody("");
+                          setTimeout(() => replyTextareaRef.current?.focus(), 50);
+                        }}
+                        aria-label="Reply"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Reply</TooltipContent>
+                  </Tooltip>
                 </div>
 
                 {/* Message header */}
@@ -1262,7 +1417,7 @@ export function Email() {
                     <iframe
                       key={fullMessage.uid}
                       srcDoc={fullMessage.html}
-                      sandbox="allow-same-origin"
+                      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
                       className="flex-1 w-full border-0 bg-white"
                       title="Email body"
                     />
