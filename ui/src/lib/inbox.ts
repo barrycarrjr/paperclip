@@ -46,6 +46,24 @@ export const inboxIssueColumns = [
 ] as const;
 export type InboxIssueColumn = (typeof inboxIssueColumns)[number];
 export const DEFAULT_INBOX_ISSUE_COLUMNS: InboxIssueColumn[] = ["status", "id", "updated"];
+
+export const kanbanCardFields = [
+  "id",
+  "priority",
+  "assignee",
+  "project",
+  "labels",
+  "parent",
+  "due",
+  "updated",
+] as const;
+export type KanbanCardField = (typeof kanbanCardFields)[number];
+export const DEFAULT_KANBAN_CARD_FIELDS: KanbanCardField[] = ["id", "priority", "assignee"];
+
+export function normalizeKanbanCardFields(fields: Iterable<string | KanbanCardField>): KanbanCardField[] {
+  const selected = new Set(fields);
+  return kanbanCardFields.filter((field) => selected.has(field));
+}
 export interface InboxFilterPreferences {
   allCategoryFilter: InboxCategoryFilter;
   allApprovalFilter: InboxApprovalFilter;

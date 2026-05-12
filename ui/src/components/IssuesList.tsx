@@ -36,16 +36,21 @@ import {
 } from "../lib/issue-filters";
 import {
   DEFAULT_INBOX_ISSUE_COLUMNS,
+  DEFAULT_KANBAN_CARD_FIELDS,
   getAvailableInboxIssueColumns,
+  kanbanCardFields,
   normalizeInboxIssueColumns,
+  normalizeKanbanCardFields,
   resolveIssueWorkspaceName,
   type InboxIssueColumn,
+  type KanbanCardField,
 } from "../lib/inbox";
 import { cn } from "../lib/utils";
 import {
   InboxIssueMetaLeading,
   InboxIssueTrailingColumns,
   IssueColumnPicker,
+  KanbanCardFieldPicker,
   issueActivityText,
   issueTrailingColumns,
 } from "./IssueColumns";
@@ -196,6 +201,33 @@ function saveIssueColumns(key: string, columns: InboxIssueColumn[]) {
     localStorage.setItem(
       getIssueColumnsStorageKey(key),
       JSON.stringify(normalizeInboxIssueColumns(columns)),
+    );
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+function getKanbanCardFieldsStorageKey(key: string): string {
+  return `${key}:kanban-card-fields`;
+}
+
+function loadKanbanCardFields(key: string): KanbanCardField[] {
+  try {
+    const raw = localStorage.getItem(getKanbanCardFieldsStorageKey(key));
+    if (raw === null) return DEFAULT_KANBAN_CARD_FIELDS;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_KANBAN_CARD_FIELDS;
+    return normalizeKanbanCardFields(parsed);
+  } catch {
+    return DEFAULT_KANBAN_CARD_FIELDS;
+  }
+}
+
+function saveKanbanCardFields(key: string, fields: KanbanCardField[]) {
+  try {
+    localStorage.setItem(
+      getKanbanCardFieldsStorageKey(key),
+      JSON.stringify(normalizeKanbanCardFields(fields)),
     );
   } catch {
     // Ignore localStorage failures.
@@ -515,6 +547,7 @@ export function IssuesList({
   const [issueSearch, setIssueSearch] = useState(initialSearch ?? "");
   const [renderedIssueRowLimit, setRenderedIssueRowLimit] = useState(INITIAL_ISSUE_ROW_RENDER_LIMIT);
   const [visibleIssueColumns, setVisibleIssueColumns] = useState<InboxIssueColumn[]>(() => loadIssueColumns(scopedKey));
+  const [visibleKanbanFields, setVisibleKanbanFields] = useState<KanbanCardField[]>(() => loadKanbanCardFields(scopedKey));
   const deferredIssueSearch = useDeferredValue(issueSearch);
   const normalizedIssueSearch = deferredIssueSearch.trim().toLowerCase();
 
@@ -531,6 +564,14 @@ export function IssuesList({
       setViewState(getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField));
     }
   }, [scopedKey, initialAssignees, initialAssigneesKey, initialWorkspaces, initialWorkspacesKey, defaultSortField]);
+
+  const prevKanbanFieldsScopedKey = useRef(scopedKey);
+  useEffect(() => {
+    if (prevKanbanFieldsScopedKey.current !== scopedKey) {
+      prevKanbanFieldsScopedKey.current = scopedKey;
+      setVisibleKanbanFields(loadKanbanCardFields(scopedKey));
+    }
+  }, [scopedKey]);
 
   const prevColumnsScopedKey = useRef(scopedKey);
   useEffect(() => {
@@ -767,6 +808,7 @@ export function IssuesList({
   }, [agents, currentUserId, issues]);
 
   const visibleIssueColumnSet = useMemo(() => new Set(visibleIssueColumns), [visibleIssueColumns]);
+  const visibleKanbanFieldSet = useMemo(() => new Set(visibleKanbanFields), [visibleKanbanFields]);
   const availableIssueColumns = useMemo(
     () => getAvailableInboxIssueColumns(isolatedWorkspacesEnabled),
     [isolatedWorkspacesEnabled],
@@ -1022,6 +1064,20 @@ export function IssuesList({
     saveIssueColumns(scopedKey, normalized);
   }, [scopedKey]);
 
+  const setKanbanFields = useCallback((next: KanbanCardField[]) => {
+    const normalized = normalizeKanbanCardFields(next);
+    setVisibleKanbanFields(normalized);
+    saveKanbanCardFields(scopedKey, normalized);
+  }, [scopedKey]);
+
+  const toggleKanbanField = useCallback((field: KanbanCardField, enabled: boolean) => {
+    if (enabled) {
+      setKanbanFields([...visibleKanbanFields, field]);
+      return;
+    }
+    setKanbanFields(visibleKanbanFields.filter((f) => f !== field));
+  }, [setKanbanFields, visibleKanbanFields]);
+
   const toggleIssueColumn = useCallback((column: InboxIssueColumn, enabled: boolean) => {
     if (enabled) {
       setIssueColumns([...visibleIssueColumns, column]);
@@ -1092,14 +1148,24 @@ export function IssuesList({
             </Button>
           )}
 
-          <IssueColumnPicker
-            availableColumns={availableIssueColumns}
-            visibleColumnSet={visibleIssueColumnSet}
-            onToggleColumn={toggleIssueColumn}
-            onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
-            title="Choose which issue columns stay visible"
-            iconOnly
-          />
+          {viewState.viewMode === "list" ? (
+            <IssueColumnPicker
+              availableColumns={availableIssueColumns}
+              visibleColumnSet={visibleIssueColumnSet}
+              onToggleColumn={toggleIssueColumn}
+              onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
+              title="Choose which issue columns stay visible"
+              iconOnly
+            />
+          ) : (
+            <KanbanCardFieldPicker
+              availableFields={[...kanbanCardFields]}
+              visibleFieldSet={visibleKanbanFieldSet}
+              onToggleField={toggleKanbanField}
+              onResetFields={() => setKanbanFields(DEFAULT_KANBAN_CARD_FIELDS)}
+              iconOnly
+            />
+          )}
 
           <IssueFiltersPopover
             state={viewState}
@@ -1224,7 +1290,9 @@ export function IssuesList({
         <KanbanBoard
           issues={filtered}
           agents={agents}
+          projects={projects?.map((project) => ({ id: project.id, name: project.name, color: project.color ?? null }))}
           liveIssueIds={liveIssueIds}
+          visibleFields={visibleKanbanFieldSet}
           onUpdateIssue={onUpdateIssue}
         />
       ) : (

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAssigneeUserLabel } from "../lib/assignees";
-import type { InboxIssueColumn } from "../lib/inbox";
+import type { InboxIssueColumn, KanbanCardField } from "../lib/inbox";
 import { cn } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Identity } from "./Identity";
@@ -61,6 +61,92 @@ function issueTrailingGridTemplate(columns: InboxIssueColumn[]): string {
     .join(" ");
 }
 
+export function FieldVisibilityPicker<T extends string>({
+  availableFields,
+  visibleFieldSet,
+  onToggleField,
+  onResetFields,
+  eyebrow,
+  title,
+  labels,
+  descriptions,
+  resetSummary,
+  buttonTitle = "Columns",
+  buttonLabel = "Columns",
+  iconOnly = false,
+}: {
+  availableFields: T[];
+  visibleFieldSet: ReadonlySet<T>;
+  onToggleField: (field: T, enabled: boolean) => void;
+  onResetFields: () => void;
+  eyebrow: string;
+  title: string;
+  labels: Record<T, string>;
+  descriptions: Record<T, string>;
+  resetSummary?: string;
+  buttonTitle?: string;
+  buttonLabel?: string;
+  iconOnly?: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant={iconOnly ? "outline" : "ghost"}
+          size={iconOnly ? "icon" : "sm"}
+          className={iconOnly ? "h-8 w-8 shrink-0" : "hidden h-8 shrink-0 px-2 text-xs sm:inline-flex"}
+          title={buttonTitle}
+        >
+          <Columns3 className={iconOnly ? "h-3.5 w-3.5" : "mr-1 h-3.5 w-3.5"} />
+          {!iconOnly && buttonLabel}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[300px] rounded-xl border-border/70 p-1.5 shadow-xl shadow-black/10">
+        <DropdownMenuLabel className="px-2 pb-1 pt-1.5">
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+              {eyebrow}
+            </div>
+            <div className="text-sm font-medium text-foreground">
+              {title}
+            </div>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {availableFields.map((field) => (
+          <DropdownMenuCheckboxItem
+            key={field}
+            checked={visibleFieldSet.has(field)}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(checked) => onToggleField(field, checked === true)}
+            className="items-start rounded-lg px-3 py-2.5 pl-8"
+          >
+            <span className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium text-foreground">
+                {labels[field]}
+              </span>
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                {descriptions[field]}
+              </span>
+            </span>
+          </DropdownMenuCheckboxItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={onResetFields}
+          className="rounded-lg px-3 py-2 text-sm"
+        >
+          Reset defaults
+          {resetSummary && (
+            <span className="ml-auto text-xs text-muted-foreground">{resetSummary}</span>
+          )}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function IssueColumnPicker({
   availableColumns,
   visibleColumnSet,
@@ -77,59 +163,71 @@ export function IssueColumnPicker({
   iconOnly?: boolean;
 }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={iconOnly ? "outline" : "ghost"}
-          size={iconOnly ? "icon" : "sm"}
-          className={iconOnly ? "h-8 w-8 shrink-0" : "hidden h-8 shrink-0 px-2 text-xs sm:inline-flex"}
-          title="Columns"
-        >
-          <Columns3 className={iconOnly ? "h-3.5 w-3.5" : "mr-1 h-3.5 w-3.5"} />
-          {!iconOnly && "Columns"}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[300px] rounded-xl border-border/70 p-1.5 shadow-xl shadow-black/10">
-        <DropdownMenuLabel className="px-2 pb-1 pt-1.5">
-          <div className="space-y-1">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-              Desktop issue rows
-            </div>
-            <div className="text-sm font-medium text-foreground">
-              {title}
-            </div>
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {availableColumns.map((column) => (
-          <DropdownMenuCheckboxItem
-            key={column}
-            checked={visibleColumnSet.has(column)}
-            onSelect={(event) => event.preventDefault()}
-            onCheckedChange={(checked) => onToggleColumn(column, checked === true)}
-            className="items-start rounded-lg px-3 py-2.5 pl-8"
-          >
-            <span className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium text-foreground">
-                {issueColumnLabels[column]}
-              </span>
-              <span className="text-xs leading-relaxed text-muted-foreground">
-                {issueColumnDescriptions[column]}
-              </span>
-            </span>
-          </DropdownMenuCheckboxItem>
-        ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={onResetColumns}
-          className="rounded-lg px-3 py-2 text-sm"
-        >
-          Reset defaults
-          <span className="ml-auto text-xs text-muted-foreground">status, id, updated</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <FieldVisibilityPicker
+      availableFields={availableColumns}
+      visibleFieldSet={visibleColumnSet}
+      onToggleField={onToggleColumn}
+      onResetFields={onResetColumns}
+      eyebrow="Desktop issue rows"
+      title={title}
+      labels={issueColumnLabels}
+      descriptions={issueColumnDescriptions}
+      resetSummary="status, id, updated"
+      iconOnly={iconOnly}
+    />
+  );
+}
+
+const kanbanCardFieldLabels: Record<KanbanCardField, string> = {
+  id: "ID",
+  priority: "Priority",
+  assignee: "Assignee",
+  project: "Project",
+  labels: "Tags",
+  parent: "Parent issue",
+  due: "Due date",
+  updated: "Last updated",
+};
+
+const kanbanCardFieldDescriptions: Record<KanbanCardField, string> = {
+  id: "Ticket identifier like PAP-1009.",
+  priority: "Priority chevron next to the title.",
+  assignee: "Assigned agent or board user.",
+  project: "Linked project pill with its color.",
+  labels: "Issue labels and tags.",
+  parent: "Parent issue identifier.",
+  due: "Due date if set.",
+  updated: "Last activity time.",
+};
+
+export function KanbanCardFieldPicker({
+  availableFields,
+  visibleFieldSet,
+  onToggleField,
+  onResetFields,
+  iconOnly = false,
+}: {
+  availableFields: KanbanCardField[];
+  visibleFieldSet: ReadonlySet<KanbanCardField>;
+  onToggleField: (field: KanbanCardField, enabled: boolean) => void;
+  onResetFields: () => void;
+  iconOnly?: boolean;
+}) {
+  return (
+    <FieldVisibilityPicker
+      availableFields={availableFields}
+      visibleFieldSet={visibleFieldSet}
+      onToggleField={onToggleField}
+      onResetFields={onResetFields}
+      eyebrow="Kanban cards"
+      title="Choose which fields show on each card"
+      labels={kanbanCardFieldLabels}
+      descriptions={kanbanCardFieldDescriptions}
+      resetSummary="id, priority, assignee"
+      buttonTitle="Card fields"
+      buttonLabel="Card fields"
+      iconOnly={iconOnly}
+    />
   );
 }
 
