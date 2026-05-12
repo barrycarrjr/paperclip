@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, Users, Heart } from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, Heart, List, Plus, Users } from "lucide-react";
 import type { Agent, AgentRole, AgentStatus, Company } from "@paperclipai/shared";
 import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
@@ -9,6 +9,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { LiveRunIndicator } from "../components/LiveRunIndicator";
+import { OrgTreeNode } from "../components/OrgTreeNode";
 import { Link } from "@/lib/router";
 import { timeAgo } from "../lib/timeAgo";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
@@ -319,6 +320,17 @@ export function PortfolioAgents() {
   const [statusFilter, setStatusFilter] = useState<AgentStatus[]>([]);
   const [roleFilter, setRoleFilter] = useState<AgentRole[]>([]);
   const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
+  const [view, setView] = useState<"list" | "org">(() => {
+    try {
+      const raw = localStorage.getItem("paperclip:portfolio-agents:view");
+      return raw === "org" ? "org" : "list";
+    } catch {
+      return "list";
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("paperclip:portfolio-agents:view", view); } catch {}
+  }, [view]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["portfolio-agents", selectedCompanyId, statusFilter, roleFilter, companyIdFilter],
@@ -381,6 +393,32 @@ export function PortfolioAgents() {
     });
     return map;
   }, [companies, liveRunQueries]);
+
+  // Org tree per-company — only fetched when the operator picks "Org" view.
+  // Result feeds the per-company OrgTreeNode renderer.
+  const orgQueries = useQueries({
+    queries: companies.map((c) => ({
+      queryKey: ["portfolio-agents", "org", c.id],
+      queryFn: () => agentsApi.org(c.id),
+      enabled: !!c.id && view === "org",
+      staleTime: 60_000,
+    })),
+  });
+  const orgByCompanyId = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof orgQueries[number]>["data"]>();
+    companies.forEach((c, idx) => {
+      map.set(c.id, orgQueries[idx]?.data);
+    });
+    return map;
+  }, [companies, orgQueries]);
+
+  // Agent lookup for the org tree (it shows adapter / heartbeat info
+  // pulled from the full Agent record, not the slim OrgNode).
+  const agentById = useMemo(() => {
+    const map = new Map<string, Agent>();
+    for (const a of agents) map.set(a.id, a);
+    return map;
+  }, [agents]);
 
   const pauseMutation = useMutation({
     mutationFn: (id: string) => agentsApi.pause(id),
@@ -480,6 +518,29 @@ export function PortfolioAgents() {
             Clear filters
           </Button>
         )}
+
+        <div className="ml-auto flex items-center gap-0.5 border border-border rounded-md p-0.5">
+          <Button
+            variant={view === "list" ? "secondary" : "ghost"}
+            size="sm"
+            className="h-6 text-xs gap-1 px-2"
+            onClick={() => setView("list")}
+            title="Flat list per company"
+          >
+            <List className="h-3 w-3" />
+            List
+          </Button>
+          <Button
+            variant={view === "org" ? "secondary" : "ghost"}
+            size="sm"
+            className="h-6 text-xs gap-1 px-2"
+            onClick={() => setView("org")}
+            title="Org chart (reporting tree) per company"
+          >
+            <GitBranch className="h-3 w-3" />
+            Org
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 py-3">
@@ -494,7 +555,7 @@ export function PortfolioAgents() {
           </div>
         )}
 
-        {!isLoading &&
+        {!isLoading && view === "list" &&
           companies.map((company) => {
             const companyAgents = agentsByCompany.get(company.id) ?? [];
             return (
@@ -511,9 +572,63 @@ export function PortfolioAgents() {
               />
             );
           })}
+
+        {!isLoading && view === "org" &&
+          companies.map((company) => {
+            const orgNodes = orgByCompanyId.get(company.id) ?? [];
+            const orgLoading = !orgByCompanyId.has(company.id) || orgNodes === undefined;
+            const companyAgents = agentsByCompany.get(company.id) ?? [];
+            const collapsed = collapsedIds.has(company.id);
+            return (
+              <div key={company.id} className="mb-1">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent/30 cursor-pointer group">
+                  <button
+                    className="flex flex-1 items-center gap-2 min-w-0"
+                    onClick={() => handleToggleCollapse(company.id)}
+                  >
+                    {collapsed
+                      ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                    <CompanyPatternIcon
+                      companyName={company.name}
+                      logoUrl={company.logoUrl}
+                      brandColor={company.brandColor}
+                      className="h-5 w-5 shrink-0 rounded-[3px]"
+                    />
+                    <span className="font-medium text-sm truncate">{company.name}</span>
+                    <span className="text-xs text-muted-foreground ml-1">
+                      {companyAgents.length} agent{companyAgents.length !== 1 ? "s" : ""}
+                    </span>
+                  </button>
+                </div>
+                {!collapsed && (
+                  <div className="ml-2 border-l border-border/50 pl-1">
+                    {orgLoading ? (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">Loading org…</p>
+                    ) : (orgNodes ?? []).length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-muted-foreground italic">
+                        No reporting hierarchy defined for this company.
+                      </p>
+                    ) : (
+                      (orgNodes ?? []).map((node) => (
+                        <OrgTreeNode
+                          key={node.id}
+                          node={node}
+                          depth={0}
+                          agentMap={agentById}
+                          liveRunByAgent={liveRunByAgent}
+                          companyPrefix={company.issuePrefix}
+                        />
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
       </div>
 
-      {selectedIds.size > 0 && (
+      {view === "list" && selectedIds.size > 0 && (
         <BulkActionsBar
           count={selectedIds.size}
           onPause={handleBulkPause}
