@@ -334,6 +334,27 @@ export {
 } from "./routine.js";
 
 export {
+  TEMPLATE_TYPES,
+  templateTypeSchema,
+  routineTemplateTriggerInputSchema,
+  createRoutineTemplateSchema,
+  updateRoutineTemplateSchema,
+  createAgentTemplateSchema,
+  updateAgentTemplateSchema,
+  createSkillTemplateSchema,
+  updateSkillTemplateSchema,
+  deployTemplateSchema,
+  type RoutineTemplateTriggerInput,
+  type CreateRoutineTemplate,
+  type UpdateRoutineTemplate,
+  type CreateAgentTemplate,
+  type UpdateAgentTemplate,
+  type CreateSkillTemplate,
+  type UpdateSkillTemplate,
+  type DeployTemplate,
+} from "./template.js";
+
+export {
   createCostEventSchema,
   updateBudgetSchema,
   type CreateCostEvent,

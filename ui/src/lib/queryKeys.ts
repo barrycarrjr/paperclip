@@ -182,4 +182,10 @@ export const queryKeys = {
   roadmap: {
     all: ["roadmap"] as const,
   },
+  templates: {
+    list: (type: "routine" | "agent" | "skill") => ["templates", type] as const,
+    detail: (type: "routine" | "agent" | "skill", id: string) => ["templates", type, id] as const,
+    deployments: (type: "routine" | "agent" | "skill", id: string) =>
+      ["templates", type, id, "deployments"] as const,
+  },
 };

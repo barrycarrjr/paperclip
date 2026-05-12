@@ -229,6 +229,20 @@ export type {
   RoutineExecutionIssueOrigin,
   RoutineListItem,
 } from "./routine.js";
+export type {
+  TemplateType,
+  RoutineTemplate,
+  RoutineTemplateTrigger,
+  RoutineTemplateDetail,
+  AgentTemplate,
+  AgentTemplateDetail,
+  SkillTemplate,
+  SkillTemplateDetail,
+  TemplateDeployment,
+  TemplateDeploymentStatus,
+  TemplateDeploymentResultItem,
+  TemplateDeploymentResult,
+} from "./template.js";
 export type { CostEvent, CostSummary, CostByAgent, CostByProviderModel, CostByBiller, CostByAgentModel, CostWindowSpendRow, CostByProject } from "./cost.js";
 export type { FinanceEvent, FinanceSummary, FinanceByBiller, FinanceByKind } from "./finance.js";
 export type {

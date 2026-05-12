@@ -596,6 +596,13 @@
       "when": 1779500000000,
       "tag": "0084_instance_settings_agent_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1779600000000,
+      "tag": "0085_templates",
+      "breakpoints": true
     }
   ]
 }

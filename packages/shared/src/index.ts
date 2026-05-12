@@ -927,7 +927,40 @@ export {
   type PluginStateScopeKey,
   type SetPluginState,
   type ListPluginState,
+  TEMPLATE_TYPES,
+  templateTypeSchema,
+  routineTemplateTriggerInputSchema,
+  createRoutineTemplateSchema,
+  updateRoutineTemplateSchema,
+  createAgentTemplateSchema,
+  updateAgentTemplateSchema,
+  createSkillTemplateSchema,
+  updateSkillTemplateSchema,
+  deployTemplateSchema,
+  type RoutineTemplateTriggerInput,
+  type CreateRoutineTemplate,
+  type UpdateRoutineTemplate,
+  type CreateAgentTemplate,
+  type UpdateAgentTemplate,
+  type CreateSkillTemplate,
+  type UpdateSkillTemplate,
+  type DeployTemplate,
 } from "./validators/index.js";
+
+export type {
+  TemplateType,
+  RoutineTemplate,
+  RoutineTemplateTrigger,
+  RoutineTemplateDetail,
+  AgentTemplate,
+  AgentTemplateDetail,
+  SkillTemplate,
+  SkillTemplateDetail,
+  TemplateDeployment,
+  TemplateDeploymentStatus,
+  TemplateDeploymentResultItem,
+  TemplateDeploymentResult,
+} from "./types/index.js";
 
 export { API_PREFIX, API } from "./api.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";

@@ -12,12 +12,17 @@ export function normalizeRememberedInstanceSettingsPath(rawPath: string | null):
     pathname === "/instance/settings/general" ||
     pathname === "/instance/settings/heartbeats" ||
     pathname === "/instance/settings/plugins" ||
-    pathname === "/instance/settings/experimental"
+    pathname === "/instance/settings/experimental" ||
+    pathname === "/instance/settings/templates"
   ) {
     return `${pathname}${search}${hash}`;
   }
 
   if (/^\/instance\/settings\/plugins\/[^/?#]+$/.test(pathname)) {
+    return `${pathname}${search}${hash}`;
+  }
+
+  if (/^\/instance\/settings\/templates\/(routine|skill|agent)(\/[^/?#]+)?$/.test(pathname)) {
     return `${pathname}${search}${hash}`;
   }
 

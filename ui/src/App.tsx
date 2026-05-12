@@ -46,6 +46,8 @@ import { ProfileSettings } from "./pages/ProfileSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
 import { Roadmap } from "./pages/Roadmap";
+import { InstanceTemplates } from "./pages/InstanceTemplates";
+import { InstanceTemplateEditor } from "./pages/InstanceTemplateEditor";
 import { AdapterManager } from "./pages/AdapterManager";
 import { ExternalMcpServers } from "./pages/ExternalMcpServers";
 import { PluginPage } from "./pages/PluginPage";
@@ -320,6 +322,9 @@ export function App() {
             <Route path="plugins" element={<PluginManager />} />
             <Route path="plugins/:pluginId" element={<PluginSettings />} />
             <Route path="roadmap" element={<Roadmap />} />
+            <Route path="templates" element={<InstanceTemplates />} />
+            <Route path="templates/:type/new" element={<InstanceTemplateEditor />} />
+            <Route path="templates/:type/:id" element={<InstanceTemplateEditor />} />
             <Route path="adapters" element={<AdapterManager />} />
             <Route path="external-mcp" element={<ExternalMcpServers />} />
           </Route>

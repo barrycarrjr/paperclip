@@ -1,4 +1,4 @@
-import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, UserRoundPen } from "lucide-react";
+import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, Sparkles, UserRoundPen } from "lucide-react";
 import { SidebarNavItem } from "./SidebarNavItem";
 
 export function InstanceSidebar() {
@@ -17,6 +17,7 @@ export function InstanceSidebar() {
           <SidebarNavItem to="/instance/settings/general" label="General" icon={SlidersHorizontal} end />
           <SidebarNavItem to="/instance/settings/access" label="Access" icon={Shield} end />
           <SidebarNavItem to="/instance/settings/heartbeats" label="Heartbeats" icon={Clock3} end />
+          <SidebarNavItem to="/instance/settings/templates" label="Templates" icon={Sparkles} />
           <SidebarNavItem to="/instance/settings/experimental" label="Experimental" icon={FlaskConical} />
           <SidebarNavItem to="/instance/settings/plugins" label="Plugins" icon={Puzzle} />
           <SidebarNavItem to="/instance/settings/adapters" label="Adapters" icon={Cpu} />
