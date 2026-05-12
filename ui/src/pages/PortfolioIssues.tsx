@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
-import { Bot, ChevronDown, ChevronRight, Plus, Check, Tag, User } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ExternalLink, Plus, Check, Tag, User } from "lucide-react";
 import type { Agent, Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
 import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { IssuePreviewSheet } from "../components/IssuePreviewSheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,6 +125,7 @@ interface IssueRowProps {
   labels: IssueLabel[];
   onToggle: () => void;
   onStatusChange: (status: string) => void;
+  onOpenPreview: (issue: Issue) => void;
 }
 
 const PREVIEW_DESCRIPTION_CHARS = 500;
@@ -140,6 +142,7 @@ function PortfolioIssueRow({
   labels,
   onToggle,
   onStatusChange,
+  onOpenPreview,
 }: IssueRowProps) {
   const issueLabels = (issue.labelIds ?? [])
     .map((id) => labels.find((l) => l.id === id))
@@ -160,35 +163,55 @@ function PortfolioIssueRow({
     <Tooltip>
       <TooltipTrigger asChild>
         <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpenPreview(issue)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onOpenPreview(issue);
+            }
+          }}
           className={cn(
-            "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group cursor-default",
+            "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/40 rounded group cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/40",
             selected && "bg-accent/60",
           )}
         >
-          <Checkbox
-            checked={selected}
-            onCheckedChange={onToggle}
-            className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100"
-            onClick={(e) => e.stopPropagation()}
-          />
+          <span onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={selected}
+              onCheckedChange={onToggle}
+              className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity data-[state=checked]:opacity-100"
+            />
+          </span>
 
-          <StatusIcon
-            status={issue.status}
-            blockerAttention={issue.blockerAttention}
-            onChange={onStatusChange}
-            className="h-4 w-4 shrink-0"
-          />
+          <span onClick={(e) => e.stopPropagation()}>
+            <StatusIcon
+              status={issue.status}
+              blockerAttention={issue.blockerAttention}
+              onChange={onStatusChange}
+              className="h-4 w-4 shrink-0"
+            />
+          </span>
 
           <span className="text-[10px] font-mono text-muted-foreground shrink-0 w-16 hidden sm:block">
             {issue.identifier ?? ""}
           </span>
 
-          <Link
-            to={`/${companyPrefix}/issues/${issue.id}`}
-            className="flex-1 min-w-0 truncate font-medium hover:underline"
-          >
-            {issue.title}
-          </Link>
+          <div className="flex-1 min-w-0 flex items-center gap-1.5">
+            <span className="truncate font-medium group-hover:underline">
+              {issue.title}
+            </span>
+            <Link
+              to={`/${companyPrefix}/issues/${issue.id}`}
+              onClick={(e) => e.stopPropagation()}
+              title="Open full page (middle-click for a new tab)"
+              aria-label="Open full page"
+              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
+          </div>
 
           {issueLabels.length > 0 && (
             <span className="hidden md:flex items-center gap-1 shrink-0">
@@ -295,6 +318,7 @@ interface CompanySectionProps {
   onToggleCollapse: () => void;
   onStatusChange: (issueId: string, status: string) => void;
   onNewIssue: (companyId: string) => void;
+  onOpenPreview: (issue: Issue) => void;
 }
 
 function CompanySection({
@@ -309,6 +333,7 @@ function CompanySection({
   onToggleCollapse,
   onStatusChange,
   onNewIssue,
+  onOpenPreview,
 }: CompanySectionProps) {
   const issueIds = issues.map((i) => i.id);
   const allSelected = issueIds.length > 0 && issueIds.every((id) => selectedIds.has(id));
@@ -362,6 +387,7 @@ function CompanySection({
               labels={labels}
               onToggle={() => onToggleIssue(issue.id)}
               onStatusChange={(status) => onStatusChange(issue.id, status)}
+              onOpenPreview={onOpenPreview}
             />
           ))}
           {issues.length === 0 && (
@@ -560,6 +586,7 @@ export function PortfolioIssues() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [previewIssue, setPreviewIssue] = useState<Issue | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<IssueStatus[]>(() =>
     readLsFilter<IssueStatus[]>(LS_STATUS_KEY, DEFAULT_STATUS_FILTER),
@@ -831,6 +858,7 @@ export function PortfolioIssues() {
                 onToggleCollapse={() => handleToggleCollapse(company.id)}
                 onStatusChange={handleStatusChange}
                 onNewIssue={handleNewIssue}
+                onOpenPreview={(issue) => setPreviewIssue(issue)}
               />
             );
           })
@@ -855,6 +883,20 @@ export function PortfolioIssues() {
           onToggleLabel={handleBulkToggleLabel}
         />
       )}
+
+      <IssuePreviewSheet
+        issue={previewIssue}
+        companyPrefix={
+          previewIssue
+            ? companies.find((c) => c.id === previewIssue.companyId)?.issuePrefix ?? null
+            : null
+        }
+        agentNameById={agentNameById}
+        labels={previewIssue ? labelsByCompanyId.get(previewIssue.companyId) ?? [] : []}
+        onOpenChange={(open) => {
+          if (!open) setPreviewIssue(null);
+        }}
+      />
     </div>
   );
 }
