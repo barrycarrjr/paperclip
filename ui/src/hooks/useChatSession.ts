@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   chatApi,
@@ -6,20 +6,14 @@ import {
   type ChatMessage,
   type ChatSession,
 } from "../api/chat";
-import { postChatMessageStream, type ChatStreamEvent } from "../lib/chat-stream";
+import {
+  clippyStreamManager,
+  type ClippyTranscriptEntry,
+  type PendingPermission,
+  type SessionStreamState,
+} from "../lib/clippy-stream-manager";
 
-interface PendingPermission {
-  toolUseId: string;
-  name: string;
-  input: unknown;
-}
-
-export interface ClippyTranscriptEntry {
-  id: string;
-  role: "user" | "assistant" | "tool";
-  blocks: ChatContentBlock[];
-  pending?: boolean;
-}
+export type { ClippyTranscriptEntry } from "../lib/clippy-stream-manager";
 
 export interface UseChatSessionResult {
   session: ChatSession | null;
@@ -38,6 +32,12 @@ export interface UseChatSessionResult {
   abort: () => void;
 }
 
+const EMPTY_STATE: SessionStreamState = {
+  streaming: false,
+  pendingAssistant: null,
+  pendingPermissions: [],
+};
+
 export function useChatSession(sessionId: string | null): UseChatSessionResult {
   const qc = useQueryClient();
   const sessionQuery = useQuery({
@@ -51,26 +51,22 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     enabled: !!sessionId,
   });
 
-  const [streaming, setStreaming] = useState(false);
-  const [pendingAssistant, setPendingAssistant] = useState<ClippyTranscriptEntry | null>(null);
-  const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
-  const abortRef = useRef<(() => void) | null>(null);
-
-  // When the session changes, clear stream state.
-  useEffect(() => {
-    return () => {
-      abortRef.current?.();
-      abortRef.current = null;
-      setPendingAssistant(null);
-      setPendingPermissions([]);
-      setStreaming(false);
-    };
+  // Subscribe to the cross-window stream manager. The manager owns the SSE
+  // connection so it survives drawer unmounts (e.g. when the user pops out
+  // mid-stream) and is mirrored to other windows over BroadcastChannel.
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!sessionId) return () => {};
+      return clippyStreamManager.subscribe(sessionId, listener);
+    },
+    [sessionId],
+  );
+  const getSnapshot = useCallback((): SessionStreamState => {
+    if (!sessionId) return EMPTY_STATE;
+    return clippyStreamManager.getSnapshot(sessionId);
   }, [sessionId]);
+  const streamState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  // Lightweight refresh: only re-pull the per-session data that actually
-  // changes during a turn. The sessions LIST is invalidated separately at
-  // turn end (or when the title changes via session_state) so we don't
-  // re-fetch the entire rail on every text_delta-adjacent event.
   const refresh = useCallback(() => {
     if (!sessionId) return;
     qc.invalidateQueries({ queryKey: ["clippy", "messages", sessionId] });
@@ -81,177 +77,67 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     qc.invalidateQueries({ queryKey: ["clippy", "sessions"] });
   }, [qc]);
 
+  // Register the refresh hooks so the manager can poke react-query when
+  // server-side state changes (message persisted, session renamed, etc).
+  useEffect(() => {
+    if (!sessionId) return;
+    clippyStreamManager.setRefreshCallbacks(sessionId, {
+      onMessage: refresh,
+      onDone: () => {
+        refresh();
+        refreshSessionsList();
+      },
+    });
+  }, [sessionId, refresh, refreshSessionsList]);
+
   const send = useCallback(
     async (text: string, attachmentIds: string[] = [], opts: { force?: boolean } = {}) => {
       if (!sessionId) throw new Error("No active session");
-      if (streaming && !opts.force) throw new Error("A turn is already streaming");
-      if (opts.force) {
-        abortRef.current?.();
-        abortRef.current = null;
+      const current = clippyStreamManager.getSnapshot(sessionId);
+      if (current.streaming && !opts.force) {
+        throw new Error("A turn is already streaming");
       }
-      // Optimistically add user message + start an empty assistant entry.
+      if (opts.force) clippyStreamManager.abortLocal(sessionId);
+
+      // Optimistically add the user message so it renders immediately. The
+      // canonical version replaces it once `message_completed` fires and the
+      // refresh callback re-pulls messages.
       const optimisticBlocks: ChatContentBlock[] = [];
       if (text.length > 0) optimisticBlocks.push({ type: "text", text });
-      // Server resolves attachment metadata when persisting; the optimistic
-      // entry is replaced by the canonical message after `done`. We don't
-      // duplicate attachment metadata here.
-      const optimisticUser: ClippyTranscriptEntry = {
-        id: `optimistic-user-${Date.now()}`,
-        role: "user",
-        blocks: optimisticBlocks,
-      };
       qc.setQueryData<ChatMessage[] | undefined>(
         ["clippy", "messages", sessionId],
-        (prev) => {
-          const list = prev ?? [];
-          return [
-            ...list,
-            {
-              id: optimisticUser.id,
-              sessionId,
-              role: "user",
-              content: optimisticUser.blocks,
-              createdAt: new Date().toISOString(),
-            },
-          ];
-        },
+        (prev) => [
+          ...(prev ?? []),
+          {
+            id: `optimistic-user-${Date.now()}`,
+            sessionId,
+            role: "user",
+            content: optimisticBlocks,
+            createdAt: new Date().toISOString(),
+          },
+        ],
       );
-      setStreaming(true);
-      setPendingAssistant({
-        id: `pending-${Date.now()}`,
-        role: "assistant",
-        blocks: [],
-        pending: true,
-      });
 
-      const handle = postChatMessageStream(
-        sessionId,
-        text,
-        (event) => {
-          handleStreamEvent(event);
-        },
-        attachmentIds,
-      );
-      abortRef.current = handle.abort;
-
-      // Helper that lazily ensures a pending assistant entry exists so a
-      // `text_delta` arriving after `message_completed` (i.e. the second LLM
-      // turn after a tool call in agent mode) still streams visibly.
-      const ensurePending = (prev: ClippyTranscriptEntry | null): ClippyTranscriptEntry =>
-        prev ?? {
-          id: `pending-${Date.now()}`,
-          role: "assistant",
-          blocks: [],
-          pending: true,
-        };
-
-      function handleStreamEvent(event: ChatStreamEvent) {
-        switch (event.type) {
-          case "message_started":
-            // Server is starting a new assistant turn. Make sure we have a
-            // pending entry so subsequent text_deltas render — this is what
-            // covers the gap between tool-loop iterations.
-            setPendingAssistant((prev) => ensurePending(prev));
-            break;
-          case "text_delta":
-            setPendingAssistant((prev) => {
-              const base = ensurePending(prev);
-              const blocks = [...base.blocks];
-              const last = blocks[blocks.length - 1];
-              if (last && last.type === "text") {
-                blocks[blocks.length - 1] = { type: "text", text: last.text + event.delta };
-              } else {
-                blocks.push({ type: "text", text: event.delta });
-              }
-              return { ...base, blocks };
-            });
-            break;
-          case "tool_use_block":
-            setPendingAssistant((prev) => {
-              const base = ensurePending(prev);
-              return {
-                ...base,
-                blocks: [
-                  ...base.blocks,
-                  { type: "tool_use", id: event.toolUseId, name: event.name, input: event.input },
-                ],
-              };
-            });
-            break;
-          case "permission_required":
-            setPendingPermissions((prev) => [
-              ...prev,
-              { toolUseId: event.toolUseId, name: event.name, input: event.input },
-            ]);
-            break;
-          case "tool_result_block":
-            // Drop matching pending permission, server-side state already advanced.
-            setPendingPermissions((prev) =>
-              prev.filter((p) => p.toolUseId !== event.toolUseId),
-            );
-            break;
-          case "message_completed":
-            // Server has persisted the assistant message; refresh canonical history.
-            refresh();
-            setPendingAssistant(null);
-            break;
-          case "session_state":
-            qc.setQueryData(["clippy", "session", sessionId], event.session);
-            // Title may have changed (e.g. auto-derived from the first user
-            // message) — refresh the rail so the dropdown reflects it.
-            refreshSessionsList();
-            break;
-          case "done":
-            setStreaming(false);
-            setPendingAssistant(null);
-            refresh();
-            refreshSessionsList();
-            break;
-          case "error":
-            setPendingAssistant({
-              id: `pending-error-${Date.now()}`,
-              role: "assistant",
-              blocks: [{ type: "text", text: `Error: ${event.error}` }],
-            });
-            setStreaming(false);
-            setPendingPermissions([]);
-            refresh();
-            break;
-          case "ping":
-            break;
-          default:
-            break;
-        }
-      }
-
-      try {
-        await handle.done;
-      } finally {
-        abortRef.current = null;
-        setStreaming(false);
-      }
+      const handle = clippyStreamManager.startTurn(sessionId, text, attachmentIds);
+      await handle.done;
     },
-    [qc, refresh, refreshSessionsList, sessionId, streaming],
+    [qc, sessionId],
   );
 
   const decidePermission = useCallback(
     async (toolUseId: string, decision: "approve" | "deny") => {
       if (!sessionId) return;
-      // Remove from pending list optimistically; server resolution drives the next event.
-      setPendingPermissions((prev) => prev.filter((p) => p.toolUseId !== toolUseId));
       try {
         await chatApi.decidePermission(sessionId, toolUseId, decision);
+        // No optimistic local mutation: the resulting `tool_result_block` or
+        // next stream event clears the pending permission across all windows
+        // via the BroadcastChannel mirror.
       } catch (err) {
-        // If the server lost the pending permission, surface as a transcript error.
         const message = err instanceof Error ? err.message : String(err);
-        setPendingAssistant((prev) => ({
-          id: prev?.id ?? `pending-perm-err-${Date.now()}`,
-          role: "assistant",
-          blocks: [
-            ...(prev?.blocks ?? []),
-            { type: "text", text: `\n\nFailed to record permission decision: ${message}` },
-          ],
-        }));
+        // Surface as an inline error; the manager doesn't expose a generic
+        // "append to pending" helper so we just log — react-query will pick
+        // up the canonical state on the next refresh.
+        console.error("Failed to record permission decision:", message);
       }
     },
     [sessionId],
@@ -274,10 +160,9 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     role: m.role,
     blocks: m.content,
   }));
-  if (pendingAssistant) {
-    // Avoid double-rendering if the server already persisted the same message id.
-    if (!messages.some((m) => m.id === pendingAssistant.id)) {
-      transcript.push(pendingAssistant);
+  if (streamState.pendingAssistant) {
+    if (!messages.some((m) => m.id === streamState.pendingAssistant!.id)) {
+      transcript.push(streamState.pendingAssistant);
     }
   }
 
@@ -286,16 +171,15 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     messages,
     transcript,
     loading: sessionQuery.isLoading || messagesQuery.isLoading,
-    streaming,
-    pendingPermissions,
+    streaming: streamState.streaming,
+    pendingPermissions: streamState.pendingPermissions,
     send,
     abortAndSend: (text, attachmentIds) => send(text, attachmentIds, { force: true }),
     decidePermission,
     patchSession,
     abort: () => {
-      abortRef.current?.();
-      abortRef.current = null;
-      setStreaming(false);
+      if (!sessionId) return;
+      clippyStreamManager.abortLocal(sessionId);
     },
   };
 }

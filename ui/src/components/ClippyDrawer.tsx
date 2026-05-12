@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ExternalLink, MessageCircle, Pencil, Plus, X } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -12,9 +12,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCompany } from "../context/CompanyContext";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
+import { clippyStreamManager } from "../lib/clippy-stream-manager";
 import { cn } from "../lib/utils";
 
 const ACTIVE_SESSION_KEY = "paperclip.clippy.activeSessionId";
@@ -67,10 +69,15 @@ function clampWidth(px: number): number {
   return Math.min(Math.max(MIN_WIDTH, px), max);
 }
 
-function popOutChat() {
+function popOutChat(sessionId: string | null) {
   if (typeof window === "undefined") return null;
   const features = "popup=yes,width=520,height=720,menubar=no,toolbar=no,location=no,status=no";
-  return window.open("/clippy-popup", "paperclip-clippy", features);
+  // Pass the active session id through so the popup opens the same chat
+  // (rather than defaulting to the most-recent session, which may differ).
+  const url = sessionId
+    ? `/clippy-popup?session=${encodeURIComponent(sessionId)}`
+    : "/clippy-popup";
+  return window.open(url, "paperclip-clippy", features);
 }
 
 export function ClippyDrawer() {
@@ -199,6 +206,27 @@ export function ClippyDrawer() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
+  // Gate the pop-out button while the active session has an in-flight turn.
+  // A new window can't see this window's in-memory stream state, so popping
+  // out mid-stream would land the user in a popup that thinks the chat is
+  // idle. Wait for the turn to finish (or have the user explicitly Stop).
+  const streamingSubscribe = useCallback(
+    (listener: () => void) => {
+      if (!activeSessionId) return () => {};
+      return clippyStreamManager.subscribe(activeSessionId, listener);
+    },
+    [activeSessionId],
+  );
+  const streamingSnapshot = useCallback(() => {
+    if (!activeSessionId) return false;
+    return clippyStreamManager.getSnapshot(activeSessionId).streaming;
+  }, [activeSessionId]);
+  const activeIsStreaming = useSyncExternalStore(
+    streamingSubscribe,
+    streamingSnapshot,
+    streamingSnapshot,
+  );
+
   return (
     <>
       <Button
@@ -312,21 +340,31 @@ export function ClippyDrawer() {
               >
                 <Plus className="mr-1 h-3 w-3" /> New
               </Button>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                onClick={() => {
-                  const win = popOutChat();
-                  // Only collapse the drawer once the popup actually opened —
-                  // if a popup blocker rejected it, leave the drawer open so
-                  // the user isn't dropped into nothing.
-                  if (win) setOpen(false);
-                }}
-                title="Pop out into its own window"
-                aria-label="Pop out into its own window"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* Wrap the disabled button in a span so the tooltip still
+                      fires — disabled buttons don't emit pointer events. */}
+                  <span>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={activeIsStreaming}
+                      onClick={() => {
+                        const win = popOutChat(activeSessionId);
+                        if (win) setOpen(false);
+                      }}
+                      aria-label="Pop out into its own window"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {activeIsStreaming
+                    ? "Wait for the current response to finish before popping out"
+                    : "Pop out into its own window"}
+                </TooltipContent>
+              </Tooltip>
               <Button
                 size="icon-sm"
                 variant="ghost"

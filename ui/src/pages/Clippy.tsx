@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,9 +16,18 @@ export function Clippy() {
     queryFn: () => chatApi.listSessions().then((r) => r.sessions),
   });
   const sessions = sessionsQuery.data ?? [];
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // Honor `?session=<id>` so the pop-out window opens the same chat the user
+  // was looking at in the drawer. Read once on mount — we don't want react
+  // query refetches retriggering this.
+  const initialSessionFromUrl = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("session");
+  }, []);
+  const [activeId, setActiveId] = useState<string | null>(initialSessionFromUrl);
 
-  // Default to most-recent session on first load.
+  // Default to most-recent session on first load — but only if the URL didn't
+  // pin us to one.
   useEffect(() => {
     if (activeId) return;
     if (sessions.length > 0) setActiveId(sessions[0].id);
