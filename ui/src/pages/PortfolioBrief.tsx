@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "@/lib/router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sun,
   Sunrise,
@@ -31,10 +31,13 @@ import { cn, formatCents } from "../lib/utils";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import {
   dismissReviewSender,
+  headerMatchesSender,
   parseReviewQueue,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { pluginsApi } from "../api/plugins";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 400;
@@ -273,6 +276,97 @@ export function PortfolioBrief() {
     return groupByCompany(reviewQueueRows, companies);
   }, [reviewQueueRows, companies]);
 
+  // For preview fetching, group by (companyId, mailbox) — the email plugin
+  // call needs both. Two companies can share a mailbox name pointing to
+  // different accounts, so the company is part of the cache key.
+  const uniqueReviewMailboxes = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { companyId: string; mailbox: string }[] = [];
+    for (const row of reviewQueueRows) {
+      const key = `${row.companyId}::${row.mailbox}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ companyId: row.companyId, mailbox: row.mailbox });
+    }
+    return out;
+  }, [reviewQueueRows]);
+
+  const previewMessageQueries = useQueries({
+    queries: uniqueReviewMailboxes.map(({ companyId, mailbox }) => ({
+      queryKey: [
+        "portfolioBrief",
+        "reviewQueuePreview",
+        emailPluginId,
+        companyId,
+        mailbox,
+      ],
+      queryFn: () => {
+        const api = makeEmailToolsApi(emailPluginId!, companyId);
+        return api.listMessages(mailbox, { limit: 200 });
+      },
+      enabled: !!emailPluginId,
+      staleTime: 60_000,
+    })),
+  });
+
+  const { reviewPreviewLookup, reviewMatchedUidsLookup } = useMemo(() => {
+    const headerMap = new Map<string, MailHeader>();
+    const uidsMap = new Map<string, number[]>();
+    uniqueReviewMailboxes.forEach(({ companyId, mailbox }, idx) => {
+      const messages = previewMessageQueries[idx]?.data?.messages ?? [];
+      const rowsForBucket = reviewQueueRows.filter(
+        (r) => r.companyId === companyId && r.mailbox === mailbox,
+      );
+      for (const row of rowsForBucket) {
+        const matches = messages.filter((m) => headerMatchesSender(m, row.sender));
+        if (matches.length === 0) continue;
+        matches.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const key = `${companyId}::${mailbox}::${row.sender}`;
+        headerMap.set(key, matches[0]!);
+        uidsMap.set(key, matches.map((m) => m.uid));
+      }
+    });
+    return { reviewPreviewLookup: headerMap, reviewMatchedUidsLookup: uidsMap };
+  }, [uniqueReviewMailboxes, previewMessageQueries, reviewQueueRows]);
+
+  const [hoveredPreviewKey, setHoveredPreviewKey] = useState<string | null>(null);
+  const hoveredHeader = hoveredPreviewKey
+    ? reviewPreviewLookup.get(hoveredPreviewKey) ?? null
+    : null;
+  const hoveredParts = hoveredPreviewKey ? hoveredPreviewKey.split("::") : null;
+  const hoveredCompanyId = hoveredParts?.[0] ?? null;
+  const hoveredMailbox = hoveredParts?.[1] ?? null;
+
+  const { data: hoveredFullMessage } = useQuery({
+    queryKey: [
+      "portfolioBrief",
+      "reviewQueueFullMessage",
+      emailPluginId,
+      hoveredCompanyId,
+      hoveredMailbox,
+      hoveredHeader?.uid,
+    ],
+    queryFn: () => {
+      const api = makeEmailToolsApi(emailPluginId!, hoveredCompanyId!);
+      return api.fetchMessage(hoveredMailbox!, hoveredHeader!.uid);
+    },
+    enabled:
+      !!emailPluginId && !!hoveredCompanyId && !!hoveredMailbox && !!hoveredHeader,
+    staleTime: 10 * 60_000,
+  });
+
+  async function markRowUidsRead(row: ReviewQueueRow) {
+    if (!emailPluginId) return;
+    const uids =
+      reviewMatchedUidsLookup.get(`${row.companyId}::${row.mailbox}::${row.sender}`) ??
+      [];
+    if (uids.length === 0) return;
+    const api = makeEmailToolsApi(emailPluginId, row.companyId);
+    await Promise.allSettled(
+      uids.map((uid) => api.markRead(row.mailbox, uid, "INBOX")),
+    );
+  }
+
   async function applyReviewTransform(
     row: ReviewQueueRow,
     transform: (body: string, sender: string) => string,
@@ -327,9 +421,17 @@ export function PortfolioBrief() {
     },
     ...reviewMutationOptions,
   });
-  const keepMutation = useMutation({
+  const keepUnreadMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
+      await applyReviewTransform(row, dismissReviewSender);
+    },
+    ...reviewMutationOptions,
+  });
+  const keepReadMutation = useMutation({
+    mutationFn: async (row: ReviewQueueRow) => {
+      await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
+      await markRowUidsRead(row);
       await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
@@ -339,7 +441,10 @@ export function PortfolioBrief() {
     ...reviewMutationOptions,
   });
   const lastReviewError =
-    graduateMutation.error ?? keepMutation.error ?? dismissMutation.error;
+    graduateMutation.error ??
+    keepUnreadMutation.error ??
+    keepReadMutation.error ??
+    dismissMutation.error;
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Sunrise} message="Select a company to view its brief." />;
@@ -559,7 +664,7 @@ export function PortfolioBrief() {
                     Email senders awaiting your call
                   </h3>
                   <span className="text-[11px] text-muted-foreground">
-                    Auto-triage = move noise · Keep = leave in INBOX · Dismiss = drop without a rule
+                    Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Dismiss = no rule
                   </span>
                 </div>
                 <div className="space-y-3">
@@ -570,14 +675,26 @@ export function PortfolioBrief() {
                       <CompanyBlock key={company.id} company={company} total={total}>
                         {visible.map((row) => {
                           const key = `${row.rulesIssueId}::${row.sender}`;
+                          const previewKey = `${row.companyId}::${row.mailbox}::${row.sender}`;
                           const isPending = pendingRowAction === key;
+                          const preview = reviewPreviewLookup.get(previewKey) ?? null;
+                          const isHovered = hoveredPreviewKey === previewKey;
                           return (
                             <ReviewQueueRow
                               key={key}
                               row={row}
+                              company={company}
                               pending={isPending}
+                              preview={preview}
+                              fullBodyText={isHovered ? hoveredFullMessage?.text ?? null : null}
+                              fullBodyLoading={isHovered && !!preview && !hoveredFullMessage}
+                              onHoverChange={(entered) => {
+                                if (entered) setHoveredPreviewKey(previewKey);
+                                else setHoveredPreviewKey((cur) => (cur === previewKey ? null : cur));
+                              }}
                               onGraduate={() => graduateMutation.mutate(row)}
-                              onKeep={() => keepMutation.mutate(row)}
+                              onKeepRead={() => keepReadMutation.mutate(row)}
+                              onKeepUnread={() => keepUnreadMutation.mutate(row)}
                               onDismiss={() => dismissMutation.mutate(row)}
                             />
                           );
@@ -781,47 +898,152 @@ function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
 
 interface ReviewQueueRowProps {
   row: ReviewQueueRow;
+  company: Company;
   pending: boolean;
+  preview: MailHeader | null;
+  fullBodyText: string | null;
+  fullBodyLoading: boolean;
+  onHoverChange: (entered: boolean) => void;
   onGraduate: () => void;
-  onKeep: () => void;
+  onKeepRead: () => void;
+  onKeepUnread: () => void;
   onDismiss: () => void;
 }
 
-function ReviewQueueRow({ row, pending, onGraduate, onKeep, onDismiss }: ReviewQueueRowProps) {
+const PREVIEW_BODY_CHARS = 700;
+
+function truncateBody(text: string, max: number): { text: string; truncated: boolean } {
+  const collapsed = text.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (collapsed.length <= max) return { text: collapsed, truncated: false };
+  return { text: collapsed.slice(0, max).trimEnd() + "…", truncated: true };
+}
+
+function ReviewQueueRow({
+  row,
+  company,
+  pending,
+  preview,
+  fullBodyText,
+  fullBodyLoading,
+  onHoverChange,
+  onGraduate,
+  onKeepRead,
+  onKeepUnread,
+  onDismiss,
+}: ReviewQueueRowProps) {
+  const subjectLine = preview?.subject?.trim() || "";
+  const snippet = preview?.snippet?.trim() || "";
+  const fullBody = fullBodyText ? truncateBody(fullBodyText, PREVIEW_BODY_CHARS) : null;
+  const baseEmailPath = `/${company.issuePrefix}/email`;
+  const messageHref = preview
+    ? `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&uid=${preview.uid}&all=1`
+    : `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&all=1`;
+
   return (
-    <div className="group relative pl-5 pr-4 py-3">
+    <div
+      className="group relative pl-5 pr-4 py-3"
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
+    >
       <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
       <div className="flex items-start gap-3">
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-mono text-[13px] truncate">{row.sender}</span>
-            <span className="text-[11px] text-muted-foreground">
-              · {row.count} message{row.count === 1 ? "" : "s"}
-            </span>
-            <span className="text-[11px] text-muted-foreground/70">· {row.mailbox} mailbox</span>
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                to={messageHref}
+                title={preview ? "Open this email" : "Open this mailbox (no recent message found in INBOX)"}
+                className="block group/link cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/40 rounded-sm"
+              >
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span className="font-mono text-[13px] truncate group-hover/link:underline">
+                    {row.sender}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    · {row.count} message{row.count === 1 ? "" : "s"}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground/70">· {row.mailbox} mailbox</span>
+                </div>
+                <div className="mt-0.5 text-[12px] text-muted-foreground truncate">
+                  {preview ? (
+                    subjectLine || <span className="italic">(no subject)</span>
+                  ) : (
+                    <span className="italic opacity-60">No recent message in INBOX — click to open mailbox</span>
+                  )}
+                </div>
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              align="start"
+              className="max-w-lg p-3 text-left whitespace-normal"
+            >
+              {preview ? (
+                <div className="space-y-1.5">
+                  <div className="text-[13px] font-medium leading-snug break-words">
+                    {subjectLine || "(no subject)"}
+                  </div>
+                  {fullBody ? (
+                    <div className="text-[12px] leading-snug break-words whitespace-pre-wrap opacity-90 max-h-64 overflow-hidden">
+                      {fullBody.text}
+                    </div>
+                  ) : snippet ? (
+                    <div className="text-[12px] leading-snug break-words opacity-80">
+                      {snippet}
+                      {fullBodyLoading && <span className="ml-1 opacity-60">· loading more…</span>}
+                    </div>
+                  ) : fullBodyLoading ? (
+                    <div className="text-[12px] opacity-60">Loading preview…</div>
+                  ) : null}
+                  <div className="text-[11px] pt-1 opacity-70">
+                    {timeAgo(preview.date)} · latest of {row.count} message{row.count === 1 ? "" : "s"} · click to open
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1 text-[12px]">
+                  <div className="font-medium">No recent message preview</div>
+                  <div className="opacity-70">
+                    Couldn't find a recent message from{" "}
+                    <span className="font-mono">{row.sender}</span> in the last 200 INBOX messages.
+                  </div>
+                  <div className="opacity-70">
+                    <span className="underline-offset-2 group-hover:underline">click to open mailbox</span>
+                  </div>
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={onGraduate}
             disabled={pending}
-            title="Move all future mail from this sender to _paperclip/triage automatically."
+            title="Write an auto-triage rule and move every message from this sender (now and going forward) to _paperclip/triage."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Auto-triage
           </button>
           <button
             type="button"
-            onClick={onKeep}
+            onClick={onKeepRead}
             disabled={pending}
-            title="Always leave mail from this sender in INBOX. Beats Auto-triage if both match."
+            title="Keep this sender in INBOX going forward AND mark the existing messages as read."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Keep
+            Keep · read
+          </button>
+          <button
+            type="button"
+            onClick={onKeepUnread}
+            disabled={pending}
+            title="Keep this sender in INBOX going forward and leave existing messages unread."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Keep · unread
           </button>
           <button
             type="button"
