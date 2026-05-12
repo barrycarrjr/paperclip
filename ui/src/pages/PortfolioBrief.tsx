@@ -685,6 +685,7 @@ export function PortfolioBrief() {
                               row={row}
                               company={company}
                               pending={isPending}
+                              canWriteRules={!!emailPluginId}
                               preview={preview}
                               fullBodyText={isHovered ? hoveredFullMessage?.text ?? null : null}
                               fullBodyLoading={isHovered && !!preview && !hoveredFullMessage}
@@ -900,6 +901,7 @@ interface ReviewQueueRowProps {
   row: ReviewQueueRow;
   company: Company;
   pending: boolean;
+  canWriteRules: boolean;
   preview: MailHeader | null;
   fullBodyText: string | null;
   fullBodyLoading: boolean;
@@ -922,6 +924,7 @@ function ReviewQueueRow({
   row,
   company,
   pending,
+  canWriteRules,
   preview,
   fullBodyText,
   fullBodyLoading,
@@ -938,6 +941,23 @@ function ReviewQueueRow({
   const messageHref = preview
     ? `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&uid=${preview.uid}&all=1`
     : `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&all=1`;
+
+  // Auto-triage / Keep buttons write rules via the email-tools plugin bridge.
+  // Without the plugin installed, those calls silently no-op — gate at the UI
+  // so the buttons disable with an explanation.
+  const ruleButtonGate = (button: React.ReactNode) => {
+    if (canWriteRules) return button;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">{button}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          Email-tools plugin isn't installed — rule actions are disabled.
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
 
   return (
     <div
@@ -1018,33 +1038,39 @@ function ReviewQueueRow({
           </Tooltip>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={onGraduate}
-            disabled={pending}
-            title="Write an auto-triage rule and move every message from this sender (now and going forward) to _paperclip/triage."
-            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Auto-triage
-          </button>
-          <button
-            type="button"
-            onClick={onKeepRead}
-            disabled={pending}
-            title="Keep this sender in INBOX going forward AND mark the existing messages as read."
-            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Keep · read
-          </button>
-          <button
-            type="button"
-            onClick={onKeepUnread}
-            disabled={pending}
-            title="Keep this sender in INBOX going forward and leave existing messages unread."
-            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Keep · unread
-          </button>
+          {ruleButtonGate(
+            <button
+              type="button"
+              onClick={onGraduate}
+              disabled={pending || !canWriteRules}
+              title="Write an auto-triage rule and move every message from this sender (now and going forward) to _paperclip/triage."
+              className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Auto-triage
+            </button>,
+          )}
+          {ruleButtonGate(
+            <button
+              type="button"
+              onClick={onKeepRead}
+              disabled={pending || !canWriteRules}
+              title="Keep this sender in INBOX going forward AND mark the existing messages as read."
+              className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Keep · read
+            </button>,
+          )}
+          {ruleButtonGate(
+            <button
+              type="button"
+              onClick={onKeepUnread}
+              disabled={pending || !canWriteRules}
+              title="Keep this sender in INBOX going forward and leave existing messages unread."
+              className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Keep · unread
+            </button>,
+          )}
           <button
             type="button"
             onClick={onDismiss}
@@ -1131,6 +1157,24 @@ function OutcomeRow({ event, company }: OutcomeRowProps) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const fullTimestamp = new Date(event.createdAt).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const actorLabel =
+    event.actorType === "agent"
+      ? "an agent"
+      : event.actorType === "user"
+        ? "a user"
+        : event.actorType === "system"
+          ? "the system"
+          : event.actorType === "plugin"
+            ? "a plugin"
+            : event.actorType;
 
   const inner = (
     <div className="grid grid-cols-[64px_1fr_auto] gap-3 items-center px-4 py-2.5 text-sm">
@@ -1145,12 +1189,36 @@ function OutcomeRow({ event, company }: OutcomeRowProps) {
     </div>
   );
 
-  return link ? (
+  const trigger = link ? (
     <Link to={link} className="block hover:bg-accent/40 transition-colors no-underline text-inherit">
       {inner}
     </Link>
   ) : (
     <div>{inner}</div>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-md p-3 text-left whitespace-normal">
+        <div className="space-y-1.5">
+          <div className="text-[13px] font-medium leading-snug break-words">
+            {outcome.verb}
+            {outcome.target && (
+              <span className="font-normal opacity-80"> {outcome.target}</span>
+            )}
+          </div>
+          <div className="text-[11px] opacity-70">
+            {fullTimestamp} · by {actorLabel} · in {company.name}
+          </div>
+          {link && (
+            <div className="text-[11px] opacity-60">
+              Click to open this {event.entityType}
+            </div>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

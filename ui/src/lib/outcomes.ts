@@ -33,6 +33,15 @@ interface SummarizeOptions {
  * Lookup table mapping the operational `entity.action` vocabulary used by the
  * activity log into outcome-shaped summaries (verb-led, user-readable). Adding
  * an entry here is the way to surface a new event in the Receipt feed.
+ *
+ * Tone palette (kept narrow on purpose so glancing at the feed conveys what
+ * happened without reading the chip text):
+ *   emerald → approval gates passed by the user ("approved")
+ *   amber   → pending / awaiting-you ("drafted", "paused")
+ *   sky     → information & content (sent, created, documented, attached)
+ *   violet  → conversation / human signal (commented)
+ *   red     → failure / rejection / destructive
+ *   muted   → archival, low-signal
  */
 const OUTCOME_TABLE: Record<
   string,
@@ -42,32 +51,33 @@ const OUTCOME_TABLE: Record<
   // amber awaiting-you state; "Approved/Rejected" map to terminal outcomes.
   // "Sent" / "Send failed" surface the actual side-effect of an approved
   // draft, recorded by the trust-loop hook in routes/approvals.ts.
+  // Emerald is reserved for `approved` so it pops in the feed.
   "approval.created": { verb: "Drafted", chip: "drafted", tone: "amber", category: "draft" },
   "approval.approved": { verb: "Approved", chip: "approved", tone: "emerald", category: "approval" },
   "approval.rejected": { verb: "Rejected", chip: "rejected", tone: "red", category: "approval" },
-  "approval.executed": { verb: "Sent", chip: "sent", tone: "emerald", category: "approval" },
+  "approval.executed": { verb: "Sent", chip: "sent", tone: "sky", category: "approval" },
   "approval.execute_failed": { verb: "Send failed for", chip: "send-failed", tone: "red", category: "approval" },
 
   // Issues — outcome-flavored only. We deliberately skip "checked_out" /
   // "released" because they are run-machinery, not user-visible outcomes.
   "issue.created": { verb: "Created issue", chip: "created", tone: "sky", category: "issue" },
-  "issue.commented": { verb: "Commented on", chip: "commented", tone: "emerald", category: "issue" },
-  "issue.comment_added": { verb: "Commented on", chip: "commented", tone: "emerald", category: "issue" },
-  "issue.attachment_added": { verb: "Attached file to", chip: "attached", tone: "emerald", category: "issue" },
-  "issue.document_created": { verb: "Created document for", chip: "documented", tone: "emerald", category: "issue" },
-  "issue.document_updated": { verb: "Updated document on", chip: "documented", tone: "emerald", category: "issue" },
+  "issue.commented": { verb: "Commented on", chip: "commented", tone: "violet", category: "issue" },
+  "issue.comment_added": { verb: "Commented on", chip: "commented", tone: "violet", category: "issue" },
+  "issue.attachment_added": { verb: "Attached file to", chip: "attached", tone: "sky", category: "issue" },
+  "issue.document_created": { verb: "Created document for", chip: "documented", tone: "sky", category: "issue" },
+  "issue.document_updated": { verb: "Updated document on", chip: "documented", tone: "sky", category: "issue" },
   "issue.deleted": { verb: "Deleted issue", chip: "deleted", tone: "red", category: "issue" },
 
   // Agents — lifecycle changes that the operator cares about.
   "agent.created": { verb: "Hired agent", chip: "hired", tone: "sky", category: "agent" },
   "agent.paused": { verb: "Paused agent", chip: "paused", tone: "amber", category: "agent" },
-  "agent.resumed": { verb: "Resumed agent", chip: "resumed", tone: "emerald", category: "agent" },
+  "agent.resumed": { verb: "Resumed agent", chip: "resumed", tone: "sky", category: "agent" },
   "agent.terminated": { verb: "Terminated agent", chip: "terminated", tone: "red", category: "agent" },
 
   // Projects + Goals.
   "project.created": { verb: "Created project", chip: "created", tone: "sky", category: "project" },
   "goal.created": { verb: "Created goal", chip: "created", tone: "sky", category: "goal" },
-  "goal.updated": { verb: "Updated goal", chip: "updated", tone: "emerald", category: "goal" },
+  "goal.updated": { verb: "Updated goal", chip: "updated", tone: "sky", category: "goal" },
 
   // Companies (rare in feeds, but we render them rather than dropping them).
   "company.created": { verb: "Created company", chip: "created", tone: "sky", category: "system" },
@@ -220,6 +230,50 @@ function detailString(event: ActivityEvent, ...keys: string[]): string | null {
   return null;
 }
 
+/**
+ * Short human labels for approval `type` values. Kept in sync with
+ * `typeLabel` in components/ApprovalPayload.tsx (duplicated rather than
+ * imported so this module stays UI-component-free and can run in any
+ * surface that summarises activity events).
+ */
+const APPROVAL_TYPE_LABEL: Record<string, string> = {
+  hire_agent: "hire request",
+  approve_ceo_strategy: "CEO strategy",
+  budget_override_required: "budget override",
+  request_board_approval: "board approval",
+  outbound_tool_draft: "outbound draft",
+};
+
+/**
+ * Short verbs for the `<plugin>:<tool>` namespaces that surface as
+ * `outbound_tool_draft` approvals. Mirrors OUTBOUND_TOOL_LABEL in
+ * components/ApprovalPayload.tsx for the same reason as above.
+ */
+const OUTBOUND_TOOL_SHORT_LABEL: Record<string, string> = {
+  "email-tools:email_send": "email",
+  "email-tools:email_reply": "email reply",
+  "help-scout:helpscout_send_reply": "HelpScout reply",
+  "help-scout:helpscout_create_conversation": "HelpScout conversation",
+  "slack-tools:slack_send_dm": "Slack DM",
+  "slack-tools:slack_send_channel": "Slack post",
+  "phone-tools:phone_call_make": "outbound call",
+  "3cx-tools:pbx_click_to_call": "click-to-call",
+};
+
+function approvalTargetFromDetails(event: ActivityEvent): string | null {
+  const explicit = detailString(event, "title", "summary", "approvalLabel");
+  if (explicit) return explicit;
+
+  const type = typeof event.details?.type === "string" ? event.details.type : null;
+  const tool = typeof event.details?.tool === "string" ? event.details.tool : null;
+
+  if (type === "outbound_tool_draft" && tool) {
+    return OUTBOUND_TOOL_SHORT_LABEL[tool] ?? tool.split(":").pop() ?? tool;
+  }
+  if (type && APPROVAL_TYPE_LABEL[type]) return APPROVAL_TYPE_LABEL[type];
+  return type ? type.replace(/_/g, " ") : null;
+}
+
 function entityTarget(event: ActivityEvent): string | null {
   if (event.entityType === "issue") {
     const ident = detailString(event, "identifier", "issueIdentifier");
@@ -228,7 +282,7 @@ function entityTarget(event: ActivityEvent): string | null {
     return ident ?? title;
   }
   if (event.entityType === "approval") {
-    return detailString(event, "title", "summary", "approvalLabel");
+    return approvalTargetFromDetails(event);
   }
   if (event.entityType === "agent") {
     return detailString(event, "agentName", "name");
