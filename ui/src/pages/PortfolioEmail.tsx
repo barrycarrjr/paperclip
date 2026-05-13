@@ -13,6 +13,9 @@ import {
   Users,
   AlignLeft,
   ExternalLink,
+  Reply,
+  Forward,
+  Bot,
 } from "lucide-react";
 import type { Company, IssueDocument } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -168,7 +171,12 @@ export function PortfolioEmail() {
     setGroupBySender(v);
   }
 
-  function openInCompany(mailboxKey: string, uid: number | null, companyId: string) {
+  function openInCompany(
+    mailboxKey: string,
+    uid: number | null,
+    companyId: string,
+    action?: "reply" | "forward" | "handoff",
+  ) {
     const targetCompany = companyById.get(companyId);
     if (!targetCompany) return;
     if (companyId !== selectedCompanyId) {
@@ -178,6 +186,7 @@ export function PortfolioEmail() {
     params.set("mailbox", mailboxKey);
     if (uid != null) params.set("uid", String(uid));
     params.set("all", "1");
+    if (action) params.set("action", action);
     // Use the target company's prefix directly. If we hand a bare "/email" to
     // navigate(), the router resolves the prefix from the current URL (HQ),
     // and Layout's URL → selectedCompanyId sync then yanks the company back
@@ -276,7 +285,9 @@ export function PortfolioEmail() {
               pluginId={pluginId}
               showAll={showAll}
               groupBySender={groupBySender}
-              onOpenMessage={(uid) => openInCompany(mb.key, uid, mb.primaryCompanyId)}
+              onOpenMessage={(uid, action) =>
+                openInCompany(mb.key, uid, mb.primaryCompanyId, action)
+              }
               onOpenMailbox={() => openInCompany(mb.key, null, mb.primaryCompanyId)}
             />
           ))}
@@ -291,7 +302,7 @@ interface MailboxPanelProps {
   pluginId: string;
   showAll: boolean;
   groupBySender: boolean;
-  onOpenMessage: (uid: number) => void;
+  onOpenMessage: (uid: number, action?: "reply" | "forward" | "handoff") => void;
   onOpenMailbox: () => void;
 }
 
@@ -626,7 +637,7 @@ interface MessageListBodyProps {
   autoTriagePendingUid: number | null;
   deleteMsg: (msg: MailHeader) => void;
   deletePendingUid: number | null;
-  onOpenMessage: (uid: number) => void;
+  onOpenMessage: (uid: number, action?: "reply" | "forward" | "handoff") => void;
 }
 
 function MessageListBody(props: MessageListBodyProps) {
@@ -908,6 +919,33 @@ function MessageRow({
             )}
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onOpenMessage(msg.uid, "reply")}
+          title="Reply"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Reply className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onOpenMessage(msg.uid, "forward")}
+          title="Forward"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Forward className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onOpenMessage(msg.uid, "handoff")}
+          title="Hand off to agent"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Bot className="h-3.5 w-3.5" />
+        </Button>
         <Button
           variant="ghost"
           size="icon-sm"

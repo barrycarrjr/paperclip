@@ -350,7 +350,7 @@ export function SidebarAccountMenu({
           align="start"
           sideOffset={10}
           onOpenAutoFocus={(event) => event.preventDefault()}
-          className="w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
+          className="w-80 overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
         >
           <div className="h-24 bg-[linear-gradient(135deg,hsl(var(--primary))_0%,hsl(var(--accent))_55%,hsl(var(--muted))_100%)]" />
           <div className="-mt-8 px-4 pb-4">

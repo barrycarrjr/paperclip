@@ -45,6 +45,7 @@ import {
 } from "./routes/system-snapshot.js";
 import { llmRoutes } from "./routes/llms.js";
 import { chatRoutes } from "./routes/chat.js";
+import { emailDraftRoutes } from "./routes/email-drafts.js";
 import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
@@ -261,6 +262,7 @@ export async function createApp(
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
   api.use(systemRoutes());
+  api.use(emailDraftRoutes());
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

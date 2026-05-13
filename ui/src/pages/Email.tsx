@@ -24,6 +24,7 @@ import {
   Users,
   AlignLeft,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -38,10 +39,19 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader, type ParsedEmailMessage } from "../api/emailTools";
+import { emailDraftsApi } from "../api/emailDrafts";
+import { chatApi } from "../api/chat";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
@@ -89,6 +99,10 @@ export function Email() {
       return Number.isFinite(n) ? n : null;
     })(),
     all: searchParams.get("all") === "1",
+    action: (() => {
+      const a = searchParams.get("action");
+      return a === "reply" || a === "forward" || a === "handoff" ? a : null;
+    })() as "reply" | "forward" | "handoff" | null,
   }).current;
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialUrlState.mailbox);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
@@ -101,6 +115,18 @@ export function Email() {
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
   const [handoffNote, setHandoffNote] = useState("");
+  // Row-click handlers for reply/forward/handoff need fullMessage. They set
+  // selectedUid (triggering fetch) and arm a pending action that fires from a
+  // useEffect once fullMessage matches. Also fed by ?action= URL param so
+  // navigations from Portfolio Email land with the action pre-armed.
+  const [pendingRowAction, setPendingRowAction] = useState<
+    { uid: number; action: "reply" | "forward" | "handoff" } | null
+  >(() => {
+    if (initialUrlState.uid !== null && initialUrlState.action) {
+      return { uid: initialUrlState.uid, action: initialUrlState.action };
+    }
+    return null;
+  });
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [moveDropdownSender, setMoveDropdownSender] = useState<string | null>(null);
@@ -143,12 +169,30 @@ export function Email() {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [replyAll, setReplyAll] = useState(false);
+  // AI Draft model — empty string = let server auto-pick. Persisted so the
+  // operator doesn't have to re-pick on every reply.
+  const [draftModel, setDraftModel] = useState<string>(() => {
+    try { return localStorage.getItem("email-draftModel") ?? ""; } catch { return ""; }
+  });
+  const updateDraftModel = (m: string) => {
+    setDraftModel(m);
+    try { localStorage.setItem("email-draftModel", m); } catch {}
+  };
   // Compose dialog state
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeTo, setComposeTo] = useState("");
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Available LLM models (for AI Draft picker) ────────────────────────────
+
+  const draftModelsQuery = useQuery({
+    queryKey: ["email", "draftModels"],
+    queryFn: () => chatApi.listModels().then((r) => r.models),
+    staleTime: 5 * 60_000,
+  });
+  const draftModels = draftModelsQuery.data ?? [];
 
   // ── Mailbox list ──────────────────────────────────────────────────────────
 
@@ -219,6 +263,7 @@ export function Email() {
     setSelectedUid(null);
     setOptimisticallyRemovedUids(new Set());
     setReplyOpen(false);
+    setPendingRowAction(null);
   }, [selectedMailbox, selectedFolder]);
 
   // ── Sender rules (used to highlight per-row action icons) ─────────────────
@@ -286,6 +331,43 @@ export function Email() {
     queryFn: () => emailApi!.fetchMessage(selectedMailbox!, selectedUid!, selectedFolder),
     enabled: !!emailApi && !!selectedMailbox && selectedUid !== null,
   });
+
+  // Fires reply/forward/handoff dialogs once fullMessage arrives for a row
+  // that armed pendingRowAction. Without this the row click would just select
+  // the message — the user would then have to click the action button on the
+  // detail pane separately.
+  useEffect(() => {
+    if (!pendingRowAction || !fullMessage || fullMessage.uid !== pendingRowAction.uid) {
+      return;
+    }
+    const action = pendingRowAction.action;
+    if (action === "reply") {
+      setReplyOpen(true);
+      setReplyBody("");
+      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+    } else if (action === "forward") {
+      const subj = fullMessage.subject || "";
+      const fwdSubj = /^fwd?:\s/i.test(subj) ? subj : `Fwd: ${subj}`;
+      const header = [
+        "---------- Forwarded message ----------",
+        `From: ${fullMessage.from}`,
+        `Date: ${new Date(fullMessage.date).toLocaleString()}`,
+        `Subject: ${fullMessage.subject}`,
+        fullMessage.to.length > 0 ? `To: ${fullMessage.to.join(", ")}` : null,
+      ]
+        .filter((l): l is string => l !== null)
+        .join("\n");
+      const body = `\n\n${header}\n\n${fullMessage.text || fullMessage.markdown || ""}`;
+      setComposeTo("");
+      setComposeSubject(fwdSubj);
+      setComposeBody(body);
+      setComposeOpen(true);
+    } else if (action === "handoff") {
+      setHandoffMessage(fullMessage);
+      setHandoffDialogOpen(true);
+    }
+    setPendingRowAction(null);
+  }, [fullMessage, pendingRowAction]);
 
   // ── Rules home issue ──────────────────────────────────────────────────────
 
@@ -554,6 +636,29 @@ export function Email() {
     },
   });
 
+  // Whatever's in the reply textarea when AI Draft is clicked is treated as
+  // optional instructions for the model ("ask about timeline", "decline
+  // politely", etc.), not as the body itself — the returned draft replaces
+  // the textarea content.
+  const draftMutation = useMutation({
+    mutationFn: async ({ msg, instructions }: { msg: ParsedEmailMessage; instructions?: string }) =>
+      emailDraftsApi.draftReply({
+        from: msg.from,
+        subject: msg.subject,
+        bodyText: msg.markdown || msg.text || "",
+        instructions: instructions?.trim() || undefined,
+        model: draftModel || undefined,
+      }),
+    onSuccess: (result) => {
+      setReplyBody(result.draft);
+      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Draft failed: ${message}`);
+    },
+  });
+
   const composeMutation = useMutation({
     mutationFn: async ({ to, subject, body }: { to: string; subject: string; body: string }) => {
       await emailApi!.sendNew(selectedMailbox!, to, subject, body);
@@ -797,6 +902,45 @@ export function Email() {
             )}
           </Button>
         )}
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Reply"
+          onClick={() => {
+            setSelectedUid(msg.uid);
+            setPendingRowAction({ uid: msg.uid, action: "reply" });
+          }}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Reply className="h-3.5 w-3.5" />
+        </Button>
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Forward"
+          onClick={() => {
+            setSelectedUid(msg.uid);
+            setPendingRowAction({ uid: msg.uid, action: "forward" });
+          }}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Forward className="h-3.5 w-3.5" />
+        </Button>
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          title="Hand off to agent"
+          onClick={() => {
+            setSelectedUid(msg.uid);
+            setPendingRowAction({ uid: msg.uid, action: "handoff" });
+          }}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Bot className="h-3.5 w-3.5" />
+        </Button>
 
         <Button
           size="icon-sm"
@@ -1475,7 +1619,65 @@ export function Email() {
                       placeholder="Write your reply…"
                       className="min-h-[100px] text-sm resize-none"
                     />
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-end gap-2">
+                      <Select
+                        value={draftModel || "__auto__"}
+                        onValueChange={(v) => updateDraftModel(v === "__auto__" ? "" : v)}
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          className="h-8 w-auto max-w-[180px] gap-1 px-2 text-xs"
+                          title="Model used for AI Draft"
+                        >
+                          <SelectValue placeholder="Auto" />
+                        </SelectTrigger>
+                        <SelectContent align="end" className="max-h-72">
+                          <SelectItem value="__auto__">Auto (server picks)</SelectItem>
+                          {draftModels.length === 0 ? (
+                            <SelectItem value="__none__" disabled>
+                              No models available
+                            </SelectItem>
+                          ) : (
+                            draftModels.map((m) => {
+                              const display = formatDraftModelLabel(m.model);
+                              return (
+                                <SelectItem key={`${m.provider}:${m.model}:${m.source ?? ""}`} value={m.model}>
+                                  <span className="font-mono">{display}</span>
+                                  {m.source ? (
+                                    <span className="ml-2 text-[10px] text-muted-foreground">via {m.source}</span>
+                                  ) : null}
+                                </SelectItem>
+                              );
+                            })
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!fullMessage || draftMutation.isPending}
+                            onClick={() => {
+                              if (fullMessage) {
+                                draftMutation.mutate({ msg: fullMessage, instructions: replyBody });
+                              }
+                            }}
+                          >
+                            {draftMutation.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" />
+                            )}
+                            AI Draft
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {replyBody.trim()
+                            ? "Use what you've typed as instructions and draft a reply"
+                            : "Draft a reply with AI"}
+                        </TooltipContent>
+                      </Tooltip>
                       <Button
                         size="sm"
                         disabled={!replyBody.trim() || replyMutation.isPending}
@@ -1660,4 +1862,14 @@ export function Email() {
 function extractSender(msg: MailHeader): string {
   const addrMatch = msg.from.match(/<([^>]+)>/);
   return addrMatch ? addrMatch[1]! : msg.from;
+}
+
+// Adapter-routed model ids encode as `adapter:<adapterType>:<modelId>`.
+// Strip the prefix so the dropdown shows the plain model name; the adapter
+// source is rendered separately as a "via X" hint.
+function formatDraftModelLabel(modelId: string): string {
+  if (!modelId.startsWith("adapter:")) return modelId;
+  const rest = modelId.slice("adapter:".length);
+  const sep = rest.indexOf(":");
+  return sep > 0 ? rest.slice(sep + 1) : modelId;
 }
