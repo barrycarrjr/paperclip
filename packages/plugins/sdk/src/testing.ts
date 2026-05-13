@@ -723,6 +723,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           hiddenAt: null,
           startDate: null,
           dueDate: null,
+          sortOrder: 0,
           createdAt: now,
           updatedAt: now,
         };

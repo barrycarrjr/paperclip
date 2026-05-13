@@ -261,6 +261,7 @@ export interface Issue {
   hiddenAt: Date | null;
   startDate: Date | null;
   dueDate: Date | null;
+  sortOrder: number;
   labelIds?: string[];
   labels?: IssueLabel[];
   blockedBy?: IssueRelationIssueSummary[];

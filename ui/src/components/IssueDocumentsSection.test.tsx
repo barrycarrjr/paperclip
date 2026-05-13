@@ -237,6 +237,7 @@ function createIssue(): Issue {
     hiddenAt: null,
     startDate: null,
     dueDate: null,
+    sortOrder: 0,
     labels: [],
     labelIds: [],
     planDocument: createIssueDocument(),

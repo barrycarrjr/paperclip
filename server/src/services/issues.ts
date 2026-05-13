@@ -197,6 +197,24 @@ export function clampIssueListLimit(limit: number): number {
   return Math.min(ISSUE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
 }
 
+// Fractional kanban ordering: each (companyId, status) column owns its own
+// sort_order space. New issues land at the bottom (max + step). Within-column
+// reorders provide an explicit midpoint from the UI, so this is only consulted
+// for fresh inserts or status changes that don't carry an explicit sortOrder.
+const SORT_ORDER_STEP = 1000;
+async function nextSortOrderForColumn(
+  dbOrTx: any,
+  companyId: string,
+  status: string,
+): Promise<number> {
+  const [row] = await dbOrTx
+    .select({ maxOrder: sql<number>`coalesce(max(${issues.sortOrder}), 0)` })
+    .from(issues)
+    .where(and(eq(issues.companyId, companyId), eq(issues.status, status)));
+  const base = Number(row?.maxOrder ?? 0);
+  return (Number.isFinite(base) ? base : 0) + SORT_ORDER_STEP;
+}
+
 function chunkList<T>(values: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < values.length; index += size) {
@@ -1281,6 +1299,7 @@ const issueListSelect = {
   hiddenAt: issues.hiddenAt,
   startDate: issues.startDate,
   dueDate: issues.dueDate,
+  sortOrder: issues.sortOrder,
   createdAt: issues.createdAt,
   updatedAt: issues.updatedAt,
 };
@@ -2604,6 +2623,11 @@ export function issueService(db: Db) {
           .where(eq(issues.companyId, companyId));
         const currentMax = maxRow?.maxNum ?? 0;
 
+        if (issueData.sortOrder === undefined || issueData.sortOrder === null) {
+          const targetStatus = issueData.status ?? "backlog";
+          issueData.sortOrder = await nextSortOrderForColumn(tx, companyId, targetStatus);
+        }
+
         const [company] = await tx
           .update(companies)
           .set({
@@ -2702,6 +2726,12 @@ export function issueService(db: Db) {
         ...issueData,
         updatedAt: new Date(),
       };
+
+      const sortOrderProvided = issueData.sortOrder !== undefined && issueData.sortOrder !== null;
+      const statusChanging = issueData.status !== undefined && issueData.status !== existing.status;
+      if (statusChanging && !sortOrderProvided) {
+        patch.sortOrder = await nextSortOrderForColumn(dbOrTx, existing.companyId, issueData.status!);
+      }
 
       const nextAssigneeAgentId =
         issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;

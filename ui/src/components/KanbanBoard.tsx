@@ -6,11 +6,10 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDroppable,
   type DragStartEvent,
   type DragEndEvent,
-  type DragOverEvent,
 } from "@dnd-kit/core";
-import { useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import {
   SortableContext,
@@ -35,8 +34,26 @@ const boardStatuses = [
   "cancelled",
 ];
 
+// Fractional indexing step. Matches the server-side default; only used by the
+// UI when one of the neighbors is null (drop at top/bottom of a column).
+const SORT_ORDER_STEP = 1000;
+
 function statusLabel(status: string): string {
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function compareBySortOrder(a: Issue, b: Issue): number {
+  const ao = Number.isFinite(a.sortOrder) ? a.sortOrder : 0;
+  const bo = Number.isFinite(b.sortOrder) ? b.sortOrder : 0;
+  if (ao !== bo) return ao - bo;
+  return a.id.localeCompare(b.id);
+}
+
+function midpointSortOrder(prev: number | null, next: number | null): number {
+  if (prev == null && next == null) return SORT_ORDER_STEP;
+  if (prev == null) return (next as number) - SORT_ORDER_STEP;
+  if (next == null) return prev + SORT_ORDER_STEP;
+  return (prev + next) / 2;
 }
 
 interface Agent {
@@ -117,7 +134,7 @@ function KanbanColumn({
   );
 }
 
-/* ── Draggable Card ── */
+/* ── Sortable Card ── */
 
 function KanbanCard({
   issue,
@@ -141,12 +158,14 @@ function KanbanCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: issue.id, data: { issue } });
+  } = useSortable({ id: issue.id, data: { issue }, disabled: isOverlay });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
+  const style = isOverlay
+    ? undefined
+    : {
+        transform: CSS.Transform.toString(transform),
+        transition,
+      };
 
   const agentName = (id: string | null) => {
     if (!id || !agents) return null;
@@ -168,10 +187,10 @@ function KanbanCard({
 
   return (
     <div
-      ref={setNodeRef}
+      ref={isOverlay ? undefined : setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
+      {...(isOverlay ? {} : attributes)}
+      {...(isOverlay ? {} : listeners)}
       className={`rounded-md border bg-card p-2.5 cursor-grab active:cursor-grabbing transition-shadow ${
         isDragging && !isOverlay ? "opacity-30" : ""
       } ${isOverlay ? "shadow-lg ring-1 ring-primary/20" : "hover:shadow-sm"}`}
@@ -295,6 +314,9 @@ export function KanbanBoard({
         grouped[issue.status].push(issue);
       }
     }
+    for (const status of boardStatuses) {
+      grouped[status].sort(compareBySortOrder);
+    }
     return grouped;
   }, [issues]);
 
@@ -312,34 +334,54 @@ export function KanbanBoard({
     const { active, over } = event;
     if (!over) return;
 
-    const issueId = active.id as string;
-    const issue = issues.find((i) => i.id === issueId);
+    const activeIdStr = active.id as string;
+    const overIdStr = over.id as string;
+    if (activeIdStr === overIdStr) return;
+
+    const issue = issues.find((i) => i.id === activeIdStr);
     if (!issue) return;
 
-    let targetStatus: string | null = null;
+    const overIsColumn = boardStatuses.includes(overIdStr);
+    const overIssue = overIsColumn ? null : issues.find((i) => i.id === overIdStr) ?? null;
+    if (!overIsColumn && !overIssue) return;
 
-    if (boardStatuses.includes(over.id as string)) {
-      targetStatus = over.id as string;
+    const targetStatus = overIsColumn ? overIdStr : overIssue!.status;
+    const targetColumn = columnIssues[targetStatus] ?? [];
+
+    if (targetStatus === issue.status) {
+      // Same column reorder. Drop position is determined by the card we're
+      // over; if we're over the column background, place at bottom.
+      if (!overIssue) return;
+      const filtered = targetColumn.filter((i) => i.id !== issue.id);
+      const overIdx = filtered.findIndex((i) => i.id === overIssue.id);
+      if (overIdx === -1) return;
+      const prev = filtered[overIdx - 1] ?? null;
+      const next = filtered[overIdx] ?? null;
+      onUpdateIssue(issue.id, {
+        sortOrder: midpointSortOrder(prev?.sortOrder ?? null, next?.sortOrder ?? null),
+      });
+      return;
+    }
+
+    // Cross-column move. If dropped on a specific card, slot in at that
+    // position; otherwise drop at the bottom of the target column.
+    const payload: Record<string, unknown> = { status: targetStatus };
+    if (overIssue) {
+      const overIdx = targetColumn.findIndex((i) => i.id === overIssue.id);
+      const prev = targetColumn[overIdx - 1] ?? null;
+      const next = targetColumn[overIdx] ?? null;
+      payload.sortOrder = midpointSortOrder(prev?.sortOrder ?? null, next?.sortOrder ?? null);
     } else {
-      const targetIssue = issues.find((i) => i.id === over.id);
-      if (targetIssue) {
-        targetStatus = targetIssue.status;
-      }
+      const last = targetColumn[targetColumn.length - 1] ?? null;
+      payload.sortOrder = midpointSortOrder(last?.sortOrder ?? null, null);
     }
-
-    if (targetStatus && targetStatus !== issue.status) {
-      onUpdateIssue(issueId, { status: targetStatus });
-    }
-  }
-
-  function handleDragOver(_event: DragOverEvent) {
+    onUpdateIssue(issue.id, payload);
   }
 
   return (
     <DndContext
       sensors={sensors}
       onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
       <div className="flex gap-3 overflow-x-auto pb-4 -mx-2 px-2">

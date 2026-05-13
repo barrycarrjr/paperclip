@@ -401,6 +401,7 @@ describe("optimistic issue comments", () => {
         hiddenAt: null,
         startDate: null,
         dueDate: null,
+        sortOrder: 0,
         createdAt: new Date("2026-03-28T14:00:00.000Z"),
         updatedAt: new Date("2026-03-28T14:00:00.000Z"),
       },
@@ -472,6 +473,7 @@ describe("optimistic issue comments", () => {
         hiddenAt: null,
         startDate: null,
         dueDate: null,
+        sortOrder: 0,
         labelIds: ["label-1", "label-2"],
         labels: [
           {
@@ -646,6 +648,7 @@ describe("optimistic issue comments", () => {
         hiddenAt: null,
         startDate: null,
         dueDate: null,
+        sortOrder: 0,
         labelIds: [],
         labels: [],
         blockedBy: [],
@@ -689,6 +692,7 @@ describe("optimistic issue comments", () => {
         hiddenAt: null,
         startDate: null,
         dueDate: null,
+        sortOrder: 0,
         labelIds: [],
         labels: [],
         blockedBy: [],

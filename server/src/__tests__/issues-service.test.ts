@@ -1763,6 +1763,7 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
         title: "Child A",
         status: "done",
         priority: "medium",
+        issueNumber: 1,
       },
       {
         id: childB,
@@ -1771,6 +1772,7 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
         title: "Child B",
         status: "blocked",
         priority: "medium",
+        issueNumber: 2,
       },
     ]);
 

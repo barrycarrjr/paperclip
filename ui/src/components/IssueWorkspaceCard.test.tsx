@@ -106,6 +106,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     hiddenAt: null,
     startDate: null,
     dueDate: null,
+    sortOrder: 0,
     createdAt: new Date("2026-04-16T04:30:00.000Z"),
     updatedAt: new Date("2026-04-16T05:30:00.000Z"),
     labels: [],
