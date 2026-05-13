@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
 
 export type DatePreset = "mtd" | "7d" | "30d" | "ytd" | "all" | "custom";
+
+const VALID_PRESETS: DatePreset[] = ["mtd", "7d", "30d", "ytd", "all", "custom"];
 
 export const PRESET_LABELS: Record<DatePreset, string> = {
   mtd: "Month to Date",
@@ -64,10 +67,33 @@ export interface UseDateRangeResult {
   customReady: boolean;
 }
 
-export function useDateRange(): UseDateRangeResult {
-  const [preset, setPreset] = useState<DatePreset>("mtd");
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
+export function useDateRange(opts?: { storageKey?: string }): UseDateRangeResult {
+  const storageKey = opts?.storageKey;
+  const presetKey = storageKey ? `${storageKey}:preset` : null;
+  const customFromKey = storageKey ? `${storageKey}:customFrom` : null;
+  const customToKey = storageKey ? `${storageKey}:customTo` : null;
+
+  const [preset, setPreset] = useState<DatePreset>(() => {
+    if (!presetKey) return "mtd";
+    const stored = readLsFilter<DatePreset>(presetKey, "mtd");
+    return VALID_PRESETS.includes(stored) ? stored : "mtd";
+  });
+  const [customFrom, setCustomFrom] = useState(() =>
+    customFromKey ? readLsFilter<string>(customFromKey, "") : "",
+  );
+  const [customTo, setCustomTo] = useState(() =>
+    customToKey ? readLsFilter<string>(customToKey, "") : "",
+  );
+
+  useEffect(() => {
+    if (presetKey) writeLsFilter(presetKey, preset);
+  }, [presetKey, preset]);
+  useEffect(() => {
+    if (customFromKey) writeLsFilter(customFromKey, customFrom);
+  }, [customFromKey, customFrom]);
+  useEffect(() => {
+    if (customToKey) writeLsFilter(customToKey, customTo);
+  }, [customToKey, customTo]);
 
   // tick at the next calendar minute boundary, then every 60s, so sliding presets
   // (7d, 30d) advance their upper bound in sync with wall clock minutes rather than

@@ -26,11 +26,33 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
+
+const LS_STATUS_KEY = "paperclip:portfolio-agents:statusFilter";
+const LS_ROLE_KEY = "paperclip:portfolio-agents:roleFilter";
+const LS_COMPANY_KEY = "paperclip:portfolio-agents:companyFilter";
 
 const VISIBLE_STATUSES: AgentStatus[] = AGENT_STATUSES.filter((s) => s !== "terminated");
 
 function statusLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Org tree is fetched per-company from an unfiltered endpoint, so when
+// status/role filters are active we trim it client-side against the filtered
+// agent set. Surviving descendants are promoted past any dropped ancestor so a
+// matching agent stays visible even when its manager is filtered out.
+function filterOrgTree(nodes: OrgNode[], keepIds: Set<string>): OrgNode[] {
+  const result: OrgNode[] = [];
+  for (const node of nodes) {
+    const filteredReports = filterOrgTree(node.reports ?? [], keepIds);
+    if (keepIds.has(node.id)) {
+      result.push({ ...node, reports: filteredReports });
+    } else {
+      result.push(...filteredReports);
+    }
+  }
+  return result;
 }
 
 interface FilterOption {
@@ -317,9 +339,18 @@ export function PortfolioAgents() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<AgentStatus[]>([]);
-  const [roleFilter, setRoleFilter] = useState<AgentRole[]>([]);
-  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<AgentStatus[]>(() =>
+    readLsFilter<AgentStatus[]>(LS_STATUS_KEY, []),
+  );
+  const [roleFilter, setRoleFilter] = useState<AgentRole[]>(() =>
+    readLsFilter<AgentRole[]>(LS_ROLE_KEY, []),
+  );
+  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>(() =>
+    readLsFilter<string[]>(LS_COMPANY_KEY, []),
+  );
+  useEffect(() => { writeLsFilter(LS_STATUS_KEY, statusFilter); }, [statusFilter]);
+  useEffect(() => { writeLsFilter(LS_ROLE_KEY, roleFilter); }, [roleFilter]);
+  useEffect(() => { writeLsFilter(LS_COMPANY_KEY, companyIdFilter); }, [companyIdFilter]);
   const [view, setView] = useState<"list" | "org">(() => {
     try {
       const raw = localStorage.getItem("paperclip:portfolio-agents:view");
@@ -575,9 +606,14 @@ export function PortfolioAgents() {
 
         {!isLoading && view === "org" &&
           companies.map((company) => {
-            const orgNodes = orgByCompanyId.get(company.id) ?? [];
-            const orgLoading = !orgByCompanyId.has(company.id) || orgNodes === undefined;
+            const rawOrgNodes = orgByCompanyId.get(company.id);
+            const orgLoading = !orgByCompanyId.has(company.id) || rawOrgNodes === undefined;
             const companyAgents = agentsByCompany.get(company.id) ?? [];
+            const hasFilters =
+              statusFilter.length > 0 || roleFilter.length > 0 || companyIdFilter.length > 0;
+            const orgNodes = hasFilters
+              ? filterOrgTree(rawOrgNodes ?? [], new Set(companyAgents.map((a) => a.id)))
+              : (rawOrgNodes ?? []);
             const collapsed = collapsedIds.has(company.id);
             return (
               <div key={company.id} className="mb-1">
@@ -605,12 +641,14 @@ export function PortfolioAgents() {
                   <div className="ml-2 border-l border-border/50 pl-1">
                     {orgLoading ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">Loading org…</p>
-                    ) : (orgNodes ?? []).length === 0 ? (
+                    ) : orgNodes.length === 0 ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground italic">
-                        No reporting hierarchy defined for this company.
+                        {hasFilters && (rawOrgNodes ?? []).length > 0
+                          ? "No agents match the current filters."
+                          : "No reporting hierarchy defined for this company."}
                       </p>
                     ) : (
-                      (orgNodes ?? []).map((node) => (
+                      orgNodes.map((node) => (
                         <OrgTreeNode
                           key={node.id}
                           node={node}

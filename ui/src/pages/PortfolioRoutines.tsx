@@ -20,6 +20,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
+
+const LS_STATUS_KEY = "paperclip:portfolio-routines:statusFilter";
+const LS_COMPANY_KEY = "paperclip:portfolio-routines:companyFilter";
 
 const STATUS_OPTIONS = [
   { value: "active", label: "Active" },
@@ -274,8 +278,14 @@ export function PortfolioRoutines() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>(() =>
+    readLsFilter<string[]>(LS_STATUS_KEY, []),
+  );
+  const [companyIdFilter, setCompanyIdFilter] = useState<string[]>(() =>
+    readLsFilter<string[]>(LS_COMPANY_KEY, []),
+  );
+  useEffect(() => { writeLsFilter(LS_STATUS_KEY, statusFilter); }, [statusFilter]);
+  useEffect(() => { writeLsFilter(LS_COMPANY_KEY, companyIdFilter); }, [companyIdFilter]);
   const [pendingByRoutineId, setPendingByRoutineId] = useState<Map<string, "run" | "status">>(new Map());
   const [confirmArchive, setConfirmArchive] = useState<{ scope: "single" | "bulk"; ids: string[] } | null>(null);
 

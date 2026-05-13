@@ -141,7 +141,19 @@ export function PortfolioEmail() {
     return out;
   }, [config, companyById, selectedCompanyId]);
 
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(() => {
+    try {
+      return localStorage.getItem("portfolio-email-showAll") === "true";
+    } catch {
+      return false;
+    }
+  });
+  function toggleShowAll(v: boolean) {
+    try {
+      localStorage.setItem("portfolio-email-showAll", String(v));
+    } catch {}
+    setShowAll(v);
+  }
   const [groupBySender, setGroupBySender] = useState(() => {
     try {
       return localStorage.getItem("portfolio-email-groupBySender") === "true";
@@ -219,7 +231,7 @@ export function PortfolioEmail() {
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => setShowAll((v) => !v)}
+                onClick={() => toggleShowAll(!showAll)}
                 aria-label={showAll ? "Show unread only" : "Show all messages"}
               >
                 {showAll ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}

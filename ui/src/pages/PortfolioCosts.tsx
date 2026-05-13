@@ -13,6 +13,10 @@ import { useNavigate } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
 import { cn } from "../lib/utils";
+import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
+
+const LS_SORT_KEY = "paperclip:portfolio-costs:sortKey";
+const LS_SORT_ASC_KEY = "paperclip:portfolio-costs:sortAsc";
 
 function formatCents(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -35,8 +39,14 @@ export function PortfolioCosts() {
 
   useEffect(() => { setBreadcrumbs([{ label: "Portfolio Costs" }]); }, [setBreadcrumbs]);
 
-  const [sortKey, setSortKey] = useState<SortKey>("spend");
-  const [sortAsc, setSortAsc] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>(() =>
+    readLsFilter<SortKey>(LS_SORT_KEY, "spend"),
+  );
+  const [sortAsc, setSortAsc] = useState<boolean>(() =>
+    readLsFilter<boolean>(LS_SORT_ASC_KEY, false),
+  );
+  useEffect(() => { writeLsFilter(LS_SORT_KEY, sortKey); }, [sortKey]);
+  useEffect(() => { writeLsFilter(LS_SORT_ASC_KEY, sortAsc); }, [sortAsc]);
 
   const {
     preset,
@@ -48,7 +58,7 @@ export function PortfolioCosts() {
     from,
     to,
     customReady,
-  } = useDateRange();
+  } = useDateRange({ storageKey: "paperclip:portfolio-costs:range" });
 
   const { data, isLoading } = useQuery({
     queryKey: ["portfolio-costs", selectedCompanyId, from || "", to || ""],
