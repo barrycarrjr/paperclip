@@ -65,6 +65,45 @@ const TRIAGE_FOLDER = "_paperclip/triage";
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
 
+// Draft persistence — keep operator's typed text across page refreshes and
+// component remounts. Same pattern used by CommentThread / IssueChatThread.
+const DRAFT_DEBOUNCE_MS = 800;
+const COMPOSE_TO_KEY = "email-draft-compose-to";
+const COMPOSE_SUBJECT_KEY = "email-draft-compose-subject";
+const COMPOSE_BODY_KEY = "email-draft-compose-body";
+
+function replyDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-reply:${mailbox}:${uid}`;
+}
+function forwardDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-forward:${mailbox}:${uid}`;
+}
+
+function loadDraft(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveDraft(key: string, value: string): void {
+  try {
+    if (value.trim()) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+function clearDraft(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
 interface RulesBundle {
   issueId: string;
   title: string;
@@ -183,6 +222,10 @@ export function Email() {
   const [composeTo, setComposeTo] = useState("");
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
+  // Drives which localStorage keys back the compose dialog's drafts: "new"
+  // uses the singleton compose-* keys, "forward" uses per-message forward-*.
+  const [composeMode, setComposeMode] = useState<"new" | "forward">("new");
+  const [composeSourceUid, setComposeSourceUid] = useState<number | null>(null);
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Available LLM models (for AI Draft picker) ────────────────────────────
@@ -336,6 +379,46 @@ export function Email() {
     enabled: !!emailApi && !!selectedMailbox && selectedUid !== null,
   });
 
+  // Open helpers — consolidate the multiple entry points (row click, inline
+  // detail-pane buttons, pencil "compose new") so each one consistently loads
+  // any persisted draft instead of clobbering it.
+  function openReplyFor(uid: number) {
+    setReplyOpen(true);
+    setReplyBody(selectedMailbox ? loadDraft(replyDraftKey(selectedMailbox, uid)) : "");
+    setTimeout(() => replyTextareaRef.current?.focus(), 50);
+  }
+
+  function openForwardCompose(msg: ParsedEmailMessage) {
+    const subj = msg.subject || "";
+    const fwdSubj = /^fwd?:\s/i.test(subj) ? subj : `Fwd: ${subj}`;
+    const header = [
+      "---------- Forwarded message ----------",
+      `From: ${msg.from}`,
+      `Date: ${new Date(msg.date).toLocaleString()}`,
+      `Subject: ${msg.subject}`,
+      msg.to.length > 0 ? `To: ${msg.to.join(", ")}` : null,
+    ]
+      .filter((l): l is string => l !== null)
+      .join("\n");
+    const fresh = `\n\n${header}\n\n${msg.text || msg.markdown || ""}`;
+    const saved = selectedMailbox ? loadDraft(forwardDraftKey(selectedMailbox, msg.uid)) : "";
+    setComposeMode("forward");
+    setComposeSourceUid(msg.uid);
+    setComposeTo("");
+    setComposeSubject(fwdSubj);
+    setComposeBody(saved || fresh);
+    setComposeOpen(true);
+  }
+
+  function openNewCompose() {
+    setComposeMode("new");
+    setComposeSourceUid(null);
+    setComposeTo(loadDraft(COMPOSE_TO_KEY));
+    setComposeSubject(loadDraft(COMPOSE_SUBJECT_KEY));
+    setComposeBody(loadDraft(COMPOSE_BODY_KEY));
+    setComposeOpen(true);
+  }
+
   // Fires reply/forward/handoff dialogs once fullMessage arrives for a row
   // that armed pendingRowAction. Without this the row click would just select
   // the message — the user would then have to click the action button on the
@@ -346,32 +429,50 @@ export function Email() {
     }
     const action = pendingRowAction.action;
     if (action === "reply") {
-      setReplyOpen(true);
-      setReplyBody("");
-      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+      openReplyFor(fullMessage.uid);
     } else if (action === "forward") {
-      const subj = fullMessage.subject || "";
-      const fwdSubj = /^fwd?:\s/i.test(subj) ? subj : `Fwd: ${subj}`;
-      const header = [
-        "---------- Forwarded message ----------",
-        `From: ${fullMessage.from}`,
-        `Date: ${new Date(fullMessage.date).toLocaleString()}`,
-        `Subject: ${fullMessage.subject}`,
-        fullMessage.to.length > 0 ? `To: ${fullMessage.to.join(", ")}` : null,
-      ]
-        .filter((l): l is string => l !== null)
-        .join("\n");
-      const body = `\n\n${header}\n\n${fullMessage.text || fullMessage.markdown || ""}`;
-      setComposeTo("");
-      setComposeSubject(fwdSubj);
-      setComposeBody(body);
-      setComposeOpen(true);
+      openForwardCompose(fullMessage);
     } else if (action === "handoff") {
       setHandoffMessage(fullMessage);
       setHandoffDialogOpen(true);
     }
     setPendingRowAction(null);
   }, [fullMessage, pendingRowAction]);
+
+  // ── Draft persistence ─────────────────────────────────────────────────────
+  // Debounced saves keep the operator's typed text alive across page refresh,
+  // mailbox switches, and accidental panel closes. Cleared on successful send
+  // by the mutation success handlers below.
+
+  useEffect(() => {
+    if (!replyOpen || !selectedMailbox || selectedUid === null) return;
+    const t = setTimeout(() => {
+      saveDraft(replyDraftKey(selectedMailbox, selectedUid), replyBody);
+    }, DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [replyOpen, replyBody, selectedMailbox, selectedUid]);
+
+  useEffect(() => {
+    if (!composeOpen) return;
+    const t = setTimeout(() => {
+      if (composeMode === "new") {
+        saveDraft(COMPOSE_TO_KEY, composeTo);
+        saveDraft(COMPOSE_SUBJECT_KEY, composeSubject);
+        saveDraft(COMPOSE_BODY_KEY, composeBody);
+      } else if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
+        saveDraft(forwardDraftKey(selectedMailbox, composeSourceUid), composeBody);
+      }
+    }, DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [
+    composeOpen,
+    composeMode,
+    composeTo,
+    composeSubject,
+    composeBody,
+    selectedMailbox,
+    composeSourceUid,
+  ]);
 
   // ── Rules home issue ──────────────────────────────────────────────────────
 
@@ -634,6 +735,7 @@ export function Email() {
     onSuccess: (_, { uid }) => {
       optimisticallyRemove(uid);
       invalidateRules();
+      if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
       setReplyOpen(false);
       setReplyBody("");
       showToast("Reply sent");
@@ -668,10 +770,19 @@ export function Email() {
       await emailApi!.sendNew(selectedMailbox!, to, subject, body);
     },
     onSuccess: () => {
+      if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
+        clearDraft(forwardDraftKey(selectedMailbox, composeSourceUid));
+      } else {
+        clearDraft(COMPOSE_TO_KEY);
+        clearDraft(COMPOSE_SUBJECT_KEY);
+        clearDraft(COMPOSE_BODY_KEY);
+      }
       setComposeOpen(false);
       setComposeTo("");
       setComposeSubject("");
       setComposeBody("");
+      setComposeMode("new");
+      setComposeSourceUid(null);
       showToast("Message sent");
     },
   });
@@ -842,7 +953,7 @@ export function Email() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setComposeOpen(true)}
+            onClick={() => openNewCompose()}
             title="Compose new message"
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -1501,20 +1612,7 @@ export function Email() {
                         variant="outline"
                         onClick={() => {
                           if (!fullMessage) return;
-                          const subj = fullMessage.subject || "";
-                          const fwdSubj = /^fwd?:\s/i.test(subj) ? subj : `Fwd: ${subj}`;
-                          const header = [
-                            "---------- Forwarded message ----------",
-                            `From: ${fullMessage.from}`,
-                            `Date: ${new Date(fullMessage.date).toLocaleString()}`,
-                            `Subject: ${fullMessage.subject}`,
-                            fullMessage.to.length > 0 ? `To: ${fullMessage.to.join(", ")}` : null,
-                          ].filter((l): l is string => l !== null).join("\n");
-                          const body = `\n\n${header}\n\n${fullMessage.text || fullMessage.markdown || ""}`;
-                          setComposeTo("");
-                          setComposeSubject(fwdSubj);
-                          setComposeBody(body);
-                          setComposeOpen(true);
+                          openForwardCompose(fullMessage);
                         }}
                         aria-label="Forward"
                       >
@@ -1530,9 +1628,11 @@ export function Email() {
                         size="icon-sm"
                         variant="outline"
                         onClick={() => {
-                          setReplyOpen((v) => !v);
-                          setReplyBody("");
-                          setTimeout(() => replyTextareaRef.current?.focus(), 50);
+                          if (replyOpen) {
+                            setReplyOpen(false);
+                          } else if (fullMessage) {
+                            openReplyFor(fullMessage.uid);
+                          }
                         }}
                         aria-label="Reply"
                       >
@@ -1723,9 +1823,11 @@ export function Email() {
 
       {/* ── Compose dialog ───────────────────────────────────────────────── */}
       <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New message</DialogTitle>
+            <DialogTitle>
+              {composeMode === "forward" ? "Forward message" : "New message"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-1">
             <div>
@@ -1752,7 +1854,7 @@ export function Email() {
                 value={composeBody}
                 onChange={(e) => setComposeBody(e.target.value)}
                 placeholder="Write your message…"
-                className="min-h-[160px] text-sm resize-none"
+                className="min-h-[160px] max-h-[400px] text-sm resize-none overflow-y-auto"
               />
             </div>
           </div>
