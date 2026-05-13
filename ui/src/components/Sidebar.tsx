@@ -61,7 +61,10 @@ export function Sidebar() {
     (a) => a.status !== "terminated",
   ).length;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
-  const { hasMailboxForCompany: showEmailNav } = useEmailToolsPlugin(selectedCompanyId);
+  const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
+    useEmailToolsPlugin(selectedCompanyId);
+  const showPortfolioEmailNav =
+    selectedCompany?.isPortfolioRoot === true && !!emailPluginId;
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -131,6 +134,14 @@ export function Sidebar() {
               icon={Repeat}
               info="See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place."
             />
+            {showPortfolioEmailNav && (
+              <SidebarNavItem
+                to="/portfolio-email"
+                label="Portfolio Email"
+                icon={Mail}
+                info="Triage every enabled mailbox in one view — no need to switch companies. Triage actions and rules work the same as the per-company view."
+              />
+            )}
             <SidebarNavItem
               to="/portfolio-costs"
               label="Portfolio Costs"

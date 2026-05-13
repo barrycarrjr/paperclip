@@ -70,6 +70,7 @@ import { PortfolioRoutines } from "./pages/PortfolioRoutines";
 import { PortfolioCosts } from "./pages/PortfolioCosts";
 import { PortfolioBrief } from "./pages/PortfolioBrief";
 import { PortfolioReceipts } from "./pages/PortfolioReceipts";
+import { PortfolioEmail } from "./pages/PortfolioEmail";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
@@ -125,6 +126,7 @@ function boardRoutes() {
       <Route path="portfolio-dashboard" element={<Navigate to="/portfolio-brief" replace />} />
       <Route path="portfolio-brief" element={<PortfolioBrief />} />
       <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
+      <Route path="portfolio-email" element={<PortfolioEmail />} />
       <Route path="issues" element={<Issues />} />
       <Route path="issues/all" element={<Navigate to="/issues" replace />} />
       <Route path="issues/active" element={<Navigate to="/issues" replace />} />

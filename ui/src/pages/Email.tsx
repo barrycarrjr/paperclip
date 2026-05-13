@@ -90,6 +90,7 @@ export function Email() {
     })(),
     all: searchParams.get("all") === "1",
   }).current;
+  console.log("[Email.mount] initialUrlState", initialUrlState, "rawSearch", window.location.search);
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialUrlState.mailbox);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
@@ -908,7 +909,7 @@ export function Email() {
       <div
         key={msg.uid}
         className={cn(
-          "flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
+          "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
           selectedUid === msg.uid && "bg-accent",
           compact ? "py-2.5" : "py-3",
         )}
@@ -931,11 +932,7 @@ export function Email() {
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
         </div>
-        <div
-          className={cn(
-            compact ? "opacity-0 group-hover:opacity-100 transition-opacity" : "opacity-100",
-          )}
-        >
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <RowActions msg={msg} />
         </div>
       </div>
