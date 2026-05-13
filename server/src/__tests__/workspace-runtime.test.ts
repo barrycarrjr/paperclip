@@ -56,6 +56,15 @@ if (!embeddedPostgresSupport.supported) {
     `Skipping embedded Postgres workspace-runtime tests on this host: ${embeddedPostgresSupport.reason ?? "unsupported environment"}`,
   );
 }
+
+// Several tests provision worktrees with bash scripts (#!/usr/bin/env bash),
+// run `pnpm install`, or spawn services via `sh -c`. None of those resolve
+// reliably on a stock Windows dev box: bash is interpreted, pnpm is a .cmd,
+// and the adapter spawns shell scripts directly. Mark the individual
+// affected tests with this gate rather than skipping the whole file so the
+// 30+ pure-git / pure-logic tests still exercise on Windows.
+const itSkipWindowsUnixTooling = process.platform === "win32" ? it.skip : it;
+const describeSkipWindowsUnixTooling = process.platform === "win32" ? describe.skip : describe;
 const provisionWorktreeScriptPath = new URL("../../../scripts/provision-worktree.sh", import.meta.url);
 
 async function runGit(cwd: string, args: string[]) {
@@ -71,6 +80,10 @@ async function createTempRepo(defaultBranch = "main") {
   await runGit(repoRoot, ["init"]);
   await runGit(repoRoot, ["config", "user.email", "paperclip@example.com"]);
   await runGit(repoRoot, ["config", "user.name", "Paperclip Test"]);
+  // Default Git for Windows installs ship with `core.autocrlf=true`, which
+  // rewrites LF to CRLF on checkout. Tests assert on file contents with LF —
+  // pin autocrlf off per-repo so the assertion holds on Windows too.
+  await runGit(repoRoot, ["config", "core.autocrlf", "false"]);
   await fs.writeFile(path.join(repoRoot, "README.md"), "hello\n", "utf8");
   await runGit(repoRoot, ["add", "README.md"]);
   await runGit(repoRoot, ["commit", "-m", "Initial commit"]);
@@ -157,6 +170,12 @@ function createWorkspaceOperationRecorderDouble() {
   return { recorder, operations };
 }
 
+// Snapshot PATH at file load so a test that throws BEFORE entering its
+// try/finally (e.g. the provision-worktree test overrides PATH to a Linux-only
+// path and then runGit fails before the try block on Windows) can't leak the
+// broken PATH into the next test — git/sh/pnpm lookups would all cascade-fail.
+const ORIGINAL_PATH = process.env.PATH;
+
 afterEach(async () => {
   await Promise.all(
     Array.from(leasedRunIds).map(async (runId) => {
@@ -169,6 +188,11 @@ afterEach(async () => {
   delete process.env.PAPERCLIP_INSTANCE_ID;
   delete process.env.PAPERCLIP_WORKTREES_DIR;
   delete process.env.DATABASE_URL;
+  if (ORIGINAL_PATH === undefined) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = ORIGINAL_PATH;
+  }
   await resetRuntimeServicesForTests();
 });
 
@@ -810,7 +834,7 @@ describe("realizeExecutionWorkspace", () => {
     await expect(fs.readFile(path.join(reused.cwd, ".paperclip-provision-version"), "utf8")).resolves.toBe("v2\n");
   }, 30_000);
 
-  it("writes an isolated repo-local Paperclip config and worktree branding when provisioning", async () => {
+  itSkipWindowsUnixTooling("writes an isolated repo-local Paperclip config and worktree branding when provisioning", async () => {
     const repoRoot = await createTempRepo();
     const previousCwd = process.cwd();
     const previousPath = process.env.PATH;
@@ -999,7 +1023,7 @@ describe("realizeExecutionWorkspace", () => {
     }
   }, 15_000);
 
-  it(
+  itSkipWindowsUnixTooling(
     "provisions worktree-local pnpm node_modules instead of reusing base-repo links",
     async () => {
     const repoRoot = await createTempRepo();
@@ -1103,7 +1127,7 @@ describe("realizeExecutionWorkspace", () => {
     30_000,
   );
 
-  it("provisions successfully when install is needed but there are no symlinked node_modules to move", async () => {
+  itSkipWindowsUnixTooling("provisions successfully when install is needed but there are no symlinked node_modules to move", async () => {
     const repoRoot = await createTempRepo();
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
     await fs.writeFile(
@@ -1176,7 +1200,7 @@ describe("realizeExecutionWorkspace", () => {
     );
   }, 30_000);
 
-  it("fails instead of writing an unseeded fallback config when worktree init errors after CLI detection succeeds", async () => {
+  itSkipWindowsUnixTooling("fails instead of writing an unseeded fallback config when worktree init errors after CLI detection succeeds", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-provision-fail-"));
     const baseRoot = path.join(tempRoot, "base");
     const worktreeRoot = path.join(tempRoot, "worktree");
@@ -1232,7 +1256,7 @@ describe("realizeExecutionWorkspace", () => {
     }
   });
 
-  it("retries worktree-local pnpm install without a frozen lockfile when the lockfile is outdated", async () => {
+  itSkipWindowsUnixTooling("retries worktree-local pnpm install without a frozen lockfile when the lockfile is outdated", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-outdated-lockfile-"));
     const baseRoot = path.join(tempRoot, "base");
     const worktreeRoot = path.join(tempRoot, "worktree");
@@ -1307,7 +1331,7 @@ describe("realizeExecutionWorkspace", () => {
     }
   });
 
-  it(
+  itSkipWindowsUnixTooling(
     "provisions worktree-local pnpm node_modules instead of reusing base-repo links",
     async () => {
     const repoRoot = await createTempRepo();
@@ -1411,7 +1435,7 @@ describe("realizeExecutionWorkspace", () => {
     15_000,
   );
 
-  it("records worktree setup and provision operations when a recorder is provided", async () => {
+  itSkipWindowsUnixTooling("records worktree setup and provision operations when a recorder is provided", async () => {
     const repoRoot = await createTempRepo();
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
@@ -1564,7 +1588,7 @@ describe("realizeExecutionWorkspace", () => {
     expect(actualHead).toBe(expectedHead);
   });
 
-  it("reattaches a missing persisted git worktree before manual control starts it", async () => {
+  itSkipWindowsUnixTooling("reattaches a missing persisted git worktree before manual control starts it", async () => {
     const repoRoot = await createTempRepo();
     const branchName = "PAP-451-restore-persisted-worktree";
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
@@ -1661,7 +1685,7 @@ describe("realizeExecutionWorkspace", () => {
     expect(actualHead).toBe(expectedHead);
   }, 15_000);
 
-  it("reprovisions an existing persisted git worktree before manual control starts it", async () => {
+  itSkipWindowsUnixTooling("reprovisions an existing persisted git worktree before manual control starts it", async () => {
     const repoRoot = await createTempRepo();
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
     await fs.writeFile(
@@ -2176,7 +2200,7 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(third[0]?.id).not.toBe(first[0]?.id);
   }, 10_000);
 
-  it("does not reuse project-scoped shared services across different workspace launch contexts", async () => {
+  itSkipWindowsUnixTooling("does not reuse project-scoped shared services across different workspace launch contexts", async () => {
     const primaryWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-primary-"));
     const worktreeWorkspaceRoot = path.join(primaryWorkspaceRoot, ".paperclip", "worktrees", "PAP-874-chat-speed-issues");
     await fs.mkdir(worktreeWorkspaceRoot, { recursive: true });
@@ -2271,7 +2295,7 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(await executionResponse.text()).toBe(path.join(worktreeWorkspaceRoot, ".paperclip", "runtime-services"));
   });
 
-  it("does not leak parent Paperclip instance env into runtime service commands", async () => {
+  itSkipWindowsUnixTooling("does not leak parent Paperclip instance env into runtime service commands", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-env-"));
     const workspace = buildWorkspace(workspaceRoot);
     const envCapturePath = path.join(workspaceRoot, "captured-env.json");
@@ -2351,7 +2375,7 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(services[0]?.scopeId).toBe("execution-workspace-1");
   });
 
-  it("stops execution workspace runtime services by executionWorkspaceId", async () => {
+  itSkipWindowsUnixTooling("stops execution workspace runtime services by executionWorkspaceId", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-stop-"));
     const workspace = buildWorkspace(workspaceRoot);
     const runId = "run-stop";
@@ -2525,7 +2549,7 @@ describe("ensureRuntimeServicesForRun", () => {
     });
   });
 
-  it("stops only the selected execution workspace runtime service", async () => {
+  itSkipWindowsUnixTooling("stops only the selected execution workspace runtime service", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-control-stop-"));
     const workspace = buildWorkspace(workspaceRoot);
 
@@ -2816,7 +2840,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     await db.delete(companies);
   });
 
-  it("adopts a live auto-port shared service after runtime state is reset", async () => {
+  itSkipWindowsUnixTooling("adopts a live auto-port shared service after runtime state is reset", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-reconcile-"));
     const paperclipHome = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-home-"));
     process.env.PAPERCLIP_HOME = paperclipHome;
@@ -3014,7 +3038,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(persisted?.stoppedAt).not.toBeNull();
   });
 
-  it("persists controlled execution workspace stops as stopped", async () => {
+  itSkipWindowsUnixTooling("persists controlled execution workspace stops as stopped", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-stop-persisted-"));
     const companyId = randomUUID();
     const agentId = randomUUID();

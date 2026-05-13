@@ -3,24 +3,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execute } from "@paperclipai/adapter-claude-local/server";
+import { writeFakeCli } from "./helpers/fake-cli.js";
 
 async function writeFailingClaudeCommand(
   commandPath: string,
   options: { resultEvent: Record<string, unknown>; exitCode?: number },
-): Promise<void> {
+): Promise<string> {
   const payload = JSON.stringify(options.resultEvent);
   const exit = options.exitCode ?? 1;
-  const script = `#!/usr/bin/env node
-console.log(${JSON.stringify(payload)});
+  const script = `console.log(${JSON.stringify(payload)});
 process.exit(${exit});
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
+  return writeFakeCli(commandPath, script);
 }
 
-async function writeFakeClaudeCommand(commandPath: string): Promise<void> {
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+async function writeFakeClaudeCommand(commandPath: string): Promise<string> {
+  const script = `const fs = require("node:fs");
 const path = require("node:path");
 
 const argv = process.argv.slice(2);
@@ -45,8 +43,7 @@ console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "claud
 console.log(JSON.stringify({ type: "assistant", session_id: "claude-session-1", message: { content: [{ type: "text", text: "hello" }] } }));
 console.log(JSON.stringify({ type: "result", session_id: "claude-session-1", result: "hello", usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 } }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
+  return writeFakeCli(commandPath, script);
 }
 
 type CapturePayload = {
@@ -61,9 +58,8 @@ type CapturePayload = {
   appendedSystemPromptFileContents?: string | null;
 };
 
-async function writeRetryThenSucceedClaudeCommand(commandPath: string): Promise<void> {
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+async function writeRetryThenSucceedClaudeCommand(commandPath: string): Promise<string> {
+  const script = `const fs = require("node:fs");
 
 const capturePath = process.env.PAPERCLIP_TEST_CAPTURE_PATH;
 const statePath = process.env.PAPERCLIP_TEST_STATE_PATH;
@@ -98,22 +94,22 @@ console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "claud
 console.log(JSON.stringify({ type: "assistant", session_id: "claude-session-2", message: { content: [{ type: "text", text: "hello" }] } }));
 console.log(JSON.stringify({ type: "result", session_id: "claude-session-2", result: "hello", usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 } }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
+  return writeFakeCli(commandPath, script);
 }
 
 async function setupExecuteEnv(
   root: string,
-  options?: { commandWriter?: (commandPath: string) => Promise<void> },
+  options?: { commandWriter?: (commandPath: string) => Promise<string> },
 ) {
   const workspace = path.join(root, "workspace");
   const binDir = path.join(root, "bin");
-  const commandPath = path.join(binDir, "claude");
   const capturePath = path.join(root, "capture.json");
   const statePath = path.join(root, "state.txt");
   await fs.mkdir(workspace, { recursive: true });
   await fs.mkdir(binDir, { recursive: true });
-  await (options?.commandWriter ?? writeFakeClaudeCommand)(commandPath);
+  const commandPath = await (options?.commandWriter ?? writeFakeClaudeCommand)(
+    path.join(binDir, "claude"),
+  );
   const previousHome = process.env.HOME;
   const previousPath = process.env.PATH;
   process.env.HOME = root;
@@ -331,13 +327,12 @@ describe("claude execute", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-meta-"));
     const workspace = path.join(root, "workspace");
     const binDir = path.join(root, "bin");
-    const commandPath = path.join(binDir, "claude");
     const capturePath = path.join(root, "capture.json");
     const claudeConfigDir = path.join(root, "claude-config");
     await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(claudeConfigDir, { recursive: true });
-    await writeFakeClaudeCommand(commandPath);
+    const commandPath = await writeFakeClaudeCommand(path.join(binDir, "claude"));
 
     const previousHome = process.env.HOME;
     const previousPath = process.env.PATH;
@@ -401,14 +396,13 @@ describe("claude execute", () => {
   it("reuses a stable Paperclip-managed Claude prompt bundle across equivalent runs", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-bundle-"));
     const workspace = path.join(root, "workspace");
-    const commandPath = path.join(root, "claude");
     const capturePath1 = path.join(root, "capture-1.json");
     const capturePath2 = path.join(root, "capture-2.json");
     const instructionsPath = path.join(root, "AGENTS.md");
     const paperclipHome = path.join(root, "paperclip-home");
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(instructionsPath, "You are managed instructions.\n", "utf8");
-    await writeFakeClaudeCommand(commandPath);
+    const commandPath = await writeFakeClaudeCommand(path.join(root, "claude"));
 
     const previousHome = process.env.HOME;
     const previousPaperclipHome = process.env.PAPERCLIP_HOME;
@@ -559,7 +553,6 @@ describe("claude execute", () => {
   it("starts a fresh Claude session when the stable prompt bundle changes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-reset-"));
     const workspace = path.join(root, "workspace");
-    const commandPath = path.join(root, "claude");
     const capturePath1 = path.join(root, "capture-before.json");
     const capturePath2 = path.join(root, "capture-after.json");
     const instructionsPath = path.join(root, "AGENTS.md");
@@ -567,7 +560,7 @@ describe("claude execute", () => {
     const logs: string[] = [];
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(instructionsPath, "Version one instructions.\n", "utf8");
-    await writeFakeClaudeCommand(commandPath);
+    const commandPath = await writeFakeClaudeCommand(path.join(root, "claude"));
 
     const previousHome = process.env.HOME;
     const previousPaperclipHome = process.env.PAPERCLIP_HOME;
@@ -664,9 +657,8 @@ describe("claude execute", () => {
   it("classifies Claude 'out of extra usage' failures as transient upstream errors", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-transient-"));
     const workspace = path.join(root, "workspace");
-    const commandPath = path.join(root, "claude");
     await fs.mkdir(workspace, { recursive: true });
-    await writeFailingClaudeCommand(commandPath, {
+    const commandPath = await writeFailingClaudeCommand(path.join(root, "claude"), {
       resultEvent: {
         type: "result",
         subtype: "error",
@@ -729,9 +721,8 @@ describe("claude execute", () => {
   it("classifies rate-limit / overloaded failures without reset metadata as transient", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-rate-limit-"));
     const workspace = path.join(root, "workspace");
-    const commandPath = path.join(root, "claude");
     await fs.mkdir(workspace, { recursive: true });
-    await writeFailingClaudeCommand(commandPath, {
+    const commandPath = await writeFailingClaudeCommand(path.join(root, "claude"), {
       resultEvent: {
         type: "result",
         subtype: "error",
@@ -787,9 +778,8 @@ describe("claude execute", () => {
   it("does not reclassify deterministic Claude failures (auth, max turns) as transient", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-max-turns-"));
     const workspace = path.join(root, "workspace");
-    const commandPath = path.join(root, "claude");
     await fs.mkdir(workspace, { recursive: true });
-    await writeFailingClaudeCommand(commandPath, {
+    const commandPath = await writeFailingClaudeCommand(path.join(root, "claude"), {
       resultEvent: {
         type: "result",
         subtype: "error_max_turns",

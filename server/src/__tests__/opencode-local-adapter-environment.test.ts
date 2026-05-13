@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-opencode-local/server";
+import { writeFakeCli } from "./helpers/fake-cli.js";
 
 describe("opencode_local environment diagnostics", () => {
   it("reports a missing working directory as an error when cwd is absolute", async () => {
@@ -62,19 +63,13 @@ describe("opencode_local environment diagnostics", () => {
   it("classifies ProviderModelNotFoundError probe output as model-unavailable warning", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-env-probe-cwd-"));
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-env-probe-bin-"));
-    const fakeOpencode = path.join(binDir, "opencode");
-    const script = [
-      "#!/bin/sh",
-      "echo 'ProviderModelNotFoundError: ProviderModelNotFoundError' 1>&2",
-      "echo 'data: { providerID: \"openai\", modelID: \"gpt-5.3-codex\", suggestions: [] }' 1>&2",
-      "exit 1",
-      "",
-    ].join("\n");
+    const script = `process.stderr.write("ProviderModelNotFoundError: ProviderModelNotFoundError\\n");
+process.stderr.write('data: { providerID: "openai", modelID: "gpt-5.3-codex", suggestions: [] }\\n');
+process.exit(1);
+`;
+    const fakeOpencode = await writeFakeCli(path.join(binDir, "opencode"), script);
 
     try {
-      await fs.writeFile(fakeOpencode, script, "utf8");
-      await fs.chmod(fakeOpencode, 0o755);
-
       const result = await testEnvironment({
         companyId: "company-1",
         adapterType: "opencode_local",

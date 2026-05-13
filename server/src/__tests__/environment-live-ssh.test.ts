@@ -143,6 +143,15 @@ const describeLiveSsh = (() => {
     );
     return describe.skip;
   }
+  // env-lab auto-start relies on docker + POSIX sshd; on Windows it cannot
+  // boot without WSL, and the test then throws instead of skipping. Treat
+  // Windows as "no auto-fixture" unless explicit SSH config was provided.
+  if (process.platform === "win32") {
+    console.warn(
+      "Skipping live SSH smoke test on Windows: env-lab fixture requires POSIX docker; set PAPERCLIP_ENV_LIVE_SSH_* env vars to point at an external SSH host to enable it.",
+    );
+    return describe.skip;
+  }
   // Will attempt env-lab — don't skip yet
   return describe;
 })();

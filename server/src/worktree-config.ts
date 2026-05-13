@@ -57,10 +57,22 @@ function parseEnvFile(contents: string): Record<string, string> {
       continue;
     }
 
-    if (
-      (value.startsWith("\"") && value.endsWith("\"")) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+    // Values written by `formatEnvEntries` are produced via JSON.stringify, which
+    // escapes backslashes inside Windows paths (e.g. `C:\Users` → `"C:\\Users"`).
+    // Strip-only would leave the literal `\\` in place and break the round-trip
+    // check that drives `repairedEnv` on Windows; round-trip via JSON.parse for
+    // double-quoted values, falling back to a literal strip if not valid JSON
+    // (handles hand-edited env files that contain unescaped backslashes).
+    if (value.startsWith("\"") && value.endsWith("\"")) {
+      try {
+        entries[key] = JSON.parse(value) as string;
+      } catch {
+        entries[key] = value.slice(1, -1);
+      }
+      continue;
+    }
+
+    if (value.startsWith("'") && value.endsWith("'")) {
       entries[key] = value.slice(1, -1);
       continue;
     }
