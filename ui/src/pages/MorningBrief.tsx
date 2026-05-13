@@ -327,6 +327,24 @@ export function MorningBrief() {
     },
     ...reviewMutationOptions,
   });
+  const muteMutation = useMutation({
+    mutationFn: async (row: ReviewQueueRow) => {
+      // Mute = keep in INBOX + auto-mark future arrivals read on poll.
+      // The set-rule action also sweeps existing unread backlog; we still
+      // mark the row's tracked UIDs read locally in case of races.
+      if (!emailApi) {
+        await applyReviewTransform(row, dismissReviewSender);
+        return;
+      }
+      await emailApi.setRule(row.mailbox, row.sender, "mute");
+      const uids = reviewMatchedUidsLookup.get(`${row.mailbox}::${row.sender}`) ?? [];
+      await Promise.allSettled(
+        uids.map((uid) => emailApi.markRead(row.mailbox, uid, "INBOX")),
+      );
+      await applyReviewTransform(row, dismissReviewSender);
+    },
+    ...reviewMutationOptions,
+  });
   const dismissMutation = useMutation({
     mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, dismissReviewSender),
     ...reviewMutationOptions,
@@ -335,6 +353,7 @@ export function MorningBrief() {
     graduateMutation.error ??
     keepUnreadMutation.error ??
     keepReadMutation.error ??
+    muteMutation.error ??
     dismissMutation.error;
 
   const userProfileMap = useMemo(
@@ -639,7 +658,7 @@ export function MorningBrief() {
                     Email senders awaiting your call
                   </h3>
                   <span className="text-[11px] text-muted-foreground">
-                    Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Dismiss = no rule
+                    Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Keep · mute = auto-mark future as read · Dismiss = no rule
                   </span>
                 </div>
                 <div className="border border-border bg-card divide-y divide-border">
@@ -667,6 +686,7 @@ export function MorningBrief() {
                         onGraduate={() => graduateMutation.mutate(row)}
                         onKeepRead={() => keepReadMutation.mutate(row)}
                         onKeepUnread={() => keepUnreadMutation.mutate(row)}
+                        onMute={() => muteMutation.mutate(row)}
                         onDismiss={() => dismissMutation.mutate(row)}
                       />
                     );
@@ -842,6 +862,7 @@ interface ReviewQueueRowProps {
   onGraduate: () => void;
   onKeepRead: () => void;
   onKeepUnread: () => void;
+  onMute: () => void;
   onDismiss: () => void;
 }
 
@@ -863,6 +884,7 @@ function ReviewQueueRow({
   onGraduate,
   onKeepRead,
   onKeepUnread,
+  onMute,
   onDismiss,
 }: ReviewQueueRowProps) {
   const subjectLine = preview?.subject?.trim() || "";
@@ -978,6 +1000,15 @@ function ReviewQueueRow({
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Keep · unread
+          </button>
+          <button
+            type="button"
+            onClick={onMute}
+            disabled={pending}
+            title="Keep this sender in INBOX going forward and automatically mark all future arrivals as read on the next poll. Marks the existing backlog as read too."
+            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Keep · mute
           </button>
           <button
             type="button"

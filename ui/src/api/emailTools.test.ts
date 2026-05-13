@@ -205,6 +205,22 @@ describe("makeEmailToolsApi", () => {
         COMPANY_ID,
       );
     });
+
+    it("upserts a mute rule", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      await api.setRule("personal", "chatty@example.com", "mute");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.set-rule",
+        {
+          companyId: COMPANY_ID,
+          mailbox: "personal",
+          senderPattern: "chatty@example.com",
+          ruleType: "mute",
+        },
+        COMPANY_ID,
+      );
+    });
   });
 
   describe("deleteRule", () => {

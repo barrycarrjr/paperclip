@@ -618,6 +618,24 @@ export function UnifiedInbox() {
     },
     ...reviewSenderMutationOptions,
   });
+  const muteMutation = useMutation({
+    mutationFn: async (item: EmailReviewSenderItem) => {
+      // Mute = keep in INBOX + auto-mark future arrivals read on poll. The
+      // set-rule action also sweeps existing unread backlog; we still mark
+      // the row's tracked UIDs read locally in case of races.
+      if (!emailApi) {
+        await applyReviewSenderTransform(item, dismissReviewSender);
+        return;
+      }
+      await emailApi.setRule(item.mailbox, item.sender, "mute");
+      const uids = reviewMatchedUidsLookup.get(`${item.mailbox}::${item.sender}`) ?? [];
+      await Promise.allSettled(
+        uids.map((uid) => emailApi.markRead(item.mailbox, uid, "INBOX")),
+      );
+      await applyReviewSenderTransform(item, dismissReviewSender);
+    },
+    ...reviewSenderMutationOptions,
+  });
   const dismissReviewMutation = useMutation({
     mutationFn: (item: EmailReviewSenderItem) =>
       applyReviewSenderTransform(item, dismissReviewSender),
@@ -773,6 +791,9 @@ export function UnifiedInbox() {
                 onKeepUnread={
                   isReviewSender ? () => keepUnreadMutation.mutate(item) : undefined
                 }
+                onMute={
+                  isReviewSender ? () => muteMutation.mutate(item) : undefined
+                }
                 onDismissRule={
                   isReviewSender ? () => dismissReviewMutation.mutate(item) : undefined
                 }
@@ -797,6 +818,7 @@ export function UnifiedInbox() {
                     (graduateMutation.isPending ||
                       keepReadMutation.isPending ||
                       keepUnreadMutation.isPending ||
+                      muteMutation.isPending ||
                       dismissReviewMutation.isPending)) ||
                   ((item.kind === "approval" || item.kind === "draft") &&
                     (approveMutation.isPending || rejectMutation.isPending)) ||
@@ -837,6 +859,7 @@ interface InboxItemRowProps {
   onGraduate?: () => void;
   onKeepRead?: () => void;
   onKeepUnread?: () => void;
+  onMute?: () => void;
   onDismissRule?: () => void;
   onRetry?: () => void;
   onOpen: () => void;
@@ -864,6 +887,7 @@ function InboxItemRow({
   onGraduate,
   onKeepRead,
   onKeepUnread,
+  onMute,
   onDismissRule,
   onRetry,
   onOpen,
@@ -1072,6 +1096,17 @@ function InboxItemRow({
                 className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50"
               >
                 Keep · unread
+              </button>
+            )}
+            {onMute && (
+              <button
+                type="button"
+                onClick={onMute}
+                disabled={isPending}
+                title="Keep this sender in INBOX going forward and automatically mark all future arrivals as read on the next poll. Marks the existing backlog as read too."
+                className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50"
+              >
+                Keep · mute
               </button>
             )}
             {onDismissRule && (

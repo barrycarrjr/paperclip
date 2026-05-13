@@ -356,15 +356,17 @@ function MailboxPanel({
     staleTime: 60_000,
   });
 
-  const { autoTriageSet, keepAlwaysSet } = useMemo(() => {
+  const { autoTriageSet, keepAlwaysSet, muteSet } = useMemo(() => {
     const auto = new Set<string>();
     const keep = new Set<string>();
+    const mute = new Set<string>();
     for (const r of rulesData?.rules ?? []) {
       const p = r.senderPattern.toLowerCase();
       if (r.ruleType === "auto-triage") auto.add(p);
       else if (r.ruleType === "keep-always") keep.add(p);
+      else if (r.ruleType === "mute") mute.add(p);
     }
-    return { autoTriageSet: auto, keepAlwaysSet: keep };
+    return { autoTriageSet: auto, keepAlwaysSet: keep, muteSet: mute };
   }, [rulesData]);
 
   function senderMatchesPattern(msg: MailHeader, patterns: Set<string>): boolean {
@@ -447,11 +449,14 @@ function MailboxPanel({
   }
 
   // Mark-read implies "this sender matters" — auto-add keep-always when not
-  // already classified. Mirrors the per-company Email page.
+  // already classified. Mirrors the per-company Email page. Muted senders
+  // are also a deliberate operator choice — don't silently invert mute into
+  // keep-always.
   async function maybeAddImplicitKeepAlways(msg: MailHeader): Promise<void> {
     if (
       senderMatchesPattern(msg, autoTriageSet) ||
-      senderMatchesPattern(msg, keepAlwaysSet)
+      senderMatchesPattern(msg, keepAlwaysSet) ||
+      senderMatchesPattern(msg, muteSet)
     ) {
       return;
     }

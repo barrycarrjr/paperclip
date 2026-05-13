@@ -275,15 +275,17 @@ export function Email() {
     staleTime: 60_000,
   });
 
-  const { autoTriageSet, keepAlwaysSet } = useMemo(() => {
+  const { autoTriageSet, keepAlwaysSet, muteSet } = useMemo(() => {
     const auto = new Set<string>();
     const keep = new Set<string>();
+    const mute = new Set<string>();
     for (const r of rulesData?.rules ?? []) {
       const p = r.senderPattern.toLowerCase();
       if (r.ruleType === "auto-triage") auto.add(p);
       else if (r.ruleType === "keep-always") keep.add(p);
+      else if (r.ruleType === "mute") mute.add(p);
     }
-    return { autoTriageSet: auto, keepAlwaysSet: keep };
+    return { autoTriageSet: auto, keepAlwaysSet: keep, muteSet: mute };
   }, [rulesData]);
 
   function senderMatchesPattern(msg: MailHeader, patterns: Set<string>): boolean {
@@ -307,12 +309,14 @@ export function Email() {
   // Mark-read / Reply / Hand-off all imply "this sender matters" — if they
   // didn't, the operator would have auto-triaged. Auto-add a keep-always
   // rule, but only when the sender isn't already classified (don't flip
-  // an existing auto-triage rule into keep-always).
+  // an existing auto-triage or mute rule into keep-always — those are
+  // deliberate operator choices we must not silently invert).
   async function maybeAddImplicitKeepAlways(msg: MailHeader): Promise<void> {
     if (!emailApi || !selectedMailbox) return;
     if (
       senderMatchesPattern(msg, autoTriageSet) ||
-      senderMatchesPattern(msg, keepAlwaysSet)
+      senderMatchesPattern(msg, keepAlwaysSet) ||
+      senderMatchesPattern(msg, muteSet)
     ) {
       return;
     }

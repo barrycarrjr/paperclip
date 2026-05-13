@@ -43,7 +43,7 @@ export interface ListMessagesOptions {
 
 export interface SenderRule {
   senderPattern: string;
-  ruleType: "auto-triage" | "keep-always";
+  ruleType: "auto-triage" | "keep-always" | "mute";
   createdAt: string;
   updatedAt: string;
 }
@@ -183,7 +183,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
     setRule: async (
       mailbox: string,
       senderPattern: string,
-      ruleType: "auto-triage" | "keep-always",
+      ruleType: "auto-triage" | "keep-always" | "mute",
     ): Promise<{ ok: boolean; sweptCount?: number }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,

@@ -237,7 +237,7 @@ export function PortfolioBrief() {
     rowCompanyId: string,
     mailbox: string,
     sender: string,
-    ruleType: "auto-triage" | "keep-always",
+    ruleType: "auto-triage" | "keep-always" | "mute",
   ): Promise<void> {
     if (!emailPluginId) return;
     await pluginsApi.bridgePerformAction(
@@ -556,6 +556,20 @@ export function PortfolioBrief() {
     },
     ...reviewMutationOptions,
   });
+  const muteMutation = useMutation({
+    mutationFn: async (row: ReviewQueueRow) => {
+      // Mute is a third keep-always-flavoured rule: sender stays in INBOX,
+      // but the email-tools poll loop marks all future arrivals as read on
+      // receipt (see plugin worker.ts `email.set-rule` + poll.ts mute
+      // check). The set-rule action also sweeps existing unread INBOX
+      // backlog read; markRowUidsRead clears the specific UIDs we tracked
+      // for this row in case the sweep missed any (race with new arrivals).
+      await writeRuleToDb(row.companyId, row.mailbox, row.sender, "mute");
+      await markRowUidsRead(row);
+      await applyReviewTransform(row, dismissReviewSender);
+    },
+    ...reviewMutationOptions,
+  });
   const dismissMutation = useMutation({
     mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, dismissReviewSender),
     ...reviewMutationOptions,
@@ -564,6 +578,7 @@ export function PortfolioBrief() {
     graduateMutation.error ??
     keepUnreadMutation.error ??
     keepReadMutation.error ??
+    muteMutation.error ??
     dismissMutation.error;
 
   if (!selectedCompanyId) {
@@ -784,7 +799,7 @@ export function PortfolioBrief() {
                     Email senders awaiting your call
                   </h3>
                   <span className="text-[11px] text-muted-foreground">
-                    Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Dismiss = no rule
+                    Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Keep · mute = auto-mark future as read · Dismiss = no rule
                   </span>
                 </div>
                 <div className="space-y-3">
@@ -817,6 +832,7 @@ export function PortfolioBrief() {
                               onGraduate={() => graduateMutation.mutate(row)}
                               onKeepRead={() => keepReadMutation.mutate(row)}
                               onKeepUnread={() => keepUnreadMutation.mutate(row)}
+                              onMute={() => muteMutation.mutate(row)}
                               onDismiss={() => dismissMutation.mutate(row)}
                             />
                           );
@@ -1115,6 +1131,7 @@ interface ReviewQueueRowProps {
   onGraduate: () => void;
   onKeepRead: () => void;
   onKeepUnread: () => void;
+  onMute: () => void;
   onDismiss: () => void;
 }
 
@@ -1139,6 +1156,7 @@ function ReviewQueueRow({
   onGraduate,
   onKeepRead,
   onKeepUnread,
+  onMute,
   onDismiss,
 }: ReviewQueueRowProps) {
   // `company` is suppressed below — it's the rules-home grouping passed in
@@ -1279,6 +1297,17 @@ function ReviewQueueRow({
               className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Keep · unread
+            </button>,
+          )}
+          {ruleButtonGate(
+            <button
+              type="button"
+              onClick={onMute}
+              disabled={pending || !canWriteRules}
+              title="Keep this sender in INBOX going forward and automatically mark all future arrivals as read on the next poll. Marks the existing backlog as read too."
+              className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Keep · mute
             </button>,
           )}
           <button
