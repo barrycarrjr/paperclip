@@ -304,12 +304,15 @@ export function createPluginMcpBridge(
               isError: true,
             };
           }
+          // Prefer `data` over `content` — matches chat-tools.ts precedence
+          // (`data ?? content`). Plugin tools commonly set `content` to a
+          // human-friendly count summary and `data` to the structured payload
+          // (UIDs, headers, etc.); preferring `content` first dropped the
+          // payload the agent actually needed to act on.
           const text =
-            typeof exec.result.content === "string"
-              ? exec.result.content
-              : exec.result.data !== undefined
-                ? JSON.stringify(exec.result.data)
-                : "";
+            exec.result.data != null
+              ? JSON.stringify(exec.result.data)
+              : (exec.result.content ?? "");
           return {
             content: [{ type: "text", text }],
           };
