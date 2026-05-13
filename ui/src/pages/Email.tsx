@@ -90,7 +90,6 @@ export function Email() {
     })(),
     all: searchParams.get("all") === "1",
   }).current;
-  console.log("[Email.mount] initialUrlState", initialUrlState, "rawSearch", window.location.search);
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialUrlState.mailbox);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);

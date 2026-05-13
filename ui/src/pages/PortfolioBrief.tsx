@@ -105,7 +105,12 @@ function groupByCompany<T extends { companyId: string }>(
 }
 
 export function PortfolioBrief() {
-  const { selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
+  const {
+    selectedCompanyId,
+    selectedCompany,
+    setSelectedCompanyId,
+    companies: allAccessibleCompanies,
+  } = useCompany();
   const navigate = useNavigate();
   const { setBreadcrumbs } = useBreadcrumbs();
 
@@ -189,6 +194,45 @@ export function PortfolioBrief() {
   // Portfolio-wide view — rows can belong to any company. Use the bridge
   // directly with each row's companyId rather than a per-company emailApi.
   const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
+
+  // The rules-home issue can live in a different company than the mailbox
+  // is `allowedCompanies`-listed under (e.g. M3 Media owns the rules issue
+  // but the m3-barry mailbox is only allowed for Personal). Building the
+  // /email link from the rules-home company sends the operator to a page
+  // that says "Email not configured". Resolve a company that IS in the
+  // mailbox's allow-list so the link actually opens the message.
+  const { data: emailConfig } = useQuery({
+    queryKey: queryKeys.plugins.config(emailPluginId ?? ""),
+    queryFn: () => pluginsApi.getConfig(emailPluginId!),
+    enabled: !!emailPluginId,
+    staleTime: 60_000,
+  });
+  const mailboxAllowedCompanyByKey = useMemo(() => {
+    const map = new Map<string, Company>();
+    const list = ((emailConfig?.configJson?.mailboxes ?? []) as Array<{
+      key?: string;
+      allowedCompanies?: string[];
+    }>);
+    const companyIndex = new Map(allAccessibleCompanies.map((c) => [c.id, c] as const));
+    for (const mb of list) {
+      if (!mb.key) continue;
+      const allowed = mb.allowedCompanies ?? [];
+      let resolved: Company | null = null;
+      if (allowed.includes("*") && selectedCompany) {
+        resolved = selectedCompany;
+      } else {
+        for (const id of allowed) {
+          const c = companyIndex.get(id);
+          if (c) {
+            resolved = c;
+            break;
+          }
+        }
+      }
+      if (resolved) map.set(mb.key, resolved);
+    }
+    return map;
+  }, [emailConfig, allAccessibleCompanies, selectedCompany]);
   async function writeRuleToDb(
     rowCompanyId: string,
     mailbox: string,
@@ -760,6 +804,7 @@ export function PortfolioBrief() {
                               key={key}
                               row={row}
                               company={company}
+                              emailCompany={mailboxAllowedCompanyByKey.get(row.mailbox) ?? company}
                               pending={isPending}
                               canWriteRules={!!emailPluginId}
                               preview={preview}
@@ -1054,6 +1099,13 @@ function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
 interface ReviewQueueRowProps {
   row: ReviewQueueRow;
   company: Company;
+  /**
+   * Company to use when building the /email link. Differs from `company`
+   * (the rules-home owner) when the mailbox is `allowedCompanies`-listed
+   * under a different company — e.g. the rules issue lives in HQ but the
+   * mailbox is only readable from Personal.
+   */
+  emailCompany: Company;
   pending: boolean;
   canWriteRules: boolean;
   preview: MailHeader | null;
@@ -1077,6 +1129,7 @@ function truncateBody(text: string, max: number): { text: string; truncated: boo
 function ReviewQueueRow({
   row,
   company,
+  emailCompany,
   pending,
   canWriteRules,
   preview,
@@ -1088,10 +1141,13 @@ function ReviewQueueRow({
   onKeepUnread,
   onDismiss,
 }: ReviewQueueRowProps) {
+  // `company` is suppressed below — it's the rules-home grouping passed in
+  // for symmetry with sibling rows. The email link uses `emailCompany`.
+  void company;
   const subjectLine = preview?.subject?.trim() || "";
   const snippet = preview?.snippet?.trim() || "";
   const fullBody = fullBodyText ? truncateBody(fullBodyText, PREVIEW_BODY_CHARS) : null;
-  const baseEmailPath = `/${company.issuePrefix}/email`;
+  const baseEmailPath = `/${emailCompany.issuePrefix}/email`;
   const messageHref = preview
     ? `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&uid=${preview.uid}&all=1`
     : `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&all=1`;

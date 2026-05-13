@@ -158,14 +158,6 @@ export function PortfolioEmail() {
 
   function openInCompany(mailboxKey: string, uid: number | null, companyId: string) {
     const targetCompany = companyById.get(companyId);
-    console.log("[PortfolioEmail.openInCompany]", {
-      mailboxKey,
-      uid,
-      uidType: typeof uid,
-      companyId,
-      targetCompanyFound: !!targetCompany,
-      targetPrefix: targetCompany?.issuePrefix,
-    });
     if (!targetCompany) return;
     if (companyId !== selectedCompanyId) {
       setSelectedCompanyId(companyId, { source: "manual" });
@@ -174,13 +166,11 @@ export function PortfolioEmail() {
     params.set("mailbox", mailboxKey);
     if (uid != null) params.set("uid", String(uid));
     params.set("all", "1");
-    const url = `/${targetCompany.issuePrefix}/email?${params.toString()}`;
-    console.log("[PortfolioEmail.openInCompany] navigating to", url);
     // Use the target company's prefix directly. If we hand a bare "/email" to
     // navigate(), the router resolves the prefix from the current URL (HQ),
     // and Layout's URL → selectedCompanyId sync then yanks the company back
     // to HQ — landing on a mailbox that may not exist there.
-    navigate(url);
+    navigate(`/${targetCompany.issuePrefix}/email?${params.toString()}`);
   }
 
   if (!selectedCompanyId) {
