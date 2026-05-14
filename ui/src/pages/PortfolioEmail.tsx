@@ -44,7 +44,10 @@ import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { dismissReviewSender } from "../lib/email-triage-rules";
-import { cn } from "../lib/utils";
+import { cn, ellipsize } from "../lib/utils";
+
+const MAX_SENDER_CHARS = 60;
+const MAX_SUBJECT_CHARS = 80;
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -1004,22 +1007,31 @@ function MessageRow({
           msg.unseen ? "bg-blue-500" : "bg-transparent",
         )}
       />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={cn("text-xs truncate", msg.unseen && "font-semibold")}>
-            {msg.from}
-          </span>
-          <span className="text-[10px] text-muted-foreground shrink-0">
-            {timeAgo(new Date(msg.date))}
-          </span>
-        </div>
-        <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
-        {msg.snippet && (
-          <div className="text-[11px] text-muted-foreground/60 truncate mt-0.5">
-            {msg.snippet}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <div className="flex items-baseline justify-between gap-2 min-w-0">
+              <span className={cn("text-xs truncate min-w-0", msg.unseen && "font-semibold")}>
+                {ellipsize(msg.from, MAX_SENDER_CHARS)}
+              </span>
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {timeAgo(new Date(msg.date))}
+              </span>
+            </div>
+            <div className="text-xs text-muted-foreground truncate mt-0.5">
+              {ellipsize(msg.subject, MAX_SUBJECT_CHARS)}
+            </div>
           </div>
-        )}
-      </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="max-w-md">
+          <div className="text-xs font-semibold">{msg.subject}</div>
+          {msg.snippet && (
+            <div className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-words">
+              {msg.snippet}
+            </div>
+          )}
+        </TooltipContent>
+      </Tooltip>
       <div
         className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
         onClick={(e) => e.stopPropagation()}

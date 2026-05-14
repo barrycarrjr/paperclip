@@ -54,6 +54,15 @@ export function relativeTime(date: Date | string): string {
   return formatDate(date);
 }
 
+/** Hard string-level truncation for inbox-style row content. CSS `truncate`
+ *  alone isn't enough when an unbroken token (URL, error id) defeats the
+ *  flex layout calc and pushes the row past its container. */
+export function ellipsize(text: string | null | undefined, maxLen: number): string {
+  if (!text) return "";
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trimEnd() + "…";
+}
+
 export function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;

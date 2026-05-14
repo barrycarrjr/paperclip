@@ -25,7 +25,10 @@ import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { mailboxRefId } from "../lib/mailboxKind";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { timeAgo } from "../lib/timeAgo";
-import { cn } from "../lib/utils";
+import { cn, ellipsize } from "../lib/utils";
+
+const MAX_SENDER_CHARS = 50;
+const MAX_SUBJECT_CHARS = 80;
 
 const KEEP_ALWAYS_LABEL = "keep-always";
 const AUTO_NOISE_LABEL = "auto-noise";
@@ -335,24 +338,36 @@ function ConversationRow({
               : "bg-transparent",
         )}
       />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={cn("text-xs truncate", conv.status === "active" && "font-semibold")}>
-            {customerLabel}
-          </span>
-          <span className="text-[10px] text-muted-foreground shrink-0">
-            {conv.modifiedAt ? timeAgo(new Date(conv.modifiedAt)) : ""}
-          </span>
-        </div>
-        <div className="text-xs text-muted-foreground truncate mt-0.5">
-          {conv.subject ?? "(no subject)"}
-        </div>
-        {conv.preview && (
-          <div className="text-[11px] text-muted-foreground/60 truncate mt-0.5">
-            {conv.preview}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <div className="flex items-baseline justify-between gap-2 min-w-0">
+              <span
+                className={cn(
+                  "text-xs truncate min-w-0",
+                  conv.status === "active" && "font-semibold",
+                )}
+              >
+                {ellipsize(customerLabel, MAX_SENDER_CHARS)}
+              </span>
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {conv.modifiedAt ? timeAgo(new Date(conv.modifiedAt)) : ""}
+              </span>
+            </div>
+            <div className="text-xs text-muted-foreground truncate mt-0.5">
+              {ellipsize(conv.subject ?? "(no subject)", MAX_SUBJECT_CHARS)}
+            </div>
           </div>
-        )}
-      </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="max-w-md">
+          <div className="text-xs font-semibold">{conv.subject ?? "(no subject)"}</div>
+          {conv.preview && (
+            <div className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-words">
+              {conv.preview}
+            </div>
+          )}
+        </TooltipContent>
+      </Tooltip>
       <div
         className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
         onClick={(e) => e.stopPropagation()}
