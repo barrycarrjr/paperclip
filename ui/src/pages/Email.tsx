@@ -49,7 +49,14 @@ import {
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { useHelpScoutPlugin } from "../hooks/useHelpScoutPlugin";
 import { makeEmailToolsApi, type MailHeader, type ParsedEmailMessage } from "../api/emailTools";
+import { makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
+import {
+  parseMailboxRefId,
+  type HelpScoutMailboxRef,
+} from "../lib/mailboxKind";
+import { HelpScoutEmailView } from "../components/HelpScoutEmailView";
 import { emailDraftsApi } from "../api/emailDrafts";
 import { chatApi } from "../api/chat";
 import { issuesApi } from "../api/issues";
@@ -257,10 +264,73 @@ export function Email() {
 
   const { pluginId, hasMailboxForCompany, isLoading: pluginLoading } =
     useEmailToolsPlugin(selectedCompanyId);
+  const helpScoutInfo = useHelpScoutPlugin(selectedCompanyId);
+  const helpScoutPluginId = helpScoutInfo.pluginId;
+  const hsAccountsForCompany = helpScoutInfo.accountsForCompany;
 
   const emailApi = useMemo(
     () => (pluginId && selectedCompanyId ? makeEmailToolsApi(pluginId, selectedCompanyId) : null),
     [pluginId, selectedCompanyId],
+  );
+
+  // Materialize one HS mailbox entry per (account, mailboxId). Same rule as
+  // PortfolioEmail: allowedMailboxes if set, else fall back to defaultMailbox.
+  const helpScoutMailboxes: HelpScoutMailboxRef[] = useMemo(() => {
+    if (!helpScoutPluginId || !selectedCompanyId) return [];
+    const out: HelpScoutMailboxRef[] = [];
+    for (const account of hsAccountsForCompany) {
+      const mailboxIds =
+        account.allowedMailboxes && account.allowedMailboxes.length > 0
+          ? account.allowedMailboxes
+          : account.defaultMailbox
+            ? [account.defaultMailbox]
+            : [];
+      for (const mailboxId of mailboxIds) {
+        out.push({
+          kind: "helpscout",
+          pluginId: helpScoutPluginId,
+          primaryCompanyId: selectedCompanyId,
+          accountKey: account.key,
+          mailboxId,
+          name: account.displayName || account.key,
+          email: "",
+          allowedCompanies: account.allowedCompanies ?? [],
+        });
+      }
+    }
+    return out;
+  }, [helpScoutPluginId, hsAccountsForCompany, selectedCompanyId]);
+
+  // Best-effort: pull mailbox name+email from the bridge so the left rail
+  // labels match Help Scout's display. Falls back to accountKey if the bridge
+  // call fails or is still loading.
+  const hsBridgeApi = useMemo(
+    () =>
+      helpScoutPluginId && selectedCompanyId
+        ? makeHelpScoutBridgeApi(helpScoutPluginId, selectedCompanyId)
+        : null,
+    [helpScoutPluginId, selectedCompanyId],
+  );
+  const { data: hsBridgeMailboxes } = useQuery({
+    queryKey: ["helpscout", helpScoutPluginId, selectedCompanyId, "list-mailboxes"],
+    queryFn: () => hsBridgeApi!.listMailboxes(),
+    enabled: !!hsBridgeApi && hsAccountsForCompany.length > 0,
+    staleTime: 5 * 60_000,
+  });
+  const hsMailboxMetaById = useMemo(() => {
+    const map = new Map<string, { name: string; email: string }>();
+    for (const m of hsBridgeMailboxes?.mailboxes ?? []) {
+      map.set(`${m.accountKey}:${m.mailboxId}`, { name: m.name, email: m.email });
+    }
+    return map;
+  }, [hsBridgeMailboxes]);
+  const enrichedHelpScoutMailboxes = useMemo(
+    () =>
+      helpScoutMailboxes.map((m) => {
+        const meta = hsMailboxMetaById.get(`${m.accountKey}:${m.mailboxId}`);
+        return meta ? { ...m, name: meta.name, email: meta.email } : m;
+      }),
+    [helpScoutMailboxes, hsMailboxMetaById],
   );
 
   const [searchParams] = useSearchParams();
@@ -273,12 +343,40 @@ export function Email() {
       return Number.isFinite(n) ? n : null;
     })(),
     all: searchParams.get("all") === "1",
+    conv: searchParams.get("conv"),
     action: (() => {
       const a = searchParams.get("action");
       return a === "reply" || a === "forward" || a === "handoff" ? a : null;
     })() as "reply" | "forward" | "handoff" | null,
   }).current;
-  const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialUrlState.mailbox);
+  // `?mailbox=` may be a bare IMAP key (legacy), `imap:<companyId>:<key>`, or
+  // `hs:<companyId>:<accountKey>:<mailboxId>`. Discriminate up front.
+  const initialMailboxParsed = useMemo(
+    () => parseMailboxRefId(initialUrlState.mailbox),
+    [initialUrlState.mailbox],
+  );
+  const initialHelpScoutFromUrl = useMemo<HelpScoutMailboxRef | null>(() => {
+    if (initialMailboxParsed?.kind !== "helpscout") return null;
+    const [companyIdFromUrl, accountKey, mailboxId] = initialMailboxParsed.parts;
+    if (!accountKey || !mailboxId) return null;
+    return {
+      kind: "helpscout",
+      pluginId: "",
+      primaryCompanyId: companyIdFromUrl || (selectedCompanyId ?? ""),
+      accountKey,
+      mailboxId,
+      name: accountKey,
+      email: "",
+      allowedCompanies: [],
+    };
+  }, [initialMailboxParsed, selectedCompanyId]);
+  const [selectedHelpScoutRef, setSelectedHelpScoutRef] =
+    useState<HelpScoutMailboxRef | null>(initialHelpScoutFromUrl);
+  const initialImapMailboxKey =
+    initialMailboxParsed?.kind === "imap" && initialMailboxParsed.parts.length > 0
+      ? initialMailboxParsed.parts[initialMailboxParsed.parts.length - 1] ?? null
+      : null;
+  const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialImapMailboxKey);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
   const [showAllMessages, setShowAllMessages] = useState(initialUrlState.all || !!initialUrlState.uid);
@@ -394,11 +492,28 @@ export function Email() {
   const mailboxes = mailboxData?.mailboxes ?? [];
 
   useEffect(() => {
-    if (mailboxes.length > 0 && !selectedMailbox) {
+    if (
+      mailboxes.length > 0 &&
+      !selectedMailbox &&
+      !selectedHelpScoutRef
+    ) {
       setSelectedMailbox(mailboxes[0]!.key);
       setSelectedFolder(mailboxes[0]!.pollFolder || "INBOX");
     }
-  }, [mailboxes, selectedMailbox]);
+  }, [mailboxes, selectedMailbox, selectedHelpScoutRef]);
+
+  // Once the help-scout plugin config has loaded, re-resolve the URL-derived
+  // HS ref with the real pluginId and account metadata. This avoids storing
+  // the bridge call's payload before the plugin has been discovered.
+  useEffect(() => {
+    if (!selectedHelpScoutRef || selectedHelpScoutRef.pluginId) return;
+    const match = enrichedHelpScoutMailboxes.find(
+      (m) =>
+        m.accountKey === selectedHelpScoutRef.accountKey &&
+        m.mailboxId === selectedHelpScoutRef.mailboxId,
+    );
+    if (match) setSelectedHelpScoutRef(match);
+  }, [selectedHelpScoutRef, enrichedHelpScoutMailboxes]);
 
   const selectedMailboxInfo = mailboxes.find((m) => m.key === selectedMailbox) ?? null;
 
@@ -917,7 +1032,7 @@ export function Email() {
     );
   }
 
-  if (pluginLoading) {
+  if (pluginLoading || helpScoutInfo.isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -925,15 +1040,18 @@ export function Email() {
     );
   }
 
-  if (!pluginId || !hasMailboxForCompany) {
+  const imapAvailableHere = !!pluginId && hasMailboxForCompany;
+  const helpScoutAvailableHere = enrichedHelpScoutMailboxes.length > 0;
+
+  if (!imapAvailableHere && !helpScoutAvailableHere) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-center space-y-2">
           <Mail className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="text-sm font-medium">Email not configured</p>
           <p className="text-xs text-muted-foreground max-w-xs">
-            Install the email-tools plugin and add a mailbox with this company in its Allowed
-            Companies list.
+            Install the email-tools or help-scout plugin and add a mailbox with this company in
+            its Allowed Companies list.
           </p>
         </div>
       </div>
@@ -972,13 +1090,16 @@ export function Email() {
                 key={mb.key}
                 type="button"
                 onClick={() => {
+                  setSelectedHelpScoutRef(null);
                   setSelectedMailbox(mb.key);
                   setSelectedFolder(mb.pollFolder || "INBOX");
                   setSelectedUid(null);
                 }}
                 className={cn(
                   "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
-                  selectedMailbox === mb.key && "bg-accent font-medium",
+                  !selectedHelpScoutRef &&
+                    selectedMailbox === mb.key &&
+                    "bg-accent font-medium",
                 )}
               >
                 <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -988,7 +1109,41 @@ export function Email() {
           </div>
         )}
 
-        {selectedMailbox && folders.length > 0 && (
+        {enrichedHelpScoutMailboxes.length > 0 && (
+          <>
+            <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Help Scout
+            </div>
+            <div className="space-y-0.5 px-2 pb-2">
+              {enrichedHelpScoutMailboxes.map((hs) => {
+                const isSelected =
+                  !!selectedHelpScoutRef &&
+                  selectedHelpScoutRef.accountKey === hs.accountKey &&
+                  selectedHelpScoutRef.mailboxId === hs.mailboxId;
+                return (
+                  <button
+                    key={`${hs.accountKey}:${hs.mailboxId}`}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMailbox(null);
+                      setSelectedUid(null);
+                      setSelectedHelpScoutRef(hs);
+                    }}
+                    className={cn(
+                      "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
+                      isSelected && "bg-accent font-medium",
+                    )}
+                  >
+                    <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{hs.email || hs.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {selectedMailbox && !selectedHelpScoutRef && folders.length > 0 && (
           <>
             <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center justify-between">
               Folders
@@ -1523,6 +1678,22 @@ export function Email() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  if (selectedHelpScoutRef && selectedHelpScoutRef.pluginId) {
+    return (
+      <HelpScoutEmailView
+        mailbox={selectedHelpScoutRef}
+        initialConversationId={initialUrlState.conv}
+        initialAction={
+          initialUrlState.action === "reply" || initialUrlState.action === "handoff"
+            ? initialUrlState.action
+            : null
+        }
+        leftPaneSlot={leftPane}
+        leftPaneWidth={leftPaneWidth}
+      />
+    );
+  }
 
   return (
     <div className="flex h-full overflow-hidden">

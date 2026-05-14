@@ -30,6 +30,8 @@ import {
   makeEmailToolsApi,
   type MailHeader,
 } from "../api/emailTools";
+import { HELP_SCOUT_PLUGIN_KEY } from "../api/helpScoutBridge";
+import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { issuesApi } from "../api/issues";
 import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
@@ -39,6 +41,10 @@ import { cn } from "../lib/utils";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import {
+  HelpScoutMailboxPanel,
+  helpScoutMailboxQueryKey,
+} from "../components/HelpScoutMailboxPanel";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
@@ -101,11 +107,20 @@ export function PortfolioEmail() {
     staleTime: 60_000,
   });
   const pluginId = plugins?.find((p) => p.pluginKey === EMAIL_TOOLS_PLUGIN_KEY)?.id ?? null;
+  const helpScoutPluginId =
+    plugins?.find((p) => p.pluginKey === HELP_SCOUT_PLUGIN_KEY)?.id ?? null;
 
   const { data: config, isLoading: configLoading } = useQuery({
     queryKey: queryKeys.plugins.config(pluginId ?? ""),
     queryFn: () => pluginsApi.getConfig(pluginId!),
     enabled: !!pluginId,
+    staleTime: 60_000,
+  });
+
+  const { data: helpScoutConfig, isLoading: helpScoutConfigLoading } = useQuery({
+    queryKey: queryKeys.plugins.config(helpScoutPluginId ?? ""),
+    queryFn: () => pluginsApi.getConfig(helpScoutPluginId!),
+    enabled: !!helpScoutPluginId,
     staleTime: 60_000,
   });
 
@@ -143,6 +158,69 @@ export function PortfolioEmail() {
     }
     return out;
   }, [config, companyById, selectedCompanyId]);
+
+  // Resolve help-scout mailboxes — one panel per (account, mailboxId).
+  // Discovery follows two passes: the plugin config lists accounts with
+  // allowedCompanies + allowedMailboxes; we pick a representative company per
+  // account (same rule as IMAP), then fan out the allowedMailboxes list. We
+  // can't ask Help Scout for the canonical name/email per ID here without an
+  // extra API call — the bridge `helpscout.list-mailboxes` does that, but
+  // we'd need to call it per company. For the Portfolio header label we use
+  // accountKey + mailboxId as a placeholder; the panel itself fetches its
+  // own metadata as part of listing conversations.
+  const resolvedHelpScoutMailboxes: Array<{
+    ref: HelpScoutMailboxRef;
+    primaryCompany: Company | null;
+  }> = useMemo(() => {
+    if (!helpScoutPluginId) return [];
+    const accounts =
+      ((helpScoutConfig?.configJson?.accounts ?? []) as Array<{
+        key?: string;
+        displayName?: string;
+        allowedMailboxes?: string[];
+        defaultMailbox?: string;
+        allowedCompanies?: string[];
+      }>) ?? [];
+    const out: Array<{ ref: HelpScoutMailboxRef; primaryCompany: Company | null }> = [];
+    for (const account of accounts) {
+      const accountKey = account.key;
+      const allowed = account.allowedCompanies ?? [];
+      if (!accountKey || allowed.length === 0) continue;
+      let primaryId: string | null = null;
+      if (allowed.includes("*")) {
+        primaryId = selectedCompanyId;
+      } else {
+        primaryId = allowed.find((c) => companyById.has(c)) ?? null;
+      }
+      if (!primaryId) continue;
+      // Materialize a panel per allowedMailbox. Fall back to defaultMailbox
+      // when allowedMailboxes is empty/missing (= unrestricted within the
+      // account — but for the UI roll-up we still need a concrete mailbox
+      // id, so default is the only sensible single choice).
+      const mailboxIds =
+        account.allowedMailboxes && account.allowedMailboxes.length > 0
+          ? account.allowedMailboxes
+          : account.defaultMailbox
+            ? [account.defaultMailbox]
+            : [];
+      for (const mailboxId of mailboxIds) {
+        out.push({
+          ref: {
+            kind: "helpscout",
+            pluginId: helpScoutPluginId,
+            primaryCompanyId: primaryId,
+            accountKey,
+            mailboxId,
+            name: account.displayName || accountKey,
+            email: "",
+            allowedCompanies: allowed,
+          },
+          primaryCompany: companyById.get(primaryId) ?? null,
+        });
+      }
+    }
+    return out;
+  }, [helpScoutPluginId, helpScoutConfig, companyById, selectedCompanyId]);
 
   const [showAll, setShowAll] = useState(() => {
     try {
@@ -194,6 +272,23 @@ export function PortfolioEmail() {
     navigate(`/${targetCompany.issuePrefix}/email?${params.toString()}`);
   }
 
+  function openHelpScoutInCompany(
+    ref: HelpScoutMailboxRef,
+    conversationId: string | null,
+    action?: "reply" | "handoff",
+  ) {
+    const targetCompany = companyById.get(ref.primaryCompanyId);
+    if (!targetCompany) return;
+    if (ref.primaryCompanyId !== selectedCompanyId) {
+      setSelectedCompanyId(ref.primaryCompanyId, { source: "manual" });
+    }
+    const params = new URLSearchParams();
+    params.set("mailbox", helpScoutMailboxQueryKey(ref));
+    if (conversationId) params.set("conv", conversationId);
+    if (action) params.set("action", action);
+    navigate(`/${targetCompany.issuePrefix}/email?${params.toString()}`);
+  }
+
   if (!selectedCompanyId) {
     return <EmptyState icon={Mail} message="Select a company to view Portfolio Email." />;
   }
@@ -205,22 +300,26 @@ export function PortfolioEmail() {
       />
     );
   }
-  if (pluginsLoading || (pluginId && configLoading)) {
+  if (
+    pluginsLoading ||
+    (pluginId && configLoading) ||
+    (helpScoutPluginId && helpScoutConfigLoading)
+  ) {
     return <PageSkeleton variant="list" />;
   }
-  if (!pluginId) {
+  if (!pluginId && !helpScoutPluginId) {
     return (
       <EmptyState
         icon={Mail}
-        message="Install the email-tools plugin to use Portfolio Email."
+        message="Install the email-tools or help-scout plugin to use Portfolio Email."
       />
     );
   }
-  if (resolvedMailboxes.length === 0) {
+  if (resolvedMailboxes.length === 0 && resolvedHelpScoutMailboxes.length === 0) {
     return (
       <EmptyState
         icon={Mail}
-        message="No mailboxes are configured. Add a mailbox in the email-tools plugin settings."
+        message="No mailboxes are configured. Add a mailbox in the email-tools or help-scout plugin settings."
       />
     );
   }
@@ -278,17 +377,29 @@ export function PortfolioEmail() {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="px-6 py-4 space-y-4">
-          {resolvedMailboxes.map((mb) => (
-            <MailboxPanel
-              key={`${mb.primaryCompanyId}:${mb.key}`}
-              mailbox={mb}
-              pluginId={pluginId}
-              showAll={showAll}
-              groupBySender={groupBySender}
-              onOpenMessage={(uid, action) =>
-                openInCompany(mb.key, uid, mb.primaryCompanyId, action)
+          {pluginId &&
+            resolvedMailboxes.map((mb) => (
+              <MailboxPanel
+                key={`${mb.primaryCompanyId}:${mb.key}`}
+                mailbox={mb}
+                pluginId={pluginId}
+                showAll={showAll}
+                groupBySender={groupBySender}
+                onOpenMessage={(uid, action) =>
+                  openInCompany(mb.key, uid, mb.primaryCompanyId, action)
+                }
+                onOpenMailbox={() => openInCompany(mb.key, null, mb.primaryCompanyId)}
+              />
+            ))}
+          {resolvedHelpScoutMailboxes.map(({ ref, primaryCompany }) => (
+            <HelpScoutMailboxPanel
+              key={`${ref.primaryCompanyId}:${ref.accountKey}:${ref.mailboxId}`}
+              mailbox={ref}
+              primaryCompany={primaryCompany}
+              onOpenMailbox={() => openHelpScoutInCompany(ref, null)}
+              onOpenConversation={(conversationId, action) =>
+                openHelpScoutInCompany(ref, conversationId, action)
               }
-              onOpenMailbox={() => openInCompany(mb.key, null, mb.primaryCompanyId)}
             />
           ))}
         </div>
