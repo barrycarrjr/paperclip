@@ -18,7 +18,47 @@ import type {
   PluginConfig,
   PluginStatus,
 } from "@paperclipai/shared";
-import { api } from "./client";
+import { api, ApiError } from "./client";
+
+/**
+ * Structured 409 body returned by `/upgrade` and `/library/install` when a
+ * plugin upgrade would introduce new capabilities that the request has not
+ * yet acknowledged. Surface the `escalated` list to the operator for review
+ * before resubmitting with `acknowledgeCapabilities`.
+ */
+export interface CapabilityEscalationDetails {
+  code: "capability_escalation";
+  error: string;
+  escalated: string[];
+  previousCapabilities: string[];
+  nextCapabilities: string[];
+}
+
+/**
+ * Narrows an `ApiError` to a capability-escalation response. Returns the
+ * structured details when the server signalled an escalation, otherwise
+ * `null`. Use in catch blocks around `pluginsApi.upgrade` /
+ * `installFromLibrary` to decide whether to prompt for approval.
+ */
+export function asCapabilityEscalationError(
+  err: unknown,
+): CapabilityEscalationDetails | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const body = err.body as Partial<CapabilityEscalationDetails> | null;
+  if (!body || body.code !== "capability_escalation") return null;
+  if (!Array.isArray(body.escalated)) return null;
+  return {
+    code: "capability_escalation",
+    error: body.error ?? err.message,
+    escalated: body.escalated.filter((c): c is string => typeof c === "string"),
+    previousCapabilities: Array.isArray(body.previousCapabilities)
+      ? body.previousCapabilities.filter((c): c is string => typeof c === "string")
+      : [],
+    nextCapabilities: Array.isArray(body.nextCapabilities)
+      ? body.nextCapabilities.filter((c): c is string => typeof c === "string")
+      : [],
+  };
+}
 
 /**
  * Normalized UI contribution record returned by `GET /api/plugins/ui-contributions`.
@@ -256,9 +296,21 @@ export const pluginsApi = {
    * configured paperclip-extensions repo, normalized with install state). */
   listLibrary: () => api.get<PluginLibraryResponse>("/plugins/library"),
 
-  /** Install (or upgrade in place) a plugin by id from the library. */
-  installFromLibrary: (id: string) =>
-    api.post<PluginRecord>("/plugins/library/install", { id }),
+  /**
+   * Install (or upgrade in place) a plugin by id from the library.
+   *
+   * When the install path lands on an upgrade and the new manifest introduces
+   * additional capabilities, the server returns HTTP 409 with
+   * `code: "capability_escalation"` and the escalation set. Resubmit with
+   * `acknowledgeCapabilities` covering those entries to proceed.
+   */
+  installFromLibrary: (id: string, acknowledgeCapabilities?: string[]) =>
+    api.post<PluginRecord>(
+      "/plugins/library/install",
+      acknowledgeCapabilities && acknowledgeCapabilities.length > 0
+        ? { id, acknowledgeCapabilities }
+        : { id },
+    ),
 
   /**
    * Uninstall a plugin.
@@ -333,14 +385,27 @@ export const pluginsApi = {
   /**
    * Upgrade a plugin to a newer version.
    *
-   * If the new version declares additional capabilities, the plugin is
-   * transitioned to `upgrade_pending` state awaiting operator approval.
+   * When the new manifest introduces capabilities the previous version did
+   * not declare, the server returns HTTP 409 with
+   * `code: "capability_escalation"` and the escalation set. Resubmit with
+   * `acknowledgeCapabilities` covering those entries to approve and proceed.
    *
    * @param pluginId - UUID of the plugin to upgrade.
    * @param version - Target version (optional; defaults to latest published).
+   * @param acknowledgeCapabilities - Capabilities the operator approves for
+   *   the upgrade, used to clear the capability-escalation gate.
    */
-  upgrade: (pluginId: string, version?: string) =>
-    api.post<{ ok: boolean }>(`/plugins/${pluginId}/upgrade`, version ? { version } : {}),
+  upgrade: (
+    pluginId: string,
+    version?: string,
+    acknowledgeCapabilities?: string[],
+  ) =>
+    api.post<{ ok: boolean }>(`/plugins/${pluginId}/upgrade`, {
+      ...(version ? { version } : {}),
+      ...(acknowledgeCapabilities && acknowledgeCapabilities.length > 0
+        ? { acknowledgeCapabilities }
+        : {}),
+    }),
 
   /**
    * Reinstall a local-path plugin in place. Re-reads the manifest from the

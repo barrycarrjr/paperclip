@@ -182,10 +182,18 @@ export interface PluginLifecycleManager {
    * This is a placeholder that handles the lifecycle state transition.
    * The actual package installation is handled by plugin-loader.
    *
-   * If the upgrade adds new capabilities, transitions to `upgrade_pending`.
-   * Otherwise, transitions to `ready` directly.
+   * If the upgrade introduces new capabilities, the underlying loader throws
+   * a `PluginCapabilityEscalationError` unless `options.acknowledgeCapabilities`
+   * covers every escalated entry. When the escalation is acknowledged the
+   * plugin transitions directly to `ready`; otherwise the error is rethrown
+   * so callers can surface a confirm prompt.
    */
-  upgrade(pluginId: string, version?: string, localPath?: string): Promise<PluginRecord>;
+  upgrade(
+    pluginId: string,
+    version?: string,
+    localPath?: string,
+    options?: { acknowledgeCapabilities?: string[] },
+  ): Promise<PluginRecord>;
 
   /**
    * Start the worker process for a plugin that is already in `ready` state.
@@ -636,7 +644,12 @@ export function pluginLifecycleManager(
      * @returns The updated `PluginRecord`.
      * @throws {BadRequest} If the plugin is not in a ready or upgrade_pending state.
      */
-    async upgrade(pluginId: string, version?: string, localPath?: string): Promise<PluginRecord> {
+    async upgrade(
+      pluginId: string,
+      version?: string,
+      localPath?: string,
+      options?: { acknowledgeCapabilities?: string[] },
+    ): Promise<PluginRecord> {
       const plugin = await requirePlugin(pluginId);
 
       // Can only upgrade plugins that are ready or already in upgrade_pending
@@ -647,16 +660,30 @@ export function pluginLifecycleManager(
         );
       }
 
+      const acknowledgeCapabilities = options?.acknowledgeCapabilities ?? [];
+
       log.info(
-        { pluginId, pluginKey: plugin.pluginKey, targetVersion: version },
+        {
+          pluginId,
+          pluginKey: plugin.pluginKey,
+          targetVersion: version,
+          acknowledgeCapabilitiesCount: acknowledgeCapabilities.length,
+        },
         "plugin lifecycle: upgrade requested",
       );
 
       await deactivatePluginRuntime(pluginId, plugin.pluginKey);
 
-      // 1. Download and validate new package via loader
+      // 1. Download and validate new package via loader. The loader enforces
+      // the capability-escalation gate — if new capabilities aren't covered
+      // by `acknowledgeCapabilities`, it throws `PluginCapabilityEscalationError`
+      // which the route handler maps to a structured 409 for the UI.
       const { oldManifest, newManifest, discovered } =
-        await pluginLoaderInstance.upgradePlugin(pluginId, { version, ...(localPath ? { localPath } : {}) });
+        await pluginLoaderInstance.upgradePlugin(pluginId, {
+          version,
+          ...(localPath ? { localPath } : {}),
+          acknowledgeCapabilities,
+        });
 
       log.info(
         {
@@ -668,44 +695,52 @@ export function pluginLifecycleManager(
         "plugin lifecycle: package upgraded on disk",
       );
 
-      // 2. Compare capabilities
+      // 2. The loader already vetted the escalation; here we just decide
+      // whether to land in `ready` directly or pause at `upgrade_pending`.
+      // An operator-acknowledged escalation skips the pending state — the
+      // approval was the acknowledgement itself.
       const addedCaps = newManifest.capabilities.filter(
         (cap) => !oldManifest.capabilities.includes(cap),
       );
+      const ackSet = new Set(acknowledgeCapabilities);
+      const unacknowledgedAddedCaps = addedCaps.filter((cap) => !ackSet.has(cap));
 
-      // 3. Transition state
-      if (addedCaps.length > 0) {
-        // New capabilities require operator approval — worker stays stopped
+      if (unacknowledgedAddedCaps.length > 0) {
+        // Reached only if the loader were ever to permit an unacknowledged
+        // escalation. Defensive: park in upgrade_pending for board review.
         log.info(
-          { pluginId, pluginKey: plugin.pluginKey, addedCaps },
-          "plugin lifecycle: new capabilities detected, transitioning to upgrade_pending",
+          {
+            pluginId,
+            pluginKey: plugin.pluginKey,
+            addedCaps: unacknowledgedAddedCaps,
+          },
+          "plugin lifecycle: unacknowledged capabilities present, transitioning to upgrade_pending",
         );
-        // Skip the inner stopWorkerIfRunning since we already stopped above
         const result = await transition(pluginId, "upgrade_pending", null, plugin);
         emitDomain("plugin.upgrade_pending", {
           pluginId,
           pluginKey: result.pluginKey,
         });
         return result;
-      } else {
-        const result = await transition(pluginId, "ready", null, {
-          ...plugin,
-          version: discovered.version,
-          manifestJson: newManifest,
-        } as PluginRecord);
-        await activateReadyPlugin(pluginId);
-
-        emitDomain("plugin.loaded", {
-          pluginId,
-          pluginKey: result.pluginKey,
-        });
-        emitDomain("plugin.enabled", {
-          pluginId,
-          pluginKey: result.pluginKey,
-        });
-
-        return result;
       }
+
+      const result = await transition(pluginId, "ready", null, {
+        ...plugin,
+        version: discovered.version,
+        manifestJson: newManifest,
+      } as PluginRecord);
+      await activateReadyPlugin(pluginId);
+
+      emitDomain("plugin.loaded", {
+        pluginId,
+        pluginKey: result.pluginKey,
+      });
+      emitDomain("plugin.enabled", {
+        pluginId,
+        pluginKey: result.pluginKey,
+      });
+
+      return result;
     },
 
     // -- startWorker ------------------------------------------------------

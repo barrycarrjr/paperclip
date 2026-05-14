@@ -301,6 +301,86 @@ export interface PluginInstallOptions {
   installDir?: string;
 }
 
+/**
+ * Upgrade-specific options. Extends the install options with an
+ * acknowledgement list used to clear the capability-escalation gate.
+ */
+export interface PluginUpgradeOptions extends Omit<PluginInstallOptions, "installDir"> {
+  /**
+   * Capabilities the operator has explicitly approved for this upgrade.
+   *
+   * When the new manifest introduces capabilities absent from the previous
+   * version, `upgradePlugin` throws unless every escalated capability is
+   * present in this list. Pass an empty array (or omit the field) to leave
+   * the gate enforced; the caller is expected to surface the escalation list
+   * to the operator and re-submit with the approved subset.
+   *
+   * @see PluginCapabilityEscalationError — the structured error thrown when
+   *   acknowledgement is missing or incomplete.
+   */
+  acknowledgeCapabilities?: string[];
+}
+
+/**
+ * Result of comparing a new manifest's capabilities against the previous
+ * install. Used by `upgradePlugin` to decide whether to proceed.
+ */
+export interface CapabilityEscalationResult {
+  /** Capabilities present in the new manifest but not the old one. */
+  escalated: string[];
+  /** True when every escalated capability is covered by `acknowledged`. */
+  approved: boolean;
+}
+
+/**
+ * Pure helper that computes the escalation set and whether it's covered by
+ * the operator's acknowledgement. Extracted so the gate is unit-testable
+ * without standing up the full loader.
+ */
+export function computeCapabilityEscalation(
+  oldCapabilities: readonly string[],
+  newCapabilities: readonly string[],
+  acknowledged: readonly string[] = [],
+): CapabilityEscalationResult {
+  const oldSet = new Set(oldCapabilities);
+  const ackSet = new Set(acknowledged);
+  const escalated = newCapabilities.filter((cap) => !oldSet.has(cap));
+  const approved = escalated.every((cap) => ackSet.has(cap));
+  return { escalated, approved };
+}
+
+/**
+ * Thrown by `upgradePlugin` when the new manifest declares capabilities the
+ * previously-installed version did not, and the caller has not acknowledged
+ * those new capabilities. Surfaces the full escalation set so routes can
+ * forward a structured response to the UI for an approval prompt.
+ */
+export class PluginCapabilityEscalationError extends Error {
+  readonly code = "capability_escalation" as const;
+  readonly pluginId: string;
+  readonly previousCapabilities: string[];
+  readonly nextCapabilities: string[];
+  readonly escalated: string[];
+
+  constructor(args: {
+    pluginId: string;
+    previousCapabilities: readonly string[];
+    nextCapabilities: readonly string[];
+    escalated: readonly string[];
+  }) {
+    super(
+      `Upgrade for "${args.pluginId}" introduces new capabilities that require approval: ${args.escalated.join(", ")}. `
+      + `The previous version declared [${args.previousCapabilities.join(", ")}]. `
+      + `Re-submit the upgrade with acknowledgeCapabilities covering the escalated set.`,
+    );
+    this.name = "PluginCapabilityEscalationError";
+    this.pluginId = args.pluginId;
+    this.previousCapabilities = [...args.previousCapabilities];
+    this.nextCapabilities = [...args.nextCapabilities];
+    this.escalated = [...args.escalated];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runtime options — services needed for initializing loaded plugins
 // ---------------------------------------------------------------------------
@@ -486,9 +566,15 @@ export interface PluginLoader {
    * 3. Updates the existing plugin record instead of creating a new one.
    * 4. Returns the old and new manifests for capability comparison.
    *
+   * When the new manifest introduces capabilities not present in the prior
+   * version, this method throws {@link PluginCapabilityEscalationError}
+   * unless `options.acknowledgeCapabilities` covers every escalated entry.
+   * Callers should surface that error to the operator and resubmit with the
+   * approved list.
+   *
    * @see PLUGIN_SPEC.md §25.3 — Upgrade Lifecycle
    */
-  upgradePlugin(pluginId: string, options: Omit<PluginInstallOptions, "installDir">): Promise<{
+  upgradePlugin(pluginId: string, options: PluginUpgradeOptions): Promise<{
     oldManifest: PaperclipPluginManifestV1;
     newManifest: PaperclipPluginManifestV1;
     discovered: DiscoveredPlugin;
@@ -1448,7 +1534,7 @@ export function pluginLoader(
      */
     async upgradePlugin(
       pluginId: string,
-      upgradeOptions: Omit<PluginInstallOptions, "installDir">,
+      upgradeOptions: PluginUpgradeOptions,
     ): Promise<{
       oldManifest: PaperclipPluginManifestV1;
       newManifest: PaperclipPluginManifestV1;
@@ -1474,6 +1560,7 @@ export function pluginLoader(
         // and fetchAndValidate uses the npm path.
         localPath = plugin.localSourcePath ?? undefined,
         version,
+        acknowledgeCapabilities = [],
       } = upgradeOptions;
 
       log.info(
@@ -1498,20 +1585,47 @@ export function pluginLoader(
         );
       }
 
-      // 3. Detect capability escalation — new capabilities not in the old manifest
-      const oldCaps = new Set(oldManifest.capabilities ?? []);
+      // 3. Detect capability escalation — new capabilities not in the old
+      // manifest. Operators acknowledge the escalation by passing the
+      // escalated capabilities in `acknowledgeCapabilities`; without that
+      // ack, we throw a structured error so callers can surface a confirm
+      // prompt rather than treating the upgrade as a hard failure.
+      const oldCaps = oldManifest.capabilities ?? [];
       const newCaps = newManifest.capabilities ?? [];
-      const escalated = newCaps.filter((c) => !oldCaps.has(c));
+      const { escalated, approved } = computeCapabilityEscalation(
+        oldCaps,
+        newCaps,
+        acknowledgeCapabilities,
+      );
 
-      if (escalated.length > 0) {
+      if (escalated.length > 0 && !approved) {
         log.warn(
-          { pluginId, escalated, oldVersion: oldManifest.version, newVersion: newManifest.version },
+          {
+            pluginId,
+            escalated,
+            acknowledged: acknowledgeCapabilities,
+            oldVersion: oldManifest.version,
+            newVersion: newManifest.version,
+          },
           "plugin-loader: upgrade introduces new capabilities — requires admin approval",
         );
-        throw new Error(
-          `Upgrade for "${pluginId}" introduces new capabilities that require approval: ${escalated.join(", ")}. ` +
-            `The previous version declared [${[...oldCaps].join(", ")}]. ` +
-            `Please review and approve the capability escalation before upgrading.`,
+        throw new PluginCapabilityEscalationError({
+          pluginId,
+          previousCapabilities: oldCaps,
+          nextCapabilities: newCaps,
+          escalated,
+        });
+      }
+
+      if (escalated.length > 0 && approved) {
+        log.info(
+          {
+            pluginId,
+            escalated,
+            oldVersion: oldManifest.version,
+            newVersion: newManifest.version,
+          },
+          "plugin-loader: capability escalation acknowledged by operator, proceeding with upgrade",
         );
       }
 

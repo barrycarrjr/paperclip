@@ -46,10 +46,15 @@ import type {
 } from "@paperclipai/shared";
 import {
   PLUGIN_STATUSES,
+  upgradePluginSchema,
 } from "@paperclipai/shared";
 import { pluginRegistryService } from "../services/plugin-registry.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
-import { getPluginUiContributionMetadata, pluginLoader } from "../services/plugin-loader.js";
+import {
+  getPluginUiContributionMetadata,
+  pluginLoader,
+  PluginCapabilityEscalationError,
+} from "../services/plugin-loader.js";
 import { logActivity } from "../services/activity-log.js";
 import { publishGlobalLiveEvent } from "../services/live-events.js";
 import { issueService } from "../services/issues.js";
@@ -1359,15 +1364,34 @@ export function pluginRoutes(
    * server downloads the matching `.pcplugin` asset from the release and
    * runs the same install pipeline as `/install-file`.
    *
-   * Body: `{ id: string }` — the plugin id (e.g. `"email-tools"`).
+   * Body:
+   *   - `id`: plugin id (e.g. `"email-tools"`). Required.
+   *   - `acknowledgeCapabilities`: optional approved-capability list used
+   *     when the install lands on the upgrade path for an already-installed
+   *     plugin and the new manifest introduces additional capabilities.
+   *     A first attempt without the list returns HTTP 409 with `code:
+   *     "capability_escalation"` and the escalation set; resubmit with the
+   *     escalated capabilities to proceed.
    */
   router.post("/plugins/library/install", async (req, res) => {
     assertInstanceAdmin(req);
-    const id = (req.body as { id?: string } | undefined)?.id?.trim();
+    const rawBody = (req.body ?? {}) as {
+      id?: string;
+      acknowledgeCapabilities?: unknown;
+    };
+    const id = rawBody.id?.trim();
     if (!id) {
       res.status(400).json({ error: "Body must include { id: string }." });
       return;
     }
+    const ackParse = upgradePluginSchema.pick({ acknowledgeCapabilities: true }).safeParse({
+      acknowledgeCapabilities: rawBody.acknowledgeCapabilities,
+    });
+    if (!ackParse.success) {
+      res.status(400).json({ error: ackParse.error.message });
+      return;
+    }
+    const acknowledgeCapabilities = ackParse.data.acknowledgeCapabilities;
 
     let library: LibraryResponse;
     try {
@@ -1458,7 +1482,9 @@ export function pluginRoutes(
       const alreadyInstalled = await registry.getByKey(id);
       if (alreadyInstalled && (alreadyInstalled.status === "ready" || alreadyInstalled.status === "upgrade_pending")) {
         const previousVersion = alreadyInstalled.version;
-        const result = await lifecycle.upgrade(alreadyInstalled.id, undefined, tempDir);
+        const result = await lifecycle.upgrade(alreadyInstalled.id, undefined, tempDir, {
+          acknowledgeCapabilities,
+        });
         cachedLibrary = null;
         await logPluginMutationActivity(req, "plugin.upgraded", alreadyInstalled.id, {
           pluginId: alreadyInstalled.id,
@@ -1468,6 +1494,7 @@ export function pluginRoutes(
           source: "library",
           libraryRepo: library.repo,
           libraryReleaseTag: library.release.tag,
+          acknowledgedCapabilities: acknowledgeCapabilities ?? null,
         });
         publishGlobalLiveEvent({
           type: "plugin.ui.updated",
@@ -1508,6 +1535,16 @@ export function pluginRoutes(
       });
       res.json(updated);
     } catch (err) {
+      if (err instanceof PluginCapabilityEscalationError) {
+        res.status(409).json({
+          error: err.message,
+          code: err.code,
+          escalated: err.escalated,
+          previousCapabilities: err.previousCapabilities,
+          nextCapabilities: err.nextCapabilities,
+        });
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: message });
     } finally {
@@ -2399,20 +2436,34 @@ export function pluginRoutes(
    * new package contents on the host before activation.
    *
    * Request body (optional):
-   * - version: Target version (defaults to latest)
+   * - `version`: Target version (defaults to latest).
+   * - `acknowledgeCapabilities`: Capabilities the operator approves for this
+   *   upgrade. The new manifest's capability set must intersect with the
+   *   acknowledged list for every capability not present in the previous
+   *   version. If a prior upgrade attempt returned a 409 with
+   *   `code: "capability_escalation"`, resubmit including the escalated
+   *   capabilities here.
    *
-   * If the upgrade adds new capabilities, the plugin transitions to
-   * 'upgrade_pending' state for board approval. Otherwise, it goes
-   * directly to 'ready'.
+   * If the upgrade adds new capabilities and the request does not
+   * acknowledge them, the route returns HTTP 409 with `code:
+   * "capability_escalation"` and the escalation set. When acknowledged the
+   * plugin transitions directly to `ready`.
    *
-   * Response: PluginRecord
-   * Errors: 404 if plugin not found, 400 for lifecycle errors
+   * Response: PluginRecord on success
+   * Errors:
+   *   - 404 if plugin not found
+   *   - 409 with `code: "capability_escalation"` when escalation requires acknowledgement
+   *   - 400 for other lifecycle errors
    */
   router.post("/plugins/:pluginId/upgrade", async (req, res) => {
     assertInstanceAdmin(req);
     const { pluginId } = req.params;
-    const body = req.body as { version?: string } | undefined;
-    const version = body?.version;
+    const bodyParse = upgradePluginSchema.safeParse(req.body ?? {});
+    if (!bodyParse.success) {
+      res.status(400).json({ error: bodyParse.error.message });
+      return;
+    }
+    const { version, acknowledgeCapabilities } = bodyParse.data;
 
     const plugin = await resolvePlugin(registry, pluginId);
     if (!plugin) {
@@ -2421,22 +2472,30 @@ export function pluginRoutes(
     }
 
     try {
-      // Upgrade the plugin - this would typically:
-      // 1. Download the new version
-      // 2. Compare capabilities
-      // 3. If new capabilities, mark as upgrade_pending
-      // 4. Otherwise, transition to ready
-      const result = await lifecycle.upgrade(plugin.id, version);
+      const result = await lifecycle.upgrade(plugin.id, version, undefined, {
+        acknowledgeCapabilities,
+      });
       await logPluginMutationActivity(req, "plugin.upgraded", plugin.id, {
         pluginId: plugin.id,
         pluginKey: plugin.pluginKey,
         previousVersion: plugin.version,
         version: result?.version ?? plugin.version,
         targetVersion: version ?? null,
+        acknowledgedCapabilities: acknowledgeCapabilities ?? null,
       });
       publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "upgraded" } });
       res.json(result);
     } catch (err) {
+      if (err instanceof PluginCapabilityEscalationError) {
+        res.status(409).json({
+          error: err.message,
+          code: err.code,
+          escalated: err.escalated,
+          previousCapabilities: err.previousCapabilities,
+          nextCapabilities: err.nextCapabilities,
+        });
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: message });
     }

@@ -728,6 +728,22 @@ export const installPluginSchema = z.object({
 
 export type InstallPlugin = z.infer<typeof installPluginSchema>;
 
+/**
+ * Schema for the POST /api/plugins/:pluginId/upgrade body and the optional
+ * approval payload accepted by POST /api/plugins/library/install when the
+ * library install lands on the upgrade code path.
+ *
+ * `acknowledgeCapabilities` allows the operator to approve a capability
+ * escalation surfaced by a prior attempt — the server enforces that every
+ * escalated capability is present in the supplied list before proceeding.
+ */
+export const upgradePluginSchema = z.object({
+  version: z.string().min(1).optional(),
+  acknowledgeCapabilities: z.array(z.string().min(1)).optional(),
+});
+
+export type UpgradePlugin = z.infer<typeof upgradePluginSchema>;
+
 // ---------------------------------------------------------------------------
 // Plugin config (instance configuration) schemas
 // ---------------------------------------------------------------------------

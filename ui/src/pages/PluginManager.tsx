@@ -8,10 +8,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PluginRecord } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
-import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, Sparkles, Trash } from "lucide-react";
+import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
-import { pluginsApi } from "@/api/plugins";
+import { pluginsApi, asCapabilityEscalationError, type CapabilityEscalationDetails } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -91,6 +91,16 @@ export function PluginManager() {
   const [uninstallPluginName, setUninstallPluginName] = useState<string>("");
   const [errorDetailsPlugin, setErrorDetailsPlugin] = useState<PluginRecord | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  // When the upgrade path returns a 409 capability_escalation, park the
+  // pluginKey + escalation details so the dialog can present them to the
+  // operator and resubmit with `acknowledgeCapabilities` on confirm.
+  const [capabilityPrompt, setCapabilityPrompt] = useState<
+    | {
+        pluginKey: string;
+        details: CapabilityEscalationDetails;
+      }
+    | null
+  >(null);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -205,15 +215,24 @@ export function PluginManager() {
   });
 
   const installFromLibraryMutation = useMutation({
-    mutationFn: (id: string) => pluginsApi.installFromLibrary(id),
+    mutationFn: (params: { id: string; acknowledgeCapabilities?: string[] }) =>
+      pluginsApi.installFromLibrary(params.id, params.acknowledgeCapabilities),
     onSuccess: (record) => {
       invalidatePluginQueries();
+      setCapabilityPrompt(null);
       pushToast({
         title: `Installed ${record.manifestJson.displayName ?? record.packageName} v${record.version}`,
         tone: "success",
       });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, variables) => {
+      const escalation = asCapabilityEscalationError(err);
+      if (escalation) {
+        // Surface a confirm dialog rather than a toast — the operator needs
+        // to see exactly which capabilities are being granted before approval.
+        setCapabilityPrompt({ pluginKey: variables.id, details: escalation });
+        return;
+      }
       pushToast({ title: "Failed to install plugin", body: err.message, tone: "error" });
     },
   });
@@ -301,9 +320,10 @@ export function PluginManager() {
     setBulkUpdating(true);
     for (const row of updatableRows) {
       try {
-        await installFromLibraryMutation.mutateAsync(row.pluginKey);
+        await installFromLibraryMutation.mutateAsync({ id: row.pluginKey });
       } catch {
-        // individual onError toast already fired
+        // individual onError handler already pushed a toast or parked an
+        // escalation prompt; "Update all" continues with the next row.
       }
     }
     setBulkUpdating(false);
@@ -535,7 +555,7 @@ export function PluginManager() {
               );
               const libraryInFlight =
                 installFromLibraryMutation.isPending &&
-                installFromLibraryMutation.variables === row.pluginKey;
+                installFromLibraryMutation.variables?.id === row.pluginKey;
 
               return (
                 <li key={row.pluginKey}>
@@ -641,7 +661,7 @@ export function PluginManager() {
                           <Button
                             size="sm"
                             className="gap-2 bg-green-600 text-white hover:bg-green-700"
-                            onClick={() => installFromLibraryMutation.mutate(row.pluginKey)}
+                            onClick={() => installFromLibraryMutation.mutate({ id: row.pluginKey })}
                             disabled={libraryInFlight}
                           >
                             <Download className="h-4 w-4" />
@@ -652,7 +672,7 @@ export function PluginManager() {
                           <Button
                             size="sm"
                             className="gap-2 bg-green-600 text-white hover:bg-green-700"
-                            onClick={() => installFromLibraryMutation.mutate(row.pluginKey)}
+                            onClick={() => installFromLibraryMutation.mutate({ id: row.pluginKey })}
                             disabled={libraryInFlight || bulkUpdating}
                           >
                             <RefreshCw className={cn("h-4 w-4", libraryInFlight && "animate-spin")} />
@@ -907,6 +927,20 @@ export function PluginManager() {
         </DialogContent>
       </Dialog>
 
+      <CapabilityApprovalDialog
+        prompt={capabilityPrompt}
+        unifiedRows={unifiedRows}
+        isPending={installFromLibraryMutation.isPending}
+        onCancel={() => setCapabilityPrompt(null)}
+        onApprove={() => {
+          if (!capabilityPrompt) return;
+          installFromLibraryMutation.mutate({
+            id: capabilityPrompt.pluginKey,
+            acknowledgeCapabilities: capabilityPrompt.details.escalated,
+          });
+        }}
+      />
+
       <Dialog
         open={errorDetailsPlugin !== null}
         onOpenChange={(open) => { if (!open) setErrorDetailsPlugin(null); }}
@@ -947,5 +981,96 @@ export function PluginManager() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * Confirm dialog rendered when an upgrade request comes back with the
+ * structured capability_escalation 409. Shows the operator the new
+ * capabilities the plugin would gain, and on approval re-fires the install
+ * mutation with `acknowledgeCapabilities` covering the escalated list.
+ */
+function CapabilityApprovalDialog(props: {
+  prompt:
+    | { pluginKey: string; details: CapabilityEscalationDetails }
+    | null;
+  unifiedRows: Array<{
+    pluginKey: string;
+    displayName: string;
+    libraryEntry: { version?: string | null } | null;
+    installedPlugin: PluginRecord | null;
+  }>;
+  isPending: boolean;
+  onCancel: () => void;
+  onApprove: () => void;
+}) {
+  const { prompt, unifiedRows, isPending, onCancel, onApprove } = props;
+  const row = prompt
+    ? unifiedRows.find((r) => r.pluginKey === prompt.pluginKey)
+    : undefined;
+  const displayName = row?.displayName ?? prompt?.pluginKey ?? "";
+  const currentVersion = row?.installedPlugin?.version ?? null;
+  const targetVersion = row?.libraryEntry?.version ?? null;
+  return (
+    <Dialog open={prompt !== null} onOpenChange={(open) => { if (!open) onCancel(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldAlert className="h-5 w-5 text-amber-600" />
+            New permissions required
+          </DialogTitle>
+          <DialogDescription>
+            {displayName}
+            {currentVersion && targetVersion
+              ? ` v${currentVersion} → v${targetVersion}`
+              : targetVersion
+                ? ` v${targetVersion}`
+                : ""}
+            {" "}is requesting capabilities the installed version does not have.
+            Review what the upgrade will be allowed to do before approving.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            New capabilities granted by this upgrade:
+          </p>
+          <ul className="space-y-1.5 text-sm">
+            {prompt?.details.escalated.map((cap) => (
+              <li
+                key={cap}
+                className="rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-xs text-foreground/85"
+              >
+                {cap}
+              </li>
+            ))}
+          </ul>
+          {prompt?.details.previousCapabilities.length ? (
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">
+                Previously granted ({prompt.details.previousCapabilities.length})
+              </summary>
+              <ul className="mt-2 space-y-1 pl-2">
+                {prompt.details.previousCapabilities.map((cap) => (
+                  <li key={cap} className="font-mono">{cap}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button
+            className="gap-2 bg-amber-600 text-white hover:bg-amber-700"
+            onClick={onApprove}
+            disabled={isPending}
+          >
+            <ShieldAlert className="h-4 w-4" />
+            {isPending ? "Upgrading…" : "Approve & upgrade"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
