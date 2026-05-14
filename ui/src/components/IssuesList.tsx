@@ -143,17 +143,21 @@ function getInitialViewState(
   key: string,
   initialAssignees?: string[],
   defaultSortField?: IssueSortField,
+  initialStatuses?: IssueStatus[],
 ): IssueViewState {
   const hasStored = hasStoredViewState(key);
   const stored = getViewState(key);
   const base = !hasStored && defaultSortField
     ? { ...stored, sortField: defaultSortField, sortDir: "asc" as const }
     : stored;
-  if (!initialAssignees) return base;
+  const withStatusOverride = initialStatuses && initialStatuses.length > 0
+    ? { ...base, statuses: initialStatuses }
+    : base;
+  if (!initialAssignees) return withStatusOverride;
   return {
-    ...base,
+    ...withStatusOverride,
     assignees: initialAssignees,
-    statuses: [],
+    statuses: initialStatuses && initialStatuses.length > 0 ? initialStatuses : [],
   };
 }
 
@@ -162,13 +166,14 @@ function getInitialWorkspaceViewState(
   initialAssignees?: string[],
   initialWorkspaces?: string[],
   defaultSortField?: IssueSortField,
+  initialStatuses?: IssueStatus[],
 ): IssueViewState {
-  const stored = getInitialViewState(key, initialAssignees, defaultSortField);
+  const stored = getInitialViewState(key, initialAssignees, defaultSortField, initialStatuses);
   if (!initialWorkspaces) return stored;
   return {
     ...stored,
     workspaces: initialWorkspaces,
-    statuses: [],
+    statuses: initialStatuses && initialStatuses.length > 0 ? initialStatuses : [],
   };
 }
 
@@ -331,6 +336,7 @@ interface IssuesListProps {
   issueLinkState?: unknown;
   initialAssignees?: string[];
   initialWorkspaces?: string[];
+  initialStatuses?: IssueStatus[];
   initialSearch?: string;
   searchFilters?: Omit<IssueListRequestFilters, "q" | "projectId" | "limit" | "includeRoutineExecutions">;
   searchWithinLoadedIssues?: boolean;
@@ -501,6 +507,7 @@ export function IssuesList({
   issueLinkState,
   initialAssignees,
   initialWorkspaces,
+  initialStatuses,
   initialSearch,
   searchFilters,
   searchWithinLoadedIssues = false,
@@ -538,9 +545,10 @@ export function IssuesList({
   const scopedKey = selectedCompanyId ? `${viewStateKey}:${selectedCompanyId}` : viewStateKey;
   const initialAssigneesKey = initialAssignees?.join("|") ?? "";
   const initialWorkspacesKey = initialWorkspaces?.join("|") ?? "";
+  const initialStatusesKey = initialStatuses?.join("|") ?? "";
 
   const [viewState, setViewState] = useState<IssueViewState>(() =>
-    getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField),
+    getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField, initialStatuses),
   );
   const [assigneePickerIssueId, setAssigneePickerIssueId] = useState<string | null>(null);
   const [assigneeSearch, setAssigneeSearch] = useState("");
@@ -556,14 +564,14 @@ export function IssuesList({
   }, [initialSearch]);
 
   // Reload view state whenever the persisted context changes.
-  const prevViewStateContextKey = useRef(`${scopedKey}::${initialAssigneesKey}::${initialWorkspacesKey}`);
+  const prevViewStateContextKey = useRef(`${scopedKey}::${initialAssigneesKey}::${initialWorkspacesKey}::${initialStatusesKey}`);
   useEffect(() => {
-    const nextContextKey = `${scopedKey}::${initialAssigneesKey}::${initialWorkspacesKey}`;
+    const nextContextKey = `${scopedKey}::${initialAssigneesKey}::${initialWorkspacesKey}::${initialStatusesKey}`;
     if (prevViewStateContextKey.current !== nextContextKey) {
       prevViewStateContextKey.current = nextContextKey;
-      setViewState(getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField));
+      setViewState(getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField, initialStatuses));
     }
-  }, [scopedKey, initialAssignees, initialAssigneesKey, initialWorkspaces, initialWorkspacesKey, defaultSortField]);
+  }, [scopedKey, initialAssignees, initialAssigneesKey, initialWorkspaces, initialWorkspacesKey, initialStatuses, initialStatusesKey, defaultSortField]);
 
   const prevKanbanFieldsScopedKey = useRef(scopedKey);
   useEffect(() => {

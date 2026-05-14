@@ -13,6 +13,7 @@ import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
 import { IssuesList } from "../components/IssuesList";
 import { CircleDot } from "lucide-react";
+import { ISSUE_STATUSES, type IssueStatus } from "@paperclipai/shared";
 
 const WORKSPACE_FILTER_ISSUE_LIMIT = 1000;
 
@@ -41,6 +42,14 @@ export function Issues() {
   const participantAgentId = searchParams.get("participantAgentId") ?? undefined;
   const initialWorkspaces = searchParams.getAll("workspace").filter((workspaceId) => workspaceId.length > 0);
   const workspaceIdFilter = initialWorkspaces.length === 1 ? initialWorkspaces[0] : undefined;
+  const knownIssueStatuses = useMemo(() => new Set<string>(ISSUE_STATUSES), []);
+  const initialStatuses = useMemo<IssueStatus[]>(
+    () =>
+      searchParams
+        .getAll("status")
+        .filter((s): s is IssueStatus => knownIssueStatuses.has(s)),
+    [searchParams, knownIssueStatuses],
+  );
   const handleSearchChange = useCallback((search: string) => {
     const nextUrl = buildIssuesSearchUrl(window.location.href, search);
     if (!nextUrl) return;
@@ -124,6 +133,7 @@ export function Issues() {
       issueLinkState={issueLinkState}
       initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
       initialWorkspaces={initialWorkspaces.length > 0 ? initialWorkspaces : undefined}
+      initialStatuses={initialStatuses.length > 0 ? initialStatuses : undefined}
       initialSearch={initialSearch}
       onSearchChange={handleSearchChange}
       enableRoutineVisibilityFilter

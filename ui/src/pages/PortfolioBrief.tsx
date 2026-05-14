@@ -1471,6 +1471,13 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
   const spendPct = summary.costs.monthUtilizationPercent ?? 0;
   const hasError = summary.agents.error > 0;
   const hasPending = summary.pendingApprovals > 0;
+  const prefix = company.issuePrefix;
+
+  // Clicks on inner Links must not also fire the outer card onSelect handler,
+  // otherwise the user lands on /brief instead of the filtered list.
+  const stopCardClick = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+  };
 
   return (
     <div
@@ -1500,25 +1507,71 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
       <div className="flex items-center gap-3 mb-2 text-sm">
         <span className="text-[10px] font-medium uppercase text-muted-foreground w-14 shrink-0">Agents</span>
         <div className="flex items-center gap-2 flex-wrap">
-          <HealthStat label="running" value={summary.agents.running} />
-          <HealthStat label="active" value={summary.agents.active} />
-          <HealthStat label="paused" value={summary.agents.paused} tone={summary.agents.paused > 0 ? "warn" : undefined} />
-          <HealthStat label="error" value={summary.agents.error} tone={summary.agents.error > 0 ? "danger" : undefined} />
+          <HealthStat
+            label="running"
+            value={summary.agents.running}
+            colorClass="text-cyan-600 dark:text-cyan-400"
+            to={`/${prefix}/agents/active`}
+            onClickCapture={stopCardClick}
+          />
+          <HealthStat
+            label="active"
+            value={summary.agents.active}
+            colorClass="text-muted-foreground"
+            to={`/${prefix}/agents/active`}
+            onClickCapture={stopCardClick}
+          />
+          <HealthStat
+            label="paused"
+            value={summary.agents.paused}
+            colorClass="text-yellow-600 dark:text-yellow-400"
+            to={`/${prefix}/agents/paused`}
+            onClickCapture={stopCardClick}
+          />
+          <HealthStat
+            label="error"
+            value={summary.agents.error}
+            colorClass="text-red-600 dark:text-red-400"
+            to={`/${prefix}/agents/error`}
+            onClickCapture={stopCardClick}
+          />
         </div>
       </div>
 
       <div className="flex items-center gap-3 mb-2 text-sm">
         <span className="text-[10px] font-medium uppercase text-muted-foreground w-14 shrink-0">Issues</span>
         <div className="flex items-center gap-2 flex-wrap">
-          <HealthStat label="open" value={summary.tasks.open} />
-          <HealthStat label="active" value={summary.tasks.inProgress} />
-          <HealthStat label="blocked" value={summary.tasks.blocked} tone={summary.tasks.blocked > 0 ? "warn" : undefined} />
+          <HealthStat
+            label="open"
+            value={summary.tasks.open}
+            colorClass="text-blue-600 dark:text-blue-400"
+            to={`/${prefix}/issues?status=todo`}
+            onClickCapture={stopCardClick}
+          />
+          <HealthStat
+            label="active"
+            value={summary.tasks.inProgress}
+            colorClass="text-yellow-600 dark:text-yellow-400"
+            to={`/${prefix}/issues?status=in_progress`}
+            onClickCapture={stopCardClick}
+          />
+          <HealthStat
+            label="blocked"
+            value={summary.tasks.blocked}
+            colorClass="text-red-600 dark:text-red-400"
+            to={`/${prefix}/issues?status=blocked`}
+            onClickCapture={stopCardClick}
+          />
         </div>
       </div>
 
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50 text-xs text-muted-foreground">
-        <span>
-          <span className="font-semibold text-foreground tabular-nums">
+        <Link
+          to={`/${prefix}/costs`}
+          onClick={stopCardClick}
+          className="hover:bg-accent/40 rounded-sm -mx-1 px-1 no-underline text-inherit"
+        >
+          <span className="font-semibold text-foreground tabular-nums hover:underline underline-offset-2">
             {formatCents(summary.costs.monthSpendCents)}
           </span>
           {summary.costs.monthBudgetCents > 0 && (
@@ -1527,7 +1580,7 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
             </span>
           )}
           {" MTD"}
-        </span>
+        </Link>
         {summary.pendingApprovals > 0 && (
           <span className="text-amber-500 font-medium">
             {summary.pendingApprovals} approval{summary.pendingApprovals !== 1 ? "s" : ""} pending
@@ -1538,19 +1591,31 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
   );
 }
 
-function HealthStat({ label, value, tone }: { label: string; value: number; tone?: "danger" | "warn" }) {
-  const color =
-    tone === "danger"
-      ? "text-red-500"
-      : tone === "warn"
-        ? "text-yellow-500"
-        : "text-muted-foreground";
+interface HealthStatProps {
+  label: string;
+  value: number;
+  colorClass: string;
+  to: string;
+  onClickCapture?: (e: React.MouseEvent) => void;
+}
+
+function HealthStat({ label, value, colorClass, to, onClickCapture }: HealthStatProps) {
+  const isZero = value === 0;
   return (
-    <span className="flex items-center gap-0.5">
-      <span className={cn("font-semibold tabular-nums", color, value === 0 && "text-muted-foreground/50")}>
+    <Link
+      to={to}
+      onClick={onClickCapture}
+      className="flex items-center gap-0.5 hover:bg-accent/40 rounded-sm -mx-1 px-1 no-underline text-inherit"
+    >
+      <span
+        className={cn(
+          "font-semibold tabular-nums hover:underline underline-offset-2",
+          isZero ? "text-muted-foreground/50" : colorClass,
+        )}
+      >
         {value}
       </span>
       <span className="text-[10px] text-muted-foreground">{label}</span>
-    </span>
+    </Link>
   );
 }
