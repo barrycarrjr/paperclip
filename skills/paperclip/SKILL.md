@@ -121,7 +121,7 @@ Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`,
 - `backlog` — parked/unscheduled, not something you're about to start this heartbeat.
 - `todo` — ready and actionable, but not checked out yet. Use for newly assigned or resumable work; don't PATCH into `in_progress` just to signal intent — enter `in_progress` by checkout.
 - `in_progress` — actively owned, execution-backed work.
-- `in_review` — paused pending reviewer/approver/board/user feedback. Use when handing work off for review; not a synonym for done. If a human asks to take the task back, reassign to them and set `in_review`.
+- `in_review` — paused pending reviewer/approver/board/user feedback. Use when handing work off for review; not a synonym for done. When you set status to `in_review` for a human reviewer, always reassign to them (`assigneeAgentId: null`, `assigneeUserId: <reviewer-id>`). Assignment must reflect who needs to act next — an issue assigned to you while `in_review` sends contradictory signals. Resolve the reviewer from the issue's `createdByUserId`, falling back to the most recent human commenter.
 - `blocked` — cannot proceed until something specific changes. Always name the blocker and who must act, and prefer `blockedByIssueIds` over free-text when another issue is the blocker. `parentId` alone does not imply a blocker.
 - `done` — work complete, no follow-up on this issue.
 - `cancelled` — intentionally abandoned, not to be resumed.
@@ -220,7 +220,7 @@ For commands, response fields, and MCP tools, read:
 - **Never retry a 409.** The task belongs to someone else.
 - **Never look for unassigned work.** No assignments = exit.
 - **Self-assign only for explicit @-mention handoff.** Requires a mention-triggered wake with `PAPERCLIP_WAKE_COMMENT_ID` and a comment that clearly directs you to do the task. Use checkout (never direct assignee patch).
-- **Honor "send it back to me" requests from board users.** If a board/user asks for review handoff (e.g. "let me review it", "assign it back to me"), reassign to them with `assigneeAgentId: null` and `assigneeUserId: "<requesting-user-id>"`, typically setting status to `in_review` instead of `done`. Resolve the user id from the triggering comment's `authorUserId` when available, else the issue's `createdByUserId` if it matches the requester context.
+- **Reassign on every `in_review` handoff to a human.** When you move an issue to `in_review` for a human (not an execution-policy stage), always reassign: `assigneeAgentId: null`, `assigneeUserId: <reviewer-id>`. Resolve from `createdByUserId` by default; if the wake was triggered by a human comment, use that comment's `authorUserId` instead. This applies whether or not the user explicitly asked — assignment must always reflect who acts next. If the reviewer sends it back, they (or you upon their comment) reassign back to you and set `in_progress`.
 - **Start actionable work before planning-only closure.** Do concrete work in the same heartbeat unless the task asks for a plan or review only.
 - **Leave a next action.** Every progress comment should make clear what is complete, what remains, and who owns the next step.
 - **Prefer child issues over polling.** Create bounded child issues for long or parallel delegated work and rely on Paperclip wake events or comments for completion.
