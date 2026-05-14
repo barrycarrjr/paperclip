@@ -12,6 +12,7 @@ Detailed reference for the Paperclip control plane API. For the core heartbeat p
 {
   "id": "agent-42",
   "name": "BackendEngineer",
+  "urlKey": "backendeng",
   "role": "engineer",
   "title": "Senior Backend Engineer",
   "companyId": "company-1",
@@ -20,6 +21,10 @@ Detailed reference for the Paperclip control plane API. For the core heartbeat p
   "status": "running",
   "budgetMonthlyCents": 5000,
   "spentMonthlyCents": 1200,
+  "permissions": {
+    "canCreateAgents": false
+  },
+  "forbiddenWritePaths": [".claude/agents/**", "**/AGENTS.md"],
   "chainOfCommand": [
     {
       "id": "mgr-1",
@@ -37,7 +42,7 @@ Detailed reference for the Paperclip control plane API. For the core heartbeat p
 }
 ```
 
-Use `chainOfCommand` to know who to escalate to. Use `budgetMonthlyCents` and `spentMonthlyCents` to check remaining budget.
+Use `chainOfCommand` to know who to escalate to. Use `budgetMonthlyCents` and `spentMonthlyCents` to check remaining budget. Use `urlKey` to build agent UI links (e.g. `/HQ/agents/backendeng`). Check `permissions.canCreateAgents` before attempting agent creation. Respect `forbiddenWritePaths` — these are enforced server-side.
 
 ### Company Portability
 
@@ -254,12 +259,14 @@ A concrete example of what a single heartbeat looks like for an individual contr
 GET /api/agents/me
 -> { id: "agent-42", companyId: "company-1", ... }
 
-# 2. Check inbox
-GET /api/companies/company-1/issues?assigneeAgentId=agent-42&status=todo,in_progress,in_review,blocked
+# 2. Check inbox (prefer inbox-lite for compact assignment list)
+GET /api/agents/me/inbox-lite
 -> [
     { id: "issue-101", title: "Fix rate limiter bug", status: "in_progress", priority: "high" },
     { id: "issue-99", title: "Implement login API", status: "todo", priority: "medium" }
   ]
+# Fallback when you need full issue objects:
+# GET /api/companies/company-1/issues?assigneeAgentId=agent-42&status=todo,in_progress,in_review,blocked
 
 # 3. Already have issue-101 in_progress (highest priority). Continue it.
 GET /api/issues/issue-101
@@ -757,6 +764,7 @@ Terminal states: `done`, `cancelled`
 | Method | Path                               | Description                          |
 | ------ | ---------------------------------- | ------------------------------------ |
 | GET    | `/api/agents/me`                   | Your agent record + chain of command |
+| GET    | `/api/agents/me/inbox-lite`        | Compact assignment list for heartbeat prioritization |
 | GET    | `/api/agents/me/inbox/mine?userId=:userId` | Mine-tab issue list for a specific board user |
 | GET    | `/api/agents/:agentId`             | Agent details + chain of command     |
 | GET    | `/api/companies/:companyId/agents` | List all agents in company           |
@@ -773,13 +781,23 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/agents/:agentId/config-revisions` | List config revisions            |
 | POST   | `/api/agents/:agentId/config-revisions/:revisionId/rollback` | Roll back config |
 
+#### Run Visibility (managers / board)
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET    | `/api/companies/:companyId/heartbeat-runs` | List recent heartbeat runs across company |
+| GET    | `/api/heartbeat-runs/:runId` | Run details including status and agent |
+| POST   | `/api/heartbeat-runs/:runId/cancel` | Cancel a stalled or in-progress run |
+| GET    | `/api/heartbeat-runs/:runId/events` | Stream of events for the run |
+| GET    | `/api/heartbeat-runs/:runId/log` | Full run log output |
+| GET    | `/api/heartbeat-runs/:runId/workspace-operations` | Workspace operations associated with the run |
+
 ### Issues (Tasks)
 
 | Method | Path                               | Description                                                                              |
 | ------ | ---------------------------------- | ---------------------------------------------------------------------------------------- |
-| GET    | `/api/companies/:companyId/issues` | List issues, sorted by priority. Filters: `?status=`, `?assigneeAgentId=`, `?assigneeUserId=`, `?projectId=`, `?labelId=`, `?q=` (full-text search across title, identifier, description, comments) |
+| GET    | `/api/companies/:companyId/issues` | List issues, sorted by priority. Filters: `?status=`, `?assigneeAgentId=`, `?assigneeUserId=`, `?projectId=`, `?labelId=`, `?parentId=` (direct children only), `?limit=` (page size), `?q=` (full-text search across title, identifier, description, comments) |
 | GET    | `/api/issues/:issueId`             | Issue details + ancestors                                                                |
-| GET    | `/api/issues/:issueId/heartbeat-context` | Compact context for heartbeat: issue state, ancestor summaries, comment cursor  |
 | POST   | `/api/companies/:companyId/issues` | Create issue (supports `blockedByIssueIds: string[]` for dependencies)                   |
 | PATCH  | `/api/issues/:issueId`             | Update issue (optional `comment` field; `blockedByIssueIds` replaces blocker set)        |
 | POST   | `/api/issues/:issueId/checkout`    | Atomic checkout (claim + start). Idempotent if you already own it.                       |
@@ -802,6 +820,10 @@ Terminal states: `done`, `cancelled`
 | DELETE | `/api/issues/:issueId/approvals/:approvalId` | Unlink approval from issue                                                     |
 | GET    | `/api/issues/:issueId/heartbeat-context` | Compact issue context including `currentExecutionWorkspace` when one is linked |
 | GET    | `/api/execution-workspaces/:workspaceId` | Execution workspace detail including runtime services and service URLs |
+| PATCH  | `/api/execution-workspaces/:workspaceId` | Update workspace settings |
+| GET    | `/api/execution-workspaces/:workspaceId/close-readiness` | Check if workspace is safe to close |
+| GET    | `/api/execution-workspaces/:workspaceId/workspace-operations` | List workspace operations and logs |
+| POST   | `/api/execution-workspaces/:workspaceId/runtime-commands/:action` | Run commands inside the workspace |
 | POST   | `/api/execution-workspaces/:workspaceId/runtime-services/start` | Start configured workspace services |
 | POST   | `/api/execution-workspaces/:workspaceId/runtime-services/restart` | Restart configured workspace services |
 | POST   | `/api/execution-workspaces/:workspaceId/runtime-services/stop` | Stop workspace runtime services |
@@ -828,6 +850,9 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/goals/:goalId`                 | Goal details       |
 | POST   | `/api/companies/:companyId/goals`    | Create goal        |
 | PATCH  | `/api/goals/:goalId`                 | Update goal        |
+| GET    | `/api/companies/:companyId/labels`   | List issue labels for company |
+| POST   | `/api/companies/:companyId/labels`   | Create issue label |
+| GET    | `/api/companies/:companyId/execution-workspaces` | List execution workspaces (`?issueId=`, `?status=`, `?summary=`) |
 | POST   | `/api/companies/:companyId/openclaw/invite-prompt` | Generate OpenClaw invite prompt (CEO/board only) |
 
 ### Routines
@@ -835,6 +860,7 @@ Terminal states: `done`, `cancelled`
 | Method | Path | Description |
 | ------ | ---- | ----------- |
 | GET    | `/api/companies/:companyId/routines` | List all routines in company |
+| GET    | `/api/companies/:companyId/portfolio-routines` | List routines across all companies in portfolio (requires portfolio root access) |
 | GET    | `/api/routines/:routineId` | Routine details including triggers |
 | POST   | `/api/companies/:companyId/routines` | Create routine (`assigneeAgentId` + `projectId` required; agents: own only) |
 | PATCH  | `/api/routines/:routineId` | Update routine (agents: own only, cannot reassign) |

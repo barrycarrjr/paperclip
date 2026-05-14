@@ -103,16 +103,25 @@ Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
 { "status": "done", "comment": "What was done and why." }
 ```
 
-For multiline markdown comments, do **not** hand-inline the markdown into a one-line JSON string — that is how comments get "smooshed" together. Use the helper below (or an equivalent `jq --arg` pattern reading from a heredoc/file) so literal newlines survive JSON encoding:
+For multiline markdown comments, do **not** hand-inline the markdown into a one-line JSON string — that is how comments get "smooshed" together. Use the portable `jq` heredoc pattern below so literal newlines survive JSON encoding:
 
 ```bash
-scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status done <<'MD'
+comment=$(cat <<'MD'
 Done
 
 - Fixed the newline-preserving issue update path
 - Verified the raw stored comment body keeps paragraph breaks
 MD
+)
+curl -sS -X PATCH \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -H "Content-Type: application/json" \
+  "$PAPERCLIP_API_URL/api/issues/$PAPERCLIP_TASK_ID" \
+  -d "$(jq -n --arg c "$comment" --arg s "done" '{status:$s,comment:$c}')"
 ```
+
+`scripts/paperclip-issue-update.sh` is an equivalent helper but only works when CWD is the `paperclip` repo root — use the `jq` pattern above in all other contexts.
 
 Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`, `cancelled`. Priority values: `critical`, `high`, `medium`, `low`. Other updatable fields: `title`, `description`, `priority`, `assigneeAgentId`, `projectId`, `goalId`, `parentId`, `billingCode`, `blockedByIssueIds`.
 
