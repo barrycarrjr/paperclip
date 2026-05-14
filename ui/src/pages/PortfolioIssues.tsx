@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
-import { Bot, ChevronDown, ChevronRight, ExternalLink, Plus, Check, Tag, User } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Plus, Check, Tag } from "lucide-react";
 import type { Agent, Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
 import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
@@ -8,8 +8,10 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialog } from "../context/DialogContext";
-import { StatusIcon } from "../components/StatusIcon";
+import { AssigneePicker } from "../components/AssigneePicker";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { PriorityIcon } from "../components/PriorityIcon";
+import { StatusIcon } from "../components/StatusIcon";
 import { Link } from "@/lib/router";
 import { timeAgo } from "../lib/timeAgo";
 import { priorityColor, priorityColorDefault } from "../lib/status-colors";
@@ -124,7 +126,7 @@ interface IssueRowProps {
   agentName: string | null;
   labels: IssueLabel[];
   onToggle: () => void;
-  onStatusChange: (status: string) => void;
+  onIssueUpdate: (partial: Record<string, unknown>) => void;
   onOpenPreview: (issue: Issue) => void;
 }
 
@@ -141,7 +143,7 @@ function PortfolioIssueRow({
   agentName,
   labels,
   onToggle,
-  onStatusChange,
+  onIssueUpdate,
   onOpenPreview,
 }: IssueRowProps) {
   const issueLabels = (issue.labelIds ?? [])
@@ -157,7 +159,6 @@ function PortfolioIssueRow({
     : issue.assigneeUserId
       ? "User"
       : null;
-  const AssigneeIcon = agentName ? Bot : User;
 
   return (
     <Tooltip>
@@ -189,7 +190,7 @@ function PortfolioIssueRow({
             <StatusIcon
               status={issue.status}
               blockerAttention={issue.blockerAttention}
-              onChange={onStatusChange}
+              onChange={(status) => onIssueUpdate({ status })}
               className="h-4 w-4 shrink-0"
             />
           </span>
@@ -235,27 +236,35 @@ function PortfolioIssueRow({
             </span>
           )}
 
-          {assigneeLabel ? (
-            <span
-              className="hidden lg:inline-flex items-center gap-1 text-[11px] text-muted-foreground shrink-0 max-w-[120px]"
-              title={`Assigned to ${assigneeLabel}`}
-            >
-              <AssigneeIcon className="h-3 w-3 shrink-0" />
-              <span className="truncate">{assigneeLabel}</span>
-            </span>
-          ) : (
-            <span className="hidden lg:inline-flex items-center text-[11px] text-muted-foreground/50 shrink-0 italic">
-              unassigned
-            </span>
-          )}
+          <span
+            onClick={(e) => e.stopPropagation()}
+            className="hidden lg:inline-flex shrink-0"
+            title={assigneeLabel ? `Assigned to ${assigneeLabel}` : "Unassigned"}
+          >
+            <AssigneePicker
+              compact
+              companyId={issue.companyId}
+              assigneeAgentId={issue.assigneeAgentId}
+              assigneeUserId={issue.assigneeUserId}
+              createdByUserId={issue.createdByUserId}
+              assigneeAgentName={agentName}
+              onChange={(next) => onIssueUpdate({ ...next })}
+            />
+          </span>
 
           <span
+            onClick={(e) => e.stopPropagation()}
             className={cn(
               "text-[10px] font-semibold uppercase shrink-0",
               priorityColor[issue.priority] ?? priorityColorDefault,
             )}
+            title={`Priority: ${issue.priority}`}
           >
-            {issue.priority?.slice(0, 4).toUpperCase()}
+            <PriorityIcon
+              priority={issue.priority}
+              onChange={(priority) => onIssueUpdate({ priority })}
+              className="h-3.5 w-3.5"
+            />
           </span>
 
           <span className="text-[11px] text-muted-foreground shrink-0 w-14 text-right">
@@ -316,7 +325,7 @@ interface CompanySectionProps {
   onToggleAll: (companyId: string, issueIds: string[]) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  onStatusChange: (issueId: string, status: string) => void;
+  onIssueUpdate: (issueId: string, partial: Record<string, unknown>) => void;
   onNewIssue: (companyId: string) => void;
   onOpenPreview: (issue: Issue) => void;
 }
@@ -331,7 +340,7 @@ function CompanySection({
   onToggleAll,
   collapsed,
   onToggleCollapse,
-  onStatusChange,
+  onIssueUpdate,
   onNewIssue,
   onOpenPreview,
 }: CompanySectionProps) {
@@ -386,7 +395,7 @@ function CompanySection({
               agentName={issue.assigneeAgentId ? agentNameById.get(issue.assigneeAgentId) ?? null : null}
               labels={labels}
               onToggle={() => onToggleIssue(issue.id)}
-              onStatusChange={(status) => onStatusChange(issue.id, status)}
+              onIssueUpdate={(partial) => onIssueUpdate(issue.id, partial)}
               onOpenPreview={onOpenPreview}
             />
           ))}
@@ -697,12 +706,24 @@ export function PortfolioIssues() {
   );
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      issuesApi.update(id, { status }),
-    onSuccess: () => {
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      issuesApi.update(id, data),
+    onSuccess: (updated, vars) => {
+      // Merge the server response into the preview detail cache so the open
+      // preview pane reflects the change without a refetch-flash.
+      queryClient.setQueryData<Issue | undefined>(
+        ["issue-preview", "detail", vars.id],
+        (prev) => prev ? { ...prev, ...updated } : updated,
+      );
       queryClient.invalidateQueries({ queryKey: ["portfolio-issues", selectedCompanyId] });
     },
   });
+
+  const handleIssueUpdate = useCallback(
+    (id: string, partial: Record<string, unknown>) =>
+      updateMutation.mutateAsync({ id, data: partial }),
+    [updateMutation],
+  );
 
   const commentMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: string }) =>
@@ -741,10 +762,6 @@ export function PortfolioIssues() {
       else next.add(companyId);
       return next;
     });
-  }
-
-  function handleStatusChange(issueId: string, status: string) {
-    updateMutation.mutate({ id: issueId, status });
   }
 
   async function handleBulkStatusChange(status: string) {
@@ -856,7 +873,7 @@ export function PortfolioIssues() {
                 onToggleAll={handleToggleAll}
                 collapsed={collapsedIds.has(company.id)}
                 onToggleCollapse={() => handleToggleCollapse(company.id)}
-                onStatusChange={handleStatusChange}
+                onIssueUpdate={handleIssueUpdate}
                 onNewIssue={handleNewIssue}
                 onOpenPreview={(issue) => setPreviewIssue(issue)}
               />
@@ -893,6 +910,7 @@ export function PortfolioIssues() {
         }
         agentNameById={agentNameById}
         labels={previewIssue ? labelsByCompanyId.get(previewIssue.companyId) ?? [] : []}
+        onIssueUpdate={handleIssueUpdate}
         onOpenChange={(open) => {
           if (!open) setPreviewIssue(null);
         }}

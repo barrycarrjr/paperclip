@@ -1,14 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
-import { Bot, ExternalLink, MessageSquare, User } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, MessageSquare, Send } from "lucide-react";
 import type { Issue, IssueComment, IssueLabel } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { issuesApi } from "../api/issues";
+import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { StatusIcon } from "./StatusIcon";
+import { Textarea } from "@/components/ui/textarea";
+import { AssigneePicker } from "./AssigneePicker";
+import { InlineEditor } from "./InlineEditor";
+import { LabelsPicker } from "./LabelsPicker";
 import { MarkdownBody } from "./MarkdownBody";
-import { priorityColor, priorityColorDefault } from "../lib/status-colors";
+import { PriorityIcon } from "./PriorityIcon";
+import { StatusIcon } from "./StatusIcon";
 import { timeAgo } from "../lib/timeAgo";
-import { cn } from "../lib/utils";
 
 export interface IssuePreviewSheetProps {
   /** Issue to preview, or null to keep the sheet closed. */
@@ -21,6 +26,8 @@ export interface IssuePreviewSheetProps {
   labels: IssueLabel[];
   /** Closes the sheet. Triggered by Radix on overlay/Escape/close-button. */
   onOpenChange: (open: boolean) => void;
+  /** Applies an inline edit to the issue (status, priority, assignee, labels, title, description). */
+  onIssueUpdate: (issueId: string, partial: Record<string, unknown>) => Promise<unknown>;
 }
 
 const STATUS_LABEL_OVERRIDES: Record<string, string> = {
@@ -38,8 +45,11 @@ export function IssuePreviewSheet({
   agentNameById,
   labels,
   onOpenChange,
+  onIssueUpdate,
 }: IssuePreviewSheetProps) {
   const open = !!issue;
+  const queryClient = useQueryClient();
+  const [commentDraft, setCommentDraft] = useState("");
 
   // Re-fetch the issue so the description and metadata are fresh — the list
   // payload may be cached. Comments are fetched on demand too.
@@ -58,11 +68,18 @@ export function IssuePreviewSheet({
     staleTime: 30_000,
   });
 
-  const issueLabels = effectiveIssue
-    ? (effectiveIssue.labelIds ?? [])
-        .map((id) => labels.find((l) => l.id === id))
-        .filter((l): l is IssueLabel => !!l)
-    : [];
+  const addComment = useMutation({
+    mutationFn: ({ issueId, body }: { issueId: string; body: string }) =>
+      issuesApi.addComment(issueId, body),
+    onSuccess: (_, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ["issue-preview", "comments", vars.issueId] });
+      void queryClient.invalidateQueries({ queryKey: ["issue-preview", "detail", vars.issueId] });
+      // The list query is keyed by [..., selectedCompanyId, ...]; invalidate the
+      // prefix so the row's updated-at refreshes too.
+      void queryClient.invalidateQueries({ queryKey: ["portfolio-issues"] });
+      setCommentDraft("");
+    },
+  });
 
   const assigneeAgentName = effectiveIssue?.assigneeAgentId
     ? agentNameById.get(effectiveIssue.assigneeAgentId) ?? null
@@ -70,6 +87,24 @@ export function IssuePreviewSheet({
   const fullPagePath = effectiveIssue && companyPrefix
     ? `/${companyPrefix}/issues/${effectiveIssue.id}`
     : null;
+
+  const handleUpdate = (partial: Record<string, unknown>) =>
+    effectiveIssue
+      ? onIssueUpdate(effectiveIssue.id, partial)
+      : Promise.resolve();
+
+  // Reset the draft when the sheet opens a different issue.
+  useEffect(() => {
+    setCommentDraft("");
+    addComment.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issue?.id]);
+
+  function submitComment() {
+    const body = commentDraft.trim();
+    if (!body || !effectiveIssue || addComment.isPending) return;
+    addComment.mutate({ issueId: effectiveIssue.id, body });
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -80,62 +115,56 @@ export function IssuePreviewSheet({
         {effectiveIssue && (
           <>
             <div className="flex items-start gap-3 px-5 pt-5 pb-4 border-b border-border shrink-0">
-              <StatusIcon
-                status={effectiveIssue.status}
-                blockerAttention={effectiveIssue.blockerAttention}
-                className="h-5 w-5 shrink-0 mt-0.5"
-              />
+              <span onClick={(e) => e.stopPropagation()} className="mt-0.5">
+                <StatusIcon
+                  status={effectiveIssue.status}
+                  blockerAttention={effectiveIssue.blockerAttention}
+                  onChange={(status) => handleUpdate({ status })}
+                  className="h-5 w-5 shrink-0"
+                />
+              </span>
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground mb-1">
                   <span className="font-mono">{effectiveIssue.identifier ?? ""}</span>
                   <span>·</span>
                   <span className="capitalize">{statusLabel(effectiveIssue.status)}</span>
                   <span>·</span>
-                  <span
-                    className={cn(
-                      "font-semibold uppercase tracking-wide",
-                      priorityColor[effectiveIssue.priority] ?? priorityColorDefault,
-                    )}
-                  >
-                    {effectiveIssue.priority}
+                  <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+                    <PriorityIcon
+                      priority={effectiveIssue.priority}
+                      onChange={(priority) => handleUpdate({ priority })}
+                      showLabel
+                    />
                   </span>
                 </div>
-                <h2 className="text-base font-semibold leading-snug break-words pr-8">
-                  {effectiveIssue.title}
-                </h2>
+                <InlineEditor
+                  value={effectiveIssue.title}
+                  onSave={(title) => handleUpdate({ title })}
+                  as="h2"
+                  className="text-base font-semibold leading-snug pr-8"
+                />
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                  {assigneeAgentName ? (
-                    <span className="inline-flex items-center gap-1">
-                      <Bot className="h-3 w-3" />
-                      {assigneeAgentName}
-                    </span>
-                  ) : effectiveIssue.assigneeUserId ? (
-                    <span className="inline-flex items-center gap-1">
-                      <User className="h-3 w-3" />
-                      User
-                    </span>
-                  ) : (
-                    <span className="italic opacity-60">Unassigned</span>
-                  )}
+                  <AssigneePicker
+                    companyId={effectiveIssue.companyId}
+                    assigneeAgentId={effectiveIssue.assigneeAgentId}
+                    assigneeUserId={effectiveIssue.assigneeUserId}
+                    createdByUserId={effectiveIssue.createdByUserId}
+                    assigneeAgentName={assigneeAgentName}
+                    onChange={(next) => handleUpdate({ ...next })}
+                    compact
+                  />
                   <span>Updated {timeAgo(effectiveIssue.updatedAt)}</span>
                   <span>Created {timeAgo(effectiveIssue.createdAt)}</span>
                 </div>
-                {issueLabels.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {issueLabels.map((l) => (
-                      <span
-                        key={l.id}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-full"
-                        style={{
-                          backgroundColor: (l.color || "#888") + "33",
-                          color: l.color || "inherit",
-                        }}
-                      >
-                        {l.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <div className="mt-2">
+                  <LabelsPicker
+                    companyId={effectiveIssue.companyId}
+                    labelIds={effectiveIssue.labelIds ?? []}
+                    availableLabels={labels}
+                    selectedLabels={effectiveIssue.labels ?? undefined}
+                    onChange={(labelIds) => handleUpdate({ labelIds })}
+                  />
+                </div>
               </div>
             </div>
 
@@ -144,13 +173,14 @@ export function IssuePreviewSheet({
                 <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-2">
                   Description
                 </h3>
-                {effectiveIssue.description?.trim() ? (
-                  <MarkdownBody className="text-sm leading-relaxed">
-                    {effectiveIssue.description}
-                  </MarkdownBody>
-                ) : (
-                  <p className="text-sm italic text-muted-foreground">No description.</p>
-                )}
+                <InlineEditor
+                  value={effectiveIssue.description ?? ""}
+                  onSave={(description) => handleUpdate({ description })}
+                  multiline
+                  foldable
+                  placeholder="Add a description..."
+                  className="text-sm leading-relaxed"
+                />
               </section>
 
               <section>
@@ -159,14 +189,43 @@ export function IssuePreviewSheet({
                   Recent comments
                 </h3>
                 {comments && comments.length > 0 ? (
-                  <ul className="space-y-3">
+                  <ul className="space-y-3 mb-3">
                     {comments.map((c) => (
                       <CommentItem key={c.id} comment={c} agentNameById={agentNameById} />
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm italic text-muted-foreground">No comments yet.</p>
+                  <p className="text-sm italic text-muted-foreground mb-3">No comments yet.</p>
                 )}
+                <div className="flex flex-col gap-2">
+                  <Textarea
+                    value={commentDraft}
+                    onChange={(e) => setCommentDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        submitComment();
+                      }
+                    }}
+                    placeholder="Write a comment… (⌘/Ctrl + Enter to send)"
+                    className="text-sm resize-none"
+                    rows={3}
+                    disabled={addComment.isPending}
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    {addComment.isError && (
+                      <span className="text-[11px] text-destructive">Could not send. Try again.</span>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={submitComment}
+                      disabled={!commentDraft.trim() || addComment.isPending}
+                    >
+                      <Send className="h-3.5 w-3.5 mr-1" />
+                      {addComment.isPending ? "Sending…" : "Send"}
+                    </Button>
+                  </div>
+                </div>
               </section>
             </div>
 
