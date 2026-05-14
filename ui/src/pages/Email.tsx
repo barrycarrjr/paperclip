@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Mail,
@@ -104,6 +104,141 @@ function clearDraft(key: string): void {
   }
 }
 
+// Self-contained textarea / input that owns its draft state internally. The
+// parent only re-renders when content crosses the empty/non-empty boundary
+// (for Send-button disabled state). Without this isolation, every keystroke
+// re-renders the entire Email page — including the inline MessageListBody
+// and ~50 row entries — which produces visible typing lag.
+interface DraftFieldHandle {
+  getValue: () => string;
+  setValue: (v: string) => void;
+  focus: () => void;
+}
+
+interface DraftTextareaProps {
+  initialValue?: string;
+  draftKey?: string | null;
+  placeholder?: string;
+  className?: string;
+  onContentChange?: (hasContent: boolean) => void;
+}
+
+const DraftTextarea = forwardRef<DraftFieldHandle, DraftTextareaProps>(
+  function DraftTextarea(
+    { initialValue = "", draftKey = null, placeholder, className, onContentChange },
+    ref,
+  ) {
+    const [value, setValue] = useState(initialValue);
+    const taRef = useRef<HTMLTextAreaElement>(null);
+    const hadContentRef = useRef(initialValue.trim().length > 0);
+    const onContentChangeRef = useRef(onContentChange);
+    onContentChangeRef.current = onContentChange;
+
+    function reportContent(v: string) {
+      const has = v.trim().length > 0;
+      if (has !== hadContentRef.current) {
+        hadContentRef.current = has;
+        onContentChangeRef.current?.(has);
+      }
+    }
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        getValue: () => value,
+        setValue: (v: string) => {
+          setValue(v);
+          reportContent(v);
+        },
+        focus: () => taRef.current?.focus(),
+      }),
+      [value],
+    );
+
+    useEffect(() => {
+      if (!draftKey) return;
+      const t = setTimeout(() => saveDraft(draftKey, value), DRAFT_DEBOUNCE_MS);
+      return () => clearTimeout(t);
+    }, [value, draftKey]);
+
+    return (
+      <Textarea
+        ref={taRef}
+        value={value}
+        onChange={(e) => {
+          const v = e.target.value;
+          setValue(v);
+          reportContent(v);
+        }}
+        placeholder={placeholder}
+        className={className}
+      />
+    );
+  },
+);
+
+interface DraftInputProps {
+  initialValue?: string;
+  draftKey?: string | null;
+  placeholder?: string;
+  className?: string;
+  onContentChange?: (hasContent: boolean) => void;
+}
+
+const DraftInput = forwardRef<DraftFieldHandle, DraftInputProps>(
+  function DraftInput(
+    { initialValue = "", draftKey = null, placeholder, className, onContentChange },
+    ref,
+  ) {
+    const [value, setValue] = useState(initialValue);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const hadContentRef = useRef(initialValue.trim().length > 0);
+    const onContentChangeRef = useRef(onContentChange);
+    onContentChangeRef.current = onContentChange;
+
+    function reportContent(v: string) {
+      const has = v.trim().length > 0;
+      if (has !== hadContentRef.current) {
+        hadContentRef.current = has;
+        onContentChangeRef.current?.(has);
+      }
+    }
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        getValue: () => value,
+        setValue: (v: string) => {
+          setValue(v);
+          reportContent(v);
+        },
+        focus: () => inputRef.current?.focus(),
+      }),
+      [value],
+    );
+
+    useEffect(() => {
+      if (!draftKey) return;
+      const t = setTimeout(() => saveDraft(draftKey, value), DRAFT_DEBOUNCE_MS);
+      return () => clearTimeout(t);
+    }, [value, draftKey]);
+
+    return (
+      <Input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => {
+          const v = e.target.value;
+          setValue(v);
+          reportContent(v);
+        }}
+        placeholder={placeholder}
+        className={className}
+      />
+    );
+  },
+);
+
 interface RulesBundle {
   issueId: string;
   title: string;
@@ -204,10 +339,14 @@ export function Email() {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
-  // Reply panel state
+  // Reply panel state. The textarea content lives inside DraftTextarea so
+  // typing doesn't re-render this entire (huge) component on every keystroke.
+  // The parent only tracks whether the body has content (for the Send-button
+  // disabled state) and reads the live value via the imperative ref.
   const [replyOpen, setReplyOpen] = useState(false);
-  const [replyBody, setReplyBody] = useState("");
   const [replyAll, setReplyAll] = useState(false);
+  const [replyHasContent, setReplyHasContent] = useState(false);
+  const replyComposerRef = useRef<DraftFieldHandle>(null);
   // AI Draft model — empty string = let server auto-pick. Persisted so the
   // operator doesn't have to re-pick on every reply.
   const [draftModel, setDraftModel] = useState<string>(() => {
@@ -217,16 +356,23 @@ export function Email() {
     setDraftModel(m);
     try { localStorage.setItem("email-draftModel", m); } catch {}
   };
-  // Compose dialog state
+  // Compose dialog state. Same isolation pattern as reply — field contents
+  // live inside DraftInput / DraftTextarea; the parent only tracks the
+  // has-content flags and the initial values to seed each field on mount.
   const [composeOpen, setComposeOpen] = useState(false);
-  const [composeTo, setComposeTo] = useState("");
-  const [composeSubject, setComposeSubject] = useState("");
-  const [composeBody, setComposeBody] = useState("");
+  const [composeInitial, setComposeInitial] = useState<{ to: string; subject: string; body: string }>(
+    { to: "", subject: "", body: "" },
+  );
+  const [composeToHasContent, setComposeToHasContent] = useState(false);
+  const [composeSubjectHasContent, setComposeSubjectHasContent] = useState(false);
+  const [composeBodyHasContent, setComposeBodyHasContent] = useState(false);
+  const composeToRef = useRef<DraftFieldHandle>(null);
+  const composeSubjectRef = useRef<DraftFieldHandle>(null);
+  const composeBodyRef = useRef<DraftFieldHandle>(null);
   // Drives which localStorage keys back the compose dialog's drafts: "new"
   // uses the singleton compose-* keys, "forward" uses per-message forward-*.
   const [composeMode, setComposeMode] = useState<"new" | "forward">("new");
   const [composeSourceUid, setComposeSourceUid] = useState<number | null>(null);
-  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Available LLM models (for AI Draft picker) ────────────────────────────
 
@@ -381,11 +527,14 @@ export function Email() {
 
   // Open helpers — consolidate the multiple entry points (row click, inline
   // detail-pane buttons, pencil "compose new") so each one consistently loads
-  // any persisted draft instead of clobbering it.
+  // any persisted draft instead of clobbering it. Each helper just pre-seeds
+  // the parent state (initial values + has-content flags); the DraftField
+  // children read initialValue on mount and own the value state from there.
   function openReplyFor(uid: number) {
+    const saved = selectedMailbox ? loadDraft(replyDraftKey(selectedMailbox, uid)) : "";
+    setReplyHasContent(saved.trim().length > 0);
     setReplyOpen(true);
-    setReplyBody(selectedMailbox ? loadDraft(replyDraftKey(selectedMailbox, uid)) : "");
-    setTimeout(() => replyTextareaRef.current?.focus(), 50);
+    setTimeout(() => replyComposerRef.current?.focus(), 50);
   }
 
   function openForwardCompose(msg: ParsedEmailMessage) {
@@ -402,20 +551,26 @@ export function Email() {
       .join("\n");
     const fresh = `\n\n${header}\n\n${msg.text || msg.markdown || ""}`;
     const saved = selectedMailbox ? loadDraft(forwardDraftKey(selectedMailbox, msg.uid)) : "";
+    const body = saved || fresh;
     setComposeMode("forward");
     setComposeSourceUid(msg.uid);
-    setComposeTo("");
-    setComposeSubject(fwdSubj);
-    setComposeBody(saved || fresh);
+    setComposeInitial({ to: "", subject: fwdSubj, body });
+    setComposeToHasContent(false);
+    setComposeSubjectHasContent(fwdSubj.trim().length > 0);
+    setComposeBodyHasContent(body.trim().length > 0);
     setComposeOpen(true);
   }
 
   function openNewCompose() {
+    const to = loadDraft(COMPOSE_TO_KEY);
+    const subject = loadDraft(COMPOSE_SUBJECT_KEY);
+    const body = loadDraft(COMPOSE_BODY_KEY);
     setComposeMode("new");
     setComposeSourceUid(null);
-    setComposeTo(loadDraft(COMPOSE_TO_KEY));
-    setComposeSubject(loadDraft(COMPOSE_SUBJECT_KEY));
-    setComposeBody(loadDraft(COMPOSE_BODY_KEY));
+    setComposeInitial({ to, subject, body });
+    setComposeToHasContent(to.trim().length > 0);
+    setComposeSubjectHasContent(subject.trim().length > 0);
+    setComposeBodyHasContent(body.trim().length > 0);
     setComposeOpen(true);
   }
 
@@ -438,41 +593,6 @@ export function Email() {
     }
     setPendingRowAction(null);
   }, [fullMessage, pendingRowAction]);
-
-  // ── Draft persistence ─────────────────────────────────────────────────────
-  // Debounced saves keep the operator's typed text alive across page refresh,
-  // mailbox switches, and accidental panel closes. Cleared on successful send
-  // by the mutation success handlers below.
-
-  useEffect(() => {
-    if (!replyOpen || !selectedMailbox || selectedUid === null) return;
-    const t = setTimeout(() => {
-      saveDraft(replyDraftKey(selectedMailbox, selectedUid), replyBody);
-    }, DRAFT_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [replyOpen, replyBody, selectedMailbox, selectedUid]);
-
-  useEffect(() => {
-    if (!composeOpen) return;
-    const t = setTimeout(() => {
-      if (composeMode === "new") {
-        saveDraft(COMPOSE_TO_KEY, composeTo);
-        saveDraft(COMPOSE_SUBJECT_KEY, composeSubject);
-        saveDraft(COMPOSE_BODY_KEY, composeBody);
-      } else if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
-        saveDraft(forwardDraftKey(selectedMailbox, composeSourceUid), composeBody);
-      }
-    }, DRAFT_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [
-    composeOpen,
-    composeMode,
-    composeTo,
-    composeSubject,
-    composeBody,
-    selectedMailbox,
-    composeSourceUid,
-  ]);
 
   // ── Rules home issue ──────────────────────────────────────────────────────
 
@@ -737,7 +857,7 @@ export function Email() {
       invalidateRules();
       if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
       setReplyOpen(false);
-      setReplyBody("");
+      setReplyHasContent(false);
       showToast("Reply sent");
     },
   });
@@ -756,8 +876,8 @@ export function Email() {
         model: draftModel || undefined,
       }),
     onSuccess: (result) => {
-      setReplyBody(result.draft);
-      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+      replyComposerRef.current?.setValue(result.draft);
+      setTimeout(() => replyComposerRef.current?.focus(), 50);
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -778,9 +898,9 @@ export function Email() {
         clearDraft(COMPOSE_BODY_KEY);
       }
       setComposeOpen(false);
-      setComposeTo("");
-      setComposeSubject("");
-      setComposeBody("");
+      setComposeToHasContent(false);
+      setComposeSubjectHasContent(false);
+      setComposeBodyHasContent(false);
       setComposeMode("new");
       setComposeSourceUid(null);
       showToast("Message sent");
@@ -1716,12 +1836,22 @@ export function Email() {
                         </Button>
                       </div>
                     </div>
-                    <Textarea
-                      ref={replyTextareaRef}
-                      value={replyBody}
-                      onChange={(e) => setReplyBody(e.target.value)}
+                    <DraftTextarea
+                      key={`reply:${selectedMailbox}:${selectedUid}`}
+                      ref={replyComposerRef}
+                      initialValue={
+                        selectedMailbox && selectedUid !== null
+                          ? loadDraft(replyDraftKey(selectedMailbox, selectedUid))
+                          : ""
+                      }
+                      draftKey={
+                        selectedMailbox && selectedUid !== null
+                          ? replyDraftKey(selectedMailbox, selectedUid)
+                          : null
+                      }
                       placeholder="Write your reply…"
                       className="min-h-[100px] text-sm resize-none"
+                      onContentChange={setReplyHasContent}
                     />
                     <div className="flex items-center justify-end gap-2">
                       <Select
@@ -1764,7 +1894,8 @@ export function Email() {
                             disabled={!fullMessage || draftMutation.isPending}
                             onClick={() => {
                               if (fullMessage) {
-                                draftMutation.mutate({ msg: fullMessage, instructions: replyBody });
+                                const instructions = replyComposerRef.current?.getValue() ?? "";
+                                draftMutation.mutate({ msg: fullMessage, instructions });
                               }
                             }}
                           >
@@ -1777,17 +1908,18 @@ export function Email() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          {replyBody.trim()
+                          {replyHasContent
                             ? "Use what you've typed as instructions and draft a reply"
                             : "Draft a reply with AI"}
                         </TooltipContent>
                       </Tooltip>
                       <Button
                         size="sm"
-                        disabled={!replyBody.trim() || replyMutation.isPending}
+                        disabled={!replyHasContent || replyMutation.isPending}
                         onClick={() => {
-                          if (selectedUid && replyBody.trim()) {
-                            replyMutation.mutate({ uid: selectedUid, body: replyBody.trim(), rAll: replyAll });
+                          const body = replyComposerRef.current?.getValue().trim() ?? "";
+                          if (selectedUid && body) {
+                            replyMutation.mutate({ uid: selectedUid, body, rAll: replyAll });
                           }
                         }}
                       >
@@ -1832,29 +1964,44 @@ export function Email() {
           <div className="space-y-3 py-1">
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
-              <Input
-                value={composeTo}
-                onChange={(e) => setComposeTo(e.target.value)}
+              <DraftInput
+                key={`to:${composeMode}:${composeSourceUid ?? "none"}`}
+                ref={composeToRef}
+                initialValue={composeInitial.to}
+                draftKey={composeMode === "new" ? COMPOSE_TO_KEY : null}
                 placeholder="recipient@example.com"
                 className="text-sm"
+                onContentChange={setComposeToHasContent}
               />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Subject</label>
-              <Input
-                value={composeSubject}
-                onChange={(e) => setComposeSubject(e.target.value)}
+              <DraftInput
+                key={`subject:${composeMode}:${composeSourceUid ?? "none"}`}
+                ref={composeSubjectRef}
+                initialValue={composeInitial.subject}
+                draftKey={composeMode === "new" ? COMPOSE_SUBJECT_KEY : null}
                 placeholder="Subject"
                 className="text-sm"
+                onContentChange={setComposeSubjectHasContent}
               />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Message</label>
-              <Textarea
-                value={composeBody}
-                onChange={(e) => setComposeBody(e.target.value)}
+              <DraftTextarea
+                key={`body:${composeMode}:${composeSourceUid ?? "none"}`}
+                ref={composeBodyRef}
+                initialValue={composeInitial.body}
+                draftKey={
+                  composeMode === "forward" && selectedMailbox && composeSourceUid !== null
+                    ? forwardDraftKey(selectedMailbox, composeSourceUid)
+                    : composeMode === "new"
+                      ? COMPOSE_BODY_KEY
+                      : null
+                }
                 placeholder="Write your message…"
                 className="min-h-[160px] max-h-[400px] text-sm resize-none overflow-y-auto"
+                onContentChange={setComposeBodyHasContent}
               />
             </div>
           </div>
@@ -1863,10 +2010,18 @@ export function Email() {
               Cancel
             </Button>
             <Button
-              disabled={!composeTo.trim() || !composeSubject.trim() || !composeBody.trim() || composeMutation.isPending}
+              disabled={
+                !composeToHasContent ||
+                !composeSubjectHasContent ||
+                !composeBodyHasContent ||
+                composeMutation.isPending
+              }
               onClick={() => {
-                if (composeTo.trim() && composeSubject.trim() && composeBody.trim()) {
-                  composeMutation.mutate({ to: composeTo.trim(), subject: composeSubject.trim(), body: composeBody.trim() });
+                const to = composeToRef.current?.getValue().trim() ?? "";
+                const subject = composeSubjectRef.current?.getValue().trim() ?? "";
+                const body = composeBodyRef.current?.getValue().trim() ?? "";
+                if (to && subject && body) {
+                  composeMutation.mutate({ to, subject, body });
                 }
               }}
             >
