@@ -16,11 +16,18 @@ import {
   Reply,
   Forward,
   Bot,
+  MoreHorizontal,
 } from "lucide-react";
 import type { Company, IssueDocument } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { useNavigate } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -856,7 +863,7 @@ function SenderGroup({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-0.5 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0 [&_button]:size-7 [&_svg]:size-3">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1007,9 +1014,14 @@ function MessageRow({
           </span>
         </div>
         <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
+        {msg.snippet && (
+          <div className="text-[11px] text-muted-foreground/60 truncate mt-0.5">
+            {msg.snippet}
+          </div>
+        )}
       </div>
       <div
-        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
         onClick={(e) => e.stopPropagation()}
       >
         {msg.unseen ? (
@@ -1051,24 +1063,6 @@ function MessageRow({
           className="text-muted-foreground hover:text-foreground"
         >
           <Reply className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onOpenMessage(msg.uid, "forward")}
-          title="Forward"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <Forward className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onOpenMessage(msg.uid, "handoff")}
-          title="Hand off to agent"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <Bot className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
@@ -1123,6 +1117,28 @@ function MessageRow({
             <Trash2 className="h-3.5 w-3.5" />
           )}
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              title="More actions"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => onOpenMessage(msg.uid, "forward")}>
+              <Forward className="h-3.5 w-3.5 mr-2" />
+              Forward
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onOpenMessage(msg.uid, "handoff")}>
+              <Bot className="h-3.5 w-3.5 mr-2" />
+              Hand off to agent
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

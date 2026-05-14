@@ -347,9 +347,14 @@ function ConversationRow({
         <div className="text-xs text-muted-foreground truncate mt-0.5">
           {conv.subject ?? "(no subject)"}
         </div>
+        {conv.preview && (
+          <div className="text-[11px] text-muted-foreground/60 truncate mt-0.5">
+            {conv.preview}
+          </div>
+        )}
       </div>
       <div
-        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
         onClick={(e) => e.stopPropagation()}
       >
         <Tooltip>

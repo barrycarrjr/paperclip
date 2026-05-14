@@ -25,6 +25,9 @@ export interface HSConversationSummary {
   assignedTo: string | null;
   tags: string[];
   modifiedAt: string | null;
+  /** Latest-message snippet (~150 chars). Optional — older plugin versions
+   *  (≤ 0.5.3) don't return it; treat as missing rather than assuming string. */
+  preview?: string | null;
 }
 
 export interface HSThread {
