@@ -6,6 +6,11 @@ export const userSidebarPreferences = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: text("user_id").notNull(),
     companyOrder: jsonb("company_order").$type<string[]>().notNull().default([]),
+    portfolioNavOrder: jsonb("portfolio_nav_order").$type<string[]>().notNull().default([]),
+    pageSectionOrders: jsonb("page_section_orders")
+      .$type<Record<string, string[]>>()
+      .notNull()
+      .default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

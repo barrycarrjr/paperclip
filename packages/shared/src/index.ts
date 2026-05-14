@@ -428,6 +428,7 @@ export type {
   UserProfileWindowStats,
   SidebarBadges,
   SidebarOrderPreference,
+  PageSectionOrderPreference,
   InboxDismissal,
   AccessUserProfile,
   CompanyMemberRecord,
@@ -545,7 +546,10 @@ export {
 export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
+  upsertSidebarSlugOrderPreferenceSchema,
+  pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
+  type UpsertSidebarSlugOrderPreference,
 } from "./validators/sidebar-preferences.js";
 
 export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";

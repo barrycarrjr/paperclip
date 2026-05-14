@@ -43,6 +43,8 @@ import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { pluginsApi } from "../api/plugins";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCompanyOrder } from "../hooks/useCompanyOrder";
+import { SortableSections, type SortableSection } from "../components/SortableSections";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 400;
@@ -266,11 +268,19 @@ export function PortfolioBrief() {
     return map;
   }, [dashboardData, activityData, approvalsData, issuesData, rulesData]);
 
-  const companies = useMemo(() => {
+  // Filter out HQ + archived; the *order* is owned by the sidebar's per-user
+  // preference (useCompanyOrder), so the Brief grid matches the sidebar
+  // automatically. Falls back to the natural map order when the user hasn't
+  // dragged anything yet.
+  const filteredCompanies = useMemo(() => {
     return Array.from(companyMap.values())
-      .filter((c) => !c.isPortfolioRoot && c.status !== "archived")
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .filter((c) => !c.isPortfolioRoot && c.status !== "archived");
   }, [companyMap]);
+  const currentUserId = session?.user?.id ?? null;
+  const { orderedCompanies: companies } = useCompanyOrder({
+    companies: filteredCompanies,
+    userId: currentUserId,
+  });
 
   const summariesByCompanyId = useMemo(() => {
     const map = new Map<string, DashboardSummary>();
@@ -695,39 +705,46 @@ export function PortfolioBrief() {
         </div>
       </section>
 
-      {/* Companies — per-company health grid (absorbed from Portfolio Dashboard) */}
-      {companies.length > 0 && (
-        <section aria-label="Companies">
-          <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Companies
-            </h2>
-            <span className="text-[11px] text-muted-foreground">
-              {companies.length} compan{companies.length === 1 ? "y" : "ies"}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {companies.map((company) => {
-              const summary = summariesByCompanyId.get(company.id);
-              if (!summary) return null;
-              return (
-                <CompanyHealthCard
-                  key={company.id}
-                  company={company}
-                  summary={summary}
-                  onSelect={() => {
-                    setSelectedCompanyId(company.id, { source: "route_sync" });
-                    navigate(`/${company.issuePrefix}/brief`);
-                  }}
-                />
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* Awaiting your tap */}
-      <section aria-label="Awaiting your tap">
+      <SortableSections
+        pageKey="portfolio-brief"
+        sections={[
+          {
+            id: "companies",
+            render: () =>
+              companies.length === 0 ? null : (
+                <section aria-label="Companies">
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                      Companies
+                    </h2>
+                    <span className="text-[11px] text-muted-foreground">
+                      {companies.length} compan{companies.length === 1 ? "y" : "ies"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {companies.map((company) => {
+                      const summary = summariesByCompanyId.get(company.id);
+                      if (!summary) return null;
+                      return (
+                        <CompanyHealthCard
+                          key={company.id}
+                          company={company}
+                          summary={summary}
+                          onSelect={() => {
+                            setSelectedCompanyId(company.id, { source: "route_sync" });
+                            navigate(`/${company.issuePrefix}/brief`);
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
+              ),
+          },
+          {
+            id: "awaiting-tap",
+            render: () => (
+              <section aria-label="Awaiting your tap">
         <div className="mb-3 flex items-baseline justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
@@ -868,10 +885,13 @@ export function PortfolioBrief() {
             )}
           </div>
         )}
-      </section>
-
-      {/* Agents */}
-      <section aria-label="Agents">
+              </section>
+            ),
+          },
+          {
+            id: "agents",
+            render: () => (
+              <section aria-label="Agents">
         <SectionHeader
           label="Agents"
           chip={
@@ -946,10 +966,13 @@ export function PortfolioBrief() {
               })}
           </div>
         )}
-      </section>
-
-      {/* Overnight outcomes */}
-      <section aria-label="Overnight outcomes">
+              </section>
+            ),
+          },
+          {
+            id: "overnight",
+            render: () => (
+              <section aria-label="Overnight outcomes">
         <SectionHeader
           label="Overnight outcomes"
           chip={
@@ -988,10 +1011,13 @@ export function PortfolioBrief() {
             ))}
           </div>
         )}
-      </section>
-
-      {/* Today */}
-      <section aria-label="Today">
+              </section>
+            ),
+          },
+          {
+            id: "today",
+            render: () => (
+              <section aria-label="Today">
         <SectionHeader
           label="Today"
           chip={{ text: now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }) }}
@@ -1032,7 +1058,11 @@ export function PortfolioBrief() {
             ))}
           </div>
         )}
-      </section>
+              </section>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

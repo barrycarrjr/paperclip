@@ -1,6 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
-import { upsertSidebarOrderPreferenceSchema } from "@paperclipai/shared";
+import {
+  pageKeyParamSchema,
+  upsertSidebarOrderPreferenceSchema,
+  upsertSidebarSlugOrderPreferenceSchema,
+} from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { logActivity, sidebarPreferenceService } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -64,6 +68,48 @@ export function sidebarPreferenceRoutes(db: Db) {
         },
       });
       res.json(result);
+    },
+  );
+
+  router.get("/sidebar-preferences/me/portfolio-nav", async (req, res) => {
+    const userId = requireBoardUserId(req, res);
+    if (!userId) return;
+    res.json(await svc.getPortfolioNavOrder(userId));
+  });
+
+  router.put(
+    "/sidebar-preferences/me/portfolio-nav",
+    validate(upsertSidebarSlugOrderPreferenceSchema),
+    async (req, res) => {
+      const userId = requireBoardUserId(req, res);
+      if (!userId) return;
+      res.json(await svc.upsertPortfolioNavOrder(userId, req.body.orderedIds));
+    },
+  );
+
+  router.get("/sidebar-preferences/me/sections/:pageKey", async (req, res) => {
+    const userId = requireBoardUserId(req, res);
+    if (!userId) return;
+    const parsed = pageKeyParamSchema.safeParse(req.params.pageKey);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid pageKey" });
+      return;
+    }
+    res.json(await svc.getPageSectionOrder(userId, parsed.data));
+  });
+
+  router.put(
+    "/sidebar-preferences/me/sections/:pageKey",
+    validate(upsertSidebarSlugOrderPreferenceSchema),
+    async (req, res) => {
+      const userId = requireBoardUserId(req, res);
+      if (!userId) return;
+      const parsed = pageKeyParamSchema.safeParse(req.params.pageKey);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid pageKey" });
+        return;
+      }
+      res.json(await svc.upsertPageSectionOrder(userId, parsed.data, req.body.orderedIds));
     },
   );
 

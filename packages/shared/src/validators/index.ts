@@ -53,7 +53,10 @@ export {
 export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
+  upsertSidebarSlugOrderPreferenceSchema,
+  pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
+  type UpsertSidebarSlugOrderPreference,
 } from "./sidebar-preferences.js";
 export {
   companySkillSourceTypeSchema,

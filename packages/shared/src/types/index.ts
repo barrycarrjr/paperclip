@@ -270,7 +270,7 @@ export type {
   UserProfileWindowStats,
 } from "./user-profile.js";
 export type { SidebarBadges } from "./sidebar-badges.js";
-export type { SidebarOrderPreference } from "./sidebar-preferences.js";
+export type { SidebarOrderPreference, PageSectionOrderPreference } from "./sidebar-preferences.js";
 export type { InboxDismissal } from "./inbox-dismissal.js";
 export type {
   AccessUserProfile,

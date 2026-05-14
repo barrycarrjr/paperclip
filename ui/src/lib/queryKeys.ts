@@ -115,6 +115,10 @@ export const queryKeys = {
     companyOrder: (userId: string) => ["sidebar-preferences", "company-order", userId] as const,
     projectOrder: (companyId: string, userId: string) =>
       ["sidebar-preferences", "project-order", companyId, userId] as const,
+    portfolioNavOrder: (userId: string) =>
+      ["sidebar-preferences", "portfolio-nav-order", userId] as const,
+    pageSectionOrder: (userId: string, pageKey: string) =>
+      ["sidebar-preferences", "page-section-order", userId, pageKey] as const,
   },
   instance: {
     generalSettings: ["instance", "general-settings"] as const,

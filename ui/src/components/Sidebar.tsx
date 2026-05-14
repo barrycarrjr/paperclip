@@ -19,6 +19,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
+import { PortfolioNavList, type PortfolioNavEntry } from "./PortfolioNavList";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { agentsApi } from "../api/agents";
@@ -110,43 +111,55 @@ export function Sidebar() {
             label="Portfolio"
             info="Cross-company views for managing the whole portfolio from one place."
           >
-            <SidebarNavItem
-              to="/portfolio-brief"
-              label="Portfolio Brief"
-              icon={Sunrise}
-              info="Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company."
-            />
-            <SidebarNavItem
-              to="/portfolio-issues"
-              label="Portfolio Issues"
-              icon={Globe2}
-              info="A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies."
-            />
-            <SidebarNavItem
-              to="/portfolio-agents"
-              label="Portfolio Agents"
-              icon={Bot}
-              info="See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide."
-            />
-            <SidebarNavItem
-              to="/portfolio-routines"
-              label="Portfolio Routines"
-              icon={Repeat}
-              info="See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place."
-            />
-            {showPortfolioEmailNav && (
-              <SidebarNavItem
-                to="/portfolio-email"
-                label="Portfolio Email"
-                icon={Mail}
-                info="Triage every enabled mailbox in one view — no need to switch companies. Triage actions and rules work the same as the per-company view."
-              />
-            )}
-            <SidebarNavItem
-              to="/portfolio-costs"
-              label="Portfolio Costs"
-              icon={DollarSign}
-              info="Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable."
+            <PortfolioNavList
+              entries={[
+                {
+                  id: "portfolio-brief",
+                  to: "/portfolio-brief",
+                  label: "Portfolio Brief",
+                  icon: Sunrise,
+                  info: "Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company.",
+                },
+                {
+                  id: "portfolio-issues",
+                  to: "/portfolio-issues",
+                  label: "Portfolio Issues",
+                  icon: Globe2,
+                  info: "A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies.",
+                },
+                {
+                  id: "portfolio-agents",
+                  to: "/portfolio-agents",
+                  label: "Portfolio Agents",
+                  icon: Bot,
+                  info: "See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide.",
+                },
+                {
+                  id: "portfolio-routines",
+                  to: "/portfolio-routines",
+                  label: "Portfolio Routines",
+                  icon: Repeat,
+                  info: "See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place.",
+                },
+                ...(showPortfolioEmailNav
+                  ? [
+                      {
+                        id: "portfolio-email",
+                        to: "/portfolio-email",
+                        label: "Portfolio Email",
+                        icon: Mail,
+                        info: "Triage every enabled mailbox in one view — no need to switch companies. Triage actions and rules work the same as the per-company view.",
+                      } satisfies PortfolioNavEntry,
+                    ]
+                  : []),
+                {
+                  id: "portfolio-costs",
+                  to: "/portfolio-costs",
+                  label: "Portfolio Costs",
+                  icon: DollarSign,
+                  info: "Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable.",
+                },
+              ]}
             />
           </SidebarSection>
         )}
