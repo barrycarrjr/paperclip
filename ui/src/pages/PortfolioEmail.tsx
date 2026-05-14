@@ -258,7 +258,12 @@ export function PortfolioEmail() {
     const targetCompany = companyById.get(companyId);
     if (!targetCompany) return;
     if (companyId !== selectedCompanyId) {
-      setSelectedCompanyId(companyId, { source: "manual" });
+      // `route_sync` (vs `manual`) tells `useCompanyPageMemory` to skip its
+      // remembered-path redirect — we're bundling the company switch with a
+      // deliberate `/email?...` navigation, and a `manual` tag would race
+      // the memory hook into overwriting the URL with M3's last-visited
+      // page (e.g. the org chart). Matches PortfolioCosts/PortfolioBrief.
+      setSelectedCompanyId(companyId, { source: "route_sync" });
     }
     const params = new URLSearchParams();
     params.set("mailbox", mailboxKey);
@@ -280,7 +285,9 @@ export function PortfolioEmail() {
     const targetCompany = companyById.get(ref.primaryCompanyId);
     if (!targetCompany) return;
     if (ref.primaryCompanyId !== selectedCompanyId) {
-      setSelectedCompanyId(ref.primaryCompanyId, { source: "manual" });
+      // See openInCompany — `route_sync` keeps the page-memory hook from
+      // racing this navigation.
+      setSelectedCompanyId(ref.primaryCompanyId, { source: "route_sync" });
     }
     const params = new URLSearchParams();
     params.set("mailbox", helpScoutMailboxQueryKey(ref));
