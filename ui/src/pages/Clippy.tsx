@@ -161,7 +161,12 @@ export function Clippy() {
 
   const createMutation = useMutation({
     mutationFn: () =>
-      chatApi.createSession({ companyId: selectedCompanyId ?? null }).then((r) => r.session),
+      chatApi
+        .createSession({
+          companyId: selectedCompanyId ?? null,
+          pageContext: window.location.pathname,
+        })
+        .then((r) => r.session),
     onSuccess: (session) => {
       qc.invalidateQueries({ queryKey: ["clippy", "sessions"] });
       setActiveId(session.id);

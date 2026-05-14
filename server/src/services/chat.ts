@@ -46,6 +46,7 @@ export interface ChatSession {
   permissionMode: PermissionMode;
   effort: EffortLevel;
   adapterSessionParams: Record<string, unknown> | null;
+  pageContext: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +103,7 @@ function rowToSession(row: typeof chatSessions.$inferSelect): ChatSession {
     permissionMode: row.permissionMode as PermissionMode,
     effort: row.effort as EffortLevel,
     adapterSessionParams: row.adapterSessionParams ?? null,
+    pageContext: row.pageContext ?? null,
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -185,7 +187,7 @@ export async function appendApprovedDraftResultToChatSession(
 
 export interface ChatActor extends ToolActor {}
 
-function systemPromptFor(_session: ChatSession, defaultCompanyId: string | null): string {
+function systemPromptFor(session: ChatSession, defaultCompanyId: string | null): string {
   const lines = [
     "You are Clippy, Paperclip's in-app assistant for board users. You can help the user understand the state of their Paperclip companies and take actions on their behalf via tools.",
     "Be concise. Prefer short, direct answers. When you call a tool, briefly say what you are about to do.",
@@ -198,6 +200,9 @@ function systemPromptFor(_session: ChatSession, defaultCompanyId: string | null)
     lines.push(
       "There is no current company selected. Ask the user which company they mean before calling tools that need a companyId.",
     );
+  }
+  if (session.pageContext) {
+    lines.push(`User's current page when this chat was opened: ${session.pageContext}`);
   }
   return lines.join("\n\n");
 }
@@ -367,6 +372,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       companyId?: string | null;
       permissionMode?: PermissionMode;
       model?: string;
+      pageContext?: string | null;
     },
   ) {
     // Auto-pick the best available model when the caller didn't specify one,
@@ -383,6 +389,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
         mode: "agent",
         permissionMode: input.permissionMode ?? "ask",
         model: initialModel,
+        pageContext: input.pageContext ?? null,
       })
       .returning()
       .then((rows) => rows[0]);

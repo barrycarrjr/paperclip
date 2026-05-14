@@ -23,6 +23,7 @@ export interface ChatSession {
   mode: ChatMode;
   permissionMode: PermissionMode;
   effort: EffortLevel;
+  pageContext: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -114,6 +115,7 @@ export const chatApi = {
     companyId?: string | null;
     permissionMode?: PermissionMode;
     model?: string;
+    pageContext?: string | null;
   }) => api.post<{ session: ChatSession }>("/chat/sessions", input),
   patchSession: (
     id: string,

@@ -29,6 +29,7 @@ const createSessionSchema = z.object({
   companyId: z.string().nullable().optional(),
   permissionMode: z.enum(["ask", "bypass"]).optional(),
   model: z.string().max(100).optional(),
+  pageContext: z.string().max(500).nullable().optional(),
 });
 
 const patchSessionSchema = z.object({
