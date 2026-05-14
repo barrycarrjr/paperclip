@@ -1545,7 +1545,7 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
             label="open"
             value={summary.tasks.open}
             colorClass="text-blue-600 dark:text-blue-400"
-            to={`/${prefix}/issues?status=todo`}
+            to={`/${prefix}/issues?status=backlog&status=todo&status=in_review`}
             onClickCapture={stopCardClick}
           />
           <HealthStat

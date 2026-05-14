@@ -71,12 +71,16 @@ export function dashboardService(db: Db) {
         blocked: 0,
         done: 0,
       };
+      // Keep open/inProgress/blocked disjoint so a "5 open · 2 active · 1 blocked"
+      // summary actually sums to the total non-terminal issue count. `open`
+      // covers everything that isn't being actively worked, blocked, or done/
+      // cancelled — i.e. backlog, todo, and in_review.
       for (const row of taskRows) {
         const count = Number(row.count);
         if (row.status === "in_progress") taskCounts.inProgress += count;
-        if (row.status === "blocked") taskCounts.blocked += count;
-        if (row.status === "done") taskCounts.done += count;
-        if (row.status !== "done" && row.status !== "cancelled") taskCounts.open += count;
+        else if (row.status === "blocked") taskCounts.blocked += count;
+        else if (row.status === "done") taskCounts.done += count;
+        else if (row.status !== "cancelled") taskCounts.open += count;
       }
 
       const now = new Date();

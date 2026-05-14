@@ -9,6 +9,10 @@ import {
   ExternalLink,
   Loader2,
   Tag,
+  Reply,
+  Bot,
+  X,
+  Clock,
 } from "lucide-react";
 import type { Company } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,6 +33,7 @@ const AUTO_NOISE_LABEL = "auto-noise";
 interface HelpScoutMailboxPanelProps {
   mailbox: HelpScoutMailboxRef;
   primaryCompany: Company | null;
+  showAll: boolean;
   onOpenMailbox: () => void;
   onOpenConversation: (conversationId: string, action?: "reply" | "handoff") => void;
 }
@@ -36,6 +41,7 @@ interface HelpScoutMailboxPanelProps {
 export function HelpScoutMailboxPanel({
   mailbox,
   primaryCompany,
+  showAll,
   onOpenMailbox,
   onOpenConversation,
 }: HelpScoutMailboxPanelProps) {
@@ -51,7 +57,11 @@ export function HelpScoutMailboxPanel({
     new Set(),
   );
 
-  const listKey = ["helpscout", pluginId, primaryCompanyId, accountKey, mailboxId, "open"];
+  // "active" = HS analog of unread (needs action). "open" = active + pending.
+  // The page-level showAll toggle gates pending conversations the same way it
+  // gates IMAP read messages.
+  const listStatus = showAll ? "open" : "active";
+  const listKey = ["helpscout", pluginId, primaryCompanyId, accountKey, mailboxId, listStatus];
 
   const {
     data,
@@ -63,7 +73,7 @@ export function HelpScoutMailboxPanel({
       api.listConversations({
         accountKey,
         mailboxId,
-        status: "open",
+        status: listStatus,
         limit: 50,
       }),
     refetchInterval: 30_000,
@@ -94,6 +104,35 @@ export function HelpScoutMailboxPanel({
     mutationFn: async (conv: HSConversationSummary) => {
       optimisticallyRemove(conv.id);
       await api.addLabel(accountKey, conv.id, [AUTO_NOISE_LABEL]);
+      await api.changeStatus(accountKey, conv.id, "closed");
+    },
+    onError: (_err, conv) => {
+      unremove(conv.id);
+      invalidateList();
+    },
+  });
+
+  // Pending = HS analog of "I see it, dealing with it later". When the panel
+  // is in unread-only mode (showAll=false, status="active"), marking pending
+  // takes the row out of view → optimistic remove. When showAll=true the row
+  // still matches the "open" filter, so we just refresh to flip the dot color.
+  const pendingMutation = useMutation({
+    mutationFn: async (conv: HSConversationSummary) => {
+      if (!showAll) optimisticallyRemove(conv.id);
+      await api.changeStatus(accountKey, conv.id, "pending");
+    },
+    onSuccess: () => {
+      if (showAll) invalidateList();
+    },
+    onError: (_err, conv) => {
+      unremove(conv.id);
+      invalidateList();
+    },
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: async (conv: HSConversationSummary) => {
+      optimisticallyRemove(conv.id);
       await api.changeStatus(accountKey, conv.id, "closed");
     },
     onError: (_err, conv) => {
@@ -173,6 +212,12 @@ export function HelpScoutMailboxPanel({
         isLoading={isLoading}
         error={error as Error | null}
         onOpen={onOpenConversation}
+        onReply={(c) => onOpenConversation(c.id, "reply")}
+        onHandoff={(c) => onOpenConversation(c.id, "handoff")}
+        markPending={(c) => pendingMutation.mutate(c)}
+        markPendingPendingId={
+          pendingMutation.isPending ? pendingMutation.variables?.id ?? null : null
+        }
         keepActive={(c) => keepActiveMutation.mutate(c)}
         keepActivePendingId={
           keepActiveMutation.isPending ? keepActiveMutation.variables?.id ?? null : null
@@ -180,6 +225,10 @@ export function HelpScoutMailboxPanel({
         autoNoise={(c) => autoNoiseMutation.mutate(c)}
         autoNoisePendingId={
           autoNoiseMutation.isPending ? autoNoiseMutation.variables?.id ?? null : null
+        }
+        close={(c) => closeMutation.mutate(c)}
+        closePendingId={
+          closeMutation.isPending ? closeMutation.variables?.id ?? null : null
         }
         markSpam={(c) => spamMutation.mutate(c)}
         markSpamPendingId={
@@ -195,10 +244,16 @@ interface ConversationListBodyProps {
   isLoading: boolean;
   error: Error | null;
   onOpen: (conversationId: string, action?: "reply" | "handoff") => void;
+  onReply: (c: HSConversationSummary) => void;
+  onHandoff: (c: HSConversationSummary) => void;
+  markPending: (c: HSConversationSummary) => void;
+  markPendingPendingId: string | null;
   keepActive: (c: HSConversationSummary) => void;
   keepActivePendingId: string | null;
   autoNoise: (c: HSConversationSummary) => void;
   autoNoisePendingId: string | null;
+  close: (c: HSConversationSummary) => void;
+  closePendingId: string | null;
   markSpam: (c: HSConversationSummary) => void;
   markSpamPendingId: string | null;
 }
@@ -243,15 +298,23 @@ function ConversationListBody(props: ConversationListBodyProps) {
 function ConversationRow({
   conv,
   onOpen,
+  onReply,
+  onHandoff,
+  markPending,
+  markPendingPendingId,
   keepActive,
   keepActivePendingId,
   autoNoise,
   autoNoisePendingId,
+  close,
+  closePendingId,
   markSpam,
   markSpamPendingId,
 }: { conv: HSConversationSummary } & ConversationListBodyProps) {
+  const isPendingPending = markPendingPendingId === conv.id;
   const isKeepPending = keepActivePendingId === conv.id;
   const isAutoNoisePending = autoNoisePendingId === conv.id;
+  const isClosePending = closePendingId === conv.id;
   const isSpamPending = markSpamPendingId === conv.id;
   const customerLabel = conv.customer?.name || conv.customer?.email || "(unknown customer)";
   const hasKeep = conv.tags.includes(KEEP_ALWAYS_LABEL);
@@ -259,7 +322,7 @@ function ConversationRow({
 
   return (
     <div
-      className="group flex items-center gap-2 px-4 py-2.5 hover:bg-accent/40 transition-colors cursor-pointer"
+      className="group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer"
       onClick={() => onOpen(conv.id)}
     >
       <span
@@ -289,6 +352,53 @@ function ConversationRow({
         className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={(e) => e.stopPropagation()}
       >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={isPendingPending}
+              onClick={() => markPending(conv)}
+              aria-label="Mark pending"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              {isPendingPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Clock className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Mark pending (snooze)</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => onReply(conv)}
+              aria-label="Reply"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Reply className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Reply</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => onHandoff(conv)}
+              aria-label="Hand off to agent"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Bot className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Hand off to agent</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -338,6 +448,25 @@ function ConversationRow({
             {hasAutoNoise ? "Auto-noise tag set" : "Tag auto-noise and close"}
           </TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={isClosePending}
+              onClick={() => close(conv)}
+              aria-label="Close"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              {isClosePending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <X className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Close</TooltipContent>
+        </Tooltip>
         {conv.tags.length > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -354,7 +483,7 @@ function ConversationRow({
           size="icon-sm"
           disabled={isSpamPending}
           onClick={() => markSpam(conv)}
-          title="Close as spam"
+          title="Spam"
           className="text-muted-foreground hover:text-destructive"
         >
           {isSpamPending ? (

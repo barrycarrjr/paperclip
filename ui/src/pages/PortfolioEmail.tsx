@@ -332,7 +332,7 @@ export function PortfolioEmail() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 w-full min-w-0 overflow-hidden">
       <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <div>
           <h1 className="text-base font-semibold">Portfolio Email</h1>
@@ -382,8 +382,8 @@ export function PortfolioEmail() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="px-6 py-4 space-y-4">
+      <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
+        <div className="px-6 py-4 space-y-4 min-w-0">
           {pluginId &&
             resolvedMailboxes.map((mb) => (
               <MailboxPanel
@@ -403,6 +403,7 @@ export function PortfolioEmail() {
               key={`${ref.primaryCompanyId}:${ref.accountKey}:${ref.mailboxId}`}
               mailbox={ref}
               primaryCompany={primaryCompany}
+              showAll={showAll}
               onOpenMailbox={() => openHelpScoutInCompany(ref, null)}
               onOpenConversation={(conversationId, action) =>
                 openHelpScoutInCompany(ref, conversationId, action)
@@ -845,7 +846,7 @@ function SenderGroup({
 
   return (
     <div>
-      <div className="flex items-center gap-2 px-4 py-2 bg-muted/20">
+      <div className="flex items-center gap-2 px-2 py-2 min-w-0 overflow-hidden bg-muted/20">
         <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
@@ -987,7 +988,7 @@ function MessageRow({
 
   return (
     <div
-      className="group flex items-center gap-2 px-4 py-2.5 hover:bg-accent/40 transition-colors cursor-pointer"
+      className="group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer"
       onClick={() => onOpenMessage(msg.uid)}
     >
       <span

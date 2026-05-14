@@ -11,6 +11,7 @@ import {
   StickyNote,
   Send,
   X,
+  Clock,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,6 +40,18 @@ const STATUS_OPTIONS: Array<{ value: HSStatusFilter; label: string }> = [
   { value: "spam", label: "Spam" },
 ];
 
+const STATUS_FILTER_STORAGE_KEY = "helpscout-status-filter";
+
+function loadPersistedStatus(): HSStatusFilter {
+  try {
+    const saved = localStorage.getItem(STATUS_FILTER_STORAGE_KEY);
+    if (saved && STATUS_OPTIONS.some((o) => o.value === saved)) {
+      return saved as HSStatusFilter;
+    }
+  } catch {}
+  return "open";
+}
+
 interface HelpScoutEmailViewProps {
   mailbox: HelpScoutMailboxRef;
   initialConversationId: string | null;
@@ -62,8 +75,14 @@ export function HelpScoutEmailView({
     [pluginId, primaryCompanyId],
   );
 
-  const [status, setStatus] = useState<HSStatusFilter>("open");
+  const [status, setStatus] = useState<HSStatusFilter>(() => loadPersistedStatus());
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConversationId);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STATUS_FILTER_STORAGE_KEY, status);
+    } catch {}
+  }, [status]);
   const [pendingReplyOnOpen, setPendingReplyOnOpen] = useState<boolean>(
     initialAction === "reply",
   );
@@ -100,7 +119,34 @@ export function HelpScoutEmailView({
       }),
     refetchInterval: 30_000,
   });
-  const conversations = listData?.conversations ?? [];
+
+  // Optimistic list removal so close/auto-noise/spam clicks update the row
+  // instantly rather than waiting for the API round-trip + refetch + Help
+  // Scout's own eventual consistency on status changes.
+  const [optimisticallyRemovedIds, setOptimisticallyRemovedIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  // A conversation we removed from "active" should re-appear if the operator
+  // pivots to "closed" — reset the set whenever the listKey identity changes.
+  useEffect(() => {
+    setOptimisticallyRemovedIds(new Set());
+  }, [status, accountKey, mailboxId]);
+
+  function optimisticallyRemoveConv(id: string) {
+    setOptimisticallyRemovedIds((prev) => new Set([...prev, id]));
+  }
+  function unremoveConv(id: string) {
+    setOptimisticallyRemovedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  const conversations = (listData?.conversations ?? []).filter(
+    (c) => !optimisticallyRemovedIds.has(c.id),
+  );
 
   function invalidateList() {
     queryClient.invalidateQueries({ queryKey: listKey });
@@ -163,23 +209,65 @@ export function HelpScoutEmailView({
 
   const autoNoiseMutation = useMutation({
     mutationFn: async () => {
-      await api.addLabel(accountKey, selectedConvId!, [AUTO_NOISE_LABEL]);
-      await api.changeStatus(accountKey, selectedConvId!, "closed");
+      const id = selectedConvId!;
+      optimisticallyRemoveConv(id);
+      try {
+        await api.addLabel(accountKey, id, [AUTO_NOISE_LABEL]);
+        await api.changeStatus(accountKey, id, "closed");
+      } catch (e) {
+        unremoveConv(id);
+        throw e;
+      }
     },
     onSuccess: () => {
       showToast("Auto-noise: tagged and closed.");
       invalidateList();
       setSelectedConvId(null);
     },
+    onError: (err) => showToast(`Auto-noise failed: ${(err as Error).message}`),
   });
 
   const closeMutation = useMutation({
-    mutationFn: () => api.changeStatus(accountKey, selectedConvId!, "closed"),
+    mutationFn: async () => {
+      const id = selectedConvId!;
+      optimisticallyRemoveConv(id);
+      try {
+        return await api.changeStatus(accountKey, id, "closed");
+      } catch (e) {
+        unremoveConv(id);
+        throw e;
+      }
+    },
     onSuccess: () => {
       showToast("Closed.");
       invalidateList();
       setSelectedConvId(null);
     },
+    onError: (err) => showToast(`Close failed: ${(err as Error).message}`),
+  });
+
+  // "Pending" = HS's "I see this, parking it." Only optimistically take the
+  // row off the list when the current filter excludes pending — under "open"
+  // or "pending" the row should stay visible (just with a different dot).
+  const pendingStillMatchesFilter = status === "open" || status === "pending";
+  const pendingMutation = useMutation({
+    mutationFn: async () => {
+      const id = selectedConvId!;
+      if (!pendingStillMatchesFilter) optimisticallyRemoveConv(id);
+      try {
+        return await api.changeStatus(accountKey, id, "pending");
+      } catch (e) {
+        if (!pendingStillMatchesFilter) unremoveConv(id);
+        throw e;
+      }
+    },
+    onSuccess: () => {
+      showToast("Marked pending.");
+      invalidateList();
+      invalidateFull();
+      if (!pendingStillMatchesFilter) setSelectedConvId(null);
+    },
+    onError: (err) => showToast(`Pending failed: ${(err as Error).message}`),
   });
 
   const reopenMutation = useMutation({
@@ -192,12 +280,22 @@ export function HelpScoutEmailView({
   });
 
   const spamMutation = useMutation({
-    mutationFn: () => api.changeStatus(accountKey, selectedConvId!, "spam"),
+    mutationFn: async () => {
+      const id = selectedConvId!;
+      optimisticallyRemoveConv(id);
+      try {
+        return await api.changeStatus(accountKey, id, "spam");
+      } catch (e) {
+        unremoveConv(id);
+        throw e;
+      }
+    },
     onSuccess: () => {
       showToast("Marked spam.");
       invalidateList();
       setSelectedConvId(null);
     },
+    onError: (err) => showToast(`Spam failed: ${(err as Error).message}`),
   });
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -340,6 +438,24 @@ export function HelpScoutEmailView({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Auto-noise tag and close</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={pendingMutation.isPending}
+                          onClick={() => pendingMutation.mutate()}
+                          aria-label="Mark pending"
+                        >
+                          {pendingMutation.isPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Clock className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Mark pending (snooze)</TooltipContent>
                     </Tooltip>
                     {fullStatus === "closed" ? (
                       <Tooltip>
