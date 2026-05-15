@@ -145,6 +145,20 @@ export function Layout() {
       })
     ) {
       setSelectedCompanyId(matchedCompany.id, { source: "route_sync" });
+      return;
+    }
+
+    // URL has settled at selectedCompanyId — the "manual" sidebar-click guard
+    // in shouldSyncCompanySelectionFromRoute exists to protect the brief race
+    // window between setSelectedCompanyId(id, manual) and useCompanyPageMemory
+    // navigating to the remembered path. Once the URL catches up to the
+    // selected company, the guard is no longer load-bearing and a sticky
+    // "manual" source breaks subsequent cross-company `<Link>` clicks (e.g.
+    // PortfolioBrief's email-row link to /M3/email — the URL navigates but
+    // the company stays HQ, rendering "Email not configured" until refresh).
+    // Flip to "route_sync" so future URL-driven nav can pull the company.
+    if (selectionSource === "manual") {
+      setSelectedCompanyId(matchedCompany.id, { source: "route_sync" });
     }
   }, [
     companyPrefix,
