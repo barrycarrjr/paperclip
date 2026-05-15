@@ -228,6 +228,10 @@ vi.mock("../components/ScrollToBottom", () => ({
   ScrollToBottom: () => null,
 }));
 
+vi.mock("../components/ScrollToTop", () => ({
+  ScrollToTop: () => null,
+}));
+
 vi.mock("../components/StatusIcon", () => ({
   StatusIcon: ({ status, blockerAttention }: { status: string; blockerAttention?: Issue["blockerAttention"] }) => (
     <span data-status-icon-state={blockerAttention?.state}>{status}</span>

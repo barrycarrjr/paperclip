@@ -75,6 +75,7 @@ import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
 import { ImageGalleryModal } from "../components/ImageGalleryModal";
 import { ScrollToBottom } from "../components/ScrollToBottom";
+import { ScrollToTop } from "../components/ScrollToTop";
 import { StatusIcon } from "../components/StatusIcon";
 import { PriorityIcon } from "../components/PriorityIcon";
 import { Identity } from "../components/Identity";
@@ -2873,7 +2874,7 @@ export function IssueDetail() {
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="md:sticky md:top-0 md:z-20 md:-mt-3 md:py-3 md:bg-background/95 md:backdrop-blur md:supports-[backdrop-filter]:bg-background/75 md:border-b md:border-border/40">
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <StatusIcon
             status={issue.status}
@@ -3092,7 +3093,9 @@ export function IssueDetail() {
             </Popover>
           </div>
         </div>
+      </div>
 
+      <div className="space-y-3">
         <InlineEditor
           value={issue.title}
           onSave={(title) => updateIssue.mutateAsync({ title })}
@@ -3643,6 +3646,7 @@ export function IssueDetail() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
+      <ScrollToTop />
       <ScrollToBottom />
     </div>
   );
