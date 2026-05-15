@@ -134,9 +134,12 @@ function RoutineEditor({ id }: { id: string | null }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => templatesApi.remove("routine", id!),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("routine") });
+    onSuccess: () => {
+      // Navigate first so the operator gets immediate feedback even if the
+      // background refetch is slow; invalidating *before* navigate let the
+      // await stall onSuccess and stranded the user on the now-stale editor.
       navigate("/instance/settings/templates");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("routine") });
     },
   });
 
@@ -435,9 +438,9 @@ function SkillEditor({ id }: { id: string | null }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => templatesApi.remove("skill", id!),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("skill") });
+    onSuccess: () => {
       navigate("/instance/settings/templates");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("skill") });
     },
   });
 
@@ -605,9 +608,9 @@ function AgentEditor({ id }: { id: string | null }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => templatesApi.remove("agent", id!),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("agent") });
+    onSuccess: () => {
       navigate("/instance/settings/templates");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("agent") });
     },
   });
 

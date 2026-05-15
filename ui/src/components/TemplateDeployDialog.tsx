@@ -44,8 +44,11 @@ export function TemplateDeployDialog({
   const [skipExisting, setSkipExisting] = useState(true);
   const [result, setResult] = useState<TemplateDeploymentResult | null>(null);
 
+  // CompanyContext owns `queryKeys.companies.all` and caches a wrapped
+  // `{ companies, unauthorized }` shape; sharing the key here would crash
+  // [...all].sort() below. Same dedicated-key workaround as PluginSettings.
   const companiesQuery = useQuery({
-    queryKey: queryKeys.companies.all,
+    queryKey: ["companies", "list-flat"] as const,
     queryFn: () => companiesApi.list(),
     enabled: open,
   });

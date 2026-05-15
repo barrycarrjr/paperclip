@@ -17,6 +17,25 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TemplateLibraryDialog } from "@/components/TemplateLibraryDialog";
 
+const LAST_TAB_KEY = "paperclip.lastTemplatesTab";
+const LAST_TAB_TTL_MS = 10 * 60_000;
+
+function readRememberedTab(): TemplateType {
+  if (typeof window === "undefined") return "routine";
+  try {
+    const raw = window.localStorage.getItem(LAST_TAB_KEY);
+    if (!raw) return "routine";
+    const parsed = JSON.parse(raw) as { tab?: unknown; savedAt?: unknown };
+    const tab = parsed.tab;
+    const savedAt = typeof parsed.savedAt === "number" ? parsed.savedAt : 0;
+    if (Date.now() - savedAt > LAST_TAB_TTL_MS) return "routine";
+    if (tab === "routine" || tab === "skill" || tab === "agent") return tab;
+  } catch {
+    // fall through to default
+  }
+  return "routine";
+}
+
 const TYPE_META: Record<TemplateType, { label: string; icon: typeof Bot; description: string }> = {
   routine: {
     label: "Routines",
@@ -37,7 +56,7 @@ const TYPE_META: Record<TemplateType, { label: string; icon: typeof Bot; descrip
 
 export function InstanceTemplates() {
   const { setBreadcrumbs } = useBreadcrumbs();
-  const [tab, setTab] = useState<TemplateType>("routine");
+  const [tab, setTab] = useState<TemplateType>(readRememberedTab);
   const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
@@ -46,6 +65,17 @@ export function InstanceTemplates() {
       { label: "Templates" },
     ]);
   }, [setBreadcrumbs]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LAST_TAB_KEY,
+        JSON.stringify({ tab, savedAt: Date.now() }),
+      );
+    } catch {
+      // Ignore storage failures in restricted environments.
+    }
+  }, [tab]);
 
   const routineQuery = useQuery({
     queryKey: queryKeys.templates.list("routine"),
@@ -315,11 +345,6 @@ function TemplateListView<T extends { id: string; name: string }>({
         <CardContent className="flex flex-col items-center justify-center py-10 gap-3">
           <Icon className="h-10 w-10 text-muted-foreground" />
           <p className="text-sm font-medium">No {TYPE_META[type].label.toLowerCase()} templates yet</p>
-          <Button asChild size="sm">
-            <Link to={`/instance/settings/templates/${type}/new`}>
-              <Plus className="h-3.5 w-3.5" /> Create one
-            </Link>
-          </Button>
         </CardContent>
       </Card>
     );
