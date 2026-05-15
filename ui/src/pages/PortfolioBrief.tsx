@@ -1192,10 +1192,21 @@ function ReviewQueueRow({
   // `company` is suppressed below — it's the rules-home grouping passed in
   // for symmetry with sibling rows. The email link uses `emailCompany`.
   void company;
+  const { selectedCompanyId, setSelectedCompanyId } = useCompany();
   const subjectLine = preview?.subject?.trim() || "";
   const snippet = preview?.snippet?.trim() || "";
   const fullBody = fullBodyText ? truncateBody(fullBodyText, PREVIEW_BODY_CHARS) : null;
   const baseEmailPath = `/${emailCompany.issuePrefix}/email`;
+  // Without pre-flipping selectedCompanyId, Layout's URL→company sync bails out
+  // when selectionSource is "manual" (see shouldSyncCompanySelectionFromRoute),
+  // landing the Email page on the wrong company and rendering "Email not
+  // configured" until the operator refreshes. Pair the navigation with a
+  // route_sync company switch — mirrors PortfolioEmail.openInCompany.
+  function handleLinkClick() {
+    if (emailCompany.id !== selectedCompanyId) {
+      setSelectedCompanyId(emailCompany.id, { source: "route_sync" });
+    }
+  }
   const messageHref = preview
     ? `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&uid=${preview.uid}&all=1`
     : `${baseEmailPath}?mailbox=${encodeURIComponent(row.mailbox)}&folder=INBOX&all=1`;
@@ -1233,6 +1244,7 @@ function ReviewQueueRow({
             <TooltipTrigger asChild>
               <Link
                 to={messageHref}
+                onClick={handleLinkClick}
                 title={preview ? "Open this email" : "Open this mailbox (no recent message found in INBOX)"}
                 className="block group/link cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/40 rounded-sm"
               >
