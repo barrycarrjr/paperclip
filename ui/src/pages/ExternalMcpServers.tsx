@@ -55,6 +55,11 @@ import { EnvVarEditor } from "@/components/EnvVarEditor";
 import { CompanyMultiSelectField } from "@/components/JsonSchemaForm";
 import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
+import {
+  CUSTOM_CONNECTOR_TILE,
+  EXTERNAL_MCP_CATALOG,
+  type CatalogEntry,
+} from "./externalMcpCatalog";
 
 const QUERY_KEY = ["external-mcp-servers"] as const;
 
@@ -97,6 +102,21 @@ function splitLines(raw: string): string[] {
     .split(/[,\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function catalogEntryToForm(entry: CatalogEntry): FormState {
+  return {
+    ...emptyForm,
+    key: entry.key,
+    displayName: entry.displayName,
+    description: entry.tagline,
+    transport: entry.transport,
+    command: entry.command ?? "npx",
+    argsRaw: (entry.args ?? []).join("\n"),
+    url: entry.url ?? "",
+    envBindings: entry.envBindings ?? {},
+    headerBindings: entry.headerBindings ?? {},
+  };
 }
 
 function formToCreatePayload(form: FormState): CreateExternalMcpServer {
@@ -160,7 +180,9 @@ export function ExternalMcpServers() {
   });
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [catalogDialogOpen, setCatalogDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [activeCatalogEntry, setActiveCatalogEntry] = useState<CatalogEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ExternalMcpServerRecord | null>(null);
   const [testTarget, setTestTarget] = useState<ExternalMcpServerRecord | null>(null);
   const [testCompanyId, setTestCompanyId] = useState("");
@@ -213,6 +235,25 @@ export function ExternalMcpServers() {
     [data],
   );
 
+  const registeredKeys = useMemo(
+    () => new Set((data ?? []).map((r) => r.key)),
+    [data],
+  );
+
+  function pickCatalogEntry(entry: CatalogEntry) {
+    setForm(catalogEntryToForm(entry));
+    setActiveCatalogEntry(entry);
+    setCatalogDialogOpen(false);
+    setCreateDialogOpen(true);
+  }
+
+  function openBlankRegistration() {
+    setForm(emptyForm);
+    setActiveCatalogEntry(null);
+    setCatalogDialogOpen(false);
+    setCreateDialogOpen(true);
+  }
+
   function handleEnvChange(env: Record<string, EnvBinding> | undefined) {
     setForm((f) => ({ ...f, envBindings: env ?? {} }));
   }
@@ -241,8 +282,8 @@ export function ExternalMcpServers() {
           >
             <RefreshCw className={cn("h-4 w-4", listSpinning && "animate-spin")} />
           </Button>
-          <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="mr-1 h-4 w-4" /> Register server
+          <Button size="sm" onClick={() => setCatalogDialogOpen(true)}>
+            <Plus className="mr-1 h-4 w-4" /> Add MCP server
           </Button>
         </div>
       </div>
@@ -351,23 +392,57 @@ export function ExternalMcpServers() {
         {sortedRows.length === 0 && !isLoading && (
           <Card>
             <CardContent className="py-6 text-center text-sm text-muted-foreground">
-              No external MCP servers registered yet. Click <strong>Register server</strong> to add
-              one.
+              No external MCP servers registered yet. Click <strong>Add MCP server</strong> to pick
+              one from the catalog or roll your own.
             </CardContent>
           </Card>
         )}
       </div>
 
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          setCreateDialogOpen(open);
+          if (!open) setActiveCatalogEntry(null);
+        }}
+      >
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-auto">
           <DialogHeader>
-            <DialogTitle>Register external MCP server</DialogTitle>
+            <DialogTitle>
+              {activeCatalogEntry
+                ? `Register ${activeCatalogEntry.displayName}`
+                : "Register external MCP server"}
+            </DialogTitle>
             <DialogDescription>
               Use stdio for npm-distributed servers (run via npx) or http/sse for remote endpoints.
               Bind credentials by referencing existing company secrets — each company resolves the
               binding against its own vault.
             </DialogDescription>
           </DialogHeader>
+
+          {activeCatalogEntry && (
+            <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
+              {activeCatalogEntry.notes && (
+                <p className="text-muted-foreground">{activeCatalogEntry.notes}</p>
+              )}
+              {activeCatalogEntry.requiredSecrets &&
+                activeCatalogEntry.requiredSecrets.length > 0 && (
+                  <div>
+                    <span className="font-medium text-foreground">Required secrets: </span>
+                    {activeCatalogEntry.requiredSecrets.map((s, i) => (
+                      <span key={s}>
+                        {i > 0 && ", "}
+                        <code className="rounded bg-muted px-1">{s}</code>
+                      </span>
+                    ))}
+                    <p className="mt-1 text-muted-foreground">
+                      Add these in <strong>Company Secrets</strong> for each allowed company before
+                      agents can use this server.
+                    </p>
+                  </div>
+                )}
+            </div>
+          )}
 
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3">
@@ -541,6 +616,78 @@ export function ExternalMcpServers() {
               disabled={createMutation.isPending || !form.key.trim() || !form.displayName.trim()}
             >
               {createMutation.isPending ? "Saving…" : "Register"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={catalogDialogOpen} onOpenChange={setCatalogDialogOpen}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Browse MCP catalog</DialogTitle>
+            <DialogDescription>
+              Pick a server to pre-fill the registration form. You'll still choose which companies
+              can use it and confirm credential bindings before it goes live.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {EXTERNAL_MCP_CATALOG.map((entry) => {
+              const Icon = entry.icon;
+              const alreadyRegistered = registeredKeys.has(entry.key);
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  onClick={() => pickCatalogEntry(entry)}
+                  className="group flex flex-col gap-2 rounded-md border border-border bg-background p-3 text-left transition hover:border-primary hover:bg-muted/40"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Icon className="h-5 w-5 text-muted-foreground group-hover:text-foreground" />
+                      <span className="font-semibold text-sm">{entry.displayName}</span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {entry.transport}
+                      </Badge>
+                    </div>
+                    {alreadyRegistered && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        registered
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{entry.tagline}</p>
+                  {entry.requiredSecrets && entry.requiredSecrets.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Needs:{" "}
+                      {entry.requiredSecrets.map((s, i) => (
+                        <span key={s}>
+                          {i > 0 && ", "}
+                          <code className="rounded bg-muted px-1 text-[10px]">{s}</code>
+                        </span>
+                      ))}
+                    </p>
+                  )}
+                </button>
+              );
+            })}
+
+            <button
+              type="button"
+              onClick={openBlankRegistration}
+              className="group flex flex-col gap-2 rounded-md border border-dashed border-border bg-background p-3 text-left transition hover:border-primary hover:bg-muted/40"
+            >
+              <div className="flex items-center gap-2">
+                <CUSTOM_CONNECTOR_TILE.icon className="h-5 w-5 text-muted-foreground group-hover:text-foreground" />
+                <span className="font-semibold text-sm">{CUSTOM_CONNECTOR_TILE.displayName}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{CUSTOM_CONNECTOR_TILE.tagline}</p>
+            </button>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCatalogDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

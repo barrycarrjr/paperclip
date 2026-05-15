@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { PluginRecord } from "@paperclipai/shared";
+import { PLUGIN_CATEGORIES, type PluginCategory, type PluginRecord } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
@@ -42,6 +42,15 @@ function firstNonEmptyLine(value: string | null | undefined): string | null {
 function getPluginErrorSummary(plugin: PluginRecord): string {
   return firstNonEmptyLine(plugin.lastError) ?? "Plugin entered an error state without a stored error message.";
 }
+
+const CATEGORY_LABELS: Record<PluginCategory, string> = {
+  connector: "Connector",
+  workspace: "Workspace",
+  automation: "Automation",
+  ui: "UI",
+};
+
+type AvailabilityFilter = "all" | "available" | "comingSoon";
 
 /**
  * PluginManager page component.
@@ -91,6 +100,8 @@ export function PluginManager() {
   const [uninstallPluginName, setUninstallPluginName] = useState<string>("");
   const [errorDetailsPlugin, setErrorDetailsPlugin] = useState<PluginRecord | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<Set<PluginCategory>>(new Set());
+  const [availabilityFilter, setAvailabilityFilter] = useState<AvailabilityFilter>("all");
   // When the upgrade path returns a 409 capability_escalation, park the
   // pluginKey + escalation details so the dialog can present them to the
   // operator and resubmit with `acknowledgeCapabilities` on confirm.
@@ -315,6 +326,62 @@ export function PluginManager() {
     [unifiedRows],
   );
 
+  const rowCategories = (row: UnifiedRow): PluginCategory[] => {
+    const cats =
+      row.installedPlugin?.manifestJson?.categories ??
+      (row.libraryEntry?.categories as PluginCategory[] | undefined) ??
+      [];
+    return cats as PluginCategory[];
+  };
+
+  const isRowComingSoon = (row: UnifiedRow): boolean =>
+    !row.installedPlugin && !!row.libraryEntry?.comingSoon;
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<PluginCategory, number>();
+    for (const cat of PLUGIN_CATEGORIES) counts.set(cat, 0);
+    for (const row of unifiedRows) {
+      for (const cat of rowCategories(row)) {
+        if (counts.has(cat)) counts.set(cat, (counts.get(cat) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [unifiedRows]);
+
+  const comingSoonCount = useMemo(
+    () => unifiedRows.filter(isRowComingSoon).length,
+    [unifiedRows],
+  );
+
+  const filteredRows = useMemo(() => {
+    return unifiedRows.filter((row) => {
+      const comingSoon = isRowComingSoon(row);
+      if (availabilityFilter === "available" && comingSoon) return false;
+      if (availabilityFilter === "comingSoon" && !comingSoon) return false;
+      if (categoryFilter.size > 0) {
+        const cats = rowCategories(row);
+        if (!cats.some((c) => categoryFilter.has(c))) return false;
+      }
+      return true;
+    });
+  }, [unifiedRows, categoryFilter, availabilityFilter]);
+
+  const hasActiveFilters = categoryFilter.size > 0 || availabilityFilter !== "all";
+
+  const toggleCategory = (cat: PluginCategory) => {
+    setCategoryFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
+
+  const clearFilters = () => {
+    setCategoryFilter(new Set());
+    setAvailabilityFilter("all");
+  };
+
   async function handleUpdateAll() {
     if (bulkUpdating || updatableRows.length === 0) return;
     setBulkUpdating(true);
@@ -527,6 +594,82 @@ export function PluginManager() {
           </div>
         )}
 
+        {unifiedRows.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border bg-muted/20 px-3 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-muted-foreground">Type:</span>
+              {PLUGIN_CATEGORIES.map((cat) => {
+                const count = categoryCounts.get(cat) ?? 0;
+                if (count === 0) return null;
+                const active = categoryFilter.has(cat);
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => toggleCategory(cat)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 transition",
+                      active
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-background hover:bg-muted",
+                    )}
+                  >
+                    {CATEGORY_LABELS[cat]}{" "}
+                    <span className={cn(active ? "text-primary/70" : "text-muted-foreground")}>
+                      ({count})
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-muted-foreground">Status:</span>
+              {(
+                [
+                  { value: "all", label: "All" },
+                  { value: "available", label: "Available" },
+                  ...(comingSoonCount > 0
+                    ? ([
+                        {
+                          value: "comingSoon" as const,
+                          label: `Coming soon (${comingSoonCount})`,
+                        },
+                      ] as const)
+                    : []),
+                ] as Array<{ value: AvailabilityFilter; label: string }>
+              ).map((opt) => {
+                const active = availabilityFilter === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setAvailabilityFilter(opt.value)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 transition",
+                      active
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-background hover:bg-muted",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="ml-auto text-muted-foreground hover:text-foreground"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        )}
+
         {unifiedRows.length === 0 ? (
           <Card className="bg-muted/30">
             <CardContent className="flex flex-col items-center justify-center py-10">
@@ -538,9 +681,18 @@ export function PluginManager() {
               </p>
             </CardContent>
           </Card>
+        ) : filteredRows.length === 0 ? (
+          <Card className="bg-muted/30">
+            <CardContent className="flex flex-col items-center justify-center py-8">
+              <p className="text-sm font-medium">No plugins match these filters</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            </CardContent>
+          </Card>
         ) : (
           <ul className="divide-y rounded-md border bg-card">
-            {unifiedRows.map((row) => {
+            {filteredRows.map((row) => {
               const installed = row.installedPlugin;
               const lib = row.libraryEntry;
               const installedVersion =
