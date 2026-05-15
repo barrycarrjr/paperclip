@@ -9,7 +9,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PLUGIN_CATEGORIES, type PluginCategory, type PluginRecord } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
-import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi, asCapabilityEscalationError, type CapabilityEscalationDetails } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
@@ -86,7 +85,6 @@ function isVersionNewer(a: string, b: string): boolean {
 }
 
 export function PluginManager() {
-  const { selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
@@ -115,11 +113,10 @@ export function PluginManager() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/brief" },
-      { label: "Settings", href: "/instance/settings/heartbeats" },
+      { label: "Instance Settings" },
       { label: "Plugins" },
     ]);
-  }, [selectedCompany?.name, setBreadcrumbs]);
+  }, [setBreadcrumbs]);
 
   const { data: plugins, isLoading, error } = useQuery({
     queryKey: queryKeys.plugins.all,

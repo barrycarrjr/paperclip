@@ -7,7 +7,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Cpu, Plus, Power, Trash2, FolderOpen, Package, RefreshCw, Download, LogIn } from "lucide-react";
-import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { adaptersApi } from "@/api/adapters";
 import type { AdapterInfo, AdapterAuthResult, AdapterAuthStatusEntry } from "@/api/adapters";
@@ -365,7 +364,6 @@ function AdapterLoginDialog({
 }
 
 export function AdapterManager() {
-  const { selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
@@ -381,11 +379,10 @@ export function AdapterManager() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/brief" },
-      { label: "Settings", href: "/instance/settings/general" },
+      { label: "Instance Settings" },
       { label: "Adapters" },
     ]);
-  }, [selectedCompany?.name, setBreadcrumbs]);
+  }, [setBreadcrumbs]);
 
   const { data: adapters, isLoading } = useQuery({
     queryKey: queryKeys.adapters.all,

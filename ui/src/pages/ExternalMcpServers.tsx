@@ -146,7 +146,7 @@ export function ExternalMcpServers() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: "Instance", href: "/instance/settings/general" },
+      { label: "Instance Settings" },
       { label: "External MCP servers" },
     ]);
   }, [setBreadcrumbs]);
