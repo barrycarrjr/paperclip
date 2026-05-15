@@ -18,11 +18,11 @@ export function InstanceSidebar() {
           <SidebarNavItem to="/instance/settings/access" label="Access" icon={Shield} end />
           <SidebarNavItem to="/instance/settings/heartbeats" label="Heartbeats" icon={Clock3} end />
           <SidebarNavItem to="/instance/settings/templates" label="Templates" icon={Sparkles} />
-          <SidebarNavItem to="/instance/settings/experimental" label="Experimental" icon={FlaskConical} />
           <SidebarNavItem to="/instance/settings/plugins" label="Plugins" icon={Puzzle} />
           <SidebarNavItem to="/instance/settings/adapters" label="Adapters" icon={Cpu} />
           <SidebarNavItem to="/instance/settings/agent-defaults" label="Agent defaults" icon={Bot} />
           <SidebarNavItem to="/instance/settings/external-mcp" label="MCP servers" icon={Network} />
+          <SidebarNavItem to="/instance/settings/experimental" label="Experimental" icon={FlaskConical} />
         </div>
       </nav>
     </aside>
