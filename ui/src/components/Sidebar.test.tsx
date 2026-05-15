@@ -33,6 +33,7 @@ vi.mock("@/lib/router", () => ({
       {children}
     </a>
   ),
+  useNavigate: () => vi.fn(),
 }));
 
 vi.mock("../context/DialogContext", () => ({

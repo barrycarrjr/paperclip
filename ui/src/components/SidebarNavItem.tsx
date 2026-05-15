@@ -1,7 +1,9 @@
-import { NavLink } from "@/lib/router";
+import { NavLink, useNavigate } from "@/lib/router";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useSidebar } from "../context/SidebarContext";
+import { useCompany } from "../context/CompanyContext";
+import { useSidebarPeek } from "../context/SidebarPeekContext";
 import { SidebarInfoButton } from "./SidebarInfoButton";
 import type { LucideIcon } from "lucide-react";
 
@@ -35,24 +37,19 @@ export function SidebarNavItem({
   info,
 }: SidebarNavItemProps) {
   const { isMobile, setSidebarOpen } = useSidebar();
+  const peek = useSidebarPeek();
+  const { setSelectedCompanyId } = useCompany();
+  const navigate = useNavigate();
 
-  const link = (
-    <NavLink
-      to={to}
-      state={SIDEBAR_SCROLL_RESET_STATE}
-      end={end}
-      onClick={() => { if (isMobile) setSidebarOpen(false); }}
-      className={({ isActive }) =>
-        cn(
-          "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
-          isActive
-            ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
-            : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
-          info && "pr-8",
-          className,
-        )
-      }
-    >
+  const baseClassName = cn(
+    "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
+    "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
+    info && "pr-8",
+    className,
+  );
+
+  const innerChildren = (
+    <>
       <span className={cn("relative shrink-0", "[&_svg]:transition-colors")}>
         <Icon className="h-4 w-4" />
         {alert && (
@@ -93,6 +90,63 @@ export function SidebarNavItem({
           {badge}
         </span>
       )}
+    </>
+  );
+
+  // In peek mode (rendered inside a CompanyRail hover flyout), the menu is
+  // showing a different company than the one currently selected. Clicking an
+  // item must switch the selected company *before* navigating — otherwise the
+  // bare path (`/brief`, `/inbox`) would render against the still-selected
+  // company. Skip NavLink's active-state styling: no item is "active" from the
+  // peeked company's perspective.
+  if (peek) {
+    const link = (
+      <a
+        href={to}
+        onClick={(e) => {
+          e.preventDefault();
+          setSelectedCompanyId(peek.peekCompanyId, { source: "manual" });
+          navigate(to);
+          peek.onItemClick?.();
+          if (isMobile) setSidebarOpen(false);
+        }}
+        className={baseClassName}
+      >
+        {innerChildren}
+      </a>
+    );
+
+    if (!info) return link;
+    return (
+      <div className="group relative">
+        {link}
+        <SidebarInfoButton
+          title={label}
+          info={info}
+          className="absolute right-2 top-1/2 -translate-y-1/2"
+        />
+      </div>
+    );
+  }
+
+  const link = (
+    <NavLink
+      to={to}
+      state={SIDEBAR_SCROLL_RESET_STATE}
+      end={end}
+      onClick={() => { if (isMobile) setSidebarOpen(false); }}
+      className={({ isActive }) =>
+        cn(
+          "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
+          isActive
+            ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
+            : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
+          info && "pr-8",
+          className,
+        )
+      }
+    >
+      {innerChildren}
     </NavLink>
   );
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Paperclip, Plus } from "lucide-react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -18,6 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
+import { useSidebar } from "../context/SidebarContext";
 import { cn } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
 import { sidebarBadgesApi } from "../api/sidebarBadges";
@@ -30,8 +31,77 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
+import { SidebarMenu } from "./SidebarMenu";
+
+/**
+ * Body shown inside a CompanyRail hover-peek flyout: company name header
+ * (replaces what the simple name-tooltip used to show) plus the full
+ * SidebarMenu in peek mode. Lives in `HoverCardContent`.
+ */
+function CompanyPeekContent({
+  company,
+  onItemClick,
+}: {
+  company: Company;
+  onItemClick: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-2 px-3 h-12 border-b border-border shrink-0">
+        {company.brandColor ? (
+          <span
+            className="size-4 shrink-0 rounded-sm"
+            style={{ backgroundColor: company.brandColor }}
+          />
+        ) : null}
+        <span className="truncate text-sm font-bold text-foreground">
+          {company.name}
+        </span>
+        {company.isPortfolioRoot && (
+          <span className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80">
+            Root
+          </span>
+        )}
+      </div>
+      <nav className="max-h-[70vh] overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-3">
+        <SidebarMenu
+          company={company}
+          peekMode
+          onPeekItemClick={onItemClick}
+        />
+      </nav>
+    </>
+  );
+}
+
+/**
+ * Hook for the per-avatar hover-peek state and gating rules. Peek only fires
+ * when the wide sidebar is collapsed — otherwise the same menu is already
+ * visible and the flyout would be redundant. Also suppressed on mobile (no
+ * hover) and while a drag is in flight. The name tooltip is hidden while the
+ * peek is open so the two popovers don't overlap.
+ */
+function useCompanyPeek(isDragging: boolean) {
+  const { isMobile, sidebarOpen } = useSidebar();
+  const [peekOpen, setPeekOpen] = useState(false);
+  const peekEnabled = !isMobile && !isDragging && !sidebarOpen;
+  const effectivePeekOpen = peekEnabled && peekOpen;
+  return {
+    peekEnabled,
+    peekOpen: effectivePeekOpen,
+    setPeekOpen: (next: boolean) => {
+      if (peekEnabled) setPeekOpen(next);
+    },
+    closePeek: () => setPeekOpen(false),
+  };
+}
 
 function SortableCompanyItem({
   company,
@@ -62,73 +132,98 @@ function SortableCompanyItem({
     opacity: isDragging ? 0.8 : 1,
   };
 
+  const peek = useCompanyPeek(isDragging);
+  const [tooltipHoverOpen, setTooltipHoverOpen] = useState(false);
+  const tooltipOpen = tooltipHoverOpen && !peek.peekOpen;
+
+  const avatar = (
+    <a
+      href={`/${company.issuePrefix}/dashboard`}
+      onClick={(e) => {
+        if (isDragging) {
+          e.preventDefault();
+          return;
+        }
+        e.preventDefault();
+        onSelect();
+      }}
+      className="relative flex items-center justify-center group overflow-visible"
+    >
+      {/* Selection indicator pill */}
+      <div
+        className={cn(
+          "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+          isSelected ? "h-5" : "h-0 group-hover:h-2",
+        )}
+      />
+      <div
+        className={cn("relative overflow-visible transition-transform duration-150", isDragging && "scale-105")}
+      >
+        <CompanyPatternIcon
+          companyName={company.name}
+          logoUrl={company.logoUrl}
+          brandColor={company.brandColor}
+          className={cn(
+            isSelected ? "rounded-[14px]" : "rounded-[22px] group-hover:rounded-[14px]",
+            isDragging && "shadow-lg",
+          )}
+        />
+        {hasLiveAgents && (
+          <span className="pointer-events-none absolute -right-0.5 -top-0.5 z-10">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-80" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-background" />
+            </span>
+          </span>
+        )}
+        {inboxCount > 0 && (
+          <span
+            className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
+            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+          >
+            {inboxCount > 99 ? "99+" : inboxCount}
+          </span>
+        )}
+      </div>
+    </a>
+  );
+
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="overflow-visible">
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <a
-            href={`/${company.issuePrefix}/dashboard`}
-            onClick={(e) => {
-              if (isDragging) {
-                e.preventDefault();
-                return;
-              }
-              e.preventDefault();
-              onSelect();
-            }}
-            className="relative flex items-center justify-center group overflow-visible"
+      <HoverCard
+        openDelay={1200}
+        closeDelay={150}
+        open={peek.peekOpen}
+        onOpenChange={peek.setPeekOpen}
+      >
+        <Tooltip
+          delayDuration={300}
+          open={tooltipOpen}
+          onOpenChange={setTooltipHoverOpen}
+        >
+          <HoverCardTrigger asChild>
+            <TooltipTrigger asChild>{avatar}</TooltipTrigger>
+          </HoverCardTrigger>
+          <TooltipContent side="right" sideOffset={8}>
+            <p>{company.name}</p>
+            {inboxCount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+              </p>
+            )}
+          </TooltipContent>
+        </Tooltip>
+        {peek.peekEnabled && (
+          <HoverCardContent
+            side="right"
+            align="start"
+            sideOffset={8}
+            className="w-60 p-0"
           >
-            {/* Selection indicator pill */}
-            <div
-              className={cn(
-                "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
-                isSelected
-                  ? "h-5"
-                  : "h-0 group-hover:h-2"
-              )}
-            />
-            <div
-              className={cn("relative overflow-visible transition-transform duration-150", isDragging && "scale-105")}
-            >
-              <CompanyPatternIcon
-                companyName={company.name}
-                logoUrl={company.logoUrl}
-                brandColor={company.brandColor}
-                className={cn(
-                  isSelected
-                    ? "rounded-[14px]"
-                    : "rounded-[22px] group-hover:rounded-[14px]",
-                  isDragging && "shadow-lg",
-                )}
-              />
-              {hasLiveAgents && (
-                <span className="pointer-events-none absolute -right-0.5 -top-0.5 z-10">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-80" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-background" />
-                  </span>
-                </span>
-              )}
-              {inboxCount > 0 && (
-                <span
-                  className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-                  aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
-                >
-                  {inboxCount > 99 ? "99+" : inboxCount}
-                </span>
-              )}
-            </div>
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          <p>{company.name}</p>
-          {inboxCount > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
-            </p>
-          )}
-        </TooltipContent>
-      </Tooltip>
+            <CompanyPeekContent company={company} onItemClick={peek.closePeek} />
+          </HoverCardContent>
+        )}
+      </HoverCard>
     </div>
   );
 }
@@ -151,62 +246,91 @@ function PinnedHqItem({
   inboxCount: number;
   onSelect: () => void;
 }) {
+  const peek = useCompanyPeek(false);
+  const [tooltipHoverOpen, setTooltipHoverOpen] = useState(false);
+  const tooltipOpen = tooltipHoverOpen && !peek.peekOpen;
+
+  const avatar = (
+    <a
+      href={`/${company.issuePrefix}/dashboard`}
+      onClick={(e) => {
+        e.preventDefault();
+        onSelect();
+      }}
+      className="relative flex items-center justify-center group overflow-visible"
+    >
+      {/* Selection indicator pill */}
+      <div
+        className={cn(
+          "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+          isSelected ? "h-5" : "h-0 group-hover:h-2",
+        )}
+      />
+      <div className="relative overflow-visible">
+        <CompanyPatternIcon
+          companyName={company.name}
+          logoUrl={company.logoUrl}
+          brandColor={company.brandColor}
+          /* Always rounded-square — HQ is visually distinct from peer companies which morph from circle on hover. */
+          className="rounded-[14px] ring-1 ring-foreground/20"
+        />
+        {hasLiveAgents && (
+          <span className="pointer-events-none absolute -right-0.5 -top-0.5 z-10">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-80" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-background" />
+            </span>
+          </span>
+        )}
+        {inboxCount > 0 && (
+          <span
+            className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
+            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+          >
+            {inboxCount > 99 ? "99+" : inboxCount}
+          </span>
+        )}
+      </div>
+    </a>
+  );
+
   return (
     <div className="overflow-visible">
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <a
-            href={`/${company.issuePrefix}/dashboard`}
-            onClick={(e) => {
-              e.preventDefault();
-              onSelect();
-            }}
-            className="relative flex items-center justify-center group overflow-visible"
+      <HoverCard
+        openDelay={1200}
+        closeDelay={150}
+        open={peek.peekOpen}
+        onOpenChange={peek.setPeekOpen}
+      >
+        <Tooltip
+          delayDuration={300}
+          open={tooltipOpen}
+          onOpenChange={setTooltipHoverOpen}
+        >
+          <HoverCardTrigger asChild>
+            <TooltipTrigger asChild>{avatar}</TooltipTrigger>
+          </HoverCardTrigger>
+          <TooltipContent side="right" sideOffset={8}>
+            <p className="font-medium">{company.name}</p>
+            <p className="text-xs text-muted-foreground">Portfolio root</p>
+            {inboxCount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+              </p>
+            )}
+          </TooltipContent>
+        </Tooltip>
+        {peek.peekEnabled && (
+          <HoverCardContent
+            side="right"
+            align="start"
+            sideOffset={8}
+            className="w-60 p-0"
           >
-            {/* Selection indicator pill */}
-            <div
-              className={cn(
-                "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
-                isSelected ? "h-5" : "h-0 group-hover:h-2",
-              )}
-            />
-            <div className="relative overflow-visible">
-              <CompanyPatternIcon
-                companyName={company.name}
-                logoUrl={company.logoUrl}
-                brandColor={company.brandColor}
-                /* Always rounded-square — HQ is visually distinct from peer companies which morph from circle on hover. */
-                className="rounded-[14px] ring-1 ring-foreground/20"
-              />
-              {hasLiveAgents && (
-                <span className="pointer-events-none absolute -right-0.5 -top-0.5 z-10">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-80" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-background" />
-                  </span>
-                </span>
-              )}
-              {inboxCount > 0 && (
-                <span
-                  className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-                  aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
-                >
-                  {inboxCount > 99 ? "99+" : inboxCount}
-                </span>
-              )}
-            </div>
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          <p className="font-medium">{company.name}</p>
-          <p className="text-xs text-muted-foreground">Portfolio root</p>
-          {inboxCount > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
-            </p>
-          )}
-        </TooltipContent>
-      </Tooltip>
+            <CompanyPeekContent company={company} onItemClick={peek.closePeek} />
+          </HoverCardContent>
+        )}
+      </HoverCard>
     </div>
   );
 }
