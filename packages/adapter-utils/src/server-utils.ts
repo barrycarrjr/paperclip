@@ -1518,6 +1518,15 @@ export async function runChildProcess(
           shell: false,
           stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
         }) as ChildProcessWithEvents;
+        // Decode stdout/stderr as UTF-8 at the stream level so Node's internal
+        // StringDecoder buffers partial multi-byte sequences across chunk
+        // boundaries. Without this, `data` events deliver raw Buffer chunks and
+        // any per-chunk `toString("utf8")` would replace bytes split mid-codepoint
+        // (e.g. an emoji landing on a chunk boundary) with U+FFFD, which then
+        // gets parsed into the adapter's streamed JSON and posted into issue
+        // comments verbatim.
+        child.stdout?.setEncoding("utf8");
+        child.stderr?.setEncoding("utf8");
         const startedAt = new Date().toISOString();
         const processGroupId = resolveProcessGroupId(child);
 

@@ -249,6 +249,36 @@ describe("runChildProcess", () => {
       }
     }
   });
+
+  it("reconstructs multi-byte UTF-8 codepoints that span stdout chunk boundaries", async () => {
+    // ✅ (U+2705) is 3 bytes in UTF-8: E2 9C 85. Write the first two bytes,
+    // wait long enough for the OS to flush the pipe, then write the trailing
+    // byte plus more text. Without setEncoding("utf8") on child.stdout, each
+    // chunk would be decoded independently and the emoji would corrupt to
+    // U+FFFD on both halves of the split — which is the bug that surfaced as
+    // ? icons inside agent-authored issue comments.
+    const result = await runChildProcess(
+      randomUUID(),
+      process.execPath,
+      [
+        "-e",
+        "const buf = Buffer.from([0xe2, 0x9c, 0x85]);"
+          + "process.stdout.write(buf.subarray(0, 2));"
+          + "setTimeout(() => { process.stdout.write(Buffer.concat([buf.subarray(2), Buffer.from(' done')])); }, 100);",
+      ],
+      {
+        cwd: process.cwd(),
+        env: {},
+        timeoutSec: 5,
+        graceSec: 1,
+        onLog: async () => {},
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("�");
+    expect(result.stdout).toBe("✅ done");
+  });
 });
 
 describe("renderPaperclipWakePrompt", () => {
