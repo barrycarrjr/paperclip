@@ -14,16 +14,12 @@
  */
 
 import {
-  Bug,
   Code2,
   Container,
   Database,
   FileText,
   Folder,
-  Github,
-  Globe,
   House,
-  MessageSquare,
   MousePointerClick,
   Network,
   Search,
@@ -75,23 +71,6 @@ const secretRef = (secretName: string): EnvBinding => ({
 
 export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
   {
-    key: "github",
-    displayName: "GitHub",
-    tagline: "Issues, PRs, files, commits",
-    description:
-      "Official MCP server for GitHub. Reads and writes issues, pull requests, files, and commits using a personal access token.",
-    icon: Github,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-    envBindings: {
-      GITHUB_PERSONAL_ACCESS_TOKEN: secretRef("GITHUB_PERSONAL_ACCESS_TOKEN"),
-    },
-    requiredSecrets: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-    notes:
-      "Create a fine-grained PAT at github.com/settings/tokens and store it as GITHUB_PERSONAL_ACCESS_TOKEN in Company Secrets.",
-  },
-  {
     key: "filesystem",
     displayName: "Filesystem",
     tagline: "Read & write files in a sandboxed path",
@@ -118,24 +97,6 @@ export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
       "Replace the connection string with your own, or move it to a secret and reference it via env binding. Server is read-only by default.",
   },
   {
-    key: "slack",
-    displayName: "Slack",
-    tagline: "Read channels, threads, search",
-    description:
-      "Read access to Slack channels, threads, users, and search. Requires a bot token with channels:history, channels:read, users:read, and search:read scopes.",
-    icon: MessageSquare,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-slack"],
-    envBindings: {
-      SLACK_BOT_TOKEN: secretRef("SLACK_BOT_TOKEN"),
-      SLACK_TEAM_ID: secretRef("SLACK_TEAM_ID"),
-    },
-    requiredSecrets: ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
-    notes:
-      "If you already use the first-party slack-tools plugin, prefer that — it's polished and audited. Use this MCP server for raw access workflows.",
-  },
-  {
     key: "brave-search",
     displayName: "Brave Search",
     tagline: "Web search via Brave's API",
@@ -152,17 +113,6 @@ export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
     notes: "Get an API key at brave.com/search/api and store it as BRAVE_API_KEY.",
   },
   {
-    key: "fetch",
-    displayName: "Fetch",
-    tagline: "Fetch web pages as markdown",
-    description:
-      "Fetches arbitrary URLs and converts HTML to markdown for the model. No credentials required.",
-    icon: Globe,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-fetch"],
-  },
-  {
     key: "puppeteer",
     displayName: "Puppeteer",
     tagline: "Headless browser automation",
@@ -172,21 +122,6 @@ export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
     transport: "stdio",
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-puppeteer"],
-  },
-  {
-    key: "sentry",
-    displayName: "Sentry",
-    tagline: "Read recent issues and events",
-    description:
-      "Read access to Sentry issues, events, and projects. If you already use the first-party rollbar-tools plugin for a similar workflow, that path is more battle-tested.",
-    icon: Bug,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-sentry"],
-    envBindings: {
-      SENTRY_AUTH_TOKEN: secretRef("SENTRY_AUTH_TOKEN"),
-    },
-    requiredSecrets: ["SENTRY_AUTH_TOKEN"],
   },
   {
     key: "notion",

@@ -30,7 +30,10 @@ import {
 import { logger } from "../middleware/logger.js";
 
 const IDLE_TIMEOUT_MS = 5 * 60_000;
-const CONNECT_TIMEOUT_MS = 30_000;
+// 2 min — most stdio servers connect in <2s, but multi-server gateways like
+// Docker MCP Gateway do a full container cold-start per enabled server during
+// tools/list enumeration and routinely take 30-90s.
+const CONNECT_TIMEOUT_MS = 120_000;
 const CALL_TIMEOUT_MS = 120_000;
 
 /**
@@ -259,15 +262,24 @@ export function createExternalMcpServerManager(
       await Promise.race([connectPromise, timeoutPromise]);
     } catch (err) {
       // Give the child a beat to finish flushing stderr after stdin closes.
-      await new Promise((resolve) => setTimeout(resolve, 50).unref?.());
+      await new Promise((resolve) => setTimeout(resolve, 250).unref?.());
       const stderrTail = getStderrTail?.().trim() ?? "";
       const baseMessage = err instanceof Error ? err.message : String(err);
-      if (stderrTail) {
-        const enriched = new Error(`${baseMessage}\n\nChild stderr:\n${stderrTail}`);
-        enriched.stack = err instanceof Error ? err.stack : undefined;
-        throw enriched;
-      }
-      throw err;
+      const passedEnvKeys =
+        server.transport === "stdio"
+          ? Object.keys({ ...getExtraHostEnv(), ...resolved.env }).sort().join(", ")
+          : "";
+      const diag =
+        server.transport === "stdio"
+          ? `Spawn: ${server.command} ${(server.args ?? []).join(" ")}\n` +
+            `Extra env passed: ${passedEnvKeys || "(none)"}\n`
+          : "";
+      const stderrBlock = stderrTail
+        ? `\nChild stderr:\n${stderrTail}`
+        : `\n(child wrote nothing to stderr)`;
+      const enriched = new Error(`${baseMessage}\n\n[diag-v2]\n${diag}${stderrBlock}`);
+      enriched.stack = err instanceof Error ? err.stack : undefined;
+      throw enriched;
     }
 
     const serverInfo = client.getServerVersion();

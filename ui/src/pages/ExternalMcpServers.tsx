@@ -304,7 +304,18 @@ export function ExternalMcpServers() {
   );
 
   function pickCatalogEntry(entry: CatalogEntry) {
-    setForm(catalogEntryToForm(entry));
+    const base = catalogEntryToForm(entry);
+    // Auto-suffix the key if one already exists for this catalog template so
+    // operators can register multiple instances of the same MCP server
+    // (different Docker profiles, filesystem sandbox roots, tool allow-lists,
+    // etc.) without having to manually dodge the DB unique-key constraint.
+    let key = base.key;
+    if (registeredKeys.has(key)) {
+      let n = 2;
+      while (registeredKeys.has(`${base.key}-${n}`)) n++;
+      key = `${base.key}-${n}`;
+    }
+    setForm({ ...base, key });
     setActiveCatalogEntry(entry);
     setCatalogDialogOpen(false);
     setCreateDialogOpen(true);
@@ -430,26 +441,26 @@ export function ExternalMcpServers() {
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 {row.transport === "stdio" ? (
                   <div>
-                    <span className="font-medium">command:</span>{" "}
+                    <span className="text-foreground">command:</span>{" "}
                     <code>
                       {row.command} {(row.args ?? []).join(" ")}
                     </code>
                   </div>
                 ) : (
                   <div>
-                    <span className="font-medium">url:</span> <code>{row.url}</code>
+                    <span className="text-foreground">url:</span> <code>{row.url}</code>
                   </div>
                 )}
                 <div>
-                  <span className="font-medium">env bindings:</span>{" "}
+                  <span className="text-foreground">env bindings:</span>{" "}
                   {Object.keys(row.envBindings).length}
                 </div>
                 <div>
-                  <span className="font-medium">header bindings:</span>{" "}
+                  <span className="text-foreground">header bindings:</span>{" "}
                   {Object.keys(row.headerBindings).length}
                 </div>
                 <div>
-                  <span className="font-medium">allowed companies:</span>{" "}
+                  <span className="text-foreground">allowed companies:</span>{" "}
                   {row.allowedCompanies.length === 0 ? (
                     <span className="text-destructive">none (unusable)</span>
                   ) : isPortfolioWide(row.allowedCompanies) ? (
@@ -512,7 +523,7 @@ export function ExternalMcpServers() {
               {activeCatalogEntry.requiredSecrets &&
                 activeCatalogEntry.requiredSecrets.length > 0 && (
                   <div>
-                    <span className="font-medium text-foreground">Required secrets: </span>
+                    <span className="text-foreground">Required secrets: </span>
                     {activeCatalogEntry.requiredSecrets.map((s, i) => (
                       <span key={s}>
                         {i > 0 && ", "}
@@ -824,7 +835,7 @@ export function ExternalMcpServers() {
           }
         }}
       >
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-h-[90vh] sm:max-w-3xl overflow-auto">
           <DialogHeader>
             <DialogTitle>Test connect — {testTarget?.key}</DialogTitle>
             <DialogDescription>
@@ -885,9 +896,9 @@ export function ExternalMcpServers() {
                   </div>
                 )}
                 {testResult.tools.length > 0 && (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  <ul className="mt-2 max-h-64 list-disc space-y-1 overflow-auto rounded border bg-muted/30 p-2 pl-6 text-xs">
                     {testResult.tools.map((t) => (
-                      <li key={t.name}>
+                      <li key={t.name} className="break-words">
                         <span className="font-mono">{t.name}</span> — {t.description}
                       </li>
                     ))}
