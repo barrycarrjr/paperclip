@@ -14,7 +14,6 @@
  */
 
 import {
-  Brain,
   Bug,
   Code2,
   Container,
@@ -162,17 +161,6 @@ export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
     transport: "stdio",
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-fetch"],
-  },
-  {
-    key: "memory",
-    displayName: "Memory",
-    tagline: "Persistent knowledge graph for the agent",
-    description:
-      "Local persistent knowledge graph. Agent stores entities, relations, and observations across sessions. Paperclip's own Memory feature is usually a better fit — use this for experiments.",
-    icon: Brain,
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-memory"],
   },
   {
     key: "puppeteer",
