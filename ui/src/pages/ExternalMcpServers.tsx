@@ -20,11 +20,13 @@ import {
   AlertTriangle,
   CheckCircle2,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Trash,
 } from "lucide-react";
 import type {
+  Company,
   CompanySecret,
   CreateExternalMcpServer,
   EnvBinding,
@@ -32,9 +34,11 @@ import type {
   ExternalMcpServerRecord,
   ExternalMcpTestConnectResult,
   ExternalMcpTransport,
+  UpdateExternalMcpServer,
 } from "@paperclipai/shared";
 import { isPortfolioWide } from "@paperclipai/shared";
 import { externalMcpServersApi } from "@/api/external-mcp-servers";
+import { companiesApi } from "@/api/companies";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useToastActions } from "@/context/ToastContext";
 import { useCompany } from "@/context/CompanyContext";
@@ -138,6 +142,25 @@ function formToCreatePayload(form: FormState): CreateExternalMcpServer {
   };
 }
 
+function recordToForm(record: ExternalMcpServerRecord): FormState {
+  return {
+    key: record.key,
+    displayName: record.displayName,
+    description: record.description ?? "",
+    transport: record.transport,
+    command: record.command ?? "",
+    argsRaw: (record.args ?? []).join("\n"),
+    url: record.url ?? "",
+    envBindings: record.envBindings,
+    headerBindings: record.headerBindings,
+    allowedCompanies: record.allowedCompanies,
+    allowMutations: record.allowMutations,
+    writeAllowListRaw: record.writeAllowList.join("\n"),
+    toolAllowListRaw: record.toolAllowList.join("\n"),
+    toolDenyListRaw: record.toolDenyList.join("\n"),
+  };
+}
+
 export function ExternalMcpServers() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
@@ -179,10 +202,21 @@ export function ExternalMcpServers() {
     enabled: Boolean(selectedCompanyId),
   });
 
+  // Companies list — used by the Test connect dialog to render a friendly
+  // dropdown instead of asking for a raw UUID. The key `["companies"]` is
+  // owned by CompanyContext which caches a different shape ({companies,
+  // unauthorized}); use a distinct key so the caches don't collide.
+  const { data: companies } = useQuery({
+    queryKey: ["companies", "list-flat"] as const,
+    queryFn: () => companiesApi.list(),
+    staleTime: 60_000,
+  });
+
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [catalogDialogOpen, setCatalogDialogOpen] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [activeCatalogEntry, setActiveCatalogEntry] = useState<CatalogEntry | null>(null);
+  const [editTarget, setEditTarget] = useState<ExternalMcpServerRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ExternalMcpServerRecord | null>(null);
   const [testTarget, setTestTarget] = useState<ExternalMcpServerRecord | null>(null);
   const [testCompanyId, setTestCompanyId] = useState("");
@@ -198,6 +232,21 @@ export function ExternalMcpServers() {
     },
     onError: (err: Error) => {
       pushToast({ tone: "error", title: "Failed to register", body: err.message });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (input: { id: string; payload: UpdateExternalMcpServer }) =>
+      externalMcpServersApi.update(input.id, input.payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      setCreateDialogOpen(false);
+      setEditTarget(null);
+      setForm(emptyForm);
+      pushToast({ tone: "success", title: "MCP server updated" });
+    },
+    onError: (err: Error) => {
+      pushToast({ tone: "error", title: "Failed to update", body: err.message });
     },
   });
 
@@ -235,6 +284,20 @@ export function ExternalMcpServers() {
     [data],
   );
 
+  // Companies eligible to back the Test connect probe: portfolio-wide servers
+  // can probe against any company; otherwise restrict to the allow-list.
+  const testCompanyOptions = useMemo<Company[]>(() => {
+    if (!testTarget) return [];
+    const list = Array.isArray(companies) ? companies : [];
+    if (isPortfolioWide(testTarget.allowedCompanies)) {
+      return [...list].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const allowed = new Set(testTarget.allowedCompanies);
+    return list
+      .filter((c) => allowed.has(c.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [testTarget, companies]);
+
   const registeredKeys = useMemo(
     () => new Set((data ?? []).map((r) => r.key)),
     [data],
@@ -250,6 +313,14 @@ export function ExternalMcpServers() {
   function openBlankRegistration() {
     setForm(emptyForm);
     setActiveCatalogEntry(null);
+    setCatalogDialogOpen(false);
+    setCreateDialogOpen(true);
+  }
+
+  function openEditForRecord(record: ExternalMcpServerRecord) {
+    setForm(recordToForm(record));
+    setActiveCatalogEntry(null);
+    setEditTarget(record);
     setCatalogDialogOpen(false);
     setCreateDialogOpen(true);
   }
@@ -343,6 +414,14 @@ export function ExternalMcpServers() {
                   >
                     Test connect
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openEditForRecord(row)}
+                    title="Edit server config"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
                   <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(row)}>
                     <Trash className="h-4 w-4 text-destructive" />
                   </Button>
@@ -403,15 +482,20 @@ export function ExternalMcpServers() {
         open={createDialogOpen}
         onOpenChange={(open) => {
           setCreateDialogOpen(open);
-          if (!open) setActiveCatalogEntry(null);
+          if (!open) {
+            setActiveCatalogEntry(null);
+            setEditTarget(null);
+          }
         }}
       >
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-auto">
           <DialogHeader>
             <DialogTitle>
-              {activeCatalogEntry
-                ? `Register ${activeCatalogEntry.displayName}`
-                : "Register external MCP server"}
+              {editTarget
+                ? `Edit ${editTarget.key}`
+                : activeCatalogEntry
+                  ? `Register ${activeCatalogEntry.displayName}`
+                  : "Register external MCP server"}
             </DialogTitle>
             <DialogDescription>
               Use stdio for npm-distributed servers (run via npx) or http/sse for remote endpoints.
@@ -611,12 +695,26 @@ export function ExternalMcpServers() {
             <Button variant="ghost" onClick={() => setCreateDialogOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(formToCreatePayload(form))}
-              disabled={createMutation.isPending || !form.key.trim() || !form.displayName.trim()}
-            >
-              {createMutation.isPending ? "Saving…" : "Register"}
-            </Button>
+            {editTarget ? (
+              <Button
+                onClick={() =>
+                  updateMutation.mutate({
+                    id: editTarget.id,
+                    payload: formToCreatePayload(form),
+                  })
+                }
+                disabled={updateMutation.isPending || !form.key.trim() || !form.displayName.trim()}
+              >
+                {updateMutation.isPending ? "Saving…" : "Save changes"}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => createMutation.mutate(formToCreatePayload(form))}
+                disabled={createMutation.isPending || !form.key.trim() || !form.displayName.trim()}
+              >
+                {createMutation.isPending ? "Saving…" : "Register"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -736,27 +834,40 @@ export function ExternalMcpServers() {
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label htmlFor="testCompanyId">Company UUID</Label>
-              <Input
-                id="testCompanyId"
-                value={testCompanyId}
-                onChange={(e) => setTestCompanyId(e.target.value)}
-              />
-              {testTarget &&
-                !isPortfolioWide(testTarget.allowedCompanies) &&
-                testTarget.allowedCompanies.length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {testTarget.allowedCompanies.map((cid) => (
-                      <button
-                        key={cid}
-                        className="rounded border px-2 py-0.5 font-mono text-xs hover:bg-muted"
-                        onClick={() => setTestCompanyId(cid)}
-                      >
-                        {cid.slice(0, 8)}…
-                      </button>
+              <Label htmlFor="testCompanyId">Company</Label>
+              {!companies ? (
+                <p className="mt-1 text-xs text-muted-foreground">Loading companies…</p>
+              ) : testCompanyOptions.length === 0 ? (
+                <p className="mt-1 text-xs text-destructive">
+                  No companies are allowed for this server. Edit the server and add at least one
+                  allowed company before probing.
+                </p>
+              ) : (
+                <>
+                  <select
+                    id="testCompanyId"
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={testCompanyId}
+                    onChange={(e) => setTestCompanyId(e.target.value)}
+                  >
+                    {!testCompanyOptions.some((c) => c.id === testCompanyId) && (
+                      <option value="">Select a company…</option>
+                    )}
+                    {testCompanyOptions.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.status === "archived" ? " (archived)" : ""}
+                      </option>
                     ))}
-                  </div>
-                )}
+                  </select>
+                  {testTarget && isPortfolioWide(testTarget.allowedCompanies) && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Server is portfolio-wide — pick any company to resolve its secret bindings
+                      for this probe.
+                    </p>
+                  )}
+                </>
+              )}
             </div>
             {testResult && (
               <div className="rounded border p-3 text-sm">
@@ -768,7 +879,9 @@ export function ExternalMcpServers() {
                 ) : (
                   <div className="flex items-start gap-2 text-destructive">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{testResult.error}</span>
+                    <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                      {testResult.error}
+                    </pre>
                   </div>
                 )}
                 {testResult.tools.length > 0 && (

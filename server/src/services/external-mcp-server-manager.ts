@@ -33,6 +33,30 @@ const IDLE_TIMEOUT_MS = 5 * 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const CALL_TIMEOUT_MS = 120_000;
 
+/**
+ * Host env vars to pass into spawned stdio MCP servers beyond what the SDK
+ * inherits by default (see `DEFAULT_INHERITED_ENV_VARS` in
+ * @modelcontextprotocol/sdk/client/stdio.js).
+ *
+ * The SDK's Windows allowlist covers APPDATA, LOCALAPPDATA, PATH, PROGRAMFILES,
+ * SYSTEMROOT, USERPROFILE, etc. — but not ProgramData, which Docker Desktop's
+ * MCP Gateway panics on if missing (`unable to get 'ProgramData'` → child exits
+ * → SDK reports `MCP error -32000: Connection closed`). PATHEXT is added so
+ * cross-spawn can resolve bare command names like `docker` to `docker.exe`
+ * without relying on shell expansion.
+ */
+const EXTRA_HOST_ENV_KEYS_WIN32 = ["ProgramData", "ProgramFiles(x86)", "PATHEXT"];
+
+function getExtraHostEnv(): Record<string, string> {
+  if (process.platform !== "win32") return {};
+  const env: Record<string, string> = {};
+  for (const key of EXTRA_HOST_ENV_KEYS_WIN32) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 interface PooledClient {
   client: Client;
   /** Set of redacted env keys / header names — for log scrubbing. */
@@ -152,26 +176,44 @@ export function createExternalMcpServerManager(
     resolved: Awaited<ReturnType<ExternalMcpSecretsService["resolveBindings"]>>,
   ): Promise<{
     transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;
+    getStderrTail?: () => string;
     cleanup?: () => Promise<void>;
   }> {
     if (server.transport === "stdio") {
       if (!server.command) {
         throw new Error(`MCP server "${server.key}" is stdio transport but has no command`);
       }
+      // Layer extra host env (e.g. Windows ProgramData) under the operator's
+      // resolved bindings — the SDK then merges its own default allowlist
+      // under all of this when it spawns.
       const transport = new StdioClientTransport({
         command: server.command,
         args: server.args ?? [],
-        env: resolved.env,
+        env: { ...getExtraHostEnv(), ...resolved.env },
         stderr: "pipe",
       });
-      // Capture stderr; never log resolved env values.
+      // Accumulate stderr so the connect() catch-block can surface the child's
+      // actual exit reason (panic, missing binary, auth error) instead of the
+      // SDK's opaque "MCP error -32000: Connection closed".
+      const stderrChunks: string[] = [];
+      const STDERR_TAIL_MAX = 4096;
       transport.stderr?.on("data", (chunk) => {
+        const text = String(chunk);
+        stderrChunks.push(text);
+        // Keep memory bounded — drop oldest chunks if we exceed the cap.
+        let total = stderrChunks.reduce((n, s) => n + s.length, 0);
+        while (total > STDERR_TAIL_MAX && stderrChunks.length > 1) {
+          total -= stderrChunks.shift()!.length;
+        }
         log.debug(
-          { serverKey: server.key, stderr: String(chunk).slice(0, 1024) },
+          { serverKey: server.key, stderr: text.slice(0, 1024) },
           "stdio mcp stderr",
         );
       });
-      return { transport };
+      return {
+        transport,
+        getStderrTail: () => stderrChunks.join("").slice(-STDERR_TAIL_MAX),
+      };
     }
 
     if (server.transport === "http") {
@@ -204,7 +246,7 @@ export function createExternalMcpServerManager(
       version: "0.1.0",
     });
 
-    const { transport } = await buildTransport(server, resolved);
+    const { transport, getStderrTail } = await buildTransport(server, resolved);
 
     const connectPromise = client.connect(transport);
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -213,7 +255,20 @@ export function createExternalMcpServerManager(
         CONNECT_TIMEOUT_MS,
       ).unref?.();
     });
-    await Promise.race([connectPromise, timeoutPromise]);
+    try {
+      await Promise.race([connectPromise, timeoutPromise]);
+    } catch (err) {
+      // Give the child a beat to finish flushing stderr after stdin closes.
+      await new Promise((resolve) => setTimeout(resolve, 50).unref?.());
+      const stderrTail = getStderrTail?.().trim() ?? "";
+      const baseMessage = err instanceof Error ? err.message : String(err);
+      if (stderrTail) {
+        const enriched = new Error(`${baseMessage}\n\nChild stderr:\n${stderrTail}`);
+        enriched.stack = err instanceof Error ? err.stack : undefined;
+        throw enriched;
+      }
+      throw err;
+    }
 
     const serverInfo = client.getServerVersion();
 

@@ -16,11 +16,14 @@
 import {
   Brain,
   Bug,
+  Code2,
+  Container,
   Database,
   FileText,
   Folder,
   Github,
   Globe,
+  House,
   MessageSquare,
   MousePointerClick,
   Network,
@@ -210,6 +213,50 @@ export const EXTERNAL_MCP_CATALOG: CatalogEntry[] = [
     requiredSecrets: ["NOTION_TOKEN"],
     notes:
       "Create an internal integration at notion.so/profile/integrations and share the relevant pages/databases with it. Store the secret as NOTION_TOKEN — the value must include the `Bearer ` prefix (e.g. `Bearer ntn_xxx`) because the header binding is injected verbatim.",
+  },
+  {
+    key: "home-assistant",
+    displayName: "Home Assistant",
+    tagline: "Smart-home control — lights, locks, climate, sensors",
+    description:
+      "Drives a Home Assistant instance as agent tools — read entity state, toggle switches, set thermostats, run scripts, query history. Works against any HA instance reachable from the Paperclip host (local LAN URL or Nabu Casa remote URL).",
+    icon: House,
+    transport: "stdio",
+    command: "uvx",
+    args: ["ha-mcp@latest"],
+    envBindings: {
+      HOMEASSISTANT_URL: secretRef("HOMEASSISTANT_URL"),
+      HOMEASSISTANT_TOKEN: secretRef("HOMEASSISTANT_TOKEN"),
+    },
+    requiredSecrets: ["HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN"],
+    notes:
+      "Requires `uv` installed on the Paperclip host (uvx fetches the ha-mcp package on first run). Create a long-lived access token in Home Assistant under Profile → Security → Long-lived access tokens. Use the Nabu Casa URL for remote access or the local http://homeassistant.local:8123 URL for LAN-only.",
+  },
+  {
+    key: "docker",
+    displayName: "Docker MCP Gateway",
+    tagline: "Catalog of containerized MCP servers via Docker Desktop",
+    description:
+      "Routes tool calls to MCP servers running as Docker containers, managed by Docker Desktop's MCP Toolkit. One gateway exposes the full Docker MCP catalog — GitHub, Playwright, Atlassian, Slack, Notion, and many more — without spawning a separate stdio process per server.",
+    icon: Container,
+    transport: "stdio",
+    command: "docker",
+    args: ["mcp", "gateway", "run"],
+    notes:
+      "Requires Docker Desktop with the MCP Toolkit extension enabled. Enable the servers you want exposed in Docker Desktop → MCP Toolkit, then sign in / supply credentials there — auth and per-server config live in Docker Desktop, not in Paperclip. The gateway inherits the host's Docker socket, so make sure the user running Paperclip can talk to Docker.",
+  },
+  {
+    key: "phpstorm",
+    displayName: "PhpStorm",
+    tagline: "Drive a running PhpStorm IDE — files, refactor, run",
+    description:
+      "Talks to a running PhpStorm (or other JetBrains IDE) via its built-in MCP server over a local SSE bridge. Lets agents read open files, navigate symbols, run inspections, and trigger refactors against the IDE's authoritative project model.",
+    icon: Code2,
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "mcp-remote", "http://127.0.0.1:64342/sse"],
+    notes:
+      "PhpStorm must be running on the same host as Paperclip with the JetBrains MCP plugin enabled (Settings → Tools → MCP Server). The default port is 64342 — check Settings if you've customized it. No credentials; the SSE endpoint is local-only.",
   },
 ];
 
