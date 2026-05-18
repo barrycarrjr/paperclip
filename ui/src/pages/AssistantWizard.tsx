@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "@/lib/router";
+import { useNavigate, useParams } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Bot, Check, Loader2, X, Phone, Mail, Calendar, MessageSquare, Play, Square, Plus, RefreshCw, Trash2 } from "lucide-react";
+import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { authApi } from "../api/auth";
@@ -40,6 +41,20 @@ interface VerifyRequestResponse {
 interface ComposeResult {
   firstMessage: string;
   systemPrompt: string;
+}
+
+/**
+ * Subset of the plugin's PhoneConfig shape that the edit-mode hydration
+ * cares about. Mirrors the fields the wizard writes — leaves the
+ * engine-side and operational fields (vapiAssistantId, transferTarget…)
+ * untouched on save so editing an assistant's wizard answers doesn't
+ * accidentally wipe operator-configured warm-transfer settings.
+ */
+interface ExistingPhoneConfig {
+  voice?: string;
+  callerIdNumberId?: string;
+  firstMessage?: string;
+  wizardAnswers?: Record<string, unknown>;
 }
 
 interface OperatorPhone {
@@ -97,13 +112,15 @@ export function AssistantWizard() {
   const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { selectedCompanyId } = useCompany();
+  const { agentId: editingAgentId } = useParams<{ agentId?: string }>();
+  const isEditMode = !!editingAgentId;
 
   useEffect(() => {
     setBreadcrumbs([
       { label: "Assistants", href: "/assistants" },
-      { label: "New Assistant" },
+      { label: isEditMode ? "Edit Assistant" : "New Assistant" },
     ]);
-  }, [setBreadcrumbs]);
+  }, [setBreadcrumbs, isEditMode]);
 
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -180,6 +197,69 @@ export function AssistantWizard() {
   // default as-is; non-null = operator typed over it.
   const [firstMessageOverride, setFirstMessageOverride] = useState<string | null>(null);
 
+  // ─── Edit-mode hydration ───────────────────────────────────────────
+  // When the route is /assistants/:agentId/edit, fetch the agent's existing
+  // phone-config + agent record and pre-fill every wizard step. The agent
+  // record gives us name; the phone-config stores wizardAnswers (which has
+  // everything else — principal, tasks, capabilities, voice, caller ID) as
+  // well as voice/callerId fields directly + the operator's first-message
+  // override. Hydration runs exactly once per agentId so navigating between
+  // steps doesn't overwrite the user's in-progress edits.
+  const existingAgentQuery = useQuery({
+    queryKey: queryKeys.agents.detail(editingAgentId ?? ""),
+    queryFn: () => agentsApi.get(editingAgentId!, selectedCompanyId!),
+    enabled: isEditMode && !!editingAgentId && !!selectedCompanyId,
+  });
+  const existingPhoneConfigQuery = useQuery({
+    queryKey: ["phone-tools", "phone-config", editingAgentId, selectedCompanyId],
+    queryFn: () =>
+      pluginFetch<{ config: ExistingPhoneConfig | null }>(
+        "/assistants/" + editingAgentId + "/phone-config",
+        { method: "GET", companyId: selectedCompanyId! },
+      ),
+    enabled: isEditMode && !!editingAgentId && !!selectedCompanyId,
+  });
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    if (!isEditMode || hydrated) return;
+    const agent = existingAgentQuery.data;
+    const cfg = existingPhoneConfigQuery.data?.config ?? null;
+    if (!agent || !existingPhoneConfigQuery.data) return;
+    // Hydrate from the agent + (optional) phone-config.
+    if (agent.name) setName(agent.name);
+    const wa = (cfg?.wizardAnswers ?? {}) as Partial<{
+      type: AssistantType;
+      principal: string;
+      tasks: string[];
+      customTasks: string;
+      phoneEnabled: boolean;
+      emailEnabled: boolean;
+      calendarEnabled: boolean;
+      voice: string;
+      callerIdNumberId: string;
+    }>;
+    if (wa.type === "ea" || wa.type === "custom") setType(wa.type);
+    if (typeof wa.principal === "string" && wa.principal) setPrincipal(wa.principal);
+    if (Array.isArray(wa.tasks)) setTasks(wa.tasks);
+    if (typeof wa.customTasks === "string") setCustomTasks(wa.customTasks);
+    // Capability flags: respect what's stored. Phone defaults true if
+    // a config exists at all (legacy configs without an explicit flag).
+    setPhoneEnabled(cfg ? wa.phoneEnabled !== false : true);
+    setEmailEnabled(wa.emailEnabled === true);
+    setCalendarEnabled(wa.calendarEnabled === true);
+    if (typeof cfg?.voice === "string") setVoice(cfg.voice);
+    else if (typeof wa.voice === "string") setVoice(wa.voice);
+    if (typeof cfg?.callerIdNumberId === "string") setCallerIdNumberId(cfg.callerIdNumberId);
+    else if (typeof wa.callerIdNumberId === "string") setCallerIdNumberId(wa.callerIdNumberId);
+    if (typeof cfg?.firstMessage === "string") setFirstMessageOverride(cfg.firstMessage);
+    setHydrated(true);
+  }, [
+    isEditMode,
+    hydrated,
+    existingAgentQuery.data,
+    existingPhoneConfigQuery.data,
+  ]);
+
   const wizardAnswers = useMemo(
     () => ({
       type,
@@ -241,38 +321,63 @@ export function AssistantWizard() {
           body: JSON.stringify({ answers: wizardAnswers }),
         }));
 
-      // Use the hire endpoint so companies that require board approval
-      // for new agents go through the approval flow. On a personal-fork
-      // setup the operator IS the board, so we auto-approve. On a real
-      // multi-board setup the approval lands in the company's queue.
-      const hire = await agentsApi.hire(selectedCompanyId, {
-        name: name.trim(),
-        role: "assistant",
-        title: type === "ea" ? "Personal EA" : "Custom assistant",
-        adapterType: "claude_local",
-        adapterConfig: {},
-        runtimeConfig: {},
-        metadata: {
-          assistantType: type,
-          assistantPrincipal: principal.trim() || userDisplayName,
-        },
-      });
-      const agent = hire.agent;
-      if (hire.approval) {
-        try {
-          await approvalsApi.approve(
-            hire.approval.id,
-            "Approved by Assistant Builder wizard.",
-          );
-          queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId) });
-        } catch (approvalErr) {
-          // Don't block save if auto-approve fails — the operator can
-          // approve manually from the Approvals page later.
-          console.warn("Assistant auto-approve failed", approvalErr);
+      let agent: Agent;
+      if (isEditMode && editingAgentId) {
+        // ── Edit existing assistant ────────────────────────────
+        // No hire / approval — agent already exists. Patch the name +
+        // title (and metadata, in case the EA-vs-custom type changed)
+        // so renames flow through to listings everywhere.
+        agent = await agentsApi.update(
+          editingAgentId,
+          {
+            name: name.trim(),
+            title: type === "ea" ? "Personal EA" : "Custom assistant",
+            metadata: {
+              assistantType: type,
+              assistantPrincipal: principal.trim() || userDisplayName,
+            },
+          },
+          selectedCompanyId,
+        );
+      } else {
+        // ── Create new assistant ───────────────────────────────
+        // Use the hire endpoint so companies that require board
+        // approval for new agents go through the approval flow. On a
+        // personal-fork setup the operator IS the board, so we
+        // auto-approve. On a real multi-board setup the approval
+        // lands in the company's queue.
+        const hire = await agentsApi.hire(selectedCompanyId, {
+          name: name.trim(),
+          role: "assistant",
+          title: type === "ea" ? "Personal EA" : "Custom assistant",
+          adapterType: "claude_local",
+          adapterConfig: {},
+          runtimeConfig: {},
+          metadata: {
+            assistantType: type,
+            assistantPrincipal: principal.trim() || userDisplayName,
+          },
+        });
+        agent = hire.agent;
+        if (hire.approval) {
+          try {
+            await approvalsApi.approve(
+              hire.approval.id,
+              "Approved by Assistant Builder wizard.",
+            );
+            queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId) });
+          } catch (approvalErr) {
+            // Don't block save if auto-approve fails — the operator can
+            // approve manually from the Approvals page later.
+            console.warn("Assistant auto-approve failed", approvalErr);
+          }
         }
       }
 
-      // Write the composed system prompt into the agent's instructions bundle.
+      // Write the composed system prompt into the agent's instructions
+      // bundle. Both create and edit go through here so an edit picks
+      // up changes from the new wizard answers (capabilities, tasks,
+      // principal, etc.) on the next call.
       await agentsApi.saveInstructionsFile(
         agent.id,
         { path: "AGENTS.md", content: compose.systemPrompt },
@@ -296,11 +401,18 @@ export function AssistantWizard() {
         });
       }
 
-      if (!activate) {
+      // Only pause on the create path. Edits should never auto-pause
+      // an already-active assistant — that would silently knock it
+      // offline behind the operator's back.
+      if (!isEditMode && !activate) {
         await agentsApi.pause(agent.id, selectedCompanyId);
       }
 
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
+      queryClient.invalidateQueries({
+        queryKey: ["phone-tools", "phone-config", agent.id, selectedCompanyId],
+      });
 
       setSavedAssistantId(agent.id);
       const routeRef = agentRouteRef(agent);
@@ -335,12 +447,31 @@ export function AssistantWizard() {
     );
   }
 
+  // Edit-mode initial load — show a small spinner instead of the blank
+  // form so the user doesn't briefly see defaults before hydration.
+  if (isEditMode && !hydrated) {
+    if (existingAgentQuery.error || existingPhoneConfigQuery.error) {
+      const message = (existingAgentQuery.error ?? existingPhoneConfigQuery.error) as Error;
+      return (
+        <div className="mx-auto max-w-2xl py-10 text-center text-sm text-destructive">
+          Couldn't load this assistant: {message.message}
+        </div>
+      );
+    }
+    return (
+      <div className="mx-auto max-w-2xl py-10 flex items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+        Loading assistant…
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-2xl py-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Bot className="h-4 w-4" />
-          <span>New Assistant</span>
+          <span>{isEditMode ? `Edit ${name.trim() || "Assistant"}` : "New Assistant"}</span>
           <span className="opacity-50">·</span>
           <span>Step {step} of {TOTAL_STEPS}</span>
         </div>
@@ -482,6 +613,17 @@ export function AssistantWizard() {
             >
               Next
               <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+            </Button>
+          ) : isEditMode ? (
+            <Button
+              size="sm"
+              onClick={async () => {
+                const target = await saveAssistant({ activate: true });
+                if (target) navigateToAssistant(target.routeRef);
+              }}
+            >
+              <Check className="h-3.5 w-3.5 mr-1.5" />
+              Save changes
             </Button>
           ) : (
             <div className="flex items-center gap-2">

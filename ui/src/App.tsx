@@ -107,6 +107,7 @@ function boardRoutes() {
       <Route path="agents/:agentId/runs/:runId" element={<AgentDetail />} />
       <Route path="assistants" element={<AssistantsList />} />
       <Route path="assistants/new" element={<AssistantWizard />} />
+      <Route path="assistants/:agentId/edit" element={<AssistantWizard />} />
       <Route path="projects" element={<Projects />} />
       <Route path="projects/:projectId" element={<ProjectDetail />} />
       <Route path="projects/:projectId/overview" element={<ProjectDetail />} />
@@ -349,6 +350,7 @@ export function App() {
           <Route path="agents/:agentId/runs/:runId" element={<UnprefixedBoardRedirect />} />
           <Route path="assistants" element={<UnprefixedBoardRedirect />} />
           <Route path="assistants/new" element={<UnprefixedBoardRedirect />} />
+          <Route path="assistants/:agentId/edit" element={<UnprefixedBoardRedirect />} />
           <Route path="projects" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/overview" element={<UnprefixedBoardRedirect />} />

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, Plus } from "lucide-react";
+import { Bot, Plus, Pencil } from "lucide-react";
 import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
@@ -58,8 +58,9 @@ export function AssistantsList() {
       </div>
 
       <p className="text-sm text-muted-foreground max-w-2xl">
-        Assistants are AI personas that act on your behalf. Today they can make outbound phone calls;
-        email, calendar, and SMS are coming soon. Each assistant has its own voice, instructions, and budget.
+        Assistants are AI personas that act on your behalf — they can place outbound phone calls,
+        read and draft email, and manage your calendar. SMS is on the way. Each assistant has its
+        own voice, instructions, and budget.
       </p>
 
       {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
@@ -87,8 +88,20 @@ export function AssistantsList() {
                 </span>
               }
               trailing={
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <StatusBadge status={agent.status} />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${agent.name}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      navigate(`/assistants/${agent.id}/edit`);
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               }
             />
