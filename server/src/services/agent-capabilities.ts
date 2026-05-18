@@ -4,7 +4,7 @@ import {
   plugins as pluginsTable,
   pluginState,
 } from "@paperclipai/db";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 
 /**
  * Agent-capability discovery service.
@@ -57,9 +57,13 @@ export function agentCapabilitiesService(db: Db) {
     if (!capability.trim()) return [];
 
     // Single SQL trip: plugin_state JOIN agents JOIN plugins. The `scope_id`
-    // column is `text` in plugin_state but `agents.id` is `uuid` — drizzle
-    // handles the cast via eq() since postgres will coerce uuid<->text on
-    // equality.
+    // column is `text` in plugin_state but `agents.id` is `uuid` — Postgres
+    // does NOT coerce uuid<->text on equality, so drizzle's `eq()` produces
+    // a query that errors with "operator does not exist: uuid = text". Cast
+    // agents.id to text in the join condition; this is index-friendly when
+    // the scope_id text index exists and avoids the risk of `scope_id::uuid`
+    // throwing on rows where scope_id isn't a valid UUID (other scope_kinds
+    // legitimately store non-UUID identifiers).
     const rows = await db
       .select({
         agentId: agentsTable.id,
@@ -75,7 +79,7 @@ export function agentCapabilitiesService(db: Db) {
         updatedAt: pluginState.updatedAt,
       })
       .from(pluginState)
-      .innerJoin(agentsTable, eq(agentsTable.id, pluginState.scopeId))
+      .innerJoin(agentsTable, sql`${agentsTable.id}::text = ${pluginState.scopeId}`)
       .innerJoin(pluginsTable, eq(pluginsTable.id, pluginState.pluginId))
       .where(
         and(
