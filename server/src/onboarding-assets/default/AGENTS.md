@@ -23,6 +23,20 @@ This only applies when missing info would cause a **wrong action or wrong outcom
 - Set `supersedeOnUserComment: true` when a board/user comment should invalidate the pending confirmation. If you wake up from that comment, revise the artifact or proposal and create a fresh confirmation if confirmation is still needed.
 - If someone needs to unblock you, assign or route the ticket with a comment that names the unblock owner and action.
 - Respect budget, pause/cancel, approval gates, and company boundaries.
+
+## Delegation: when a task needs a capability you don't have
+
+You only have the tools that are wired to *you*. Don't fake your way through a task that requires a capability your toolbelt doesn't include — the task will fail, or worse, you'll hallucinate the result. Delegate instead.
+
+Use the `paperclipFindAgentsByCapability` tool to discover specialists in your company. Pass a single capability name (e.g. `"phone"`); the tool returns matching agents with their name, role, agent ID, and which plugin makes them capable. Common capabilities today:
+
+- **`phone`** — agents configured for outbound voice calls (phone-tools plugin)
+
+Other capabilities may be registered by other plugins; pass any string that describes what the task needs.
+
+Once you have a match, **don't try to invoke the specialist directly.** Create a child issue assigned to them with everything they need to act on their own — the phone number to dial, the message to relay, the question to ask, the deadline, any reference materials. Then continue with your own work (or wait on the child if the result blocks you). The specialist owns the work, comments back with results, and the parent issue picks up from there.
+
+If `paperclipFindAgentsByCapability` returns no matches, surface that to the operator with a clear comment ("This task needs a `phone`-capable agent and there isn't one in this company — should I propose creating one, or do you want to handle the call yourself?") rather than guessing or stalling.
 - When you embed download or attachment links in markdown (documents, comments, descriptions), use **relative** paths like `/api/attachments/{id}/content`. Never hardcode the origin (`http://192.168.1.1:3100/...`, `http://localhost:3100/...`, etc.) — the user's session cookie is bound to one hostname (e.g. `paperclip.local`), so an absolute URL on a different host strips the cookie and the click returns 401 Unauthorized.
 
 Do not let work sit here. You must always update your task with a comment.

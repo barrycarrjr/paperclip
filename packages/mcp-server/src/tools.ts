@@ -251,6 +251,27 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
+      "paperclipFindAgentsByCapability",
+      "Find other agents in your company that can do a specific kind of work. " +
+        "Use this when a task needs a capability your toolbelt doesn't have — " +
+        "for example `capability=\"phone\"` to find an agent that can place outbound " +
+        "voice calls. Returns matching agents (name, role, agentId, source plugin). " +
+        "Then create a child issue assigned to one of them so they can act. " +
+        "Common capabilities: 'phone'. Any plugin can register additional capabilities.",
+      z.object({
+        capability: z.string().min(1),
+        companyId: companyIdOptional,
+      }),
+      async ({ capability, companyId }) => {
+        const resolved = client.resolveCompanyId(companyId);
+        const qs = new URLSearchParams({ capability }).toString();
+        return client.requestJson(
+          "GET",
+          `/companies/${resolved}/agents/find-by-capability?${qs}`,
+        );
+      },
+    ),
+    makeTool(
       "paperclipListIssues",
       "List issues for a company with optional filters",
       listIssuesSchema,

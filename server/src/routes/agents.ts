@@ -33,6 +33,7 @@ import {
 import { validate } from "../middleware/validate.js";
 import {
   agentService,
+  agentCapabilitiesService,
   agentInstructionsService,
   accessService,
   approvalService,
@@ -1149,6 +1150,34 @@ export function agentRoutes(
       return;
     }
     res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+  });
+
+  /**
+   * Discover agents in `companyId` that have been declared with a given
+   * capability by an installed plugin. Used by agents (typically a CoS or
+   * orchestrator) to find specialists to delegate work to via child issues.
+   *
+   * Plugins declare capabilities by writing to `plugin_state` at the
+   * conventional namespace+scope+key — see agentCapabilitiesService.
+   *
+   * Example: `GET /companies/<id>/agents/find-by-capability?capability=phone`
+   * returns every agent in the company that has phone-tools' Vapi-side
+   * assistant projection configured.
+   */
+  router.get("/companies/:companyId/agents/find-by-capability", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    const capability =
+      typeof req.query.capability === "string" ? req.query.capability.trim() : "";
+    if (!capability) {
+      res.status(400).json({
+        error: "Missing required query parameter: capability",
+      });
+      return;
+    }
+    const capsSvc = agentCapabilitiesService(db);
+    const matches = await capsSvc.findAgentsWithCapability(companyId, capability);
+    res.json({ capability, matches });
   });
 
   router.get("/companies/:companyId/portfolio-agents", async (req, res) => {
