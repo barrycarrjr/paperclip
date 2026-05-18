@@ -131,7 +131,6 @@ import {
   type AskUserQuestionsAnswer,
   type ActivityEvent,
   type Agent,
-  type FeedbackVote,
   type Issue,
   type IssueAttachment,
   type IssueComment,
@@ -152,7 +151,6 @@ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
   queueReason?: "hold" | "active_run" | "other";
 };
 
-const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
 const ISSUE_COMMENT_PAGE_SIZE = 50;
 const ISSUE_COMMENT_AUTOLOAD_LIMIT = ISSUE_COMMENT_PAGE_SIZE * 3;
 const TREE_CONTROL_MODE_LABEL: Record<IssueTreeControlMode, string> = {
@@ -247,63 +245,6 @@ function titleizeFilename(input: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function mergeOptimisticFeedbackVote(
-  previousVotes: FeedbackVote[] | undefined,
-  nextVote: {
-    issueId: string;
-    targetType: "issue_comment" | "issue_document_revision";
-    targetId: string;
-    vote: "up" | "down";
-    reason?: string;
-  },
-  currentUserId: string | null,
-): FeedbackVote[] {
-  const now = new Date();
-  const existingVotes = previousVotes ?? [];
-  const existingIndex = existingVotes.findIndex(
-    (feedbackVote) =>
-      feedbackVote.targetType === nextVote.targetType &&
-      feedbackVote.targetId === nextVote.targetId &&
-      (!currentUserId || feedbackVote.authorUserId === currentUserId),
-  );
-
-  if (existingIndex >= 0) {
-    const existingVote = existingVotes[existingIndex]!;
-    const updatedVote: FeedbackVote = {
-      ...existingVote,
-      vote: nextVote.vote,
-      reason:
-        nextVote.reason !== undefined
-          ? nextVote.reason.trim() || null
-          : existingVote.reason,
-      updatedAt: now,
-    };
-    const nextVotes = [...existingVotes];
-    nextVotes[existingIndex] = updatedVote;
-    return nextVotes;
-  }
-
-  return [
-    ...existingVotes,
-    {
-      id: `optimistic:${nextVote.targetType}:${nextVote.targetId}`,
-      companyId: "",
-      issueId: nextVote.issueId,
-      targetType: nextVote.targetType,
-      targetId: nextVote.targetId,
-      authorUserId: currentUserId ?? "current-user",
-      vote: nextVote.vote,
-      reason: nextVote.reason?.trim() || null,
-      sharedWithLabs: false,
-      sharedAt: null,
-      consentVersion: null,
-      redactionSummary: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
 }
 
 function ActorIdentity({ evt, agentMap, userProfileMap }: { evt: ActivityEvent; agentMap: Map<string, Agent>; userProfileMap?: Map<string, import("../lib/company-members").CompanyUserProfile> }) {
@@ -560,9 +501,6 @@ type IssueDetailChatTabProps = {
   commentsLoadingOlder: boolean;
   onLoadOlderComments: () => void;
   composerRef: Ref<IssueChatComposerHandle>;
-  feedbackVotes?: FeedbackVote[];
-  feedbackDataSharingPreference: "allowed" | "not_allowed" | "prompt";
-  feedbackTermsUrl: string | null;
   agentMap: Map<string, Agent>;
   currentUserId: string | null;
   userLabelMap: ReadonlyMap<string, string> | null;
@@ -575,11 +513,6 @@ type IssueDetailChatTabProps = {
   composerDisabledReason: string | null;
   composerHint: string | null;
   queuedCommentReason: "hold" | "active_run" | "other";
-  onVote: (
-    commentId: string,
-    vote: "up" | "down",
-    options?: { allowSharing?: boolean; reason?: string },
-  ) => Promise<void>;
   onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
   onImageUpload: (file: File) => Promise<string>;
   onAttachImage: (file: File) => Promise<IssueAttachment | void>;
@@ -613,9 +546,6 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   commentsLoadingOlder,
   onLoadOlderComments,
   composerRef,
-  feedbackVotes,
-  feedbackDataSharingPreference,
-  feedbackTermsUrl,
   agentMap,
   currentUserId,
   userLabelMap,
@@ -628,7 +558,6 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   composerDisabledReason,
   composerHint,
   queuedCommentReason,
-  onVote,
   onAdd,
   onImageUpload,
   onAttachImage,
@@ -792,9 +721,6 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         composerRef={composerRef}
         comments={commentsWithRunMeta}
         interactions={interactions}
-        feedbackVotes={feedbackVotes}
-        feedbackDataSharingPreference={feedbackDataSharingPreference}
-        feedbackTermsUrl={feedbackTermsUrl}
         linkedRuns={timelineRuns}
         timelineEvents={timelineEvents}
         liveRuns={resolvedLiveRuns}
@@ -816,7 +742,6 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         mentions={mentions}
         composerDisabledReason={composerDisabledReason}
         composerHint={composerHint}
-        onVote={onVote}
         onAdd={onAdd}
         imageUploadHandler={onImageUpload}
         onAttachImage={onAttachImage}
@@ -1213,11 +1138,6 @@ export function IssueDetail() {
     selectedCompanyId
     && boardAccess?.companyIds?.includes(selectedCompanyId),
   );
-  const { data: feedbackVotes } = useQuery({
-    queryKey: queryKeys.issues.feedbackVotes(issueId!),
-    queryFn: () => issuesApi.listFeedbackVotes(issueId!),
-    enabled: !!issueId && !!currentUserId,
-  });
   const { data: instanceGeneralSettings } = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -1225,7 +1145,6 @@ export function IssueDetail() {
     retry: false,
   });
   const keyboardShortcutsEnabled = instanceGeneralSettings?.keyboardShortcuts === true;
-  const feedbackDataSharingPreference = instanceGeneralSettings?.feedbackDataSharingPreference ?? "prompt";
   const { orderedProjects } = useProjectOrder({
     projects: projects ?? [],
     companyId: selectedCompanyId,
@@ -2106,71 +2025,6 @@ export function IssueDetail() {
     void cancelQueuedComment.mutateAsync({ commentId });
   }, [cancelQueuedComment, restoreQueuedCommentDraft, pushToast]);
 
-  const feedbackVoteMutation = useMutation({
-    mutationFn: (variables: {
-      targetType: "issue_comment" | "issue_document_revision";
-      targetId: string;
-      vote: "up" | "down";
-      reason?: string;
-      allowSharing?: boolean;
-      sharingPreferenceAtSubmit: "allowed" | "not_allowed" | "prompt";
-    }) =>
-      issuesApi.upsertFeedbackVote(issueId!, {
-        targetType: variables.targetType,
-        targetId: variables.targetId,
-        vote: variables.vote,
-        ...(variables.reason ? { reason: variables.reason } : {}),
-        ...(variables.allowSharing ? { allowSharing: true } : {}),
-      }),
-    onMutate: async (variables) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.issues.feedbackVotes(issueId!) });
-      const previousVotes = queryClient.getQueryData<FeedbackVote[]>(
-        queryKeys.issues.feedbackVotes(issueId!),
-      );
-      queryClient.setQueryData<FeedbackVote[]>(
-        queryKeys.issues.feedbackVotes(issueId!),
-        mergeOptimisticFeedbackVote(
-          previousVotes,
-          {
-            issueId: issueId!,
-            targetType: variables.targetType,
-            targetId: variables.targetId,
-            vote: variables.vote,
-            reason: variables.reason,
-          },
-          currentUserId,
-        ),
-      );
-      return { previousVotes };
-    },
-    onSuccess: (_savedVote, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.issues.feedbackVotes(issueId!) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.instance.generalSettings });
-      pushToast({
-        title:
-          variables.sharingPreferenceAtSubmit === "prompt"
-            ? variables.allowSharing
-              ? "Feedback saved. Future votes will share"
-              : "Feedback saved. Future votes will stay local"
-            : variables.allowSharing
-              ? "Feedback saved and sharing enabled"
-              : "Feedback saved",
-        tone: "success",
-      });
-    },
-    onError: (err, _variables, context) => {
-      if (context?.previousVotes) {
-        queryClient.setQueryData(queryKeys.issues.feedbackVotes(issueId!), context.previousVotes);
-      }
-      pushToast({
-        title: "Failed to save feedback",
-        body: err instanceof Error ? err.message : "Unknown error",
-        tone: "error",
-      });
-    },
-  });
-
   const uploadAttachment = useMutation({
     mutationFn: async (file: File) => {
       if (!selectedCompanyId) throw new Error("No company selected");
@@ -2559,16 +2413,6 @@ export function IssueDetail() {
     if (!shouldPrefetchOlderComments) return;
     void fetchOlderComments();
   }, [fetchOlderComments, shouldPrefetchOlderComments]);
-  const handleCommentVote = useCallback(async (commentId: string, vote: "up" | "down", options?: { allowSharing?: boolean; reason?: string }) => {
-    await feedbackVoteMutation.mutateAsync({
-      targetType: "issue_comment",
-      targetId: commentId,
-      vote,
-      reason: options?.reason,
-      allowSharing: options?.allowSharing,
-      sharingPreferenceAtSubmit: feedbackDataSharingPreference,
-    });
-  }, [feedbackDataSharingPreference, feedbackVoteMutation]);
   const handleChatAdd = useCallback(async (body: string, reopen?: boolean, reassignment?: CommentReassignment) => {
     if (reassignment) {
       await addCommentAndReassign.mutateAsync({ body, reopen, reassignment });
@@ -3200,23 +3044,10 @@ export function IssueDetail() {
       <IssueDocumentsSection
         issue={issue}
         canDeleteDocuments={Boolean(session?.user?.id)}
-        feedbackVotes={feedbackVotes}
-        feedbackDataSharingPreference={feedbackDataSharingPreference}
-        feedbackTermsUrl={FEEDBACK_TERMS_URL}
         mentions={mentionOptions}
         imageUploadHandler={async (file) => {
           const attachment = await uploadAttachment.mutateAsync(file);
           return attachment.contentPath;
-        }}
-        onVote={async (revisionId, vote, options) => {
-          await feedbackVoteMutation.mutateAsync({
-            targetType: "issue_document_revision",
-            targetId: revisionId,
-            vote,
-            reason: options?.reason,
-            allowSharing: options?.allowSharing,
-            sharingPreferenceAtSubmit: feedbackDataSharingPreference,
-          });
         }}
         extraActions={!hasAttachments ? attachmentUploadButton : null}
       />
@@ -3406,9 +3237,6 @@ export function IssueDetail() {
               commentsLoadingOlder={commentsLoadingOlder}
               onLoadOlderComments={loadOlderComments}
               composerRef={commentComposerRef}
-              feedbackVotes={feedbackVotes}
-              feedbackDataSharingPreference={feedbackDataSharingPreference}
-              feedbackTermsUrl={FEEDBACK_TERMS_URL}
               agentMap={agentMap}
               currentUserId={currentUserId}
               userLabelMap={userLabelMap}
@@ -3421,7 +3249,6 @@ export function IssueDetail() {
               composerDisabledReason={commentComposerDisabledReason}
               composerHint={composerHint}
               queuedCommentReason={queuedCommentReason}
-              onVote={handleCommentVote}
               onAdd={handleChatAdd}
               onImageUpload={handleCommentImageUpload}
               onAttachImage={handleCommentAttachImage}

@@ -28,9 +28,6 @@ import {
 import { Link, useLocation } from "@/lib/router";
 import type {
   Agent,
-  FeedbackDataSharingPreference,
-  FeedbackVote,
-  FeedbackVoteValue,
   IssueAttachment,
   IssueBlockerAttention,
   IssueRelationIssueSummary,
@@ -62,14 +59,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -100,25 +89,15 @@ import {
 } from "../lib/transcriptPresentation";
 import { cn, formatDateTime, formatShortDate } from "../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Textarea } from "@/components/ui/textarea";
-import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square } from "lucide-react";
 import { IssueBlockedNotice } from "./IssueBlockedNotice";
 
 interface IssueChatMessageContext {
-  feedbackVoteByTargetId: Map<string, FeedbackVoteValue>;
-  feedbackDataSharingPreference: FeedbackDataSharingPreference;
-  feedbackTermsUrl: string | null;
   agentMap?: Map<string, Agent>;
   currentUserId?: string | null;
   userLabelMap?: ReadonlyMap<string, string> | null;
   userProfileMap?: ReadonlyMap<string, CompanyUserProfile> | null;
   activeRunIds: ReadonlySet<string>;
-  onVote?: (
-    commentId: string,
-    vote: FeedbackVoteValue,
-    options?: { allowSharing?: boolean; reason?: string },
-  ) => Promise<void>;
   onStopRun?: (runId: string) => Promise<void>;
   stoppingRunId?: string | null;
   onInterruptQueued?: (runId: string) => Promise<void>;
@@ -140,9 +119,6 @@ interface IssueChatMessageContext {
 }
 
 const IssueChatCtx = createContext<IssueChatMessageContext>({
-  feedbackVoteByTargetId: new Map(),
-  feedbackDataSharingPreference: "prompt",
-  feedbackTermsUrl: null,
   activeRunIds: new Set<string>(),
 });
 
@@ -236,9 +212,6 @@ interface IssueChatComposerProps {
 interface IssueChatThreadProps {
   comments: IssueChatComment[];
   interactions?: IssueThreadInteraction[];
-  feedbackVotes?: FeedbackVote[];
-  feedbackDataSharingPreference?: FeedbackDataSharingPreference;
-  feedbackTermsUrl?: string | null;
   linkedRuns?: IssueChatLinkedRun[];
   timelineEvents?: IssueTimelineEvent[];
   liveRuns?: LiveRunForIssue[];
@@ -252,11 +225,6 @@ interface IssueChatThreadProps {
   currentUserId?: string | null;
   userLabelMap?: ReadonlyMap<string, string> | null;
   userProfileMap?: ReadonlyMap<string, CompanyUserProfile> | null;
-  onVote?: (
-    commentId: string,
-    vote: FeedbackVoteValue,
-    options?: { allowSharing?: boolean; reason?: string },
-  ) => Promise<void>;
   onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
   onCancelRun?: () => Promise<void>;
   onStopRun?: (runId: string) => Promise<void>;
@@ -1312,10 +1280,6 @@ function IssueChatUserMessage({ message }: { message: ThreadMessage }) {
 
 function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
   const {
-    feedbackVoteByTargetId,
-    feedbackDataSharingPreference,
-    feedbackTermsUrl,
-    onVote,
     agentMap,
     activeRunIds,
     onStopRun,
@@ -1334,7 +1298,6 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
   const runStatus = typeof custom.runStatus === "string" ? custom.runStatus : null;
   const agentId = authorAgentId ?? runAgentId;
   const agentIcon = agentId ? agentMap?.get(agentId)?.icon : undefined;
-  const commentId = typeof custom.commentId === "string" ? custom.commentId : null;
   const notices = Array.isArray(custom.notices)
     ? custom.notices.filter((notice): notice is string => typeof notice === "string" && notice.length > 0)
     : [];
@@ -1367,15 +1330,6 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
     }
   }
 
-  const handleVote = async (
-    vote: FeedbackVoteValue,
-    options?: { allowSharing?: boolean; reason?: string },
-  ) => {
-    if (!commentId || !onVote) return;
-    await onVote(commentId, vote, options);
-  };
-
-  const activeVote = commentId ? feedbackVoteByTargetId.get(commentId) ?? null : null;
   const followUpRequested = custom.followUpRequested === true;
 
   return (
@@ -1469,14 +1423,6 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
                 >
                   {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 </button>
-                {commentId && onVote ? (
-                  <IssueChatFeedbackButtons
-                    activeVote={activeVote}
-                    sharingPreference={feedbackDataSharingPreference}
-                    termsUrl={feedbackTermsUrl ?? null}
-                    onVote={handleVote}
-                  />
-                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <a
@@ -1539,226 +1485,6 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function IssueChatFeedbackButtons({
-  activeVote,
-  sharingPreference = "prompt",
-  termsUrl,
-  onVote,
-}: {
-  activeVote: FeedbackVoteValue | null;
-  sharingPreference: FeedbackDataSharingPreference;
-  termsUrl: string | null;
-  onVote: (vote: FeedbackVoteValue, options?: { allowSharing?: boolean; reason?: string }) => Promise<void>;
-}) {
-  const [isSaving, setIsSaving] = useState(false);
-  const [optimisticVote, setOptimisticVote] = useState<FeedbackVoteValue | null>(null);
-  const [reasonOpen, setReasonOpen] = useState(false);
-  const [downvoteReason, setDownvoteReason] = useState("");
-  const [pendingSharingDialog, setPendingSharingDialog] = useState<{
-    vote: FeedbackVoteValue;
-    reason?: string;
-  } | null>(null);
-  const visibleVote = optimisticVote ?? activeVote ?? null;
-
-  useEffect(() => {
-    if (optimisticVote && activeVote === optimisticVote) setOptimisticVote(null);
-  }, [activeVote, optimisticVote]);
-
-  async function doVote(
-    vote: FeedbackVoteValue,
-    options?: { allowSharing?: boolean; reason?: string },
-  ) {
-    setIsSaving(true);
-    try {
-      await onVote(vote, options);
-    } catch {
-      setOptimisticVote(null);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function handleVote(vote: FeedbackVoteValue, reason?: string) {
-    setOptimisticVote(vote);
-    if (sharingPreference === "prompt") {
-      setPendingSharingDialog({ vote, ...(reason ? { reason } : {}) });
-      return;
-    }
-    const allowSharing = sharingPreference === "allowed";
-    void doVote(vote, {
-      ...(allowSharing ? { allowSharing: true } : {}),
-      ...(reason ? { reason } : {}),
-    });
-  }
-
-  function handleThumbsUp() {
-    handleVote("up");
-  }
-
-  function handleThumbsDown() {
-    setOptimisticVote("down");
-    setReasonOpen(true);
-    // Submit the initial down vote right away
-    handleVote("down");
-  }
-
-  function handleSubmitReason() {
-    if (!downvoteReason.trim()) return;
-    // Re-submit with reason attached
-    if (sharingPreference === "prompt") {
-      setPendingSharingDialog({ vote: "down", reason: downvoteReason });
-    } else {
-      const allowSharing = sharingPreference === "allowed";
-      void doVote("down", {
-        ...(allowSharing ? { allowSharing: true } : {}),
-        reason: downvoteReason,
-      });
-    }
-    setReasonOpen(false);
-    setDownvoteReason("");
-  }
-
-  return (
-    <>
-      <button
-        type="button"
-        disabled={isSaving}
-        className={cn(
-          "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-          visibleVote === "up"
-            ? "text-green-600 dark:text-green-400"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
-        )}
-        title="Helpful"
-        aria-label="Helpful"
-        onClick={handleThumbsUp}
-      >
-        <ThumbsUp className="h-3.5 w-3.5" />
-      </button>
-      <Popover open={reasonOpen} onOpenChange={setReasonOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={isSaving}
-            className={cn(
-              "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-              visibleVote === "down"
-                ? "text-amber-600 dark:text-amber-400"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
-            )}
-            title="Needs work"
-            aria-label="Needs work"
-            onClick={handleThumbsDown}
-          >
-            <ThumbsDown className="h-3.5 w-3.5" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent side="top" align="start" className="w-80 p-3">
-          <div className="mb-2 text-sm font-medium">What could have been better?</div>
-          <Textarea
-            value={downvoteReason}
-            onChange={(event) => setDownvoteReason(event.target.value)}
-            placeholder="Add a short note"
-            className="min-h-20 resize-y bg-background text-sm"
-            disabled={isSaving}
-          />
-          <div className="mt-2 flex items-center justify-end gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={isSaving}
-              onClick={() => {
-                setReasonOpen(false);
-                setDownvoteReason("");
-              }}
-            >
-              Dismiss
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSaving || !downvoteReason.trim()}
-              onClick={handleSubmitReason}
-            >
-              {isSaving ? "Saving..." : "Save note"}
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      <Dialog
-        open={Boolean(pendingSharingDialog)}
-        onOpenChange={(open) => {
-          if (!open && !isSaving) {
-            setPendingSharingDialog(null);
-            setOptimisticVote(null);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Save your feedback sharing preference</DialogTitle>
-            <DialogDescription>
-              Choose whether voted AI outputs can be shared with Paperclip Labs. This
-              answer becomes the default for future thumbs up and thumbs down votes.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>This vote is always saved locally.</p>
-            <p>
-              Choose <span className="font-medium text-foreground">Always allow</span> to share
-              this vote and future voted AI outputs. Choose{" "}
-              <span className="font-medium text-foreground">Don't allow</span> to keep this vote
-              and future votes local.
-            </p>
-            <p>You can change this later in Instance Settings &gt; General.</p>
-            {termsUrl ? (
-              <a
-                href={termsUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex text-sm text-foreground underline underline-offset-4"
-              >
-                Read our terms of service
-              </a>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!pendingSharingDialog || isSaving}
-              onClick={() => {
-                if (!pendingSharingDialog) return;
-                void doVote(
-                  pendingSharingDialog.vote,
-                  pendingSharingDialog.reason ? { reason: pendingSharingDialog.reason } : undefined,
-                ).then(() => setPendingSharingDialog(null));
-              }}
-            >
-              {isSaving ? "Saving..." : "Don't allow"}
-            </Button>
-            <Button
-              type="button"
-              disabled={!pendingSharingDialog || isSaving}
-              onClick={() => {
-                if (!pendingSharingDialog) return;
-                void doVote(pendingSharingDialog.vote, {
-                  allowSharing: true,
-                  ...(pendingSharingDialog.reason ? { reason: pendingSharingDialog.reason } : {}),
-                }).then(() => setPendingSharingDialog(null));
-              }}
-            >
-              {isSaving ? "Saving..." : "Always allow"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 
@@ -2464,9 +2190,6 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 export function IssueChatThread({
   comments,
   interactions = [],
-  feedbackVotes = [],
-  feedbackDataSharingPreference = "prompt",
-  feedbackTermsUrl = null,
   linkedRuns = [],
   timelineEvents = [],
   liveRuns = [],
@@ -2480,7 +2203,6 @@ export function IssueChatThread({
   currentUserId,
   userLabelMap,
   userProfileMap,
-  onVote,
   onAdd,
   onCancelRun,
   onStopRun,
@@ -2626,15 +2348,6 @@ export function IssueChatThread({
     const assigneeAgentId = currentAssigneeValue.slice("agent:".length);
     return agentMap?.get(assigneeAgentId) ?? null;
   }, [agentMap, currentAssigneeValue]);
-  const feedbackVoteByTargetId = useMemo(() => {
-    const map = new Map<string, FeedbackVoteValue>();
-    for (const feedbackVote of feedbackVotes) {
-      if (feedbackVote.targetType !== "issue_comment") continue;
-      map.set(feedbackVote.targetId, feedbackVote.vote);
-    }
-    return map;
-  }, [feedbackVotes]);
-
   const runtime = usePaperclipIssueRuntime({
     messages,
     isRunning,
@@ -2726,15 +2439,11 @@ export function IssueChatThread({
 
   const chatCtx = useMemo<IssueChatMessageContext>(
     () => ({
-      feedbackVoteByTargetId,
-      feedbackDataSharingPreference,
-      feedbackTermsUrl,
       agentMap,
       currentUserId,
       userLabelMap,
       userProfileMap,
       activeRunIds,
-      onVote,
       onStopRun,
       stoppingRunId,
       onInterruptQueued,
@@ -2746,15 +2455,11 @@ export function IssueChatThread({
       onSubmitInteractionAnswers,
     }),
     [
-      feedbackVoteByTargetId,
-      feedbackDataSharingPreference,
-      feedbackTermsUrl,
       agentMap,
       currentUserId,
       userLabelMap,
       userProfileMap,
       activeRunIds,
-      onVote,
       onStopRun,
       stoppingRunId,
       onInterruptQueued,

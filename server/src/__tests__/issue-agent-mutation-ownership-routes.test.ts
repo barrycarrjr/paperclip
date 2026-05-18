@@ -87,10 +87,6 @@ function registerRouteMocks() {
     agentService: () => mockAgentService,
     documentService: () => mockDocumentService,
     executionWorkspaceService: () => ({}),
-    feedbackService: () => ({
-      listIssueVotesForUser: vi.fn(async () => []),
-      saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
-    }),
     goalService: () => ({}),
     heartbeatService: () => ({
       wakeup: vi.fn(async () => undefined),
@@ -104,7 +100,6 @@ function registerRouteMocks() {
         id: "instance-settings-1",
         general: {
           censorUsernameInLogs: false,
-          feedbackDataSharingPreference: "prompt",
         },
       })),
       listCompanyIds: vi.fn(async () => [companyId]),

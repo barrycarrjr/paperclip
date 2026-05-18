@@ -533,7 +533,6 @@ function IssueManagementStories() {
             <IssueDocumentsSection
               issue={primaryIssue}
               canDeleteDocuments
-              feedbackDataSharingPreference="allowed"
             />
           </Section>
 

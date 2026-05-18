@@ -28,11 +28,6 @@ const mockExecutionWorkspaceService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
-const mockFeedbackService = vi.hoisted(() => ({
-  listIssueVotesForUser: vi.fn(),
-  saveIssueVote: vi.fn(),
-}));
-
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(),
   reportRunActivity: vi.fn(),
@@ -69,10 +64,6 @@ function registerRouteMocks() {
     executionWorkspaceService: () => mockExecutionWorkspaceService,
   }));
 
-  vi.doMock("../services/feedback.js", () => ({
-    feedbackService: () => mockFeedbackService,
-  }));
-
   vi.doMock("../services/heartbeat.js", () => ({
     heartbeatService: () => mockHeartbeatService,
   }));
@@ -94,7 +85,6 @@ function registerRouteMocks() {
     agentService: () => mockAgentService,
     documentService: () => ({}),
     executionWorkspaceService: () => mockExecutionWorkspaceService,
-    feedbackService: () => mockFeedbackService,
     goalService: () => ({}),
     heartbeatService: () => mockHeartbeatService,
     instanceSettingsService: () => mockInstanceSettingsService,
@@ -165,7 +155,6 @@ describe("issue workspace command authorization", () => {
     vi.doUnmock("../services/activity-log.js");
     vi.doUnmock("../services/agents.js");
     vi.doUnmock("../services/execution-workspaces.js");
-    vi.doUnmock("../services/feedback.js");
     vi.doUnmock("../services/heartbeat.js");
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/instance-settings.js");
@@ -190,12 +179,6 @@ describe("issue workspace command authorization", () => {
     mockAccessService.hasPermission.mockResolvedValue(true);
     mockAgentService.getById.mockResolvedValue(null);
     mockExecutionWorkspaceService.getById.mockResolvedValue(null);
-    mockFeedbackService.listIssueVotesForUser.mockResolvedValue([]);
-    mockFeedbackService.saveIssueVote.mockResolvedValue({
-      vote: null,
-      consentEnabledNow: false,
-      sharingEnabled: false,
-    });
     mockHeartbeatService.wakeup.mockResolvedValue(undefined);
     mockHeartbeatService.reportRunActivity.mockResolvedValue(undefined);
     mockHeartbeatService.getRun.mockResolvedValue(null);
@@ -205,7 +188,6 @@ describe("issue workspace command authorization", () => {
       id: "instance-settings-1",
       general: {
         censorUsernameInLogs: false,
-        feedbackDataSharingPreference: "prompt",
       },
     });
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1"]);

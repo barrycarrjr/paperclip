@@ -1,4 +1,4 @@
-import type { Agent, FeedbackVote } from "@paperclipai/shared";
+import type { Agent } from "@paperclipai/shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import type { InlineEntityOption } from "../components/InlineEntitySelector";
 import type { MentionOption } from "../components/MarkdownEditor";
@@ -334,21 +334,3 @@ export const issueChatUxReviewEvents: IssueTimelineEvent[] = [
   },
 ];
 
-export const issueChatUxFeedbackVotes: FeedbackVote[] = [
-  {
-    id: "feedback-1",
-    companyId: "company-ux",
-    issueId: "issue-ux",
-    targetType: "issue_comment",
-    targetId: "comment-review-agent",
-    authorUserId: "user-1",
-    vote: "up",
-    reason: null,
-    sharedWithLabs: false,
-    sharedAt: null,
-    consentVersion: null,
-    redactionSummary: null,
-    createdAt: new Date("2026-04-06T12:35:00.000Z"),
-    updatedAt: new Date("2026-04-06T12:35:00.000Z"),
-  },
-];

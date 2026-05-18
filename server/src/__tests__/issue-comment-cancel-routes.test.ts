@@ -20,16 +20,11 @@ const mockHeartbeatService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
-const mockFeedbackService = vi.hoisted(() => ({
-  listIssueVotesForUser: vi.fn(async () => []),
-  saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
-}));
 const mockInstanceSettingsService = vi.hoisted(() => ({
   get: vi.fn(async () => ({
     id: "instance-settings-1",
     general: {
       censorUsernameInLogs: false,
-      feedbackDataSharingPreference: "prompt",
     },
   })),
   listCompanyIds: vi.fn(async () => ["company-1"]),
@@ -46,10 +41,6 @@ function registerModuleMocks() {
 
   vi.doMock("../services/activity-log.js", () => ({
     logActivity: mockLogActivity,
-  }));
-
-  vi.doMock("../services/feedback.js", () => ({
-    feedbackService: () => mockFeedbackService,
   }));
 
   vi.doMock("../services/heartbeat.js", () => ({
@@ -69,7 +60,6 @@ function registerModuleMocks() {
     agentService: () => ({ getById: vi.fn(async () => null) }),
     documentService: () => ({}),
     executionWorkspaceService: () => ({}),
-    feedbackService: () => mockFeedbackService,
     goalService: () => ({}),
     heartbeatService: () => mockHeartbeatService,
     instanceSettingsService: () => mockInstanceSettingsService,
@@ -155,7 +145,6 @@ describe.sequential("issue comment cancel routes", () => {
     vi.resetModules();
     vi.doUnmock("../services/access.js");
     vi.doUnmock("../services/activity-log.js");
-    vi.doUnmock("../services/feedback.js");
     vi.doUnmock("../services/heartbeat.js");
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/instance-settings.js");
@@ -171,12 +160,6 @@ describe.sequential("issue comment cancel routes", () => {
     mockIssueService.removeComment.mockResolvedValue(makeComment());
     mockAccessService.canUser.mockResolvedValue(false);
     mockAccessService.hasPermission.mockResolvedValue(false);
-    mockFeedbackService.listIssueVotesForUser.mockResolvedValue([]);
-    mockFeedbackService.saveIssueVote.mockResolvedValue({
-      vote: null,
-      consentEnabledNow: false,
-      sharingEnabled: false,
-    });
     mockHeartbeatService.getRun.mockResolvedValue({
       id: "run-1",
       companyId: "company-1",
@@ -190,7 +173,6 @@ describe.sequential("issue comment cancel routes", () => {
       id: "instance-settings-1",
       general: {
         censorUsernameInLogs: false,
-        feedbackDataSharingPreference: "prompt",
       },
     });
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1"]);

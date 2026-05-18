@@ -5,7 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { IssueChatThread } from "../components/IssueChatThread";
 import {
   issueChatUxAgentMap,
-  issueChatUxFeedbackVotes,
   issueChatUxLinkedRuns,
   issueChatUxLiveComments,
   issueChatUxLiveEvents,
@@ -25,7 +24,7 @@ const noop = async () => {};
 const highlights = [
   "Running assistant replies with streamed text, reasoning, tool cards, and background status notes",
   "Historical issue events and linked runs rendered inline with the chat timeline",
-  "Queued user messages, settled assistant comments, and feedback controls",
+  "Queued user messages, settled assistant comments",
   "Submitting (pending) message bubble with Sending... label and reduced opacity",
   "Empty and disabled-composer states without relying on live backend data",
 ];
@@ -271,7 +270,6 @@ export function IssueChatUxLab() {
           agentMap={issueChatUxAgentMap}
           currentUserId="user-1"
           onAdd={noop}
-          onVote={noop}
           onCancelRun={noop}
           onInterruptQueued={noop}
           draftKey="issue-chat-ux-lab-primary"
@@ -310,21 +308,18 @@ export function IssueChatUxLab() {
       <div className="grid gap-6 xl:grid-cols-2">
         <LabSection
           eyebrow="Settled review"
-          title="Durable comments and feedback"
-          description="Shows the post-run state: assistant comment feedback controls, historical run context, and timeline reassignment without any active stream."
+          title="Durable comments"
+          description="Shows the post-run state: assistant comments, historical run context, and timeline reassignment without any active stream."
           accentClassName="bg-[linear-gradient(180deg,rgba(168,85,247,0.05),transparent_26%),var(--background)]"
         >
           <IssueChatThread
             comments={issueChatUxReviewComments}
             linkedRuns={issueChatUxLinkedRuns.slice(1)}
             timelineEvents={issueChatUxReviewEvents}
-            feedbackVotes={issueChatUxFeedbackVotes}
-            feedbackTermsUrl="/feedback-terms"
             issueStatus="in_review"
             agentMap={issueChatUxAgentMap}
             currentUserId="user-1"
             onAdd={noop}
-            onVote={noop}
             draftKey="issue-chat-ux-lab-review"
             showComposer={false}
             enableLiveTranscriptPolling={false}

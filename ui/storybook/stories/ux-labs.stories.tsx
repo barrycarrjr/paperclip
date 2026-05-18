@@ -38,7 +38,7 @@ export const IssueChatReviewSurface: Story = {
     docs: {
       description: {
         story:
-          "Exercises assistant-ui issue chat states: timeline events, live run stream, queued message, feedback controls, submitting bubble, empty state, and disabled composer.",
+          "Exercises assistant-ui issue chat states: timeline events, live run stream, queued message, submitting bubble, empty state, and disabled composer.",
       },
     },
   },

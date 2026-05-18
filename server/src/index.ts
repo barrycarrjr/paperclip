@@ -31,13 +31,11 @@ import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
-  feedbackService,
   heartbeatService,
   instanceSettingsService,
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
-import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
@@ -538,14 +536,6 @@ export async function startServer(): Promise<StartedServer> {
   });
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
-  // Feedback trace share is opt-in — only create the client if an explicit
-  // backend URL is configured. Without this guard the factory throws on every
-  // startup, since we removed the upstream-controlled default URL.
-  const feedback = feedbackService(db as any, {
-    shareClient: config.feedbackExportBackendUrl?.trim()
-      ? createFeedbackTraceShareClientFromConfig(config)
-      : undefined,
-  });
   const backupSettingsSvc = instanceSettingsService(db);
   let databaseBackupInFlight = false;
   const runServerDatabaseBackup = async (
@@ -822,7 +812,6 @@ export async function startServer(): Promise<StartedServer> {
     uiMode,
     serverPort: listenPort,
     storageService,
-    feedbackExportService: feedback,
     databaseBackupService: {
       runManualBackup: async () => {
         const result = await runServerDatabaseBackup("manual");

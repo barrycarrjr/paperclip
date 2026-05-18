@@ -69,7 +69,6 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.released": "released the issue",
   "issue.comment_added": "added a comment",
   "issue.comment_cancelled": "cancelled a queued comment",
-  "issue.feedback_vote_saved": "saved feedback on an AI output",
   "issue.attachment_added": "added an attachment",
   "issue.attachment_removed": "removed an attachment",
   "issue.document_created": "created a document",

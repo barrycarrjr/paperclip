@@ -4,9 +4,6 @@ import type {
   Company,
   CreateIssueTreeHold,
   DocumentRevision,
-  FeedbackTargetType,
-  FeedbackTrace,
-  FeedbackVote,
   Issue,
   IssueAttachment,
   IssueComment,
@@ -189,26 +186,6 @@ export const issuesApi = {
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions/${interactionId}/respond`, data),
   getComment: (id: string, commentId: string) =>
     api.get<IssueComment>(`/issues/${id}/comments/${commentId}`),
-  listFeedbackVotes: (id: string) => api.get<FeedbackVote[]>(`/issues/${id}/feedback-votes`),
-  listFeedbackTraces: (id: string, filters?: Record<string, string | boolean | undefined>) => {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(filters ?? {})) {
-      if (value === undefined) continue;
-      params.set(key, String(value));
-    }
-    const qs = params.toString();
-    return api.get<FeedbackTrace[]>(`/issues/${id}/feedback-traces${qs ? `?${qs}` : ""}`);
-  },
-  upsertFeedbackVote: (
-    id: string,
-    data: {
-      targetType: FeedbackTargetType;
-      targetId: string;
-      vote: "up" | "down";
-      reason?: string;
-      allowSharing?: boolean;
-    },
-  ) => api.post<FeedbackVote>(`/issues/${id}/feedback-votes`, data),
   addComment: (id: string, body: string, reopen?: boolean, interrupt?: boolean) =>
     api.post<IssueComment>(
       `/issues/${id}/comments`,

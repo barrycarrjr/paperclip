@@ -12,10 +12,6 @@ export interface Company {
   budgetMonthlyCents: number;
   spentMonthlyCents: number;
   requireBoardApprovalForNewAgents: boolean;
-  feedbackDataSharingEnabled: boolean;
-  feedbackDataSharingConsentAt: Date | null;
-  feedbackDataSharingConsentByUserId: string | null;
-  feedbackDataSharingTermsVersion: string | null;
   brandColor: string | null;
   /** True if this is HQ — the portfolio-root holding-company entity. Singleton per instance. */
   isPortfolioRoot: boolean;

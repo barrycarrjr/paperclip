@@ -140,7 +140,6 @@ const NOISE_ACTIONS = new Set<string>([
   "issue.document_deleted",
   "issue.document_restored",
   "issue.document_upserted",
-  "issue.feedback_vote_saved",
   "issue.harness_liveness_escalation_created",
   "issue.inbox_archived",
   "issue.inbox_unarchived",
@@ -190,7 +189,6 @@ const NOISE_ACTIONS = new Set<string>([
   // company.* — outcomes are created/archived; the rest is admin.
   "company.branding_updated",
   "company.budget_updated",
-  "company.feedback_data_sharing_updated",
   "company.imported",
   "company.skill_created",
   "company.skill_deleted",

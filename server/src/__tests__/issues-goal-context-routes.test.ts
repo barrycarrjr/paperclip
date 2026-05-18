@@ -43,11 +43,6 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
-const mockFeedbackService = vi.hoisted(() => ({
-  listIssueVotesForUser: vi.fn(async () => []),
-  saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
-}));
-
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
   reportRunActivity: vi.fn(async () => undefined),
@@ -58,7 +53,6 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
     id: "instance-settings-1",
     general: {
       censorUsernameInLogs: false,
-      feedbackDataSharingPreference: "prompt",
     },
   })),
   listCompanyIds: vi.fn(async () => ["company-1"]),
@@ -96,7 +90,6 @@ vi.mock("../services/index.js", () => ({
   documentService: () => mockDocumentsService,
   environmentService: () => mockEnvironmentService,
   executionWorkspaceService: () => mockExecutionWorkspaceService,
-  feedbackService: () => mockFeedbackService,
   goalService: () => mockGoalService,
   heartbeatService: () => mockHeartbeatService,
   instanceSettingsService: () => mockInstanceSettingsService,

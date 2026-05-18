@@ -71,10 +71,6 @@ function registerServiceMocks() {
     }),
     documentService: () => ({}),
     executionWorkspaceService: () => mockExecutionWorkspaceService,
-    feedbackService: () => ({
-      listIssueVotesForUser: vi.fn(async () => []),
-      saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
-    }),
     goalService: () => ({
       getDefaultCompanyGoal: vi.fn(async () => null),
       getById: vi.fn(async () => null),
@@ -85,7 +81,6 @@ function registerServiceMocks() {
         id: "instance-settings-1",
         general: {
           censorUsernameInLogs: false,
-          feedbackDataSharingPreference: "prompt",
         },
       })),
       listCompanyIds: vi.fn(async () => ["company-1"]),

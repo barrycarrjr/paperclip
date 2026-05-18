@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { Agent, FeedbackVote, IssueComment } from "@paperclipai/shared";
+import type { Agent, IssueComment } from "@paperclipai/shared";
 import type { TranscriptEntry } from "@/adapters";
 import type { LiveRunForIssue } from "@/api/heartbeats";
 import { CommentThread } from "@/components/CommentThread";
@@ -278,25 +278,6 @@ const commentLinkedRuns = [
   },
 ];
 
-const feedbackVotes: FeedbackVote[] = [
-  {
-    id: "feedback-chat-comment-01",
-    companyId,
-    issueId,
-    targetType: "issue_comment",
-    targetId: "comment-issue-agent",
-    authorUserId: currentUserId,
-    vote: "up",
-    reason: null,
-    sharedWithLabs: false,
-    sharedAt: null,
-    consentVersion: null,
-    redactionSummary: null,
-    createdAt: new Date("2026-04-20T13:52:00.000Z"),
-    updatedAt: new Date("2026-04-20T13:52:00.000Z"),
-  },
-];
-
 const liveRun: LiveRunForIssue = {
   id: "run-live-chat-01",
   status: "running",
@@ -379,7 +360,7 @@ const issueChatComments: IssueChatComment[] = [
     id: "comment-issue-agent",
     authorAgentId: codexAgent.id,
     authorUserId: null,
-    body: "I kept the existing component contracts and added fixtures with realistic Paperclip work: checkout, comments, linked runs, and review feedback.",
+    body: "I kept the existing component contracts and added fixtures with realistic Paperclip work: checkout, comments, linked runs, and review notes.",
     createdAt: new Date("2026-04-20T13:50:00.000Z"),
     runId: "run-issue-chat-01",
     runAgentId: codexAgent.id,
@@ -579,8 +560,6 @@ function IssueChatMatrix() {
             linkedRuns={issueLinkedRuns}
             timelineEvents={issueTimelineEvents}
             liveRuns={[liveRun]}
-            feedbackVotes={feedbackVotes}
-            feedbackDataSharingPreference="allowed"
             companyId={companyId}
             projectId={projectId}
             issueStatus="in_progress"
@@ -588,7 +567,6 @@ function IssueChatMatrix() {
             currentUserId={currentUserId}
             userLabelMap={boardUserLabels}
             onAdd={async () => {}}
-            onVote={async () => {}}
             onStopRun={async () => {}}
             enableReassign
             reassignOptions={reassignOptions}
