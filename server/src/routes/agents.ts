@@ -83,6 +83,26 @@ import {
 } from "../services/default-agent-instructions.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
+import { logger } from "../middleware/logger.js";
+
+function stripWrappingCodeFence(text: string): string {
+  // Models often wrap the whole response in ```...``` even though we asked them not to.
+  // Strip a single outermost fence if and only if it wraps the whole document.
+  const match = /^```(?:[a-zA-Z0-9_-]*)\n([\s\S]*?)\n```$/.exec(text);
+  return match ? match[1] : text;
+}
+
+function extractRewrittenContent(text: string): string {
+  // Preferred path: the model wrapped its answer in <rewritten_content> tags
+  // (per the system prompt). Greedy match so any stray nested tags in the
+  // content itself don't truncate the extraction.
+  const tagMatch = /<rewritten_content>([\s\S]*)<\/rewritten_content>/i.exec(text);
+  if (tagMatch) return tagMatch[1].replace(/^\n/, "").replace(/\n\s*$/, "");
+
+  // Fallback: model ignored the tag instruction. Strip a wrapping code fence
+  // if the whole response is one fenced block. Otherwise return as-is.
+  return stripWrappingCodeFence(text.trim());
+}
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
@@ -2143,6 +2163,165 @@ export function agentRoutes(
     });
 
     res.json(result.bundle);
+  });
+
+  router.post("/agents/:id/instructions-bundle/file/ai-rewrite", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCanManageInstructionsPath(req, existing);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const relativePath = typeof body.path === "string" ? body.path.trim() : "";
+    const content = typeof body.content === "string" ? body.content : "";
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const selection = typeof body.selection === "string" && body.selection.length > 0 ? body.selection : null;
+    const requestedModel = typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : null;
+
+    if (!relativePath) {
+      res.status(422).json({ error: "path is required" });
+      return;
+    }
+    if (!prompt) {
+      res.status(422).json({ error: "prompt is required" });
+      return;
+    }
+    if (content.length > 200_000) {
+      res.status(422).json({ error: "content is too large (max 200000 chars)" });
+      return;
+    }
+    if (prompt.length > 4000) {
+      res.status(422).json({ error: "prompt is too long (max 4000 chars)" });
+      return;
+    }
+
+    const {
+      getProviderForModel,
+      listConfiguredProviders,
+      pickBestDefaultModel,
+      removeClippyWorkspace,
+    } = await import("../services/chat-providers.js");
+
+    // Prefer native API-key providers over adapter routing for inline rewrites:
+    // a native SDK call returns in ~hundreds of ms vs seconds of CLI cold-start.
+    // Ollama is deliberately excluded — its `isConfigured()` returns true by
+    // default without any reachability check, so a non-running ollama would
+    // win this cascade and then fail at fetch time. Falling through to
+    // `pickBestDefaultModel()` lets ollama's reachability check decide whether
+    // it's actually a viable target, and otherwise picks the best adapter-
+    // routed model (Claude Pro via claude_local, etc.).
+    let model: string;
+    if (requestedModel) {
+      model = requestedModel;
+    } else {
+      const configured = listConfiguredProviders();
+      const nativePreference = ["anthropic", "openai", "gemini"] as const;
+      const nativeProvider = nativePreference
+        .map((name) => configured.find((p) => p.name === name))
+        .find((p): p is NonNullable<typeof p> => Boolean(p));
+      model = nativeProvider ? nativeProvider.defaultModel() : await pickBestDefaultModel();
+    }
+
+    const provider = getProviderForModel(model);
+    if (!provider) {
+      res.status(503).json({ error: `No provider available for model "${model}". Configure an LLM provider (Anthropic/OpenAI/Gemini/Ollama) or a local CLI adapter under Instance Settings.` });
+      return;
+    }
+    if (!provider.isConfigured()) {
+      res.status(503).json({ error: `Provider for "${model}" is not configured. Set its API key under Instance Settings.` });
+      return;
+    }
+
+    const system = [
+      "You are an editor helping an operator refine an AI agent's instructions file.",
+      "The operator will give you a SOURCE document and an INSTRUCTION describing how to change it.",
+      "",
+      "OUTPUT FORMAT (STRICT):",
+      "1. Wrap the rewritten content in <rewritten_content>...</rewritten_content> tags.",
+      "2. Put NOTHING else outside those tags — no preamble (\"Here's...\", \"I've revised...\"), no trailing commentary, no questions back to the operator, no explanation of what you changed.",
+      "3. Do NOT wrap the content inside the tags in markdown code fences (no leading or trailing ```).",
+      "4. The content between the tags is what gets pasted directly into the file, byte-for-byte.",
+      "",
+      "Preserve the document's existing markdown structure, heading levels, and tone unless the instruction explicitly asks otherwise.",
+      "If the instruction is ambiguous, make the most reasonable interpretation and apply it consistently.",
+      "Do not use tools, edit files, or run commands. Output the rewritten text and stop.",
+      selection
+        ? "The operator has SELECTED a portion of the source. Rewrite ONLY that selection and return ONLY the replacement text inside the tags (no surrounding context)."
+        : "Rewrite the WHOLE source document and return the full updated document inside the tags.",
+    ].join("\n");
+
+    const userParts: string[] = [];
+    if (selection) {
+      userParts.push("SOURCE DOCUMENT (for context only — do not return this):\n```\n" + content + "\n```");
+      userParts.push("\nSELECTED PORTION (rewrite ONLY this):\n```\n" + selection + "\n```");
+    } else {
+      userParts.push("SOURCE DOCUMENT:\n```\n" + content + "\n```");
+    }
+    userParts.push("\nINSTRUCTION: " + prompt);
+
+    // For adapter-routed models, synthesize a throwaway one-shot context.
+    // The adapter path is built for multi-turn Clippy sessions (sessionId,
+    // sessionParams persistence, per-session workspaces under
+    // ~/.paperclip/clippy-workspaces/) — none of which apply here. We mint a
+    // unique sessionId, no-op the sessionParams callback, and clean up the
+    // workspace dir in `finally` so we don't leak directories.
+    const oneShotSessionId = `oneshot-${randomUUID()}`;
+    const adapterContext = provider.name === "adapter"
+      ? {
+          sessionId: oneShotSessionId,
+          companyId: existing.companyId,
+          boardUserId: req.actor.userId ?? "",
+          prevSessionParams: null,
+          saveSessionParams: async () => {
+            // One-shot: no continuity needed.
+          },
+        }
+      : undefined;
+
+    let rewrittenText = "";
+    try {
+      const iter = provider.streamTurn({
+        model,
+        system,
+        messages: [{ role: "user", content: userParts.join("\n") }],
+        effort: "auto",
+        adapterContext,
+      });
+      while (true) {
+        const step = await iter.next();
+        if (step.done) {
+          for (const block of step.value.content) {
+            if (block.type === "text") rewrittenText += block.text;
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, agentId: id, model }, "AI rewrite failed");
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: `LLM call failed: ${message}` });
+      return;
+    } finally {
+      if (adapterContext) {
+        await removeClippyWorkspace(oneShotSessionId).catch((err) => {
+          logger.warn({ err, sessionId: oneShotSessionId }, "Failed to clean up one-shot adapter workspace");
+        });
+      }
+    }
+
+    // Extract content from <rewritten_content> tags (or fall back to stripping
+    // a wrapping code fence if the model ignored the tag instruction).
+    rewrittenText = extractRewrittenContent(rewrittenText);
+
+    if (!rewrittenText) {
+      res.status(502).json({ error: "Model returned no text. Try rephrasing the instruction." });
+      return;
+    }
+
+    res.json({ rewritten: rewrittenText, model });
   });
 
   router.patch("/agents/:id", validate(updateAgentSchema), async (req, res) => {

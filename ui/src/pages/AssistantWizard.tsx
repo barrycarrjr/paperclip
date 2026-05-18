@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Bot, Check, Loader2, X, Phone, Mail, Calendar, MessageSquare, Play, Square } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Check, Loader2, X, Phone, Mail, Calendar, MessageSquare, Play, Square, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { authApi } from "../api/auth";
@@ -18,6 +18,23 @@ interface PhoneNumber {
   id: string;
   e164: string;
   label: string | null;
+  /** Verified personal caller ID (vs an engine-owned number). */
+  personal?: boolean;
+}
+
+interface NumbersResponse {
+  numbers: PhoneNumber[];
+  engine?: "vapi" | "diy";
+  /** True if the resolved phone-tools account has Twilio creds. */
+  twilioConfigured?: boolean;
+}
+
+interface VerifyRequestResponse {
+  e164: string;
+  validationCode: string;
+  friendlyName: string;
+  callSid: string | null;
+  instructions: string;
 }
 
 interface ComposeResult {
@@ -35,6 +52,7 @@ const EA_TASKS = [
   { id: "take-messages", label: "Take messages" },
   { id: "confirm-appointments", label: "Confirm appointments" },
   { id: "follow-up", label: "Follow up after calls" },
+  { id: "gather-information", label: "Gather information" },
 ] as const;
 
 const VOICES = [
@@ -105,8 +123,10 @@ export function AssistantWizard() {
   // Step 4
   const [tasks, setTasks] = useState<string[]>(EA_TASKS.map((t) => t.id));
   const [customTasks, setCustomTasks] = useState("");
-  // Step 5 — capability checklist (only Phone is selectable in Phase A)
+  // Step 5 — capability checklist
   const [phoneEnabled, setPhoneEnabled] = useState(true);
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [calendarEnabled, setCalendarEnabled] = useState(false);
   // Step 6
   const [voice, setVoice] = useState<string>(VOICES[0]!.id);
   // Step 7
@@ -119,10 +139,13 @@ export function AssistantWizard() {
     }
   }, [session?.user?.name, principal]);
 
-  // Phone numbers — fetched from the plugin's account.
+  // Phone numbers — fetched from the plugin's account. Returns both
+  // engine-owned numbers and locally-cached verified personal caller
+  // IDs, plus engine + twilioConfigured flags so the UI can show the
+  // right verification affordances.
   const numbersQuery = useQuery({
     queryKey: ["phone-tools", "phone-numbers", selectedCompanyId],
-    queryFn: () => pluginFetch<{ numbers: PhoneNumber[] }>("/accounts/numbers", {
+    queryFn: () => pluginFetch<NumbersResponse>("/accounts/numbers", {
       method: "GET",
       companyId: selectedCompanyId!,
     }),
@@ -151,6 +174,12 @@ export function AssistantWizard() {
     }
   }, [operatorPhoneQuery.data?.e164, operatorPhoneDraft]);
 
+  // First-message override: the wizard's composed default contains a
+  // `{the reason for call}` placeholder that the operator should replace before
+  // saving (the engine speaks firstMessage verbatim). Null = use the composed
+  // default as-is; non-null = operator typed over it.
+  const [firstMessageOverride, setFirstMessageOverride] = useState<string | null>(null);
+
   const wizardAnswers = useMemo(
     () => ({
       type,
@@ -159,10 +188,12 @@ export function AssistantWizard() {
       tasks,
       customTasks: customTasks.trim(),
       phoneEnabled,
+      emailEnabled,
+      calendarEnabled,
       voice,
       callerIdNumberId,
     }),
-    [type, name, principal, tasks, customTasks, phoneEnabled, voice, callerIdNumberId, userDisplayName],
+    [type, name, principal, tasks, customTasks, phoneEnabled, emailEnabled, calendarEnabled, voice, callerIdNumberId, userDisplayName],
   );
 
   // Compose preview for Q8.
@@ -259,7 +290,7 @@ export function AssistantWizard() {
             callerIdNumberId,
             costCapDailyUsd: 10,
             enabled: true,
-            firstMessage: compose.firstMessage,
+            firstMessage: firstMessageOverride ?? compose.firstMessage,
             wizardAnswers,
           }),
         });
@@ -290,9 +321,9 @@ export function AssistantWizard() {
     if (currentStep === 2) return name.trim().length > 0;
     if (currentStep === 3) return (principal.trim() || userDisplayName).length > 0;
     if (currentStep === 4) return true;
-    if (currentStep === 5) return phoneEnabled; // Phase A: at least Phone must be enabled
-    if (currentStep === 6) return !!voice;
-    if (currentStep === 7) return !!callerIdNumberId;
+    if (currentStep === 5) return phoneEnabled || emailEnabled || calendarEnabled;
+    if (currentStep === 6) return !phoneEnabled || !!voice;
+    if (currentStep === 7) return !phoneEnabled || !!callerIdNumberId;
     return true;
   }
 
@@ -356,6 +387,10 @@ export function AssistantWizard() {
           <Step5
             phoneEnabled={phoneEnabled}
             onPhoneChange={setPhoneEnabled}
+            emailEnabled={emailEnabled}
+            onEmailChange={setEmailEnabled}
+            calendarEnabled={calendarEnabled}
+            onCalendarChange={setCalendarEnabled}
           />
         )}
         {step === 6 && (
@@ -364,10 +399,18 @@ export function AssistantWizard() {
         {step === 7 && (
           <Step7
             numbers={numbersQuery.data?.numbers ?? []}
+            engine={numbersQuery.data?.engine ?? null}
+            twilioConfigured={numbersQuery.data?.twilioConfigured ?? false}
             isLoading={numbersQuery.isLoading}
             errorMessage={numbersQuery.error instanceof Error ? numbersQuery.error.message : null}
             value={callerIdNumberId}
             onChange={setCallerIdNumberId}
+            companyId={selectedCompanyId}
+            onNumbersChanged={() => {
+              queryClient.invalidateQueries({
+                queryKey: ["phone-tools", "phone-numbers", selectedCompanyId],
+              });
+            }}
           />
         )}
         {step === 8 && (
@@ -381,6 +424,8 @@ export function AssistantWizard() {
             preview={composeQuery.data ?? null}
             previewLoading={composeQuery.isLoading}
             previewError={composeQuery.error instanceof Error ? composeQuery.error.message : null}
+            firstMessageOverride={firstMessageOverride}
+            onFirstMessageChange={setFirstMessageOverride}
             operatorPhone={operatorPhoneDraft}
             onOperatorPhoneChange={setOperatorPhoneDraft}
             onSaveOperatorPhone={() => saveOperatorPhone.mutate(operatorPhoneDraft.trim())}
@@ -590,13 +635,28 @@ function Step4({
   );
 }
 
-function Step5({ phoneEnabled, onPhoneChange }: { phoneEnabled: boolean; onPhoneChange: (v: boolean) => void }) {
+function Step5({
+  phoneEnabled,
+  onPhoneChange,
+  emailEnabled,
+  onEmailChange,
+  calendarEnabled,
+  onCalendarChange,
+}: {
+  phoneEnabled: boolean;
+  onPhoneChange: (v: boolean) => void;
+  emailEnabled: boolean;
+  onEmailChange: (v: boolean) => void;
+  calendarEnabled: boolean;
+  onCalendarChange: (v: boolean) => void;
+}) {
   return (
     <div className="space-y-3">
       <h2 className="text-base font-semibold">What can they do?</h2>
       <p className="text-sm text-muted-foreground">
-        Phone is the only capability available today. Email, Calendar, and SMS are coming soon —
-        you'll be able to enable them on this same assistant once they ship.
+        Pick the channels this assistant can use. They draw on the email-tools and
+        google-workspace plugins — make sure those are connected for this company.
+        SMS is still on the way.
       </p>
       <div className="flex flex-col gap-2">
         <CapabilityRow
@@ -607,8 +667,22 @@ function Step5({ phoneEnabled, onPhoneChange }: { phoneEnabled: boolean; onPhone
           checked={phoneEnabled}
           onChange={onPhoneChange}
         />
-        <CapabilityRow icon={Mail} label="Email" subtitle="Read, draft, and send email on your behalf." available={false} />
-        <CapabilityRow icon={Calendar} label="Calendar" subtitle="Schedule, reschedule, decline." available={false} />
+        <CapabilityRow
+          icon={Mail}
+          label="Email"
+          subtitle="Read, draft, and send email on your behalf via email-tools."
+          available
+          checked={emailEnabled}
+          onChange={onEmailChange}
+        />
+        <CapabilityRow
+          icon={Calendar}
+          label="Calendar"
+          subtitle="Schedule, reschedule, decline via google-workspace."
+          available
+          checked={calendarEnabled}
+          onChange={onCalendarChange}
+        />
         <CapabilityRow icon={MessageSquare} label="SMS" subtitle="Send and reply to text messages." available={false} />
       </div>
     </div>
@@ -707,23 +781,91 @@ function Step6({ voice, onChange }: { voice: string; onChange: (v: string) => vo
 
 function Step7({
   numbers,
+  engine,
+  twilioConfigured,
   isLoading,
   errorMessage,
   value,
   onChange,
+  companyId,
+  onNumbersChanged,
 }: {
   numbers: PhoneNumber[];
+  engine: "vapi" | "diy" | null;
+  twilioConfigured: boolean;
   isLoading: boolean;
   errorMessage: string | null;
   value: string;
   onChange: (v: string) => void;
+  companyId: string | null;
+  onNumbersChanged: () => void;
 }) {
+  const [adding, setAdding] = useState(false);
+  const [personalE164, setPersonalE164] = useState("");
+  const [personalLabel, setPersonalLabel] = useState("");
+  const [pending, setPending] = useState<VerifyRequestResponse | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const selectedIsPersonal = numbers.find((n) => n.id === value)?.personal === true;
+  const vapiPersonalUnsupported = selectedIsPersonal && engine === "vapi";
+
+  async function startVerification() {
+    if (!companyId) return;
+    setVerifyError(null);
+    try {
+      const res = await pluginFetch<VerifyRequestResponse>("/accounts/verified-callers/request", {
+        method: "POST",
+        companyId,
+        body: JSON.stringify({
+          e164: personalE164.trim(),
+          label: personalLabel.trim() || undefined,
+        }),
+      });
+      setPending(res);
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Verification failed.");
+    }
+  }
+
+  async function refreshFromTwilio() {
+    if (!companyId) return;
+    setVerifyError(null);
+    try {
+      await pluginFetch("/accounts/verified-callers/refresh", {
+        method: "POST",
+        companyId,
+        body: JSON.stringify({}),
+      });
+      onNumbersChanged();
+      // If the pending number now shows up, clear the pending state.
+      setPending(null);
+      setAdding(false);
+      setPersonalE164("");
+      setPersonalLabel("");
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Refresh failed.");
+    }
+  }
+
+  async function deletePersonal(sid: string) {
+    if (!companyId) return;
+    try {
+      await pluginFetch(`/accounts/verified-callers/${encodeURIComponent(sid)}`, {
+        method: "DELETE",
+        companyId,
+      });
+      onNumbersChanged();
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Delete failed.");
+    }
+  }
+
   return (
     <div className="space-y-3">
       <h2 className="text-base font-semibold">Caller ID</h2>
       <p className="text-sm text-muted-foreground">
-        Calls placed by this assistant will show this number. Only allow-listed numbers
-        from your phone-tools account are available.
+        Calls placed by this assistant will show this number. Pick an engine-owned
+        number, or verify your own cell so the assistant calls "from your phone."
       </p>
       {isLoading && <p className="text-sm text-muted-foreground">Loading numbers…</p>}
       {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
@@ -740,11 +882,154 @@ function Step7({
         >
           {numbers.map((n) => (
             <option key={n.id} value={n.id}>
-              {n.e164}{n.label ? ` — ${n.label}` : ""}
+              {n.e164}
+              {n.label ? ` — ${n.label}` : ""}
+              {n.personal ? " (verified personal)" : ""}
             </option>
           ))}
         </select>
       )}
+
+      {vapiPersonalUnsupported && (
+        <div className="border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300">
+          ⚠ This account uses the Vapi engine. Vapi can only dial out from numbers
+          it manages, so a verified personal caller ID won't show on the actual
+          call — Vapi falls back to its own number. Switch this account's engine
+          to DIY (jambonz) to honour the personal caller ID, or import the
+          number into Vapi as a BYO Twilio number instead.
+        </div>
+      )}
+
+      {/* Personal verified caller ID: list + add affordance */}
+      <div className="border border-border p-3 space-y-2 text-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-medium">Your personal numbers</p>
+            <p className="text-xs text-muted-foreground">
+              Verified via Twilio so the recipient sees your real cell when the
+              assistant calls.
+            </p>
+          </div>
+          {!adding && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setAdding(true);
+                setVerifyError(null);
+              }}
+              disabled={!twilioConfigured}
+              title={twilioConfigured ? undefined : "Add Twilio Account SID + Auth Token to the phone-tools account first."}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1.5" />
+              Add my number
+            </Button>
+          )}
+        </div>
+
+        {!twilioConfigured && (
+          <p className="text-xs text-muted-foreground">
+            Add a Twilio Account SID + Auth Token to this phone-tools account
+            on the plugin settings page to enable personal-number verification.
+          </p>
+        )}
+
+        {numbers.filter((n) => n.personal).length > 0 && (
+          <ul className="text-xs divide-y divide-border">
+            {numbers
+              .filter((n) => n.personal)
+              .map((n) => {
+                const sid = n.id.replace(/^personal:/, "");
+                return (
+                  <li key={n.id} className="flex items-center justify-between py-1.5">
+                    <span>
+                      <span className="font-mono">{n.e164}</span>
+                      {n.label && <span className="text-muted-foreground"> — {n.label}</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deletePersonal(sid)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      title="Remove from Twilio + local cache"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+
+        {adding && !pending && (
+          <div className="space-y-2 pt-1">
+            <input
+              type="tel"
+              inputMode="tel"
+              value={personalE164}
+              onChange={(e) => setPersonalE164(e.target.value)}
+              placeholder="+17175771023"
+              className="w-full border border-border bg-transparent px-2.5 py-1.5 text-sm focus:outline-none focus:border-foreground/40"
+            />
+            <input
+              type="text"
+              value={personalLabel}
+              onChange={(e) => setPersonalLabel(e.target.value)}
+              placeholder="Label (optional) — e.g. My cell"
+              className="w-full border border-border bg-transparent px-2.5 py-1.5 text-sm focus:outline-none focus:border-foreground/40"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={startVerification}
+                disabled={!personalE164.trim()}
+              >
+                Send verification call
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setAdding(false);
+                  setPersonalE164("");
+                  setPersonalLabel("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {pending && (
+          <div className="border border-border bg-accent/30 p-2.5 text-xs space-y-2">
+            <p>
+              Twilio is calling <span className="font-mono">{pending.e164}</span>{" "}
+              now. When it asks, enter this code on your keypad:
+            </p>
+            <p className="text-2xl font-mono tracking-widest text-center py-1">
+              {pending.validationCode}
+            </p>
+            <p>{pending.instructions}</p>
+            <div className="flex items-center gap-2 pt-1">
+              <Button size="sm" onClick={refreshFromTwilio}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                I entered the code — refresh
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setPending(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {verifyError && <p className="text-xs text-destructive">{verifyError}</p>}
+      </div>
     </div>
   );
 }
@@ -756,6 +1041,8 @@ function Step8({
   preview,
   previewLoading,
   previewError,
+  firstMessageOverride,
+  onFirstMessageChange,
   operatorPhone,
   onOperatorPhoneChange,
   onSaveOperatorPhone,
@@ -763,12 +1050,21 @@ function Step8({
   verifiedOperatorPhone,
   onTest,
 }: {
-  answers: { name: string; principal: string; type: AssistantType; phoneEnabled: boolean };
+  answers: {
+    name: string;
+    principal: string;
+    type: AssistantType;
+    phoneEnabled: boolean;
+    emailEnabled: boolean;
+    calendarEnabled: boolean;
+  };
   voiceLabel: string;
   callerIdLabel: string;
   preview: ComposeResult | null;
   previewLoading: boolean;
   previewError: string | null;
+  firstMessageOverride: string | null;
+  onFirstMessageChange: (value: string | null) => void;
   operatorPhone: string;
   onOperatorPhoneChange: (v: string) => void;
   onSaveOperatorPhone: () => void;
@@ -789,7 +1085,15 @@ function Step8({
         <span className="text-muted-foreground">Type</span>
         <span>{answers.type === "ea" ? "Personal EA" : "Custom"}</span>
         <span className="text-muted-foreground">Capabilities</span>
-        <span>{answers.phoneEnabled ? "✓ Phone" : "(none)"}</span>
+        <span>
+          {[
+            answers.phoneEnabled ? "Phone" : null,
+            answers.emailEnabled ? "Email" : null,
+            answers.calendarEnabled ? "Calendar" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "(none)"}
+        </span>
         <span className="text-muted-foreground">Voice</span>
         <span>{voiceLabel}</span>
         <span className="text-muted-foreground">Caller ID</span>
@@ -798,14 +1102,35 @@ function Step8({
         <span>$10.00</span>
       </div>
 
-      <details className="border border-border p-3 text-sm">
-        <summary className="cursor-pointer text-muted-foreground">View first message</summary>
-        {previewLoading && <p className="text-muted-foreground mt-2">Composing…</p>}
-        {previewError && <p className="text-destructive mt-2">{previewError}</p>}
+      <div className="border border-border p-3 text-sm space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-medium">First message</p>
+          {firstMessageOverride !== null && preview && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+              onClick={() => onFirstMessageChange(null)}
+            >
+              Reset to default
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The first thing the assistant says when a call connects.
+          {" "}<code className="text-[10px] bg-muted px-1 py-0.5 rounded">{"{the reason for call}"}</code>{" "}
+          is auto-substituted at call time with the <code className="text-[10px] bg-muted px-1 py-0.5 rounded">reason</code> the calling agent passes — leave it as-is for dynamic per-call greetings. Edit only if you want a fixed greeting (e.g. for an agent that always calls about the same thing).
+        </p>
+        {previewLoading && <p className="text-muted-foreground">Composing…</p>}
+        {previewError && <p className="text-destructive">{previewError}</p>}
         {preview && (
-          <p className="mt-2 whitespace-pre-wrap">{preview.firstMessage}</p>
+          <textarea
+            value={firstMessageOverride ?? preview.firstMessage}
+            onChange={(e) => onFirstMessageChange(e.target.value)}
+            rows={3}
+            className="w-full border border-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-foreground/40 font-mono"
+          />
         )}
-      </details>
+      </div>
       <details className="border border-border p-3 text-sm">
         <summary className="cursor-pointer text-muted-foreground">View full system prompt</summary>
         {preview && (

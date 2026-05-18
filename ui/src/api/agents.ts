@@ -164,6 +164,15 @@ export const agentsApi = {
     api.delete<AgentInstructionsBundle>(
       agentPath(id, companyId, `/instructions-bundle/file?path=${encodeURIComponent(relativePath)}`),
     ),
+  aiRewriteInstructions: (
+    id: string,
+    data: { path: string; content: string; prompt: string; selection?: string | null; model?: string | null },
+    companyId?: string,
+  ) =>
+    api.post<{ rewritten: string; model: string }>(
+      agentPath(id, companyId, "/instructions-bundle/file/ai-rewrite"),
+      data,
+    ),
   pause: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/pause"), {}),
   resume: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/resume"), {}),
   approve: (id: string, companyId?: string) => api.post<Agent>(agentPath(id, companyId, "/approve"), {}),

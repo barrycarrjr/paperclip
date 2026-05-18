@@ -28,6 +28,7 @@ import { adapterLabels, roleLabels, help } from "../components/agent-config-prim
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { MarkdownEditor } from "../components/MarkdownEditor";
+import { AiInstructionsAssistDialog } from "../components/AiInstructionsAssistDialog";
 import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
@@ -84,6 +85,7 @@ import {
   ArrowLeft,
   HelpCircle,
   FolderOpen,
+  Sparkles,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -1837,6 +1839,7 @@ function PromptsTab({
   const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
+  const [aiAssist, setAiAssist] = useState<{ selection: string | null } | null>(null);
   const [bundleDraft, setBundleDraft] = useState<{
     mode: "managed" | "external";
     rootPath: string;
@@ -2491,6 +2494,33 @@ function PromptsTab({
             </div>
             <div className="flex items-center gap-2">
               {!fileLoading && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="AI edit"
+                      onClick={() => {
+                        const raw = window.getSelection()?.toString() ?? "";
+                        const trimmed = raw.trim();
+                        // Only honor the selection if it's a unique substring of the current
+                        // content — otherwise we can't reliably splice the rewrite back in.
+                        let selection: string | null = null;
+                        if (trimmed.length > 0) {
+                          const first = displayValue.indexOf(trimmed);
+                          const last = displayValue.lastIndexOf(trimmed);
+                          if (first !== -1 && first === last) selection = trimmed;
+                        }
+                        setAiAssist({ selection });
+                      }}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>AI edit (select text first to edit just that)</TooltipContent>
+                </Tooltip>
+              )}
+              {!fileLoading && (
                 <CopyText
                   text={displayValue}
                   ariaLabel="Copy instructions file as markdown"
@@ -2550,6 +2580,21 @@ function PromptsTab({
           )}
         </div>
       </div>
+
+      {aiAssist && (
+        <AiInstructionsAssistDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setAiAssist(null);
+          }}
+          agentId={agent.id}
+          companyId={companyId}
+          filePath={selectedOrEntryFile}
+          content={displayValue}
+          selection={aiAssist.selection}
+          onApply={(next) => setDraft(next)}
+        />
+      )}
 
     </div>
   );
