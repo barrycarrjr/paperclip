@@ -11,6 +11,7 @@ import { ExternalLink } from "lucide-react";
 import { Identity } from "./Identity";
 import { RunChatSurface } from "./RunChatSurface";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
+import { GroupedRunsCard, groupRunsByIssue } from "./GroupedRunsCard";
 
 const MIN_DASHBOARD_RUNS = 4;
 const DASHBOARD_RUN_CARD_LIMIT = 4;
@@ -97,18 +98,27 @@ export function ActiveAgentsPanel({
         </div>
       ) : (
         <div className={cn("grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4", gridClassName)}>
-          {visibleRuns.map((run) => (
-            <AgentRunCard
-              key={run.id}
-              companyId={companyId}
-              run={run}
-              issue={run.issueId ? issueById.get(run.issueId) : undefined}
-              transcript={transcriptByRun.get(run.id) ?? EMPTY_TRANSCRIPT}
-              hasOutput={hasOutputForRun(run.id)}
-              isActive={isRunActive(run)}
-              className={cardClassName}
-            />
-          ))}
+          {groupRunsByIssue(visibleRuns).map((entry) =>
+            entry.kind === "group" ? (
+              <GroupedRunsCard
+                key={`group-${entry.issueId}`}
+                issue={issueById.get(entry.issueId)}
+                runs={entry.runs}
+                className={cardClassName}
+              />
+            ) : (
+              <AgentRunCard
+                key={entry.run.id}
+                companyId={companyId}
+                run={entry.run}
+                issue={entry.run.issueId ? issueById.get(entry.run.issueId) : undefined}
+                transcript={transcriptByRun.get(entry.run.id) ?? EMPTY_TRANSCRIPT}
+                hasOutput={hasOutputForRun(entry.run.id)}
+                isActive={isRunActive(entry.run)}
+                className={cardClassName}
+              />
+            ),
+          )}
         </div>
       )}
       {showMoreLink && hiddenRunCount > 0 && (

@@ -21,6 +21,7 @@ import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive } from "../components/ActiveAgentsPanel";
+import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
 import { useCompany } from "../context/CompanyContext";
@@ -1003,23 +1004,31 @@ export function PortfolioBrief() {
                       </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-3">
-                      {visible.map((run) => (
-                        <AgentRunCard
-                          key={run.id}
-                          companyId={company.id}
-                          run={run}
-                          issue={
-                            run.issueId
-                              ? issuesByIdAcrossPortfolio.get(run.issueId)
-                              : undefined
-                          }
-                          transcript={
-                            transcriptByRun.get(run.id) ?? EMPTY_TRANSCRIPT
-                          }
-                          hasOutput={hasOutputForRun(run.id)}
-                          isActive={isRunActive(run)}
-                        />
-                      ))}
+                      {groupRunsByIssue(visible).map((entry) =>
+                        entry.kind === "group" ? (
+                          <GroupedRunsCard
+                            key={`group-${entry.issueId}`}
+                            issue={issuesByIdAcrossPortfolio.get(entry.issueId)}
+                            runs={entry.runs}
+                          />
+                        ) : (
+                          <AgentRunCard
+                            key={entry.run.id}
+                            companyId={company.id}
+                            run={entry.run}
+                            issue={
+                              entry.run.issueId
+                                ? issuesByIdAcrossPortfolio.get(entry.run.issueId)
+                                : undefined
+                            }
+                            transcript={
+                              transcriptByRun.get(entry.run.id) ?? EMPTY_TRANSCRIPT
+                            }
+                            hasOutput={hasOutputForRun(entry.run.id)}
+                            isActive={isRunActive(entry.run)}
+                          />
+                        ),
+                      )}
                     </div>
                   </div>
                 );
