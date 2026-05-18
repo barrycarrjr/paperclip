@@ -489,6 +489,18 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         },
       },
 
+      ai: {
+        async complete(input) {
+          return callHost("ai.complete", {
+            prompt: input.prompt,
+            system: input.system,
+            images: input.images,
+            model: input.model,
+            maxTokens: input.maxTokens,
+          });
+        },
+      },
+
       activity: {
         async log(entry): Promise<void> {
           await callHost("activity.log", {

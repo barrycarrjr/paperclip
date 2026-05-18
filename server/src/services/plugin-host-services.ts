@@ -42,6 +42,15 @@ import { pluginStateStore } from "./plugin-state-store.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
 import { logActivity } from "./activity-log.js";
+import {
+  getProviderForModel,
+  pickBestVisionModel,
+  isVisionCapableModel,
+  decodeAdapterModel,
+  removeClippyWorkspace,
+  type CanonicalContentBlock,
+  type ResolvedAttachments,
+} from "./chat-providers.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -435,6 +444,221 @@ const _logFlushInterval = setInterval(() => {
 
 // Allow the interval to be unref'd so it doesn't keep the process alive in tests.
 if (_logFlushInterval.unref) _logFlushInterval.unref();
+
+// ---------------------------------------------------------------------------
+// AI completions (single-turn) for `ctx.ai.complete`
+// ---------------------------------------------------------------------------
+
+/** Per-image base64 size cap (before decoding). Generous for high-res photos. */
+const PLUGIN_AI_MAX_IMAGE_BASE64_BYTES = 12 * 1024 * 1024; // ~9 MB binary
+/** Total cap across all images in one request. */
+const PLUGIN_AI_MAX_TOTAL_BASE64_BYTES = 24 * 1024 * 1024;
+/** Maximum images per request. */
+const PLUGIN_AI_MAX_IMAGES = 8;
+/** Hard upper bound on output tokens. */
+const PLUGIN_AI_MAX_OUTPUT_TOKENS = 2048;
+/** Default output token budget if the caller didn't specify one. */
+const PLUGIN_AI_DEFAULT_OUTPUT_TOKENS = 1024;
+/** Default system prompt when the caller didn't pass one. */
+const PLUGIN_AI_DEFAULT_SYSTEM =
+  "You are a concise assistant. Respond with the requested information in plain text. Do not add preamble or sign-off.";
+
+interface PluginAiCompleteParams {
+  prompt: string;
+  system?: string;
+  images?: Array<{ mediaType: string; base64: string; name?: string }>;
+  model?: string;
+  maxTokens?: number;
+}
+
+interface PluginAiCompleteResult {
+  text: string;
+  modelUsed: string;
+}
+
+async function runPluginAiComplete(
+  pluginId: string,
+  params: PluginAiCompleteParams,
+): Promise<PluginAiCompleteResult> {
+  const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
+  if (!prompt) {
+    throw new Error("[EINVALID_INPUT] ai.complete requires a non-empty `prompt`");
+  }
+  const images = Array.isArray(params.images) ? params.images : [];
+  if (images.length > PLUGIN_AI_MAX_IMAGES) {
+    throw new Error(`[EINVALID_INPUT] ai.complete supports up to ${PLUGIN_AI_MAX_IMAGES} images per request`);
+  }
+  let totalBase64 = 0;
+  for (const img of images) {
+    if (!img || typeof img.mediaType !== "string" || typeof img.base64 !== "string") {
+      throw new Error("[EINVALID_INPUT] each image must have mediaType and base64 strings");
+    }
+    if (!img.mediaType.startsWith("image/")) {
+      throw new Error(`[EINVALID_INPUT] unsupported image mediaType: ${img.mediaType}`);
+    }
+    if (img.base64.length > PLUGIN_AI_MAX_IMAGE_BASE64_BYTES) {
+      throw new Error(`[EINVALID_INPUT] image exceeds per-image size cap (${PLUGIN_AI_MAX_IMAGE_BASE64_BYTES} base64 bytes)`);
+    }
+    totalBase64 += img.base64.length;
+  }
+  if (totalBase64 > PLUGIN_AI_MAX_TOTAL_BASE64_BYTES) {
+    throw new Error(`[EINVALID_INPUT] images exceed total size cap (${PLUGIN_AI_MAX_TOTAL_BASE64_BYTES} base64 bytes)`);
+  }
+
+  // Resolve which model to use. Explicit `model` wins; otherwise auto-pick
+  // the best vision-capable model the operator has configured. If images
+  // were attached, refuse to run on a text-only model — better to surface
+  // the misconfiguration than to silently drop the images.
+  let modelToUse: string;
+  if (typeof params.model === "string" && params.model.trim()) {
+    modelToUse = params.model.trim();
+    if (images.length > 0 && !isVisionCapableModel(modelToUse)) {
+      throw new Error(`[EVISION_REQUIRED] model "${modelToUse}" is not vision-capable but images were attached`);
+    }
+  } else if (images.length > 0) {
+    const picked = await pickBestVisionModel();
+    if (!picked) {
+      throw new Error(
+        "[ENO_VISION_MODEL] no vision-capable provider is configured on this host. " +
+        "Configure ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY, or use an adapter " +
+        "with image support (currently: claude_local).",
+      );
+    }
+    modelToUse = picked;
+  } else {
+    // No images — text-only completion. Reuse the same picker since every
+    // vision-capable model also handles text fine; falls back to whatever
+    // is configured.
+    const picked = await pickBestVisionModel();
+    if (!picked) {
+      throw new Error(
+        "[ENO_MODEL] no chat provider is configured on this host.",
+      );
+    }
+    modelToUse = picked;
+  }
+
+  const provider = getProviderForModel(modelToUse);
+  if (!provider) {
+    throw new Error(`[EUNKNOWN_MODEL] no provider handles model "${modelToUse}"`);
+  }
+  if (!provider.isConfigured()) {
+    throw new Error(`[EPROVIDER_NOT_CONFIGURED] provider for "${modelToUse}" is missing credentials`);
+  }
+
+  // Build canonical content blocks. Each image gets a synthetic attachmentId
+  // that maps to its decoded bytes in the resolvedAttachments map — the
+  // provider layer (chat-providers.ts) reads from there when emitting
+  // inline image_url blocks. No on-disk persistence; the bytes only live in
+  // memory for this call.
+  const content: CanonicalContentBlock[] = [{ type: "text", text: prompt }];
+  const resolvedAttachments: ResolvedAttachments = new Map();
+  for (const img of images) {
+    const attachmentId = randomUUID();
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(img.base64, "base64");
+    } catch {
+      throw new Error("[EINVALID_INPUT] image base64 decode failed");
+    }
+    resolvedAttachments.set(attachmentId, {
+      data: bytes,
+      mediaType: img.mediaType,
+      name: img.name ?? "image",
+    });
+    content.push({
+      type: "image",
+      attachmentId,
+      url: `inline:${attachmentId}`,
+      mediaType: img.mediaType,
+      name: img.name ?? "image",
+    });
+  }
+
+  const system = typeof params.system === "string" && params.system.trim()
+    ? params.system
+    : PLUGIN_AI_DEFAULT_SYSTEM;
+  const maxOut = Math.min(
+    PLUGIN_AI_MAX_OUTPUT_TOKENS,
+    Math.max(1, params.maxTokens ?? PLUGIN_AI_DEFAULT_OUTPUT_TOKENS),
+  );
+
+  logger.debug(
+    { pluginId, model: modelToUse, images: images.length, promptLen: prompt.length, maxOut },
+    "plugin ai.complete starting",
+  );
+
+  // Adapter-routed providers (claude_local etc.) require an adapterContext —
+  // session identity, callbacks for persisting per-turn state, etc. — that
+  // comes from the chat orchestrator in the Clippy flow. For a plugin one-shot
+  // we synthesize a minimal context: a per-call sessionId so the provider can
+  // materialize a private workspace (and we clean it up afterwards), a no-op
+  // saveSessionParams (we never resume), and pluginId as the boardUserId so
+  // adapter-side audit trails name the actual caller. Native providers
+  // (Anthropic, OpenAI, Gemini SDKs) ignore this entirely.
+  const ephemeralSessionId = `plugin-ai-${pluginId}-${randomUUID()}`;
+  const isAdapterRoute = decodeAdapterModel(modelToUse) !== null;
+  const adapterContext = isAdapterRoute
+    ? {
+        sessionId: ephemeralSessionId,
+        companyId: null,
+        boardUserId: `plugin:${pluginId}`,
+        prevSessionParams: null,
+        saveSessionParams: async () => {
+          /* one-shot — nothing to persist */
+        },
+      }
+    : undefined;
+
+  let final: { content: CanonicalContentBlock[] } | null = null;
+  try {
+    // Drain the provider stream into a final result. We discard text_delta
+    // events (no caller-side streaming on this surface) and use the returned
+    // ProviderTurnResult.content to assemble plain text.
+    const generator = provider.streamTurn({
+      model: modelToUse,
+      system,
+      messages: [{ role: "user", content }],
+      resolvedAttachments,
+      adapterContext,
+    });
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const step = await generator.next();
+      if (step.done) {
+        final = step.value as { content: CanonicalContentBlock[] };
+        break;
+      }
+      // streaming events ignored for one-shot
+    }
+  } finally {
+    // Adapter routes materialized a per-call workspace; drop it now so we
+    // don't litter ~/.paperclip/clippy-workspaces with plugin-ai-* dirs.
+    if (isAdapterRoute) {
+      removeClippyWorkspace(ephemeralSessionId).catch((err) => {
+        logger.warn(
+          { pluginId, sessionId: ephemeralSessionId, err: (err as Error).message },
+          "plugin ai.complete: failed to clean up ephemeral workspace",
+        );
+      });
+    }
+  }
+
+  const text = (final?.content ?? [])
+    .filter((b): b is Extract<CanonicalContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+
+  // Audit log — record fact-of-call without persisting the prompt or bytes.
+  // The activity table is the right home; image bytes never go there.
+  logger.info(
+    { pluginId, model: modelToUse, images: images.length, outputChars: text.length },
+    "plugin ai.complete completed",
+  );
+
+  return { text, modelUsed: modelToUse };
+}
 
 /**
  * buildHostServices — creates a concrete implementation of the `HostServices`
@@ -837,6 +1061,12 @@ export function buildHostServices(
     secrets: {
       async resolve(params) {
         return secretsHandler.resolve(params);
+      },
+    },
+
+    ai: {
+      async complete(params) {
+        return runPluginAiComplete(pluginId, params);
       },
     },
 

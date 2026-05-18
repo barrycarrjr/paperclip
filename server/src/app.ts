@@ -163,7 +163,10 @@ export async function createApp(
 
   app.use(express.json({
     // Company import/export payloads can inline full portable packages.
-    limit: "10mb",
+    // Also has to accommodate plugin API requests that carry inline images
+    // (e.g. phone-tools "describe these photos before placing the call"),
+    // which are base64-encoded and can hit ~24MB of payload before headers.
+    limit: "30mb",
     verify: (req, _res, buf) => {
       (req as unknown as { rawBody: Buffer }).rawBody = buf;
     },

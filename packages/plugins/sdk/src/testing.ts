@@ -538,6 +538,22 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         return `resolved:${secretRef}`;
       },
     },
+    ai: {
+      async complete(input) {
+        requireCapability(manifest, capabilitySet, "ai.complete");
+        // Test stub: echo the prompt back and report a fixed model id. Tests
+        // that need a specific output should override this via mocking — see
+        // the harness's `mockAiComplete()` helper for that. Image bytes are
+        // intentionally not interpreted in the stub.
+        const imageNote = input.images?.length
+          ? ` (with ${input.images.length} image${input.images.length === 1 ? "" : "s"})`
+          : "";
+        return {
+          text: `[stub] ${input.prompt}${imageNote}`,
+          modelUsed: input.model ?? "stub:claude-opus-4-7",
+        };
+      },
+    },
     activity: {
       async log(entry) {
         requireCapability(manifest, capabilitySet, "activity.log.write");

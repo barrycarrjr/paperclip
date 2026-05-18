@@ -138,7 +138,10 @@ interface PluginHealthCheckResult {
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const PLUGIN_API_BODY_LIMIT_BYTES = 1_000_000;
+// Has to accommodate plugin API requests that carry inline images
+// (e.g. phone-tools' describe-attachments endpoint feeding ctx.ai.complete).
+// Cap aligns with the AI capability's 24MB base64 total + JSON envelope.
+const PLUGIN_API_BODY_LIMIT_BYTES = 30_000_000;
 const PLUGIN_SCOPED_API_RESPONSE_HEADER_ALLOWLIST = new Set([
   "cache-control",
   "etag",

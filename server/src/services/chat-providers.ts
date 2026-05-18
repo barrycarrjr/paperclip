@@ -1,8 +1,32 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { promises as fsPromises } from "node:fs";
+import * as nodePath from "node:path";
+import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
+
+/**
+ * Adapter types whose underlying CLI has multimodal Read support — i.e. it
+ * can be instructed to read an image file from disk and reason about its
+ * contents. When the picked model is one of these, AdapterExecuteProvider
+ * materializes image blocks as files inside the chat workspace and rewrites
+ * the prompt to reference those file paths instead of dropping the bytes.
+ *
+ * If you add an adapter to this list, also confirm:
+ * 1. Its CLI can read image files when instructed (Claude Code: ✓, via Read tool)
+ * 2. Its execute.ts honours `config.cwd` so files written into the chat
+ *    workspace end up where the CLI can find them.
+ */
+const ADAPTER_TYPES_WITH_IMAGE_SUPPORT: ReadonlySet<string> = new Set([
+  "claude_local",
+]);
+
+/** True iff this adapter's underlying CLI can actually consume image inputs. */
+export function adapterSupportsImageInputs(adapterType: string): boolean {
+  return ADAPTER_TYPES_WITH_IMAGE_SUPPORT.has(adapterType);
+}
 
 // Canonical (Anthropic-shape) content blocks. Both providers translate
 // to/from this so storage and the rest of the system stay provider-agnostic.
@@ -946,24 +970,76 @@ class AdapterExecuteProvider implements ChatProvider {
       );
     }
 
+    const cwd = await ensureClippyWorkspace(ctx.sessionId);
+    const canUseImages = adapterSupportsImageInputs(decoded.adapterType);
+
     // Latest user message is the new prompt; older history was provided to the
     // adapter on prior turns and re-anchored via sessionParams resume.
     const lastUserMsg = [...input.messages].reverse().find((m) => m.role === "user");
-    const userPrompt = lastUserMsg
-      ? typeof lastUserMsg.content === "string"
-        ? lastUserMsg.content
-        : lastUserMsg.content
-            .map((b) => {
-              if (b.type === "text") return b.text;
-              if (b.type === "image") return `[Attached image: ${b.name}]`;
-              if (b.type === "file") return `[Attached file: ${b.name} (${b.mediaType})]`;
-              return "";
-            })
-            .filter(Boolean)
-            .join("\n")
-      : "";
 
-    const cwd = await ensureClippyWorkspace(ctx.sessionId);
+    // For adapter-routed providers, the underlying CLI can't accept inline
+    // image bytes. For adapters in ADAPTER_TYPES_WITH_IMAGE_SUPPORT we
+    // materialize image blocks as files inside the chat workspace and rewrite
+    // the prompt to reference those file paths plus a Read instruction. For
+    // adapters without image support we fall back to a text label so the
+    // adapter at least knows an image was attached.
+    const materializedImagePaths: string[] = [];
+    async function expandBlockForAdapter(
+      block: Extract<CanonicalContentBlock, { type: "text" | "image" | "file" }>,
+    ): Promise<string> {
+      if (block.type === "text") return block.text;
+      if (block.type === "file") return `[Attached file: ${block.name} (${block.mediaType})]`;
+      // block.type === "image"
+      if (!canUseImages) return `[Attached image: ${block.name}]`;
+      const resolved = input.resolvedAttachments?.get(block.attachmentId);
+      if (!resolved) return `[Attached image: ${block.name} (bytes unavailable)]`;
+      const safeName = block.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "image";
+      const fileName = `${randomUUID()}-${safeName}`;
+      const targetDir = nodePath.join(cwd, ".paperclip-image-attachments");
+      const targetPath = nodePath.join(targetDir, fileName);
+      await fsPromises.mkdir(targetDir, { recursive: true });
+      await fsPromises.writeFile(targetPath, resolved.data);
+      materializedImagePaths.push(targetPath);
+      return `[Attached image at: ${targetPath} (${block.mediaType})]`;
+    }
+
+    let userPrompt = "";
+    if (lastUserMsg) {
+      if (typeof lastUserMsg.content === "string") {
+        userPrompt = lastUserMsg.content;
+      } else {
+        const expanded = await Promise.all(
+          lastUserMsg.content.map((b) =>
+            b.type === "text" || b.type === "image" || b.type === "file"
+              ? expandBlockForAdapter(b)
+              : Promise.resolve(""),
+          ),
+        );
+        userPrompt = expanded.filter(Boolean).join("\n");
+      }
+    }
+
+    // When images were materialized, add a final instruction so the adapter
+    // knows it needs to Read each file before reasoning. Without this the
+    // CLI may just acknowledge the path without opening the file.
+    if (materializedImagePaths.length > 0) {
+      const fileList = materializedImagePaths
+        .map((p, i) => `${i + 1}. ${p}`)
+        .join("\n");
+      userPrompt = `${userPrompt}\n\nThe operator attached ${materializedImagePaths.length} image file${materializedImagePaths.length === 1 ? "" : "s"} listed above. Use your Read tool on each path before answering:\n${fileList}`;
+    }
+
+    // Adapter-routed providers have no native channel for the system prompt
+    // (the API field is for native SDKs; CLI adapters get system instructions
+    // through `--append-system-prompt-file` which the chat orchestrator
+    // controls, not us). Prepend any caller-supplied system as an explicit
+    // instruction block so plugin ai.complete callers can actually steer the
+    // model. For Clippy this is a small belt-and-braces — the agent's
+    // instructions file is still loaded — but it makes the system reach the
+    // model regardless of route.
+    if (input.system && input.system.trim()) {
+      userPrompt = `[System instructions for this turn]\n${input.system.trim()}\n\n[User message]\n${userPrompt}`;
+    }
 
     // Streaming bridge: adapter.execute() is a Promise; onLog fires during
     // execution. Push parsed text into a queue and yield from the generator.
@@ -1060,6 +1136,10 @@ class AdapterExecuteProvider implements ChatProvider {
         promptTemplate: "",
         dangerouslySkipPermissions: true,
         maxTurnsPerRun: 0,
+        // When we materialized image files into the chat workspace, route
+        // the adapter's working dir there too so the CLI's Read tool can
+        // open them. Defaults are unchanged when no images are present.
+        ...(materializedImagePaths.length > 0 ? { cwd } : {}),
       };
       const adapterContext: Record<string, unknown> = {
         paperclipTaskMarkdown: userPrompt,
@@ -1315,4 +1395,73 @@ export async function pickBestDefaultModel(): Promise<string> {
   }
 
   return [...models].sort((a, b) => score(b) - score(a))[0].model;
+}
+
+/**
+ * True when a model id refers to a vision-capable model known to accept
+ * image content blocks. Conservative on purpose — better to fall back to a
+ * text-only summary than to silently drop images on a model that ignores
+ * them. The list is updated as new vision-capable families ship.
+ *
+ * **Adapter-routed models** are vision-capable only when the adapter type is
+ * in `ADAPTER_TYPES_WITH_IMAGE_SUPPORT` (because the adapter then materializes
+ * image bytes to files the CLI can read) AND the underlying model is itself
+ * vision-capable. Adapters without image-passing get false regardless.
+ */
+export function isVisionCapableModel(model: string): boolean {
+  const decoded = decodeAdapterModel(model);
+  if (decoded) {
+    if (!adapterSupportsImageInputs(decoded.adapterType)) return false;
+    return isVisionCapableModel(decoded.modelId);
+  }
+
+  const lower = model.toLowerCase();
+  // Anthropic Claude 4.x family is all multimodal.
+  if (lower.startsWith("claude-opus-4") || lower.startsWith("claude-sonnet-4") || lower.startsWith("claude-haiku-4")) {
+    return true;
+  }
+  // OpenAI: gpt-4o / gpt-4.1 / gpt-5 family accept image_url. o-series reasoning
+  // models are excluded here even though some now support vision — keep the
+  // list narrow until they're explicitly validated.
+  if (lower.startsWith("gpt-4o") || lower.startsWith("gpt-4.1") || lower.startsWith("gpt-5")) {
+    return true;
+  }
+  // Gemini 1.5+ is multimodal; older bisons are not.
+  if (lower.startsWith("gemini-1.5") || lower.startsWith("gemini-2") || lower.startsWith("gemini-pro-vision")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Pick the best vision-capable model the operator currently has configured.
+ * Returns null when none are available, so callers can surface a clear error
+ * rather than silently routing to a text-only model.
+ *
+ * Used by `ctx.ai.complete` (plugin SDK) when no explicit model is requested.
+ * Prefers Claude Opus > Sonnet > Haiku > GPT-5 > GPT-4.x > Gemini-2 > others,
+ * mirroring `pickBestDefaultModel` but filtered through `isVisionCapableModel`.
+ */
+export async function pickBestVisionModel(): Promise<string | null> {
+  const all = await listAvailableModels();
+  const candidates = all.filter((m) => isVisionCapableModel(m.model));
+  if (candidates.length === 0) return null;
+
+  function score(m: { provider: string; model: string }): number {
+    const lower = m.model.toLowerCase();
+    let s = 0;
+    if (lower.includes("opus")) s += 200;
+    else if (lower.includes("sonnet")) s += 180;
+    else if (lower.includes("claude")) s += 160;
+    else if (lower.includes("gpt-5")) s += 140;
+    else if (lower.includes("gpt-4")) s += 120;
+    else if (lower.includes("gemini-2")) s += 90;
+    else if (lower.includes("gemini")) s += 70;
+    // Tiebreak: prefer the native SDK path over adapter routing for one-shot
+    // ephemeral calls, since adapters expect session continuity.
+    if (m.provider !== "adapter") s += 5;
+    return s;
+  }
+
+  return [...candidates].sort((a, b) => score(b) - score(a))[0].model;
 }

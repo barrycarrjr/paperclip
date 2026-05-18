@@ -126,6 +126,11 @@ export interface HostServices {
     resolve(params: WorkerToHostMethods["secrets.resolve"][0]): Promise<string>;
   };
 
+  /** Provides `ai.complete`. */
+  ai: {
+    complete(params: WorkerToHostMethods["ai.complete"][0]): Promise<WorkerToHostMethods["ai.complete"][1]>;
+  };
+
   /** Provides `activity.log`. */
   activity: {
     log(params: {
@@ -303,6 +308,9 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
 
   // Secrets
   "secrets.resolve": "secrets.read-ref",
+
+  // AI
+  "ai.complete": "ai.complete",
 
   // Activity
   "activity.log": "activity.log.write",
@@ -484,6 +492,11 @@ export function createHostClientHandlers(
     // Secrets
     "secrets.resolve": gated("secrets.resolve", async (params) => {
       return services.secrets.resolve(params);
+    }),
+
+    // AI
+    "ai.complete": gated("ai.complete", async (params) => {
+      return services.ai.complete(params);
     }),
 
     // Activity

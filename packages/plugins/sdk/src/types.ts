@@ -1326,6 +1326,65 @@ export interface PluginAgentSessionsClient {
 }
 
 /**
+ * `ctx.ai` — single-turn completions against the host's configured chat
+ * provider. Use for one-shot tasks (describe-this-image, summarise-this-text,
+ * extract-fields-from-document); not a substitute for a real agent run.
+ *
+ * The host picks the best vision-capable model the operator has configured,
+ * preferring Claude > GPT > Gemini > others. Plugins stay LLM-agnostic — the
+ * actual provider call lives in the host, so plugins never carry an Anthropic
+ * or OpenAI SDK.
+ *
+ * Requires `ai.complete`.
+ */
+export interface PluginAICompleteInput {
+  /** The user-facing prompt sent to the model. */
+  prompt: string;
+  /**
+   * Optional system prompt. If omitted, a neutral default is used by the
+   * host (e.g. "You are a concise assistant.").
+   */
+  system?: string;
+  /**
+   * Optional images to attach. Each image is sent inline as a base64 string
+   * with its media type (e.g. `image/jpeg`, `image/png`). The host enforces
+   * a per-request size cap and a per-image count cap.
+   */
+  images?: Array<{
+    mediaType: string;
+    /** Raw base64 (no `data:` URL prefix). */
+    base64: string;
+    /** Optional human-readable name surfaced to the model. */
+    name?: string;
+  }>;
+  /**
+   * Optional explicit model id (e.g. `claude-opus-4-7`). When omitted the
+   * host auto-picks the best vision-capable configured model.
+   */
+  model?: string;
+  /**
+   * Cap on output tokens. Defaults to the host's configured single-turn
+   * cap. Always honoured as an upper bound.
+   */
+  maxTokens?: number;
+}
+
+export interface PluginAICompleteResult {
+  /** The model's response text, joined across any text content blocks. */
+  text: string;
+  /** The model id actually used (after host-side auto-pick / overrides). */
+  modelUsed: string;
+}
+
+export interface PluginAIClient {
+  /**
+   * Send a single-turn prompt (optionally with images) to the host's LLM
+   * provider and return the model's text response. Requires `ai.complete`.
+   */
+  complete(input: PluginAICompleteInput): Promise<PluginAICompleteResult>;
+}
+
+/**
  * `ctx.goals` — read and mutate goals.
  *
  * Requires:
@@ -1506,6 +1565,9 @@ export interface PluginContext {
 
   /** Emit plugin-scoped external telemetry. Requires `telemetry.track`. */
   telemetry: PluginTelemetryClient;
+
+  /** Single-turn completions against the host's configured LLM. Requires `ai.complete`. */
+  ai: PluginAIClient;
 
   /** Structured logger. Output is captured and surfaced in the plugin health dashboard. */
   logger: PluginLogger;

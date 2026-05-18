@@ -687,6 +687,18 @@ export interface WorkerToHostMethods {
     result: void,
   ];
 
+  // AI — single-turn host LLM completion (optionally multimodal)
+  "ai.complete": [
+    params: {
+      prompt: string;
+      system?: string;
+      images?: Array<{ mediaType: string; base64: string; name?: string }>;
+      model?: string;
+      maxTokens?: number;
+    },
+    result: { text: string; modelUsed: string },
+  ];
+
   // Logger
   "log": [
     params: { level: "info" | "warn" | "error" | "debug"; message: string; meta?: Record<string, unknown> },
