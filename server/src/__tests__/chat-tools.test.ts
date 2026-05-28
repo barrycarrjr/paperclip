@@ -101,6 +101,54 @@ describe("chat-tools registry", () => {
     if (!result.ok) expect(result.error).toMatch(/Invalid input/);
   });
 
+  it("web_fetch is registered as a non-mutating tool", () => {
+    const tool = getChatTool("web_fetch");
+    expect(tool).toBeDefined();
+    expect(tool!.mutating).toBe(false);
+  });
+
+  it("web_fetch rejects non-http(s) URLs", async () => {
+    const result = await executeChatTool(
+      "web_fetch",
+      { url: "file:///etc/passwd" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: null,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/scheme/i);
+  });
+
+  it("web_fetch rejects loopback IP literals", async () => {
+    const result = await executeChatTool(
+      "web_fetch",
+      { url: "http://127.0.0.1/" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: null,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/private IP|Blocked/i);
+  });
+
+  it("web_fetch rejects 'localhost' and private-network host strings", async () => {
+    const result = await executeChatTool(
+      "web_fetch",
+      { url: "http://localhost:8080/admin" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: null,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/Blocked host/);
+  });
+
   it("set_secret tool result must never include the value (regression guard)", () => {
     // Our chat-tools registry intentionally does NOT include a set_secret tool yet
     // (deferred to a follow-up), so the registry should not surface the name.

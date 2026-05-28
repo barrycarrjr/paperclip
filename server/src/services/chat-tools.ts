@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import dns from "node:dns/promises";
+import net from "node:net";
 import { z, type ZodTypeAny } from "zod";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -9,7 +11,7 @@ import {
   issueComments,
   issues,
 } from "@paperclipai/db";
-import { forbidden, notFound } from "../errors.js";
+import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 
@@ -402,6 +404,143 @@ const addCommentTool: ChatToolDefinition<{ issueId: string; body: string }> = {
   },
 };
 
+const BLOCKED_HOST_PATTERNS = [/^localhost$/i, /\.local$/i, /\.internal$/i, /\.lan$/i];
+
+function isPrivateIp(ip: string): boolean {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const lower = ip.toLowerCase();
+    if (lower === "::1" || lower === "::") return true;
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+    if (lower.startsWith("fe80")) return true;
+    return false;
+  }
+  return false;
+}
+
+// Best-effort SSRF guard: blocks obvious internal hostnames and rejects when
+// DNS resolves to a private/loopback range. Note: a determined DNS-rebind
+// attack could still pass the check and then resolve to a private IP at
+// fetch time — accepted tradeoff for v1; pin-the-IP would harden it.
+async function assertPublicHost(hostname: string): Promise<void> {
+  for (const pat of BLOCKED_HOST_PATTERNS) {
+    if (pat.test(hostname)) throw badRequest(`Blocked host ${hostname}`);
+  }
+  if (net.isIP(hostname)) {
+    if (isPrivateIp(hostname)) throw badRequest(`Blocked private IP ${hostname}`);
+    return;
+  }
+  let addrs: { address: string; family: number }[];
+  try {
+    addrs = await dns.lookup(hostname, { all: true });
+  } catch {
+    throw badRequest(`DNS lookup failed for ${hostname}`);
+  }
+  for (const a of addrs) {
+    if (isPrivateIp(a.address)) {
+      throw badRequest(`Host ${hostname} resolves to private IP ${a.address}`);
+    }
+  }
+}
+
+const webFetchTool: ChatToolDefinition<{ url: string; maxBytes?: number }> = {
+  name: "web_fetch",
+  description:
+    "Fetch a public http(s) URL and return the response body as text. Read-only. Blocks loopback and private network addresses. Default cap 1 MB.",
+  mutating: false,
+  inputSchema: z.object({
+    url: z.string().url(),
+    maxBytes: z.number().int().min(1024).max(2_000_000).optional(),
+  }),
+  spec: {
+    name: "web_fetch",
+    description:
+      "Fetch a public http(s) URL. Returns { status, finalUrl, contentType, body, truncated, byteLength }. Blocks private/loopback addresses.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Absolute http:// or https:// URL." },
+        maxBytes: {
+          type: "integer",
+          description: "Optional cap on response bytes (default 1048576, max 2000000).",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  async handler({ url, maxBytes = 1_048_576 }) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw badRequest(`Invalid URL: ${url}`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw badRequest(`Unsupported URL scheme ${parsed.protocol}`);
+    }
+    await assertPublicHost(parsed.hostname);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const resp = await fetch(parsed.toString(), {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers: { "user-agent": "Paperclip-Clippy/1.0 (+web_fetch)" },
+      });
+      const contentType = resp.headers.get("content-type") ?? "";
+      const reader = resp.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      let truncated = false;
+      if (reader) {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (received + value.length > maxBytes) {
+            const remaining = Math.max(0, maxBytes - received);
+            if (remaining > 0) chunks.push(value.subarray(0, remaining));
+            truncated = true;
+            try {
+              await reader.cancel();
+            } catch {
+              // already closed
+            }
+            break;
+          }
+          chunks.push(value);
+          received += value.length;
+        }
+      }
+      const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+      return {
+        status: resp.status,
+        finalUrl: resp.url,
+        contentType,
+        body: buf.toString("utf8"),
+        truncated,
+        byteLength: buf.byteLength,
+      };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw badRequest(`Request to ${parsed.hostname} timed out after 15s`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+};
+
 export const CHAT_TOOLS: ChatToolDefinition[] = [
   listCompaniesTool,
   getCompanyTool,
@@ -411,6 +550,7 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   getIssueTool,
   createIssueTool,
   addCommentTool,
+  webFetchTool,
 ] as ChatToolDefinition[];
 
 const TOOLS_BY_NAME: Record<string, ChatToolDefinition> = Object.fromEntries(
