@@ -263,6 +263,7 @@ export function PortfolioEmail() {
     mailboxKey: string,
     uid: number | null,
     companyId: string,
+    pollFolder: string,
     action?: "reply" | "forward" | "handoff",
   ) {
     const targetCompany = companyById.get(companyId);
@@ -278,7 +279,13 @@ export function PortfolioEmail() {
     const params = new URLSearchParams();
     params.set("mailbox", mailboxKey);
     if (uid != null) params.set("uid", String(uid));
-    params.set("all", "1");
+    // Carry the mailbox's polled folder so the per-company Email page fetches
+    // the message from the right folder — it defaults to INBOX otherwise, so a
+    // mailbox that polls a subfolder would open to "message not found".
+    if (pollFolder && pollFolder !== "INBOX") params.set("folder", pollFolder);
+    // Deliberately NOT forcing `all=1`: the destination remembers the
+    // operator's own read/unread preference (persisted as `email-showAll`).
+    // Forcing show-all here is what made it always reveal every message.
     if (action) params.set("action", action);
     // Use the target company's prefix directly. If we hand a bare "/email" to
     // navigate(), the router resolves the prefix from the current URL (HQ),
@@ -403,9 +410,11 @@ export function PortfolioEmail() {
                 showAll={showAll}
                 groupBySender={groupBySender}
                 onOpenMessage={(uid, action) =>
-                  openInCompany(mb.key, uid, mb.primaryCompanyId, action)
+                  openInCompany(mb.key, uid, mb.primaryCompanyId, mb.pollFolder, action)
                 }
-                onOpenMailbox={() => openInCompany(mb.key, null, mb.primaryCompanyId)}
+                onOpenMailbox={() =>
+                  openInCompany(mb.key, null, mb.primaryCompanyId, mb.pollFolder)
+                }
               />
             ))}
           {resolvedHelpScoutMailboxes.map(({ ref, primaryCompany }) => (

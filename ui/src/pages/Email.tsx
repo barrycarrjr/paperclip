@@ -379,7 +379,29 @@ export function Email() {
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialImapMailboxKey);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
-  const [showAllMessages, setShowAllMessages] = useState(initialUrlState.all || !!initialUrlState.uid);
+  const [showAllMessages, setShowAllMessages] = useState(() => {
+    // Explicit ?all= in the URL wins (deep-links can force a view); otherwise
+    // restore the operator's remembered preference. Opening a specific ?uid=
+    // no longer forces "show all" — the detail pane renders the message
+    // regardless of the list filter, so the operator's unread-only view is
+    // preserved when arriving from Portfolio Email.
+    const param = searchParams.get("all");
+    if (param === "1") return true;
+    if (param === "0") return false;
+    try {
+      return localStorage.getItem("email-showAll") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleShowAllMessages = (v: boolean) => {
+    try {
+      localStorage.setItem("email-showAll", String(v));
+    } catch {
+      // ignore quota / disabled-storage errors
+    }
+    setShowAllMessages(v);
+  };
   const [optimisticallyRemovedUids, setOptimisticallyRemovedUids] = useState<Set<number>>(
     new Set(),
   );
@@ -558,12 +580,22 @@ export function Email() {
   const allMessages = messagesData?.messages ?? [];
   const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
 
-  const skipNextResetRef = useRef(initialUrlState.uid !== null);
+  // Reset the open message + transient compose state when the operator
+  // switches mailbox or folder. We track the previous (mailbox, folder) and
+  // bail when it hasn't actually changed — critical because React StrictMode
+  // (dev) double-invokes effects, and a naive "skip the first run" guard would
+  // null a deep-linked ?uid= on the second invocation, so an email opened from
+  // Portfolio Email would never appear. Only a genuine mailbox/folder change
+  // clears the open message.
+  const prevMailboxFolderRef = useRef<string | null>(null);
   useEffect(() => {
-    if (skipNextResetRef.current) {
-      skipNextResetRef.current = false;
+    const sig = `${selectedMailbox ?? ""}::${selectedFolder}`;
+    if (prevMailboxFolderRef.current === null) {
+      prevMailboxFolderRef.current = sig;
       return;
     }
+    if (prevMailboxFolderRef.current === sig) return;
+    prevMailboxFolderRef.current = sig;
     setSelectedUid(null);
     setOptimisticallyRemovedUids(new Set());
     setReplyOpen(false);
@@ -1203,7 +1235,7 @@ export function Email() {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => setShowAllMessages((v) => !v)}
+          onClick={() => toggleShowAllMessages(!showAllMessages)}
           title={showAllMessages ? "Showing all — click for unread only" : "Showing unread only — click for all"}
         >
           {showAllMessages ? (
