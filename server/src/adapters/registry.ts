@@ -37,6 +37,7 @@ import {
   readClaudeAuthStatus,
   readClaudeOauthExpiry,
   runClaudeSetupToken,
+  extractClaudeSetupToken,
 } from "@paperclipai/adapter-claude-local/server";
 import { agentConfigurationDoc as claudeAgentConfigurationDoc, models as claudeModels } from "@paperclipai/adapter-claude-local";
 import {
@@ -258,6 +259,29 @@ async function persistHostClaudeToken(
       }`,
     };
   }
+}
+
+/**
+ * Apply a long-lived token the operator pasted from `claude setup-token` (run in
+ * a terminal, where the browser sign-in reliably works) host-wide. This is the
+ * reliable alternative to the server-spawned interactive sign-in, which can't
+ * reliably complete the device/browser flow headless. Extracts the token from
+ * the raw paste (tolerating surrounding terminal text); never logs it.
+ */
+export async function applyClaudeHostToken(
+  rawToken: string,
+): Promise<{ ok: boolean; expiresAt: string | null; error?: string }> {
+  const token = extractClaudeSetupToken(rawToken);
+  if (!token) {
+    return {
+      ok: false,
+      expiresAt: null,
+      error: "Paste the token from `claude setup-token` — it starts with sk-ant-oat01-.",
+    };
+  }
+  const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  await persistHostClaudeToken(token, expiresAt);
+  return { ok: true, expiresAt };
 }
 
 async function claudeAuthenticate(): Promise<AdapterAuthResult> {

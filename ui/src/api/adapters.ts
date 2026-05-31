@@ -102,4 +102,12 @@ export const adaptersApi = {
     api.get<{ status: "running" | "ok" | "error"; result: AdapterAuthResult | null; error: string | null }>(
       `/adapter-auth-jobs/${jobId}`,
     ),
+
+  /**
+   * Apply a long-lived token (pasted from `claude setup-token`, run in a
+   * terminal) host-wide. claude_local only — reliable alternative to the
+   * spawned interactive sign-in.
+   */
+  submitToken: (type: string, token: string) =>
+    api.post<{ ok: boolean; expiresAt: string | null }>(`/adapters/${type}/submit-token`, { token }),
 };

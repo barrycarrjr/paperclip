@@ -69,7 +69,7 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { runClaudeLogin, runClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
+import { runClaudeLogin, extractClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
 import { runCodexLogin } from "@paperclipai/adapter-codex-local/server";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
@@ -118,28 +118,6 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.min(max, Math.trunc(parsed)));
-}
-
-// Background jobs for the (1-2 min, browser-driven) `claude setup-token` flow, so
-// POST /agents/:id/claude-setup-token returns immediately and the UI polls
-// GET /agents/:id/claude-setup-token/:jobId for completion. In-memory, short-lived.
-type ClaudeSetupTokenJob = {
-  id: string;
-  agentId: string;
-  companyId: string;
-  status: "running" | "ok" | "error";
-  result: { ok: true; secretId: string; expiresAt: string | null; rotated: boolean } | null;
-  error: string | null;
-  loginUrl: string | null;
-  startedAt: number;
-};
-const claudeSetupTokenJobs = new Map<string, ClaudeSetupTokenJob>();
-const CLAUDE_SETUP_TOKEN_JOB_TTL_MS = 15 * 60_000;
-function pruneClaudeSetupTokenJobs() {
-  const cutoff = Date.now() - CLAUDE_SETUP_TOKEN_JOB_TTL_MS;
-  for (const [id, job] of claudeSetupTokenJobs) {
-    if (job.status !== "running" && job.startedAt < cutoff) claudeSetupTokenJobs.delete(id);
-  }
 }
 
 export function agentRoutes(
@@ -2898,10 +2876,11 @@ export function agentRoutes(
     res.json(result);
   });
 
-  // One-click durable auth for claude_local: runs `claude setup-token` (the
-  // operator approves the browser sign-in on the host), captures the long-lived
-  // token, stores it as a company secret, and binds it into this agent's adapter
-  // env so the change takes effect on the next run with no server restart.
+  // Durable auth for claude_local via a PASTED long-lived token. The operator
+  // runs `claude setup-token` in a terminal (where the browser sign-in reliably
+  // works) and pastes the resulting sk-ant-oat01-… token here; we store it as a
+  // company secret and bind it into the agent's adapter env. No server-spawned
+  // sign-in (that's unreliable headless), so this is fast and synchronous.
   router.post("/agents/:id/claude-setup-token", async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
@@ -2917,118 +2896,60 @@ export function agentRoutes(
       return;
     }
 
-    const config = asRecord(agent.adapterConfig) ?? {};
-    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
-
-    // The browser sign-in + token mint takes ~1-2 minutes, so run it as a
-    // background job and return a jobId immediately; the UI polls the status
-    // route below. Validation/authz above already ran synchronously.
-    pruneClaudeSetupTokenJobs();
-    const jobId = randomUUID();
-    const actorUserId = req.actor.userId ?? "board";
-    const job: ClaudeSetupTokenJob = {
-      id: jobId,
-      agentId: agent.id,
-      companyId: agent.companyId,
-      status: "running",
-      result: null,
-      error: null,
-      loginUrl: null,
-      startedAt: Date.now(),
-    };
-    claudeSetupTokenJobs.set(jobId, job);
-
-    void (async () => {
-      try {
-        const result = await runClaudeSetupToken({
-          runId: `claude-setup-token-${randomUUID()}`,
-          agent: {
-            id: agent.id,
-            companyId: agent.companyId,
-            name: agent.name,
-            adapterType: agent.adapterType,
-            adapterConfig: agent.adapterConfig,
-          },
-          config: runtimeConfig,
-        });
-
-        if (!result.ok || !result.token) {
-          // Never echo the token; surface only redacted diagnostics.
-          job.status = "error";
-          job.loginUrl = result.loginUrl;
-          job.error =
-            result.exitCode != null && result.exitCode !== 0
-              ? `claude setup-token exited with code ${result.exitCode}`
-              : "Could not capture a long-lived token. Complete the browser sign-in on the host and try again.";
-          return;
-        }
-
-        // Store the captured token as a company secret (rotate an existing one of
-        // the same name rather than pile up duplicates), then bind it into the
-        // agent's adapter env alongside a non-secret expiry stamp.
-        const SECRET_NAME = "CLAUDE_CODE_OAUTH_TOKEN";
-        const actor = { userId: actorUserId, agentId: null };
-        const existing = (await secretsSvc.listWithAgentReferences(agent.companyId)).find(
-          (s) => s.name === SECRET_NAME,
-        );
-        let secretId: string;
-        let rotated = false;
-        if (existing) {
-          await secretsSvc.rotate(existing.id, { value: result.token }, actor);
-          secretId = existing.id;
-          rotated = true;
-        } else {
-          const created = await secretsSvc.create(
-            agent.companyId,
-            {
-              name: SECRET_NAME,
-              provider: "local_encrypted",
-              value: result.token,
-              description: "Long-lived Claude Code OAuth token (claude setup-token) for claude_local agents.",
-            },
-            actor,
-          );
-          secretId = created.id;
-        }
-
-        const env = asRecord(config.env) ? { ...(asRecord(config.env) as Record<string, unknown>) } : {};
-        env.CLAUDE_CODE_OAUTH_TOKEN = { type: "secret_ref", secretId, version: "latest" };
-        if (result.expiresAt) {
-          env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = { type: "plain", value: result.expiresAt };
-        }
-        await svc.update(agent.id, { adapterConfig: { ...config, env } });
-
-        await logActivity(db, {
-          companyId: agent.companyId,
-          actorType: "user",
-          actorId: actorUserId,
-          action: rotated ? "secret.rotated" : "secret.created",
-          entityType: "secret",
-          entityId: secretId,
-          details: { name: SECRET_NAME, via: "claude_setup_token", agentId: agent.id },
-        });
-
-        job.status = "ok";
-        job.result = { ok: true, secretId, expiresAt: result.expiresAt, rotated };
-      } catch (err) {
-        job.status = "error";
-        job.error = err instanceof Error ? err.message : "Setup token failed";
-      }
-    })();
-
-    res.status(202).json({ jobId, status: "running" });
-  });
-
-  // Poll the status of a background claude_local setup-token job (above).
-  router.get("/agents/:id/claude-setup-token/:jobId", async (req, res) => {
-    assertBoard(req);
-    const job = claudeSetupTokenJobs.get(req.params.jobId as string);
-    if (!job) {
-      res.status(404).json({ error: "Setup-token job not found (it may have expired). Try again." });
+    // Accept the raw paste (may include surrounding terminal text) and extract
+    // the token; never echo it back.
+    const rawToken = typeof req.body?.token === "string" ? req.body.token : "";
+    const token = extractClaudeSetupToken(rawToken);
+    if (!token) {
+      res.status(400).json({
+        error: "Paste the token from `claude setup-token` — it starts with sk-ant-oat01-.",
+      });
       return;
     }
-    assertCompanyAccess(req, job.companyId);
-    res.json({ status: job.status, result: job.result, error: job.error, loginUrl: job.loginUrl });
+
+    const config = asRecord(agent.adapterConfig) ?? {};
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const SECRET_NAME = "CLAUDE_CODE_OAUTH_TOKEN";
+    const actor = { userId: req.actor.userId ?? "board", agentId: null };
+    const existing = (await secretsSvc.listWithAgentReferences(agent.companyId)).find(
+      (s) => s.name === SECRET_NAME,
+    );
+    let secretId: string;
+    let rotated = false;
+    if (existing) {
+      await secretsSvc.rotate(existing.id, { value: token }, actor);
+      secretId = existing.id;
+      rotated = true;
+    } else {
+      const created = await secretsSvc.create(
+        agent.companyId,
+        {
+          name: SECRET_NAME,
+          provider: "local_encrypted",
+          value: token,
+          description: "Long-lived Claude Code OAuth token (claude setup-token) for claude_local agents.",
+        },
+        actor,
+      );
+      secretId = created.id;
+    }
+
+    const env = asRecord(config.env) ? { ...(asRecord(config.env) as Record<string, unknown>) } : {};
+    env.CLAUDE_CODE_OAUTH_TOKEN = { type: "secret_ref", secretId, version: "latest" };
+    env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = { type: "plain", value: expiresAt };
+    await svc.update(agent.id, { adapterConfig: { ...config, env } });
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: rotated ? "secret.rotated" : "secret.created",
+      entityType: "secret",
+      entityId: secretId,
+      details: { name: SECRET_NAME, via: "claude_setup_token_paste", agentId: agent.id },
+    });
+
+    res.json({ ok: true, secretId, expiresAt, rotated });
   });
 
   router.post("/agents/:id/codex-login", async (req, res) => {

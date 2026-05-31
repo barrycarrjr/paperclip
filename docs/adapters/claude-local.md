@@ -22,13 +22,19 @@ The `claude_local` adapter runs Anthropic's Claude Code CLI locally. It supports
 
 > **Why the long-lived token must be set via the adapter `env`:** Paperclip strips an *inherited* `CLAUDE_CODE_OAUTH_TOKEN` from the spawned `claude` process — Claude Desktop injects a session-scoped token that is rejected with `401 Invalid authentication credentials` when used by an out-of-process child. A `CLAUDE_CODE_OAUTH_TOKEN` set explicitly in the adapter `env` is preserved and used; only the inherited desktop token is dropped. A failed run surfaces `errorCode: claude_auth_required` with re-auth guidance in the agent run view.
 
-### One-click setup
+### Token setup (paste a `setup-token`)
 
-When a claude_local run fails with `claude_auth_required`, the agent run view shows a **Set up Claude auth** button. It runs `claude setup-token` on the host (you approve the sign-in in the browser that opens — the one unavoidable manual step), then captures the long-lived token, stores it as the company secret `CLAUDE_CODE_OAUTH_TOKEN`, and binds it into the agent's adapter `env`. The token never appears in logs or API responses. The change takes effect on the next run with no server restart. Re-running it later rotates the existing secret in place.
+A server-spawned interactive sign-in can't reliably complete the browser/device OAuth flow headless (it polls Anthropic and the approval often never reaches the operator). So the reliable, durable path is to mint the token in a terminal and paste it:
 
-`POST /agents/:id/claude-setup-token` (board-only) drives this flow; the long-lived token, valid ~1 year, is stamped into `CLAUDE_CODE_OAUTH_TOKEN_EXPIRES` for expiry tracking.
+1. On the host, run `claude setup-token` **in a terminal** — the browser sign-in works there — and copy the printed `sk-ant-oat01-…` token.
+2. Paste it into Paperclip and save.
 
-The **sign-in button on Instance Settings → Adapters** also runs `claude setup-token`, but host-wide rather than per-agent: it applies the captured token to the running server immediately (in `process.env`) and persists it to the host user environment, so every claude_local agent across all companies inherits it. Because that relies on the inherited-env path, it can be re-stripped if the server is later relaunched from a Claude Code / desktop context — the per-agent flow (DB-stored secret) is restart-proof, so prefer it for production agents.
+Where to paste:
+
+- **Per-agent** — the agent run view shows a token field when a run fails with `claude_auth_required`. `POST /agents/:id/claude-setup-token` (board-only) stores the token as the company secret `CLAUDE_CODE_OAUTH_TOKEN` and binds it into that agent's adapter `env`. Restart-proof, company-isolated; effective on the next run; re-pasting rotates the secret. Expiry (~1 yr) is stamped in `CLAUDE_CODE_OAUTH_TOKEN_EXPIRES`.
+- **Instance** — Instance Settings → Adapters → sign-in. `POST /adapters/claude_local/submit-token` (instance-admin) applies it host-wide: sets it in the running server's `process.env` and persists it to the host user environment, so every claude_local agent across all companies inherits it. This rides the inherited-env path, so it can be re-stripped if the server is relaunched from a Claude Code / desktop context — prefer the per-agent secret for production agents.
+
+The token never appears in logs or API responses, and the submit is synchronous (no server-spawned sign-in).
 
 ## Configuration Fields
 

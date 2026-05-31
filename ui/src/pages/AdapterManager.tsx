@@ -297,6 +297,67 @@ function formatElapsed(totalSec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function ClaudeTokenDialog({
+  open,
+  value,
+  onChange,
+  onSubmit,
+  pending,
+  ok,
+  expiresAt,
+  errorMessage,
+  onClose,
+}: {
+  open: boolean;
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  pending: boolean;
+  ok: boolean;
+  expiresAt: string | null;
+  errorMessage: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Sign in to claude_local</DialogTitle>
+          <DialogDescription>
+            In a terminal on the host run{" "}
+            <code className="text-xs bg-muted px-1 py-0.5 rounded">claude setup-token</code>, approve
+            the sign-in in your browser, then paste the token (starts with{" "}
+            <code className="text-xs bg-muted px-1 py-0.5 rounded">sk-ant-oat01-</code>) below. It's
+            applied host-wide for all claude_local agents.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="sk-ant-oat01-…"
+            rows={3}
+            spellCheck={false}
+            className="w-full rounded-md border bg-background px-2 py-1 text-sm font-mono"
+          />
+          {ok && (
+            <p className="text-sm text-emerald-700 dark:text-emerald-400">
+              ✓ Token applied{expiresAt ? ` — valid until ${new Date(expiresAt).toLocaleDateString()}` : ""}.
+            </p>
+          )}
+          {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Done</Button>
+          <Button onClick={onSubmit} disabled={pending || value.trim().length === 0}>
+            {pending ? "Saving…" : "Save token"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AdapterLoginDialog({
   adapterType,
   open,
@@ -540,8 +601,25 @@ export function AdapterManager() {
     return () => clearInterval(id);
   }, [signInBusy]);
 
+  // claude_local uses a pasted long-lived token (terminal `claude setup-token`)
+  // applied host-wide, instead of the unreliable spawned interactive sign-in.
+  const [hostTokenInput, setHostTokenInput] = useState("");
+  const submitClaudeHostToken = useMutation({
+    mutationFn: () => adaptersApi.submitToken("claude_local", hostTokenInput.trim()),
+    onSuccess: () => {
+      setHostTokenInput("");
+      queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
+    },
+  });
+
   const handleSignIn = (type: string) => {
     setSignInTarget(type);
+    if (type === "claude_local") {
+      // Paste-token flow — no spawned sign-in.
+      setHostTokenInput("");
+      submitClaudeHostToken.reset();
+      return;
+    }
     setSignInJobId(null);
     setSignInStartedAt(Date.now());
     setSignInClock(Date.now());
@@ -550,12 +628,14 @@ export function AdapterManager() {
   };
 
   const handleCloseSignIn = () => {
-    // Closing while running is fine — the job keeps going server-side; the badge
-    // refreshes on the next status poll / window focus.
+    // Closing a spawned sign-in while running is fine — the job keeps going
+    // server-side; the badge refreshes on the next status poll / window focus.
     setSignInTarget(null);
     setSignInJobId(null);
     setSignInStartedAt(null);
+    setHostTokenInput("");
     startSignInMutation.reset();
+    submitClaudeHostToken.reset();
     queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
   };
 
@@ -891,15 +971,31 @@ export function AdapterManager() {
         onCancel={() => setReinstallTarget(null)}
       />
       {/* Adapter sign-in flow */}
-      <AdapterLoginDialog
-        adapterType={signInTarget}
-        open={signInTarget !== null}
-        phase={signInPhase}
-        result={signInResult}
-        errorMessage={signInErrorMessage}
-        elapsedSec={signInElapsed}
-        onClose={handleCloseSignIn}
-      />
+      {signInTarget === "claude_local" ? (
+        <ClaudeTokenDialog
+          open
+          value={hostTokenInput}
+          onChange={setHostTokenInput}
+          onSubmit={() => submitClaudeHostToken.mutate()}
+          pending={submitClaudeHostToken.isPending}
+          ok={submitClaudeHostToken.data?.ok ?? false}
+          expiresAt={submitClaudeHostToken.data?.expiresAt ?? null}
+          errorMessage={
+            submitClaudeHostToken.error instanceof Error ? submitClaudeHostToken.error.message : null
+          }
+          onClose={handleCloseSignIn}
+        />
+      ) : (
+        <AdapterLoginDialog
+          adapterType={signInTarget}
+          open={signInTarget !== null}
+          phase={signInPhase}
+          result={signInResult}
+          errorMessage={signInErrorMessage}
+          elapsedSec={signInElapsed}
+          onClose={handleCloseSignIn}
+        />
+      )}
     </div>
   );
 }

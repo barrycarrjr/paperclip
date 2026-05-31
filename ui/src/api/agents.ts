@@ -234,15 +234,13 @@ export const agentsApi = {
     api.post<AdapterCliLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
   loginWithCodex: (id: string, companyId?: string) =>
     api.post<AdapterCliLoginResult>(agentPath(id, companyId, "/codex-login"), {}),
-  setupTokenForClaude: (id: string, companyId?: string) =>
-    api.post<{ jobId: string; status: "running" }>(agentPath(id, companyId, "/claude-setup-token"), {}),
-  getSetupTokenJob: (id: string, jobId: string, companyId?: string) =>
-    api.get<{
-      status: "running" | "ok" | "error";
-      result: AdapterSetupTokenResult | null;
-      error: string | null;
-      loginUrl: string | null;
-    }>(agentPath(id, companyId, `/claude-setup-token/${encodeURIComponent(jobId)}`)),
+  /**
+   * Store a long-lived token (pasted from `claude setup-token`, run in a
+   * terminal) as a secret bound to this agent's claude_local env. Synchronous
+   * and reliable — no server-spawned browser sign-in.
+   */
+  setupTokenForClaude: (id: string, token: string, companyId?: string) =>
+    api.post<AdapterSetupTokenResult>(agentPath(id, companyId, "/claude-setup-token"), { token }),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
 };

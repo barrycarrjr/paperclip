@@ -29,6 +29,7 @@ import {
   unregisterServerAdapter,
   isOverridePaused,
   setOverridePaused,
+  applyClaudeHostToken,
 } from "../adapters/registry.js";
 import {
   listAdapterPlugins,
@@ -781,6 +782,26 @@ export function adapterRoutes() {
       return;
     }
     res.json({ status: job.status, result: job.result, error: job.error });
+  });
+
+  // ── POST /api/adapters/:type/submit-token ────────────────────────────────
+  // Apply a long-lived token pasted from `claude setup-token` (run in a terminal)
+  // host-wide. Reliable alternative to the spawned interactive sign-in, which
+  // can't complete the browser/device flow headless. claude_local only.
+  router.post("/adapters/:type/submit-token", async (req, res) => {
+    assertInstanceAdmin(req);
+    const { type } = req.params;
+    if (type !== "claude_local") {
+      res.status(400).json({ error: `Pasting a token is only supported for claude_local (got "${type}").` });
+      return;
+    }
+    const rawToken = typeof req.body?.token === "string" ? req.body.token : "";
+    const result = await applyClaudeHostToken(rawToken);
+    if (!result.ok) {
+      res.status(400).json({ ok: false, error: result.error ?? "Invalid token." });
+      return;
+    }
+    res.json({ ok: true, expiresAt: result.expiresAt });
   });
 
   return router;

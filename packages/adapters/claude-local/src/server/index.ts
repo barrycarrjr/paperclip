@@ -1,4 +1,4 @@
-export { execute, runClaudeLogin, runClaudeSetupToken } from "./execute.js";
+export { execute, runClaudeLogin, runClaudeSetupToken, extractClaudeSetupToken } from "./execute.js";
 export type { ClaudeSetupTokenResult } from "./execute.js";
 export { listClaudeSkills, syncClaudeSkills } from "./skills.js";
 export { listClaudeModels } from "./models.js";

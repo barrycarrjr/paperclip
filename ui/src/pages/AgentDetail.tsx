@@ -3210,9 +3210,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const metrics = runMetrics(run);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [cliLoginResult, setCliLoginResult] = useState<AdapterCliLoginResult | null>(null);
-  const [setupTokenJobId, setSetupTokenJobId] = useState<string | null>(null);
-  const [setupTokenStartedAt, setSetupTokenStartedAt] = useState<number | null>(null);
-  const [setupTokenClock, setSetupTokenClock] = useState<number>(() => Date.now());
+  const [setupTokenInput, setSetupTokenInput] = useState("");
 
   useEffect(() => {
     setCliLoginResult(null);
@@ -3326,52 +3324,19 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
 
   // Sign-in runs as a background job (browser approval can take 1-2 min): start
   // it, then poll for completion so the button never looks hung.
-  const startClaudeSetupToken = useMutation({
-    mutationFn: () => agentsApi.setupTokenForClaude(run.agentId, run.companyId),
-    onSuccess: (data) => {
-      setSetupTokenJobId(data.jobId);
-      setSetupTokenStartedAt(Date.now());
-    },
-  });
-
-  const setupTokenJob = useQuery({
-    queryKey: ["claudeSetupTokenJob", run.agentId, setupTokenJobId],
-    queryFn: () => agentsApi.getSetupTokenJob(run.agentId, setupTokenJobId as string, run.companyId),
-    enabled: setupTokenJobId !== null,
-    refetchInterval: (query) => {
-      const status = (query.state.data as { status?: string } | undefined)?.status;
-      return status === "running" || status === undefined ? 2500 : false;
-    },
-  });
-
-  useEffect(() => {
-    if (setupTokenJob.data?.status === "ok") {
+  // Save a long-lived token pasted from `claude setup-token` (run in a terminal,
+  // where the browser sign-in reliably works). Synchronous — stores a secret +
+  // binds this agent's env.
+  const submitClaudeToken = useMutation({
+    mutationFn: () => agentsApi.setupTokenForClaude(run.agentId, setupTokenInput.trim(), run.companyId),
+    onSuccess: () => {
+      setSetupTokenInput("");
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
-    }
-  }, [setupTokenJob.data?.status, queryClient, run.agentId]);
-
-  const setupTokenBusy =
-    startClaudeSetupToken.isPending ||
-    (setupTokenJobId !== null && (setupTokenJob.data === undefined || setupTokenJob.data.status === "running"));
-
-  useEffect(() => {
-    if (!setupTokenBusy) return;
-    const timer = setInterval(() => setSetupTokenClock(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [setupTokenBusy]);
-
-  const setupTokenElapsed =
-    setupTokenStartedAt !== null ? Math.max(0, Math.floor((setupTokenClock - setupTokenStartedAt) / 1000)) : 0;
-  const setupTokenElapsedLabel = `${Math.floor(setupTokenElapsed / 60)}:${String(setupTokenElapsed % 60).padStart(2, "0")}`;
-  const setupTokenResult = setupTokenJob.data?.status === "ok" ? setupTokenJob.data.result : null;
+    },
+  });
+  const setupTokenResult = submitClaudeToken.data ?? null;
   const setupTokenError =
-    startClaudeSetupToken.error instanceof Error
-      ? startClaudeSetupToken.error.message
-      : setupTokenJob.data?.status === "error"
-        ? setupTokenJob.data.error ?? "Setup token failed — complete the browser sign-in on the host and retry."
-        : startClaudeSetupToken.isError
-          ? "Setup token failed — try again."
-          : null;
+    submitClaudeToken.error instanceof Error ? submitClaudeToken.error.message : null;
 
   const runCodexLogin = useMutation({
     mutationFn: () => agentsApi.loginWithCodex(run.agentId, run.companyId),
@@ -3516,29 +3481,31 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  Claude Code on the host can't authenticate. Click below to set up a long-lived
-                  token: it runs <code className="font-mono">claude setup-token</code> on the host
-                  (approve the sign-in in the browser that opens), then automatically stores the
-                  token as a secret and binds it to this agent's environment — valid ~1 year, no
-                  restart needed.
+                  Claude Code on the host can't authenticate. In a terminal on the host run{" "}
+                  <code className="font-mono">claude setup-token</code>, approve the sign-in in your
+                  browser, then paste the token below (starts with{" "}
+                  <code className="font-mono">sk-ant-oat01-</code>). It's stored as a secret and bound
+                  to this agent — valid ~1 year, effective on the next run.
                 </p>
+                <textarea
+                  value={setupTokenInput}
+                  onChange={(e) => setSetupTokenInput(e.target.value)}
+                  placeholder="sk-ant-oat01-…"
+                  rows={2}
+                  spellCheck={false}
+                  className="w-full rounded-md border bg-background px-2 py-1 text-xs font-mono"
+                />
                 <Button
                   size="sm"
                   className="h-7 px-2 text-xs"
-                  onClick={() => startClaudeSetupToken.mutate()}
-                  disabled={setupTokenBusy}
+                  onClick={() => submitClaudeToken.mutate()}
+                  disabled={submitClaudeToken.isPending || setupTokenInput.trim().length === 0}
                 >
-                  {setupTokenBusy ? "Setting up… approve in your browser" : "Set up Claude auth"}
+                  {submitClaudeToken.isPending ? "Saving…" : "Save token"}
                 </Button>
-                {setupTokenBusy && (
-                  <p className="text-xs text-muted-foreground">
-                    Waiting for you to approve the sign-in in the browser that opened… this can take
-                    1–2 minutes ({setupTokenElapsedLabel}).
-                  </p>
-                )}
                 {setupTokenResult?.ok && (
                   <p className="text-xs text-green-600 dark:text-green-400">
-                    ✓ Long-lived token stored and bound
+                    ✓ Token stored and bound
                     {setupTokenResult.expiresAt
                       ? `; valid until ${new Date(setupTokenResult.expiresAt).toLocaleDateString()}`
                       : ""}
