@@ -1510,13 +1510,20 @@ export function buildSpawnChildEnv(
   const explicitOAuthToken =
     typeof overrideEnv?.CLAUDE_CODE_OAUTH_TOKEN === "string" &&
     overrideEnv.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0;
+  // An empty CLAUDE_CODE_OAUTH_TOKEN explicitly present in overrideEnv means
+  // "force it off": `claude setup-token` / `claude login` must NOT inherit an
+  // existing token, or the CLI short-circuits and mints/prints nothing.
+  const explicitClearOAuthToken =
+    overrideEnv != null &&
+    Object.prototype.hasOwnProperty.call(overrideEnv, "CLAUDE_CODE_OAUTH_TOKEN") &&
+    !explicitOAuthToken;
   const inheritedHasDesktopMarkers = CLAUDE_CODE_NESTING_VARS.some(
     (key) =>
       key !== "CLAUDE_CODE_OAUTH_TOKEN" &&
       typeof inheritedEnv[key] === "string" &&
       (inheritedEnv[key] as string).trim().length > 0,
   );
-  const keepOAuthToken = explicitOAuthToken || !inheritedHasDesktopMarkers;
+  const keepOAuthToken = explicitOAuthToken || (!explicitClearOAuthToken && !inheritedHasDesktopMarkers);
 
   for (const key of CLAUDE_CODE_NESTING_VARS) {
     if (key === "CLAUDE_CODE_OAUTH_TOKEN" && keepOAuthToken) continue;

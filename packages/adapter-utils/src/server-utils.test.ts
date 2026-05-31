@@ -63,6 +63,14 @@ describe("buildSpawnChildEnv", () => {
     );
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
+
+  it("removes a clean-inherited token when overrideEnv sets it empty (setup-token/login must mint fresh)", () => {
+    const env = buildSpawnChildEnv(
+      { PATH: "/usr/bin", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-existing-from-server-env" },
+      { CLAUDE_CODE_OAUTH_TOKEN: "" },
+    );
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
 });
 
 function isPidAlive(pid: number) {

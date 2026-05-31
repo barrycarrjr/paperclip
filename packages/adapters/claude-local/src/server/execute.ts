@@ -279,6 +279,12 @@ export async function runClaudeLogin(input: {
     authToken: input.authToken,
   });
 
+  // A login must NOT inherit an existing token/key — the CLI short-circuits
+  // ("already authenticated") instead of running the interactive flow. Empty
+  // values force buildSpawnChildEnv to drop them for this spawn.
+  runtime.env.CLAUDE_CODE_OAUTH_TOKEN = "";
+  runtime.env.ANTHROPIC_API_KEY = "";
+
   const proc = await runAdapterExecutionTargetProcess(input.runId, null, runtime.command, ["login"], {
     cwd: runtime.cwd,
     env: runtime.env,
@@ -350,6 +356,13 @@ export async function runClaudeSetupToken(input: {
     context: input.context ?? {},
     authToken: input.authToken,
   });
+
+  // `claude setup-token` mints a NEW token and short-circuits (printing nothing)
+  // if it inherits an existing CLAUDE_CODE_OAUTH_TOKEN — e.g. one a prior sign-in
+  // injected into the server's env — or an ANTHROPIC_API_KEY. Empty values force
+  // buildSpawnChildEnv to drop them so this spawn always runs the fresh mint.
+  runtime.env.CLAUDE_CODE_OAUTH_TOKEN = "";
+  runtime.env.ANTHROPIC_API_KEY = "";
 
   const callerLog = input.onLog;
   const onLog = callerLog
