@@ -120,6 +120,28 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
   return Math.max(0, Math.min(max, Math.trunc(parsed)));
 }
 
+// Background jobs for the (1-2 min, browser-driven) `claude setup-token` flow, so
+// POST /agents/:id/claude-setup-token returns immediately and the UI polls
+// GET /agents/:id/claude-setup-token/:jobId for completion. In-memory, short-lived.
+type ClaudeSetupTokenJob = {
+  id: string;
+  agentId: string;
+  companyId: string;
+  status: "running" | "ok" | "error";
+  result: { ok: true; secretId: string; expiresAt: string | null; rotated: boolean } | null;
+  error: string | null;
+  loginUrl: string | null;
+  startedAt: number;
+};
+const claudeSetupTokenJobs = new Map<string, ClaudeSetupTokenJob>();
+const CLAUDE_SETUP_TOKEN_JOB_TTL_MS = 15 * 60_000;
+function pruneClaudeSetupTokenJobs() {
+  const cutoff = Date.now() - CLAUDE_SETUP_TOKEN_JOB_TTL_MS;
+  for (const [id, job] of claudeSetupTokenJobs) {
+    if (job.status !== "running" && job.startedAt < cutoff) claudeSetupTokenJobs.delete(id);
+  }
+}
+
 export function agentRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
@@ -2897,77 +2919,116 @@ export function agentRoutes(
 
     const config = asRecord(agent.adapterConfig) ?? {};
     const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
-    const result = await runClaudeSetupToken({
-      runId: `claude-setup-token-${randomUUID()}`,
-      agent: {
-        id: agent.id,
-        companyId: agent.companyId,
-        name: agent.name,
-        adapterType: agent.adapterType,
-        adapterConfig: agent.adapterConfig,
-      },
-      config: runtimeConfig,
-    });
 
-    if (!result.ok || !result.token) {
-      // Never echo the token; surface only redacted diagnostics.
-      res.status(502).json({
-        ok: false,
-        error:
-          "Could not capture a long-lived token from `claude setup-token`. Complete the browser sign-in on the host and try again.",
-        loginUrl: result.loginUrl,
-        exitCode: result.exitCode,
-        stderr: result.stderr,
-      });
+    // The browser sign-in + token mint takes ~1-2 minutes, so run it as a
+    // background job and return a jobId immediately; the UI polls the status
+    // route below. Validation/authz above already ran synchronously.
+    pruneClaudeSetupTokenJobs();
+    const jobId = randomUUID();
+    const actorUserId = req.actor.userId ?? "board";
+    const job: ClaudeSetupTokenJob = {
+      id: jobId,
+      agentId: agent.id,
+      companyId: agent.companyId,
+      status: "running",
+      result: null,
+      error: null,
+      loginUrl: null,
+      startedAt: Date.now(),
+    };
+    claudeSetupTokenJobs.set(jobId, job);
+
+    void (async () => {
+      try {
+        const result = await runClaudeSetupToken({
+          runId: `claude-setup-token-${randomUUID()}`,
+          agent: {
+            id: agent.id,
+            companyId: agent.companyId,
+            name: agent.name,
+            adapterType: agent.adapterType,
+            adapterConfig: agent.adapterConfig,
+          },
+          config: runtimeConfig,
+        });
+
+        if (!result.ok || !result.token) {
+          // Never echo the token; surface only redacted diagnostics.
+          job.status = "error";
+          job.loginUrl = result.loginUrl;
+          job.error =
+            result.exitCode != null && result.exitCode !== 0
+              ? `claude setup-token exited with code ${result.exitCode}`
+              : "Could not capture a long-lived token. Complete the browser sign-in on the host and try again.";
+          return;
+        }
+
+        // Store the captured token as a company secret (rotate an existing one of
+        // the same name rather than pile up duplicates), then bind it into the
+        // agent's adapter env alongside a non-secret expiry stamp.
+        const SECRET_NAME = "CLAUDE_CODE_OAUTH_TOKEN";
+        const actor = { userId: actorUserId, agentId: null };
+        const existing = (await secretsSvc.listWithAgentReferences(agent.companyId)).find(
+          (s) => s.name === SECRET_NAME,
+        );
+        let secretId: string;
+        let rotated = false;
+        if (existing) {
+          await secretsSvc.rotate(existing.id, { value: result.token }, actor);
+          secretId = existing.id;
+          rotated = true;
+        } else {
+          const created = await secretsSvc.create(
+            agent.companyId,
+            {
+              name: SECRET_NAME,
+              provider: "local_encrypted",
+              value: result.token,
+              description: "Long-lived Claude Code OAuth token (claude setup-token) for claude_local agents.",
+            },
+            actor,
+          );
+          secretId = created.id;
+        }
+
+        const env = asRecord(config.env) ? { ...(asRecord(config.env) as Record<string, unknown>) } : {};
+        env.CLAUDE_CODE_OAUTH_TOKEN = { type: "secret_ref", secretId, version: "latest" };
+        if (result.expiresAt) {
+          env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = { type: "plain", value: result.expiresAt };
+        }
+        await svc.update(agent.id, { adapterConfig: { ...config, env } });
+
+        await logActivity(db, {
+          companyId: agent.companyId,
+          actorType: "user",
+          actorId: actorUserId,
+          action: rotated ? "secret.rotated" : "secret.created",
+          entityType: "secret",
+          entityId: secretId,
+          details: { name: SECRET_NAME, via: "claude_setup_token", agentId: agent.id },
+        });
+
+        job.status = "ok";
+        job.result = { ok: true, secretId, expiresAt: result.expiresAt, rotated };
+      } catch (err) {
+        job.status = "error";
+        job.error = err instanceof Error ? err.message : "Setup token failed";
+      }
+    })();
+
+    res.status(202).json({ jobId, status: "running" });
+  });
+
+  // Poll the status of a background claude_local setup-token job (above).
+  router.get("/agents/:id/claude-setup-token/:jobId", async (req, res) => {
+    assertBoard(req);
+    const job = claudeSetupTokenJobs.get(req.params.jobId as string);
+    if (!job) {
+      res.status(404).json({ error: "Setup-token job not found (it may have expired). Try again." });
       return;
     }
-
-    // Store the captured token as a company secret (rotate an existing one of
-    // the same name rather than pile up duplicates), then bind it into the
-    // agent's adapter env alongside a non-secret expiry stamp.
-    const SECRET_NAME = "CLAUDE_CODE_OAUTH_TOKEN";
-    const actor = { userId: req.actor.userId ?? "board", agentId: null };
-    const existing = (await secretsSvc.listWithAgentReferences(agent.companyId)).find(
-      (s) => s.name === SECRET_NAME,
-    );
-    let secretId: string;
-    let rotated = false;
-    if (existing) {
-      await secretsSvc.rotate(existing.id, { value: result.token }, actor);
-      secretId = existing.id;
-      rotated = true;
-    } else {
-      const created = await secretsSvc.create(
-        agent.companyId,
-        {
-          name: SECRET_NAME,
-          provider: "local_encrypted",
-          value: result.token,
-          description: "Long-lived Claude Code OAuth token (claude setup-token) for claude_local agents.",
-        },
-        actor,
-      );
-      secretId = created.id;
-    }
-
-    const env = asRecord(config.env) ? { ...(asRecord(config.env) as Record<string, unknown>) } : {};
-    env.CLAUDE_CODE_OAUTH_TOKEN = { type: "secret_ref", secretId, version: "latest" };
-    if (result.expiresAt) {
-      env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = { type: "plain", value: result.expiresAt };
-    }
-    await svc.update(agent.id, { adapterConfig: { ...config, env } });
-
-    await logActivity(db, {
-      companyId: agent.companyId,
-      actorType: "user",
-      actorId: req.actor.userId ?? "board",
-      action: rotated ? "secret.rotated" : "secret.created",
-      entityType: "secret",
-      entityId: secretId,
-      details: { name: SECRET_NAME, via: "claude_setup_token", agentId: agent.id },
-    });
-
-    res.json({ ok: true, secretId, expiresAt: result.expiresAt, rotated });
+    assertCompanyAccess(req, job.companyId);
+    res.json({ status: job.status, result: job.result, error: job.error, loginUrl: job.loginUrl });
   });
 
   router.post("/agents/:id/codex-login", async (req, res) => {

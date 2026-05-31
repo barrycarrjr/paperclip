@@ -235,7 +235,14 @@ export const agentsApi = {
   loginWithCodex: (id: string, companyId?: string) =>
     api.post<AdapterCliLoginResult>(agentPath(id, companyId, "/codex-login"), {}),
   setupTokenForClaude: (id: string, companyId?: string) =>
-    api.post<AdapterSetupTokenResult>(agentPath(id, companyId, "/claude-setup-token"), {}),
+    api.post<{ jobId: string; status: "running" }>(agentPath(id, companyId, "/claude-setup-token"), {}),
+  getSetupTokenJob: (id: string, jobId: string, companyId?: string) =>
+    api.get<{
+      status: "running" | "ok" | "error";
+      result: AdapterSetupTokenResult | null;
+      error: string | null;
+      loginUrl: string | null;
+    }>(agentPath(id, companyId, `/claude-setup-token/${encodeURIComponent(jobId)}`)),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
 };

@@ -5,7 +5,6 @@ import {
   agentsApi,
   type AgentKey,
   type AdapterCliLoginResult,
-  type AdapterSetupTokenResult,
   type AgentPermissionUpdate,
 } from "../api/agents";
 import { companySkillsApi } from "../api/companySkills";
@@ -3211,7 +3210,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const metrics = runMetrics(run);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [cliLoginResult, setCliLoginResult] = useState<AdapterCliLoginResult | null>(null);
-  const [setupTokenResult, setSetupTokenResult] = useState<AdapterSetupTokenResult | null>(null);
+  const [setupTokenJobId, setSetupTokenJobId] = useState<string | null>(null);
+  const [setupTokenStartedAt, setSetupTokenStartedAt] = useState<number | null>(null);
+  const [setupTokenClock, setSetupTokenClock] = useState<number>(() => Date.now());
 
   useEffect(() => {
     setCliLoginResult(null);
@@ -3323,16 +3324,54 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     },
   });
 
-  const runClaudeSetupToken = useMutation({
+  // Sign-in runs as a background job (browser approval can take 1-2 min): start
+  // it, then poll for completion so the button never looks hung.
+  const startClaudeSetupToken = useMutation({
     mutationFn: () => agentsApi.setupTokenForClaude(run.agentId, run.companyId),
-    onMutate: () => {
-      setSetupTokenResult(null);
-    },
     onSuccess: (data) => {
-      setSetupTokenResult(data);
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
+      setSetupTokenJobId(data.jobId);
+      setSetupTokenStartedAt(Date.now());
     },
   });
+
+  const setupTokenJob = useQuery({
+    queryKey: ["claudeSetupTokenJob", run.agentId, setupTokenJobId],
+    queryFn: () => agentsApi.getSetupTokenJob(run.agentId, setupTokenJobId as string, run.companyId),
+    enabled: setupTokenJobId !== null,
+    refetchInterval: (query) => {
+      const status = (query.state.data as { status?: string } | undefined)?.status;
+      return status === "running" || status === undefined ? 2500 : false;
+    },
+  });
+
+  useEffect(() => {
+    if (setupTokenJob.data?.status === "ok") {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
+    }
+  }, [setupTokenJob.data?.status, queryClient, run.agentId]);
+
+  const setupTokenBusy =
+    startClaudeSetupToken.isPending ||
+    (setupTokenJobId !== null && (setupTokenJob.data === undefined || setupTokenJob.data.status === "running"));
+
+  useEffect(() => {
+    if (!setupTokenBusy) return;
+    const timer = setInterval(() => setSetupTokenClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [setupTokenBusy]);
+
+  const setupTokenElapsed =
+    setupTokenStartedAt !== null ? Math.max(0, Math.floor((setupTokenClock - setupTokenStartedAt) / 1000)) : 0;
+  const setupTokenElapsedLabel = `${Math.floor(setupTokenElapsed / 60)}:${String(setupTokenElapsed % 60).padStart(2, "0")}`;
+  const setupTokenResult = setupTokenJob.data?.status === "ok" ? setupTokenJob.data.result : null;
+  const setupTokenError =
+    startClaudeSetupToken.error instanceof Error
+      ? startClaudeSetupToken.error.message
+      : setupTokenJob.data?.status === "error"
+        ? setupTokenJob.data.error ?? "Setup token failed — complete the browser sign-in on the host and retry."
+        : startClaudeSetupToken.isError
+          ? "Setup token failed — try again."
+          : null;
 
   const runCodexLogin = useMutation({
     mutationFn: () => agentsApi.loginWithCodex(run.agentId, run.companyId),
@@ -3486,13 +3525,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 <Button
                   size="sm"
                   className="h-7 px-2 text-xs"
-                  onClick={() => runClaudeSetupToken.mutate()}
-                  disabled={runClaudeSetupToken.isPending}
+                  onClick={() => startClaudeSetupToken.mutate()}
+                  disabled={setupTokenBusy}
                 >
-                  {runClaudeSetupToken.isPending
-                    ? "Setting up… approve in your browser"
-                    : "Set up Claude auth"}
+                  {setupTokenBusy ? "Setting up… approve in your browser" : "Set up Claude auth"}
                 </Button>
+                {setupTokenBusy && (
+                  <p className="text-xs text-muted-foreground">
+                    Waiting for you to approve the sign-in in the browser that opened… this can take
+                    1–2 minutes ({setupTokenElapsedLabel}).
+                  </p>
+                )}
                 {setupTokenResult?.ok && (
                   <p className="text-xs text-green-600 dark:text-green-400">
                     ✓ Long-lived token stored and bound
@@ -3502,13 +3545,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                     . Re-run the agent to pick it up.
                   </p>
                 )}
-                {runClaudeSetupToken.isError && (
-                  <p className="text-xs text-destructive">
-                    {runClaudeSetupToken.error instanceof Error
-                      ? runClaudeSetupToken.error.message
-                      : "Setup token failed — complete the browser sign-in on the host and retry."}
-                  </p>
-                )}
+                {setupTokenError && <p className="text-xs text-destructive">{setupTokenError}</p>}
                 <p className="text-xs text-muted-foreground">
                   Fallback: run <code className="font-mono">claude auth login</code> on the host, or
                   the headless login below (only works in limited cases).
