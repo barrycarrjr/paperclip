@@ -5,6 +5,7 @@ import {
   agentsApi,
   type AgentKey,
   type AdapterCliLoginResult,
+  type AdapterSetupTokenResult,
   type AgentPermissionUpdate,
 } from "../api/agents";
 import { companySkillsApi } from "../api/companySkills";
@@ -3210,6 +3211,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const metrics = runMetrics(run);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [cliLoginResult, setCliLoginResult] = useState<AdapterCliLoginResult | null>(null);
+  const [setupTokenResult, setSetupTokenResult] = useState<AdapterSetupTokenResult | null>(null);
 
   useEffect(() => {
     setCliLoginResult(null);
@@ -3318,6 +3320,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     },
     onSuccess: (data) => {
       setCliLoginResult(data);
+    },
+  });
+
+  const runClaudeSetupToken = useMutation({
+    mutationFn: () => agentsApi.setupTokenForClaude(run.agentId, run.companyId),
+    onMutate: () => {
+      setSetupTokenResult(null);
+    },
+    onSuccess: (data) => {
+      setSetupTokenResult(data);
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
     },
   });
 
@@ -3463,6 +3476,43 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             )}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Claude Code on the host can't authenticate. Click below to set up a long-lived
+                  token: it runs <code className="font-mono">claude setup-token</code> on the host
+                  (approve the sign-in in the browser that opens), then automatically stores the
+                  token as a secret and binds it to this agent's environment — valid ~1 year, no
+                  restart needed.
+                </p>
+                <Button
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => runClaudeSetupToken.mutate()}
+                  disabled={runClaudeSetupToken.isPending}
+                >
+                  {runClaudeSetupToken.isPending
+                    ? "Setting up… approve in your browser"
+                    : "Set up Claude auth"}
+                </Button>
+                {setupTokenResult?.ok && (
+                  <p className="text-xs text-green-600 dark:text-green-400">
+                    ✓ Long-lived token stored and bound
+                    {setupTokenResult.expiresAt
+                      ? `; valid until ${new Date(setupTokenResult.expiresAt).toLocaleDateString()}`
+                      : ""}
+                    . Re-run the agent to pick it up.
+                  </p>
+                )}
+                {runClaudeSetupToken.isError && (
+                  <p className="text-xs text-destructive">
+                    {runClaudeSetupToken.error instanceof Error
+                      ? runClaudeSetupToken.error.message
+                      : "Setup token failed — complete the browser sign-in on the host and retry."}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Fallback: run <code className="font-mono">claude auth login</code> on the host, or
+                  the headless login below (only works in limited cases).
+                </p>
                 <Button
                   variant="outline"
                   size="sm"

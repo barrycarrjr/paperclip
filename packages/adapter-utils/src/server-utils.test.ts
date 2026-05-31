@@ -3,12 +3,67 @@ import { describe, expect, it } from "vitest";
 import {
   applyPaperclipWorkspaceEnv,
   appendWithByteCap,
+  buildSpawnChildEnv,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   renderPaperclipWakePrompt,
   runningProcesses,
   runChildProcess,
   stringifyPaperclipWakePayload,
 } from "./server-utils.js";
+
+describe("buildSpawnChildEnv", () => {
+  it("strips the inherited desktop token + nesting guards when desktop markers are present", () => {
+    const env = buildSpawnChildEnv(
+      {
+        PATH: "/usr/bin",
+        CLAUDECODE: "1",
+        CLAUDE_CODE_ENTRYPOINT: "claude-desktop",
+        CLAUDE_CODE_OAUTH_TOKEN: "desktop-session-token",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      },
+      undefined,
+    );
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+  });
+
+  it("preserves an inherited operator-exported token when no nesting markers are present (single-env-var path)", () => {
+    const env = buildSpawnChildEnv(
+      { PATH: "/usr/bin", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-longlived" },
+      undefined,
+    );
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-longlived");
+  });
+
+  it("preserves an explicit overrideEnv token even when desktop markers are present", () => {
+    const env = buildSpawnChildEnv(
+      {
+        PATH: "/usr/bin",
+        CLAUDECODE: "1",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "desktop-session-token",
+      },
+      { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-override" },
+    );
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-override");
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+  });
+
+  it("strips an inherited token when desktop markers are present and the override is empty", () => {
+    const env = buildSpawnChildEnv(
+      {
+        PATH: "/usr/bin",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "desktop-session-token",
+      },
+      { CLAUDE_CODE_OAUTH_TOKEN: "   " },
+    );
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+});
 
 function isPidAlive(pid: number) {
   try {

@@ -1,4 +1,5 @@
-export { execute, runClaudeLogin } from "./execute.js";
+export { execute, runClaudeLogin, runClaudeSetupToken } from "./execute.js";
+export type { ClaudeSetupTokenResult } from "./execute.js";
 export { listClaudeSkills, syncClaudeSkills } from "./skills.js";
 export { listClaudeModels } from "./models.js";
 export { testEnvironment } from "./test.js";
@@ -12,6 +13,7 @@ export {
   getQuotaWindows,
   readClaudeAuthStatus,
   readClaudeToken,
+  readClaudeOauthExpiry,
   fetchClaudeQuota,
   fetchClaudeCliQuota,
   captureClaudeCliUsageText,

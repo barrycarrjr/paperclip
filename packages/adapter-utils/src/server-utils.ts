@@ -1455,6 +1455,76 @@ export async function ensureCommandResolvable(
   throw new Error(`Command not found in PATH: "${command}"`);
 }
 
+// Env vars that must not leak into a spawned `claude`. The nesting guards make
+// the CLI refuse to start ("cannot be launched inside another session") when
+// Paperclip itself was started from within a Claude Code session (or cron
+// inherits a contaminated shell). CLAUDE_CODE_OAUTH_TOKEN +
+// CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST are the host-managed token + flag that
+// Claude Desktop injects; that token is scoped to the desktop session and is
+// rejected with HTTP 401 ("Invalid authentication credentials") when used by an
+// out-of-process child, so the inherited copy must be dropped.
+const CLAUDE_CODE_NESTING_VARS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION",
+  "CLAUDE_CODE_PARENT_SESSION",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+] as const;
+
+/**
+ * Build the environment for a spawned child process (e.g. the `claude` CLI):
+ * the inherited, Paperclip-sanitized process env overlaid with the
+ * adapter-provided `overrideEnv`.
+ *
+ * Strips the Claude Code nesting guards and the desktop-injected OAuth token
+ * that leak in from the inherited env, so a spawned `claude` starts cleanly and
+ * falls back to the user's persisted login (~/.claude credentials) — letting
+ * ANTHROPIC_API_KEY take precedence when configured.
+ *
+ * EXCEPTION for `CLAUDE_CODE_OAUTH_TOKEN`: a long-lived `claude setup-token` is
+ * valid for an out-of-process child and is the durable, subscription-billed way
+ * to authenticate a headless `claude_local` agent. It is preserved when supplied
+ * explicitly via `overrideEnv` (adapter `env` / secret ref) OR when inherited
+ * from a clean environment with no Claude Code nesting/desktop markers (i.e. the
+ * operator exported it themselves). Only a token inherited *alongside* those
+ * markers — the ephemeral Claude Desktop session token — is dropped.
+ */
+export function buildSpawnChildEnv(
+  inheritedEnv: NodeJS.ProcessEnv,
+  overrideEnv: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+  const rawMerged: NodeJS.ProcessEnv = {
+    ...sanitizeInheritedPaperclipEnv(inheritedEnv),
+    ...overrideEnv,
+  };
+
+  // Decide whether CLAUDE_CODE_OAUTH_TOKEN may reach the child:
+  //  - Set explicitly via overrideEnv (adapter `env` / secret ref): always keep.
+  //  - Inherited from a *clean* env (no Claude Code nesting/desktop markers): the
+  //    operator exported it deliberately (e.g. a long-lived `claude setup-token`),
+  //    so keep it — this is the single-env-var setup path.
+  //  - Inherited *alongside* the desktop/nesting markers: this is the ephemeral
+  //    Claude Desktop session token, which 401s for an out-of-process child. Drop
+  //    it so `claude` falls back to ~/.claude credentials / ANTHROPIC_API_KEY.
+  const explicitOAuthToken =
+    typeof overrideEnv?.CLAUDE_CODE_OAUTH_TOKEN === "string" &&
+    overrideEnv.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0;
+  const inheritedHasDesktopMarkers = CLAUDE_CODE_NESTING_VARS.some(
+    (key) =>
+      key !== "CLAUDE_CODE_OAUTH_TOKEN" &&
+      typeof inheritedEnv[key] === "string" &&
+      (inheritedEnv[key] as string).trim().length > 0,
+  );
+  const keepOAuthToken = explicitOAuthToken || !inheritedHasDesktopMarkers;
+
+  for (const key of CLAUDE_CODE_NESTING_VARS) {
+    if (key === "CLAUDE_CODE_OAUTH_TOKEN" && keepOAuthToken) continue;
+    delete rawMerged[key];
+  }
+  return ensurePathInEnv(rawMerged);
+}
+
 export async function runChildProcess(
   runId: string,
   command: string,
@@ -1474,38 +1544,7 @@ export async function runChildProcess(
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
   return new Promise<RunProcessResult>((resolve, reject) => {
-    const rawMerged: NodeJS.ProcessEnv = {
-      ...sanitizeInheritedPaperclipEnv(process.env),
-      ...opts.env,
-    };
-
-    // Strip Claude Code nesting-guard env vars so spawned `claude` processes
-    // don't refuse to start with "cannot be launched inside another session".
-    // These vars leak in when the Paperclip server itself is started from
-    // within a Claude Code session (e.g. `npx paperclipai run` in a terminal
-    // owned by Claude Code) or when cron inherits a contaminated shell env.
-    //
-    // Also strip the host-managed OAuth token + provider flag injected by
-    // Claude Desktop when its terminal launches Paperclip. That token is
-    // scoped to the desktop session and rejected with HTTP 401
-    // ("Invalid authentication credentials") when used by an out-of-process
-    // child. Removing it lets `claude` fall back to the user's persisted
-    // login (keychain / ~/.claude credentials) and use subscription credits
-    // normally — and lets ANTHROPIC_API_KEY take precedence cleanly when the
-    // user later opts into API-credit billing.
-    const CLAUDE_CODE_NESTING_VARS = [
-      "CLAUDECODE",
-      "CLAUDE_CODE_ENTRYPOINT",
-      "CLAUDE_CODE_SESSION",
-      "CLAUDE_CODE_PARENT_SESSION",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
-    ] as const;
-    for (const key of CLAUDE_CODE_NESTING_VARS) {
-      delete rawMerged[key];
-    }
-
-    const mergedEnv = ensurePathInEnv(rawMerged);
+    const mergedEnv = buildSpawnChildEnv(process.env, opts.env);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv, {
       remoteExecution: opts.remoteExecution ?? null,
       remoteEnv: opts.remoteExecution ? opts.env : null,

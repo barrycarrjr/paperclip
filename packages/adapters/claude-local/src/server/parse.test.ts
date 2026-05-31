@@ -1,8 +1,72 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectClaudeLoginRequired,
   extractClaudeRetryNotBefore,
   isClaudeTransientUpstreamError,
 } from "./parse.js";
+
+describe("detectClaudeLoginRequired", () => {
+  it("classifies the 401 'Invalid authentication credentials' result as auth-required", () => {
+    expect(
+      detectClaudeLoginRequired({
+        parsed: {
+          is_error: true,
+          api_error_status: 401,
+          result: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        },
+        stdout: "",
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(true);
+  });
+
+  it("classifies a bare api_error_status 401 as auth-required even when the prose matches no phrase", () => {
+    expect(
+      detectClaudeLoginRequired({
+        parsed: { is_error: true, api_error_status: 401, result: "Request failed." },
+        stdout: "",
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(true);
+  });
+
+  it("matches both the legacy `claude login` and the new `claude auth login` phrasing", () => {
+    expect(
+      detectClaudeLoginRequired({
+        parsed: null,
+        stdout: "",
+        stderr: "Please log in. Run `claude login` first.",
+      }).requiresLogin,
+    ).toBe(true);
+    expect(
+      detectClaudeLoginRequired({
+        parsed: null,
+        stdout: "Run `claude auth login` to authenticate.",
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(true);
+  });
+
+  it("does not flag a successful run as auth-required", () => {
+    expect(
+      detectClaudeLoginRequired({
+        parsed: { is_error: false, result: "OK" },
+        stdout: "",
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(false);
+  });
+
+  it("does not flag a 429 rate-limit as auth-required", () => {
+    expect(
+      detectClaudeLoginRequired({
+        parsed: { is_error: true, api_error_status: 429, result: "Rate limited." },
+        stdout: "",
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(false);
+  });
+});
 
 describe("isClaudeTransientUpstreamError", () => {
   it("classifies the 'out of extra usage' subscription window failure as transient", () => {

@@ -6,7 +6,7 @@ import {
   parseJson,
 } from "@paperclipai/adapter-utils/server-utils";
 
-const CLAUDE_AUTH_REQUIRED_RE = /(?:not\s+logged\s+in|please\s+log\s+in|please\s+run\s+`?claude\s+login`?|login\s+required|requires\s+login|unauthorized|authentication\s+required)/i;
+const CLAUDE_AUTH_REQUIRED_RE = /(?:not\s+logged\s+in|please\s+log\s+in|(?:please\s+)?run\s+`?claude\s+(?:auth\s+)?login`?|login\s+required|requires\s+login|unauthorized|authentication\s+required|authentication[_\s]error|failed\s+to\s+authenticate|invalid\s+authentication\s+credentials|invalid\s+x-api-key|invalid\s+bearer\s+token|oauth\s+token\s+(?:has\s+)?expired)/i;
 const URL_RE = /(https?:\/\/[^\s'"`<>()[\]{};,!?]+[^\s'"`<>()[\]{};,!.?:]+)/gi;
 
 const CLAUDE_TRANSIENT_UPSTREAM_RE =
@@ -141,7 +141,14 @@ export function detectClaudeLoginRequired(input: {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const requiresLogin = messages.some((line) => CLAUDE_AUTH_REQUIRED_RE.test(line));
+  // A 401 from the CLI is always an authentication failure (expired/revoked
+  // OAuth session, or a missing/invalid API key) — never a rate-limit or a
+  // transient upstream blip. Key off the structured status code in addition to
+  // the prose, because the human-readable wording has drifted across CLI
+  // versions ("Invalid authentication credentials" matches no legacy phrase).
+  const apiErrorStatus = asNumber(input.parsed?.api_error_status, 0);
+  const requiresLogin =
+    apiErrorStatus === 401 || messages.some((line) => CLAUDE_AUTH_REQUIRED_RE.test(line));
   return {
     requiresLogin,
     loginUrl: extractClaudeLoginUrl([input.stdout, input.stderr].join("\n")),

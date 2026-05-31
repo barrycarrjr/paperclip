@@ -146,6 +146,42 @@ export async function readClaudeToken(): Promise<string | null> {
   return null;
 }
 
+async function readClaudeOauthExpiryFromFile(credPath: string): Promise<number | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(credPath, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const oauth = (parsed as Record<string, unknown>)["claudeAiOauth"];
+  if (typeof oauth !== "object" || oauth === null) return null;
+  const exp = (oauth as Record<string, unknown>)["expiresAt"];
+  return typeof exp === "number" && Number.isFinite(exp) ? exp : null;
+}
+
+/**
+ * Read the persisted Claude OAuth token's expiry (epoch ms) from local
+ * credentials and whether it is already past. Returns null when no file-based
+ * credential is present. This reflects only the `claude auth login` (creds-file)
+ * path — a `CLAUDE_CODE_OAUTH_TOKEN` env var / secret is opaque here and must be
+ * checked separately by the caller.
+ */
+export async function readClaudeOauthExpiry(): Promise<{ expiresAt: number; expired: boolean } | null> {
+  const configDir = claudeConfigDir();
+  for (const filename of [".credentials.json", "credentials.json"]) {
+    const exp = await readClaudeOauthExpiryFromFile(path.join(configDir, filename));
+    if (exp != null) return { expiresAt: exp, expired: exp <= Date.now() };
+  }
+  return null;
+}
+
 interface AnthropicUsageWindow {
   utilization?: number | null;
   resets_at?: string | null;

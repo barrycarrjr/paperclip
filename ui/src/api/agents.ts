@@ -47,6 +47,14 @@ export interface AdapterCliLoginResult {
   stderr: string;
 }
 
+export interface AdapterSetupTokenResult {
+  ok: boolean;
+  /** ISO timestamp the captured long-lived token is expected to expire (~1yr). */
+  expiresAt: string | null;
+  /** Whether an existing secret was rotated (true) vs a new one created (false). */
+  rotated?: boolean;
+}
+
 export interface OrgNode {
   id: string;
   name: string;
@@ -226,6 +234,8 @@ export const agentsApi = {
     api.post<AdapterCliLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
   loginWithCodex: (id: string, companyId?: string) =>
     api.post<AdapterCliLoginResult>(agentPath(id, companyId, "/codex-login"), {}),
+  setupTokenForClaude: (id: string, companyId?: string) =>
+    api.post<AdapterSetupTokenResult>(agentPath(id, companyId, "/claude-setup-token"), {}),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
 };

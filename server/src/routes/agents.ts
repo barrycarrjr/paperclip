@@ -69,7 +69,7 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
+import { runClaudeLogin, runClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
 import { runCodexLogin } from "@paperclipai/adapter-codex-local/server";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
@@ -2874,6 +2874,100 @@ export function agentRoutes(
     });
 
     res.json(result);
+  });
+
+  // One-click durable auth for claude_local: runs `claude setup-token` (the
+  // operator approves the browser sign-in on the host), captures the long-lived
+  // token, stores it as a company secret, and binds it into this agent's adapter
+  // env so the change takes effect on the next run with no server restart.
+  router.post("/agents/:id/claude-setup-token", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertBoardCanManageAgentsForCompany(req, agent.companyId);
+    assertCompanyAccess(req, agent.companyId);
+    if (agent.adapterType !== "claude_local") {
+      res.status(400).json({ error: "Setup token is only supported for claude_local agents" });
+      return;
+    }
+
+    const config = asRecord(agent.adapterConfig) ?? {};
+    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
+    const result = await runClaudeSetupToken({
+      runId: `claude-setup-token-${randomUUID()}`,
+      agent: {
+        id: agent.id,
+        companyId: agent.companyId,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        adapterConfig: agent.adapterConfig,
+      },
+      config: runtimeConfig,
+    });
+
+    if (!result.ok || !result.token) {
+      // Never echo the token; surface only redacted diagnostics.
+      res.status(502).json({
+        ok: false,
+        error:
+          "Could not capture a long-lived token from `claude setup-token`. Complete the browser sign-in on the host and try again.",
+        loginUrl: result.loginUrl,
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+      });
+      return;
+    }
+
+    // Store the captured token as a company secret (rotate an existing one of
+    // the same name rather than pile up duplicates), then bind it into the
+    // agent's adapter env alongside a non-secret expiry stamp.
+    const SECRET_NAME = "CLAUDE_CODE_OAUTH_TOKEN";
+    const actor = { userId: req.actor.userId ?? "board", agentId: null };
+    const existing = (await secretsSvc.listWithAgentReferences(agent.companyId)).find(
+      (s) => s.name === SECRET_NAME,
+    );
+    let secretId: string;
+    let rotated = false;
+    if (existing) {
+      await secretsSvc.rotate(existing.id, { value: result.token }, actor);
+      secretId = existing.id;
+      rotated = true;
+    } else {
+      const created = await secretsSvc.create(
+        agent.companyId,
+        {
+          name: SECRET_NAME,
+          provider: "local_encrypted",
+          value: result.token,
+          description: "Long-lived Claude Code OAuth token (claude setup-token) for claude_local agents.",
+        },
+        actor,
+      );
+      secretId = created.id;
+    }
+
+    const env = asRecord(config.env) ? { ...(asRecord(config.env) as Record<string, unknown>) } : {};
+    env.CLAUDE_CODE_OAUTH_TOKEN = { type: "secret_ref", secretId, version: "latest" };
+    if (result.expiresAt) {
+      env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = { type: "plain", value: result.expiresAt };
+    }
+    await svc.update(agent.id, { adapterConfig: { ...config, env } });
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: rotated ? "secret.rotated" : "secret.created",
+      entityType: "secret",
+      entityId: secretId,
+      details: { name: SECRET_NAME, via: "claude_setup_token", agentId: agent.id },
+    });
+
+    res.json({ ok: true, secretId, expiresAt: result.expiresAt, rotated });
   });
 
   router.post("/agents/:id/codex-login", async (req, res) => {

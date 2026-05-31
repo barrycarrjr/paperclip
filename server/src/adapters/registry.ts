@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AdapterAgent, AdapterAuthResult, AdapterAuthStatus } from "@paperclipai/adapter-utils";
 import type { ServerAdapterModule } from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
@@ -33,7 +35,8 @@ import {
   sessionCodec as claudeSessionCodec,
   getQuotaWindows as claudeGetQuotaWindows,
   readClaudeAuthStatus,
-  runClaudeLogin,
+  readClaudeOauthExpiry,
+  runClaudeSetupToken,
 } from "@paperclipai/adapter-claude-local/server";
 import { agentConfigurationDoc as claudeAgentConfigurationDoc, models as claudeModels } from "@paperclipai/adapter-claude-local";
 import {
@@ -166,37 +169,120 @@ function clipOutput(stdout: string, stderr: string): string {
 }
 
 async function claudeGetAuthStatus(): Promise<AdapterAuthStatus | null> {
+  // `claude auth status` reports loggedIn from stored metadata and ignores token
+  // expiry (it says loggedIn:true even after the token has died), so decide the
+  // *real* usable credential here instead of trusting that flag.
+  if ((process.env.ANTHROPIC_API_KEY ?? "").trim().length > 0) {
+    return { loggedIn: true, method: "API key", detail: null };
+  }
+
   const status = await readClaudeAuthStatus();
-  if (!status) return null;
-  const method =
-    status.authMethod === "claude.ai"
-      ? status.subscriptionType
-        ? `Claude (${status.subscriptionType})`
-        : "Claude subscription"
-      : status.authMethod === "apiKey"
-        ? "API key"
-        : status.authMethod ?? null;
-  return {
-    loggedIn: status.loggedIn,
-    method,
-    detail: status.subscriptionType ?? null,
-  };
+  const subscriptionLabel = status?.subscriptionType
+    ? `Claude (${status.subscriptionType})`
+    : "Claude subscription";
+
+  // A long-lived setup-token in the host env (the durable path the Adapters
+  // sign-in button applies) is authoritative when present.
+  if ((process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) {
+    return { loggedIn: true, method: subscriptionLabel, detail: status?.subscriptionType ?? "long-lived token" };
+  }
+
+  // Otherwise fall back to the persisted login (~/.claude credentials), trusting
+  // the token's actual expiry rather than the over-optimistic auth-status flag.
+  const expiry = await readClaudeOauthExpiry();
+  if (!status && !expiry) return null;
+  if (expiry?.expired) {
+    return { loggedIn: false, method: `${subscriptionLabel} — token expired`, detail: "Token expired — re-authenticate" };
+  }
+  const loggedIn = expiry ? !expiry.expired : Boolean(status?.loggedIn);
+  if (status?.authMethod === "apiKey") {
+    return { loggedIn, method: "API key", detail: null };
+  }
+  return { loggedIn, method: subscriptionLabel, detail: status?.subscriptionType ?? null };
+}
+
+const execFileAsync = promisify(execFile);
+
+const CLAUDE_NESTING_MARKERS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION",
+  "CLAUDE_CODE_PARENT_SESSION",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+] as const;
+
+/**
+ * Apply a captured long-lived token host-wide. Immediately for the running
+ * server: set it in process.env and drop the desktop nesting markers so
+ * buildSpawnChildEnv preserves the inherited token (those markers are launch
+ * artifacts, irrelevant to the server's own logic). Persistently on Windows via
+ * the user environment — the token is passed to the child through its env, never
+ * on the command line. (Per-agent "Set up Claude auth" remains the restart-proof
+ * path; this host env var can be re-stripped if the server is relaunched from a
+ * Claude Code / desktop context.)
+ */
+async function persistHostClaudeToken(
+  token: string,
+  expiresAt: string | null,
+): Promise<{ persisted: boolean; note: string }> {
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  if (expiresAt) process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = expiresAt;
+  for (const marker of CLAUDE_NESTING_MARKERS) delete process.env[marker];
+
+  if (process.platform !== "win32") {
+    return {
+      persisted: false,
+      note: "Applied to the running server. Set CLAUDE_CODE_OAUTH_TOKEN in the host environment to persist across restarts.",
+    };
+  }
+  try {
+    await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN',$env:__PCLIP_TOK,'User'); if($env:__PCLIP_EXP){[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN_EXPIRES',$env:__PCLIP_EXP,'User')}",
+      ],
+      { env: { ...process.env, __PCLIP_TOK: token, __PCLIP_EXP: expiresAt ?? "" } },
+    );
+    return { persisted: true, note: "Persisted to the Windows user environment." };
+  } catch (err) {
+    return {
+      persisted: false,
+      note: `Applied to the running server, but could not persist to the user environment: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
 }
 
 async function claudeAuthenticate(): Promise<AdapterAuthResult> {
   try {
-    const result = await runClaudeLogin({
-      runId: `adapter-login-claude-${randomUUID()}`,
+    const result = await runClaudeSetupToken({
+      runId: `adapter-setup-token-claude-${randomUUID()}`,
       agent: instanceLoginAgent("claude_local"),
       config: {},
     });
-    const ok = !result.timedOut && (result.exitCode ?? 0) === 0;
-    return {
-      ok,
-      loginUrl: result.loginUrl ?? null,
-      output: clipOutput(result.stdout, result.stderr),
-      error: ok ? undefined : result.timedOut ? "claude login timed out" : `claude login exited with code ${result.exitCode}`,
-    };
+    if (!result.ok || !result.token) {
+      return {
+        ok: false,
+        loginUrl: result.loginUrl ?? null,
+        output: result.stderr || undefined,
+        error:
+          result.exitCode != null && result.exitCode !== 0
+            ? `claude setup-token exited with code ${result.exitCode}`
+            : "Could not capture a long-lived token. Complete the browser sign-in on the host and try again.",
+      };
+    }
+    const persist = await persistHostClaudeToken(result.token, result.expiresAt);
+    const lines = [
+      "Long-lived token captured and applied host-wide (all claude_local agents).",
+      result.expiresAt ? `Valid until ${result.expiresAt.slice(0, 10)}.` : null,
+      persist.note,
+      'For restart-proof, per-company auth, use "Set up Claude auth" on an agent run instead.',
+    ].filter((line): line is string => Boolean(line));
+    return { ok: true, loginUrl: null, output: lines.join("\n") };
   } catch (err) {
     return {
       ok: false,

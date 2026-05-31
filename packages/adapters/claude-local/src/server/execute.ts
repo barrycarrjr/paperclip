@@ -299,6 +299,87 @@ export async function runClaudeLogin(input: {
   });
 }
 
+// `claude setup-token` prints a long-lived OAuth token of this shape on success.
+const CLAUDE_SETUP_TOKEN_RE = /sk-ant-oat01-[A-Za-z0-9_-]{20,}/;
+const CLAUDE_SETUP_TOKEN_GLOBAL_RE = /sk-ant-oat01-[A-Za-z0-9_-]{20,}/g;
+const SETUP_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000; // setup-token: "valid for 1 year"
+
+/** Extract the first `sk-ant-oat01-…` token from setup-token output, or null. */
+export function extractClaudeSetupToken(text: string): string | null {
+  const match = text.match(CLAUDE_SETUP_TOKEN_RE);
+  return match ? match[0] : null;
+}
+
+/** Replace every setup-token occurrence so it is safe to log or surface. */
+export function redactSetupToken(text: string): string {
+  return text.replace(CLAUDE_SETUP_TOKEN_GLOBAL_RE, "sk-ant-oat01-***REDACTED***");
+}
+
+export interface ClaudeSetupTokenResult {
+  exitCode: number | null;
+  ok: boolean;
+  /** The captured long-lived token. Caller stores it as a secret and MUST NOT log or return it. */
+  token: string | null;
+  /** Best-effort expiry (now + 1 year); setup-token does not emit an exact timestamp. */
+  expiresAt: string | null;
+  loginUrl: string | null;
+  /** stderr with any token occurrences redacted, safe to surface. */
+  stderr: string;
+}
+
+/**
+ * Run `claude setup-token` and capture the long-lived OAuth token it prints.
+ *
+ * The browser sign-in is the one irreducibly-human step (it opens on the host);
+ * everything after — capturing, storing, binding — is automated by the caller.
+ * The token is redacted from any forwarded `onLog` output and returned in-memory
+ * only, so it never lands in run logs.
+ */
+export async function runClaudeSetupToken(input: {
+  runId: string;
+  agent: AdapterExecutionContext["agent"];
+  config: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  authToken?: string;
+  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
+}): Promise<ClaudeSetupTokenResult> {
+  const runtime = await buildClaudeRuntimeConfig({
+    runId: input.runId,
+    agent: input.agent,
+    config: input.config,
+    context: input.context ?? {},
+    authToken: input.authToken,
+  });
+
+  const callerLog = input.onLog;
+  const onLog = callerLog
+    ? async (stream: "stdout" | "stderr", chunk: string) => callerLog(stream, redactSetupToken(chunk))
+    : async () => {};
+
+  // Allow ample time for the interactive browser approval; fall back to 5 min
+  // when the adapter is configured with no timeout (0).
+  const timeoutSec = runtime.timeoutSec > 0 ? runtime.timeoutSec : 300;
+  const proc = await runAdapterExecutionTargetProcess(input.runId, null, runtime.command, ["setup-token"], {
+    cwd: runtime.cwd,
+    env: runtime.env,
+    timeoutSec,
+    graceSec: runtime.graceSec,
+    onLog,
+  });
+
+  const token = extractClaudeSetupToken(`${proc.stdout}\n${proc.stderr}`);
+  const loginMeta = detectClaudeLoginRequired({ parsed: null, stdout: proc.stdout, stderr: proc.stderr });
+
+  return {
+    exitCode: proc.exitCode,
+    ok: Boolean(token) && (proc.exitCode ?? 0) === 0,
+    token,
+    expiresAt: token ? new Date(Date.now() + SETUP_TOKEN_TTL_MS).toISOString() : null,
+    loginUrl: loginMeta.loginUrl,
+    stderr: redactSetupToken(proc.stderr),
+  };
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
   const executionTarget = readAdapterExecutionTarget({
