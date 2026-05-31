@@ -225,8 +225,11 @@ async function persistHostClaudeToken(
   token: string,
   expiresAt: string | null,
 ): Promise<{ persisted: boolean; note: string }> {
+  // Always have a concrete expiry so the health-check's pre-expiry warning works
+  // — fall back to ~1y out if the caller didn't supply one.
+  const expiry = expiresAt ?? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
   process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-  if (expiresAt) process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = expiresAt;
+  process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = expiry;
   for (const marker of CLAUDE_NESTING_MARKERS) delete process.env[marker];
 
   if (process.platform !== "win32") {
@@ -242,9 +245,9 @@ async function persistHostClaudeToken(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN',$env:__PCLIP_TOK,'User'); if($env:__PCLIP_EXP){[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN_EXPIRES',$env:__PCLIP_EXP,'User')}",
+        "[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN',$env:__PCLIP_TOK,'User'); [Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN_EXPIRES',$env:__PCLIP_EXP,'User')",
       ],
-      { env: { ...process.env, __PCLIP_TOK: token, __PCLIP_EXP: expiresAt ?? "" } },
+      { env: { ...process.env, __PCLIP_TOK: token, __PCLIP_EXP: expiry } },
     );
     return { persisted: true, note: "Persisted to the Windows user environment." };
   } catch (err) {

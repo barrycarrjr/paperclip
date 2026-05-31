@@ -45,8 +45,31 @@ import { loadExternalAdapterPackage, getUiParserSource, getOrExtractUiParserSour
 import { logger } from "../middleware/logger.js";
 import { assertBoardOrgAccess, assertInstanceAdmin } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
+import { randomUUID } from "node:crypto";
+import type { AdapterAuthResult } from "@paperclipai/adapter-utils";
 
 const execFileAsync = promisify(execFile);
+
+// Interactive adapter sign-in (e.g. `claude setup-token`) opens a browser and
+// can take a minute or two. We run it as a background job and let the UI poll
+// for status, so the HTTP request never hangs and the dialog can show progress.
+// Jobs are in-memory and short-lived (pruned after they finish).
+type AdapterAuthJob = {
+  id: string;
+  type: string;
+  status: "running" | "ok" | "error";
+  result: AdapterAuthResult | null;
+  error: string | null;
+  startedAt: number;
+};
+const adapterAuthJobs = new Map<string, AdapterAuthJob>();
+const ADAPTER_AUTH_JOB_TTL_MS = 15 * 60_000;
+function pruneAdapterAuthJobs() {
+  const cutoff = Date.now() - ADAPTER_AUTH_JOB_TTL_MS;
+  for (const [id, job] of adapterAuthJobs) {
+    if (job.status !== "running" && job.startedAt < cutoff) adapterAuthJobs.delete(id);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -704,9 +727,11 @@ export function adapterRoutes() {
   });
 
   // ── POST /api/adapters/:type/authenticate ────────────────────────────────
-  // Trigger an interactive re-auth flow for a specific adapter (e.g. spawn
-  // `claude login`). Instance-admin only because it can spawn processes and
-  // modify the host user's credential store.
+  // Start an interactive re-auth flow for an adapter (e.g. spawn
+  // `claude setup-token`). Instance-admin only — it spawns processes and can
+  // modify the host user's credential store. The sign-in opens a browser and
+  // can take a minute or two, so it runs as a background job: this returns a
+  // jobId immediately and the UI polls /adapter-auth-jobs/:jobId for progress.
   router.post("/adapters/:type/authenticate", async (req, res) => {
     assertInstanceAdmin(req);
     const { type } = req.params;
@@ -719,15 +744,43 @@ export function adapterRoutes() {
       res.status(405).json({ supported: false, result: null });
       return;
     }
-    try {
-      const result = await adapter.authenticate();
-      res.json({ supported: true, result });
-    } catch (err) {
-      logger.error({ err, adapterType: type }, "adapter authenticate threw");
-      res.status(500).json({
-        error: err instanceof Error ? err.message : "Authentication failed",
-      });
+    pruneAdapterAuthJobs();
+    const authenticate = adapter.authenticate;
+    const jobId = randomUUID();
+    const job: AdapterAuthJob = {
+      id: jobId,
+      type,
+      status: "running",
+      result: null,
+      error: null,
+      startedAt: Date.now(),
+    };
+    adapterAuthJobs.set(jobId, job);
+    void (async () => {
+      try {
+        const result = await authenticate();
+        job.result = result;
+        job.status = result.ok ? "ok" : "error";
+        if (!result.ok) job.error = result.error ?? "Sign-in failed.";
+      } catch (err) {
+        logger.error({ err, adapterType: type }, "adapter authenticate threw");
+        job.status = "error";
+        job.error = err instanceof Error ? err.message : "Authentication failed";
+      }
+    })();
+    res.status(202).json({ jobId, status: "running", supported: true });
+  });
+
+  // ── GET /api/adapter-auth-jobs/:jobId ────────────────────────────────────
+  // Poll the status of a background adapter sign-in started above.
+  router.get("/adapter-auth-jobs/:jobId", async (req, res) => {
+    assertInstanceAdmin(req);
+    const job = adapterAuthJobs.get(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Auth job not found (it may have expired). Try signing in again." });
+      return;
     }
+    res.json({ status: job.status, result: job.result, error: job.error });
   });
 
   return router;

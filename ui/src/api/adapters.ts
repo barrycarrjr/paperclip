@@ -89,7 +89,17 @@ export const adaptersApi = {
   getAuthStatuses: () =>
     api.get<{ statuses: Record<string, AdapterAuthStatusEntry> }>("/adapters/auth-statuses"),
 
-  /** Trigger an interactive re-auth flow for an adapter (e.g. claude login). */
+  /**
+   * Start an interactive re-auth flow for an adapter (e.g. `claude setup-token`).
+   * Returns a jobId immediately — the sign-in runs in the background (it opens a
+   * browser and can take 1-2 minutes); poll {@link getAuthJob} for completion.
+   */
   authenticate: (type: string) =>
-    api.post<{ supported: boolean; result: AdapterAuthResult | null }>(`/adapters/${type}/authenticate`, {}),
+    api.post<{ jobId: string; status: "running"; supported: boolean }>(`/adapters/${type}/authenticate`, {}),
+
+  /** Poll the status of a background adapter sign-in started by {@link authenticate}. */
+  getAuthJob: (jobId: string) =>
+    api.get<{ status: "running" | "ok" | "error"; result: AdapterAuthResult | null; error: string | null }>(
+      `/adapter-auth-jobs/${jobId}`,
+    ),
 };

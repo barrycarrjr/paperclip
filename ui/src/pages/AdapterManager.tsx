@@ -291,41 +291,56 @@ function ReinstallDialog({
   );
 }
 
+function formatElapsed(totalSec: number): string {
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function AdapterLoginDialog({
   adapterType,
   open,
-  isPending,
+  phase,
   result,
   errorMessage,
+  elapsedSec,
   onClose,
 }: {
   adapterType: string | null;
   open: boolean;
-  isPending: boolean;
+  phase: "starting" | "running" | "ok" | "error";
   result: AdapterAuthResult | null;
   errorMessage: string | null;
+  elapsedSec: number;
   onClose: () => void;
 }) {
+  const busy = phase === "starting" || phase === "running";
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Sign in to {adapterType}</DialogTitle>
           <DialogDescription>
-            Paperclip is starting an interactive sign-in for the{" "}
-            <code className="text-xs bg-muted px-1 py-0.5 rounded">{adapterType}</code> adapter.
-            Complete sign-in in your browser, then close this dialog. Paperclip will pick up the new
-            credentials on the next run.
+            Paperclip runs an interactive sign-in for the{" "}
+            <code className="text-xs bg-muted px-1 py-0.5 rounded">{adapterType}</code> adapter. A
+            browser window opens — approve the sign-in there. This can take a minute or two; keep this
+            dialog open until it confirms.
           </DialogDescription>
         </DialogHeader>
 
         <div className="rounded-md border bg-muted/40 px-4 py-3 text-sm space-y-2 min-h-20">
-          {isPending && (
-            <p className="text-muted-foreground">Starting login… this may take a few seconds.</p>
+          {phase === "starting" && (
+            <p className="text-muted-foreground">Starting sign-in…</p>
           )}
-          {!isPending && result?.loginUrl && (
+          {phase === "running" && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              <span>Waiting for you to approve the sign-in in your browser… ({formatElapsed(elapsedSec)})</span>
+            </div>
+          )}
+          {result?.loginUrl && (
             <div className="space-y-1">
-              <p className="text-foreground">Open this URL in your browser to complete sign-in:</p>
+              <p className="text-foreground">If a browser didn't open, use this URL:</p>
               <a
                 href={result.loginUrl}
                 target="_blank"
@@ -336,26 +351,23 @@ function AdapterLoginDialog({
               </a>
             </div>
           )}
-          {!isPending && result?.ok && !result.loginUrl && (
+          {phase === "ok" && (
             <p className="text-emerald-700 dark:text-emerald-400">Signed in successfully.</p>
           )}
-          {!isPending && result && !result.ok && !result.loginUrl && (
-            <p className="text-destructive">{result.error ?? "Sign-in failed."}</p>
+          {phase === "error" && (
+            <p className="text-destructive">{errorMessage ?? "Sign-in failed."}</p>
           )}
-          {!isPending && errorMessage && !result && (
-            <p className="text-destructive">{errorMessage}</p>
-          )}
-          {!isPending && (result?.output || result?.error) && (
+          {!busy && (result?.output || result?.error) && (
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer">Output</summary>
-              <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px]">{result.output || result.error}</pre>
+              <summary className="cursor-pointer">Details</summary>
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px]">{result?.output || result?.error}</pre>
             </details>
           )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={isPending}>
-            Done
+          <Button variant="outline" onClick={onClose}>
+            {busy ? "Run in background" : "Done"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -375,7 +387,9 @@ export function AdapterManager() {
   const [removeType, setRemoveType] = useState<string | null>(null);
   const [reinstallTarget, setReinstallTarget] = useState<AdapterInfo | null>(null);
   const [signInTarget, setSignInTarget] = useState<string | null>(null);
-  const [signInResult, setSignInResult] = useState<AdapterAuthResult | null>(null);
+  const [signInJobId, setSignInJobId] = useState<string | null>(null);
+  const [signInStartedAt, setSignInStartedAt] = useState<number | null>(null);
+  const [signInClock, setSignInClock] = useState<number>(() => Date.now());
 
   useEffect(() => {
     setBreadcrumbs([
@@ -488,30 +502,79 @@ export function AdapterManager() {
     },
   });
 
-  const signInMutation = useMutation({
+  // Sign-in runs as a background job (it opens a browser and can take 1-2 min):
+  // kick it off, then poll for completion so the dialog never looks hung.
+  const startSignInMutation = useMutation({
     mutationFn: (type: string) => adaptersApi.authenticate(type),
     onSuccess: (data) => {
-      setSignInResult(data.result);
-      queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
-    },
-    onError: () => {
-      setSignInResult(null);
+      setSignInJobId(data.jobId);
+      setSignInStartedAt(Date.now());
     },
   });
 
+  const authJob = useQuery({
+    queryKey: ["adapterAuthJob", signInJobId],
+    queryFn: () => adaptersApi.getAuthJob(signInJobId as string),
+    enabled: signInJobId !== null && signInTarget !== null,
+    refetchInterval: (query) => {
+      const status = (query.state.data as { status?: string } | undefined)?.status;
+      return status === "running" || status === undefined ? 2500 : false;
+    },
+  });
+
+  // Refresh the auth-status badges once a sign-in lands successfully.
+  useEffect(() => {
+    if (authJob.data?.status === "ok") {
+      queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
+    }
+  }, [authJob.data?.status, queryClient]);
+
+  const signInBusy =
+    startSignInMutation.isPending ||
+    (signInJobId !== null && (authJob.data === undefined || authJob.data.status === "running"));
+
+  // Tick an elapsed clock while a sign-in is in flight (drives the dialog timer).
+  useEffect(() => {
+    if (!signInBusy) return;
+    const id = setInterval(() => setSignInClock(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [signInBusy]);
+
   const handleSignIn = (type: string) => {
     setSignInTarget(type);
-    setSignInResult(null);
-    signInMutation.reset();
-    signInMutation.mutate(type);
+    setSignInJobId(null);
+    setSignInStartedAt(Date.now());
+    setSignInClock(Date.now());
+    startSignInMutation.reset();
+    startSignInMutation.mutate(type);
   };
 
   const handleCloseSignIn = () => {
+    // Closing while running is fine — the job keeps going server-side; the badge
+    // refreshes on the next status poll / window focus.
     setSignInTarget(null);
-    setSignInResult(null);
-    signInMutation.reset();
+    setSignInJobId(null);
+    setSignInStartedAt(null);
+    startSignInMutation.reset();
     queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
   };
+
+  const signInPhase: "starting" | "running" | "ok" | "error" = startSignInMutation.isError
+    ? "error"
+    : signInJobId === null
+      ? "starting"
+      : authJob.data?.status === "ok"
+        ? "ok"
+        : authJob.data?.status === "error"
+          ? "error"
+          : "running";
+  const signInElapsed =
+    signInStartedAt !== null ? Math.max(0, Math.floor((signInClock - signInStartedAt) / 1000)) : 0;
+  const signInResult = authJob.data?.result ?? null;
+  const signInErrorMessage =
+    startSignInMutation.error instanceof Error
+      ? startSignInMutation.error.message
+      : authJob.data?.error ?? (authJob.isError ? "Lost track of the sign-in — try again." : null);
 
   const builtinAdapters = (adapters ?? []).filter((a) => a.source === "builtin");
   const externalAdapters = (adapters ?? []).filter((a) => a.source === "external");
@@ -831,11 +894,10 @@ export function AdapterManager() {
       <AdapterLoginDialog
         adapterType={signInTarget}
         open={signInTarget !== null}
-        isPending={signInMutation.isPending}
+        phase={signInPhase}
         result={signInResult}
-        errorMessage={
-          signInMutation.error instanceof Error ? signInMutation.error.message : null
-        }
+        errorMessage={signInErrorMessage}
+        elapsedSec={signInElapsed}
         onClose={handleCloseSignIn}
       />
     </div>
