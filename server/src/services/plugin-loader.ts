@@ -1607,26 +1607,11 @@ export function pluginLoader(
             oldVersion: oldManifest.version,
             newVersion: newManifest.version,
           },
-          "plugin-loader: upgrade introduces new capabilities — requires admin approval",
+          "plugin-loader: upgrade introduces new capabilities — transitioning to upgrade_pending",
         );
-        throw new PluginCapabilityEscalationError({
-          pluginId,
-          previousCapabilities: oldCaps,
-          nextCapabilities: newCaps,
-          escalated,
-        });
-      }
-
-      if (escalated.length > 0 && approved) {
-        log.info(
-          {
-            pluginId,
-            escalated,
-            oldVersion: oldManifest.version,
-            newVersion: newManifest.version,
-          },
-          "plugin-loader: capability escalation acknowledged by operator, proceeding with upgrade",
-        );
+        // We let the upgrade proceed here so that plugin-lifecycle.ts can
+        // transition the plugin to 'upgrade_pending' status, requiring admin
+        // approval via the /enable route to start the new worker.
       }
 
       // 3a. For local-path upgrades, copy the freshly-rebuilt artifacts into

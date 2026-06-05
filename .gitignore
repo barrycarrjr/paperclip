@@ -26,6 +26,18 @@ server/check-*.mjs
 server/seed-*.mjs
 packages/db/seed-*.mjs
 
+# Operator-specific seed/setup/debug scripts — contain real portfolio
+# company names, infra, and local paths. Keep local, never commit.
+/upgrade-email-tools.ts
+/server/upgrade-email-tools.ts
+/server/scripts/add-agents.ts
+/server/scripts/add-ceos.ts
+/server/scripts/add-skills.ts
+/server/scripts/run-setup.ts
+/server/scripts/inspect-bz.ts
+# Personal browser shortcuts dropped into the launcher folder
+/scripts/launchers/windows/*.url
+
 # npm publish build artifacts
 cli/package.dev.json
 
