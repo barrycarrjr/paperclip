@@ -733,8 +733,11 @@ function ThreadCard({ thread }: { thread: HSThread }) {
           </span>
         )}
       </div>
+      {/* Email HTML is authored for a white background. Render it as a light
+          island (white bg, dark text, forced light color-scheme) so the app's
+          dark theme doesn't leave the body text washed-out and unreadable. */}
       <div
-        className="text-xs whitespace-pre-wrap break-words"
+        className="rounded bg-white text-zinc-900 [color-scheme:light] p-2 text-xs whitespace-pre-wrap break-words overflow-x-auto"
         dangerouslySetInnerHTML={renderThreadBody(body)}
       />
     </div>

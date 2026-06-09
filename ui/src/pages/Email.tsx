@@ -1985,6 +1985,10 @@ export function Email() {
                       key={fullMessage.uid}
                       srcDoc={fullMessage.html}
                       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                      // Email HTML is authored for a white background. Force a light
+                      // color-scheme so the app's dark theme doesn't leak in and flip
+                      // unstyled text to near-white (invisible on the white bg).
+                      style={{ colorScheme: "light" }}
                       className="flex-1 w-full border-0 bg-white"
                       title="Email body"
                     />
