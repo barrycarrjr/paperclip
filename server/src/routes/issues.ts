@@ -64,6 +64,10 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import {
+  PORTFOLIO_DIRECTIVE_ORIGIN_KIND,
+  portfolioDirectiveService,
+} from "../services/portfolio-directive.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
 import { environmentService } from "../services/environments.js";
@@ -1000,6 +1004,144 @@ export function issueRoutes(
     }
 
     res.json({ issues: allIssues, companies: targetCompanies });
+  });
+
+  // Portfolio Directives — the read side of the HQ "conductor". Groups every
+  // `portfolio_directive`-tagged CEO issue across companies by its shared
+  // originId (the directive id) so the board can watch a single intent cascade
+  // through the portfolio. HQ-only, read-only, same access rule as
+  // portfolio-issues.
+  router.get("/companies/:companyId/portfolio-directives", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = serviceIndex.companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const allCompanies = await companySvc.list();
+    const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    const companyById = new Map(targetCompanies.map((c) => [c.id, c]));
+
+    const issueArrays = await Promise.all(
+      targetCompanies.map((company) =>
+        svc.list(company.id, {
+          originKind: PORTFOLIO_DIRECTIVE_ORIGIN_KIND,
+          limit: clampIssueListLimit(ISSUE_LIST_MAX_LIMIT),
+        }),
+      ),
+    );
+
+    type DirectiveItem = {
+      companyId: string;
+      companyName: string;
+      issueId: string;
+      identifier: string | null;
+      status: string;
+      assigneeAgentId: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    };
+    const byDirective = new Map<string, { directiveId: string; title: string; items: DirectiveItem[] }>();
+    for (const issue of issueArrays.flat()) {
+      if (!issue.originId) continue;
+      let group = byDirective.get(issue.originId);
+      if (!group) {
+        group = { directiveId: issue.originId, title: issue.title, items: [] };
+        byDirective.set(issue.originId, group);
+      }
+      group.items.push({
+        companyId: issue.companyId,
+        companyName: companyById.get(issue.companyId)?.name ?? issue.companyId,
+        issueId: issue.id,
+        identifier: issue.identifier ?? null,
+        status: issue.status,
+        assigneeAgentId: issue.assigneeAgentId ?? null,
+        createdAt: issue.createdAt,
+        updatedAt: issue.updatedAt,
+      });
+    }
+
+    const directives = Array.from(byDirective.values())
+      .map((group) => {
+        const createdAt = group.items.reduce(
+          (min, it) => (it.createdAt < min ? it.createdAt : min),
+          group.items[0]!.createdAt,
+        );
+        const statusCounts: Record<string, number> = {};
+        for (const it of group.items) {
+          statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1;
+        }
+        return { ...group, createdAt, statusCounts, companyCount: group.items.length };
+      })
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+    res.json({ directives, companies: targetCompanies });
+  });
+
+  // Broadcast a directive straight from the HQ Directives page (the one-tap
+  // path — same fan-out the `broadcast_directive` Clippy tool uses, but
+  // callable without a chat turn). Board-only, HQ-only.
+  const broadcastDirectiveSchema = z.object({
+    intent: z.string().trim().min(1).max(4000),
+    title: z.string().trim().max(200).optional(),
+    companyIds: z.array(z.string()).max(500).optional(),
+    includePortfolioRoot: z.boolean().optional(),
+  });
+  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    assertBoard(req);
+
+    const companySvc = serviceIndex.companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+    const isPortfolioRootAccess =
+      req.actor.source === "local_implicit" ||
+      req.actor.isInstanceAdmin === true ||
+      req.actor.isPortfolioRootUserAdmin === true;
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const parsed = broadcastDirectiveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    const result = await portfolioDirectiveService(db).broadcast({
+      actor: {
+        userId: req.actor.userId ?? "board",
+        isInstanceAdmin: req.actor.isInstanceAdmin === true,
+        companyIds: req.actor.companyIds ?? [],
+      },
+      intent: parsed.data.intent,
+      title: parsed.data.title,
+      companyIds: parsed.data.companyIds,
+      includePortfolioRoot: parsed.data.includePortfolioRoot,
+    });
+    res.status(201).json(result);
   });
 
   router.get("/companies/:companyId/labels", async (req, res) => {

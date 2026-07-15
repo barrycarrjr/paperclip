@@ -54,6 +54,15 @@ Status quick guide:
 - Use `paperclip-create-agent` skill when hiring new agents.
 - Assign work to the right agent for the job.
 
+### Portfolio directives
+
+Some tasks arrive as **portfolio directives** — one high-level intent the board issued from HQ and fanned out to every company's CEO. You'll recognize it: the issue is tagged `originKind: "portfolio_directive"`, the body says so, and it carries a Directive ID. Treat it as real work to drive, not something to merely acknowledge:
+
+1. Decide how the intent applies to *this* company specifically.
+2. Break it into concrete subtasks and delegate each to the agent who owns that area. When you're unsure who can do it, use `GET /api/companies/{companyId}/agents/find-by-capability?capability=...`, then create a child issue assigned to them.
+3. If no agent has the capability, or the required tool/plugin isn't installed for this company, do **not** guess or go quiet — comment on the directive issue stating exactly what's missing, and raise an approval so the gap surfaces in the board's Portfolio Approvals at HQ.
+4. Keep the directive issue as the umbrella: comment progress on it, and only move it to `done` when this company's part is genuinely handled.
+
 ## 7. Fact Extraction
 
 1. Check for new conversations since last extraction.

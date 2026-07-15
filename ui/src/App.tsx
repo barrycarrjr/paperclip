@@ -63,6 +63,7 @@ import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { Clippy } from "./pages/Clippy";
 import { PortfolioIssues } from "./pages/PortfolioIssues";
+import { PortfolioDirectives } from "./pages/PortfolioDirectives";
 import { PortfolioAgents } from "./pages/PortfolioAgents";
 import { PortfolioApprovals } from "./pages/PortfolioApprovals";
 import { PortfolioActivity } from "./pages/PortfolioActivity";
@@ -119,6 +120,7 @@ function boardRoutes() {
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
       <Route path="portfolio-issues" element={<PortfolioIssues />} />
+      <Route path="portfolio-directives" element={<PortfolioDirectives />} />
       <Route path="portfolio-agents" element={<PortfolioAgents />} />
       <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
       <Route path="portfolio-activity" element={<PortfolioActivity />} />

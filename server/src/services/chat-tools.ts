@@ -14,6 +14,7 @@ import {
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
+import { portfolioDirectiveService } from "./portfolio-directive.js";
 
 export type ToolActor = {
   userId: string;
@@ -404,6 +405,65 @@ const addCommentTool: ChatToolDefinition<{ issueId: string; body: string }> = {
   },
 };
 
+const broadcastDirectiveTool: ChatToolDefinition<{
+  intent: string;
+  title?: string;
+  companyIds?: string[];
+  includePortfolioRoot?: boolean;
+}> = {
+  name: "broadcast_directive",
+  description:
+    "Fan out ONE high-level, cross-company intent to each company's CEO agent. For every targeted company this creates a task assigned to that company's CEO (who then decomposes it and delegates to the right sub-agent) and wakes them to start. Use this — not repeated create_issue calls — when the board expresses something they want done across all or several companies (e.g. 'get every company's Google reviews replied to', 'chase all overdue invoices'). Mutating — requires permission. Returns which CEOs it reached and which companies were skipped (and why).",
+  mutating: true,
+  inputSchema: z.object({
+    intent: z.string().min(1).max(4000),
+    title: z.string().max(200).optional(),
+    companyIds: z.array(z.string()).max(500).optional(),
+    includePortfolioRoot: z.boolean().optional(),
+  }),
+  spec: {
+    name: "broadcast_directive",
+    description:
+      "Fan out one high-level intent to each company's CEO as an assigned, woken task; each CEO decomposes and delegates. Prefer this over creating issues one-by-one for portfolio-wide intents.",
+    input_schema: {
+      type: "object",
+      properties: {
+        intent: {
+          type: "string",
+          description:
+            "The high-level directive, in plain language, as the operator expressed it (e.g. 'Acknowledge and reply to every company's Google reviews').",
+        },
+        title: {
+          type: "string",
+          description: "Optional short task title. Derived from intent when omitted.",
+        },
+        companyIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Restrict the fan-out to these company ids. Omit to target every active operating company the board can write to.",
+        },
+        includePortfolioRoot: {
+          type: "boolean",
+          description:
+            "Optional. Include the HQ (portfolio-root) company as a target. Defaults to false — HQ is the cockpit, not an operating company.",
+        },
+      },
+      required: ["intent"],
+    },
+  },
+  async handler({ intent, title, companyIds, includePortfolioRoot }, ctx) {
+    const svc = portfolioDirectiveService(ctx.db);
+    return svc.broadcast({
+      actor: ctx.actor,
+      intent,
+      title,
+      companyIds,
+      includePortfolioRoot,
+    });
+  },
+};
+
 const BLOCKED_HOST_PATTERNS = [/^localhost$/i, /\.local$/i, /\.internal$/i, /\.lan$/i];
 
 function isPrivateIp(ip: string): boolean {
@@ -549,6 +609,7 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   listIssuesTool,
   getIssueTool,
   createIssueTool,
+  broadcastDirectiveTool,
   addCommentTool,
   webFetchTool,
 ] as ChatToolDefinition[];

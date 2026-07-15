@@ -25,6 +25,41 @@ export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
 };
 
+export interface PortfolioDirectiveItem {
+  companyId: string;
+  companyName: string;
+  issueId: string;
+  identifier: string | null;
+  status: string;
+  assigneeAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PortfolioDirective {
+  directiveId: string;
+  title: string;
+  createdAt: string;
+  companyCount: number;
+  statusCounts: Record<string, number>;
+  items: PortfolioDirectiveItem[];
+}
+
+export interface DirectiveBroadcastResult {
+  directiveId: string;
+  intent: string;
+  title: string;
+  dispatched: Array<{
+    companyId: string;
+    companyName: string;
+    ceoAgentId: string;
+    ceoAgentName: string;
+    issueId: string;
+    issueIdentifier: string | null;
+  }>;
+  skipped: Array<{ companyId: string; companyName: string; reason: string }>;
+}
+
 export const issuesApi = {
   list: (
     companyId: string,
@@ -94,6 +129,18 @@ export const issuesApi = {
       `/companies/${hqCompanyId}/portfolio-issues${qs ? `?${qs}` : ""}`,
     );
   },
+  listPortfolioDirectives: (hqCompanyId: string) =>
+    api.get<{ directives: PortfolioDirective[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-directives`,
+    ),
+  broadcastDirective: (
+    hqCompanyId: string,
+    body: { intent: string; title?: string; companyIds?: string[]; includePortfolioRoot?: boolean },
+  ) =>
+    api.post<DirectiveBroadcastResult>(
+      `/companies/${hqCompanyId}/portfolio-directives`,
+      body,
+    ),
   listLabels: (companyId: string) => api.get<IssueLabel[]>(`/companies/${companyId}/labels`),
   createLabel: (companyId: string, data: { name: string; color: string }) =>
     api.post<IssueLabel>(`/companies/${companyId}/labels`, data),
