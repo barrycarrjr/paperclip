@@ -159,8 +159,14 @@ struct PendingResponse {
 struct NotificationDto {
     id: String,
     title: String,
+    // Reminders created without a body serialize as `"body": null`. serde's
+    // `#[serde(default)]` only fills a MISSING field — a present `null` still
+    // fails to deserialize into a plain `String` and would poison the whole
+    // batch parse (one null-body row => the entire poll returns nothing, so no
+    // toast and no ack ever fire). Model it as Option and flatten null/absent
+    // to an empty string at the mapping step.
     #[serde(default)]
-    body: String,
+    body: Option<String>,
     #[serde(default)]
     url: Option<String>,
 }
@@ -373,10 +379,19 @@ fn run_tray(paths: Paths, config: Config) {
     // new one to the event loop as a toast request, then ack them so the server
     // never hands them back. Error-swallowing throughout (no unwrap/expect) so a
     // transient network or JSON failure can never abort the process.
-    let base = config.url.clone();
+    // The internal desktop-notification endpoints are LOOPBACK-ONLY by design
+    // (server routes/internal-notifications.ts trusts a tokenless request only
+    // when it arrives on 127.0.0.1/::1). Always poll them over loopback using
+    // the configured port — NOT `config.url`, which may be a user-facing LAN
+    // hostname (e.g. "paperclip.local" → 192.168.27.50). Hitting the endpoint
+    // via a non-loopback address returns 401, so the tray would never show a
+    // toast and the queue would pile up forever. `config.url` is still used for
+    // opening the browser and as the toast deep-link target below.
+    let internal_port = config.port;
     std::thread::spawn(move || {
-        let pending_url = join_url(&base, "api/internal/desktop-notifications/pending?limit=20");
-        let ack_url = join_url(&base, "api/internal/desktop-notifications/ack");
+        let loopback_base = format!("http://127.0.0.1:{}/", internal_port);
+        let pending_url = join_url(&loopback_base, "api/internal/desktop-notifications/pending?limit=20");
+        let ack_url = join_url(&loopback_base, "api/internal/desktop-notifications/ack");
         let mut shown: std::collections::HashSet<String> = std::collections::HashSet::new();
         loop {
             if let Some(items) = poll_pending(&pending_url) {
@@ -658,7 +673,7 @@ fn poll_pending(url: &str) -> Option<Vec<DesktopNotification>> {
             .map(|n| DesktopNotification {
                 id: n.id,
                 title: n.title,
-                body: n.body,
+                body: n.body.unwrap_or_default(),
                 url: n.url,
             })
             .collect(),
