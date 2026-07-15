@@ -14,6 +14,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "portfolio-brief",
   "portfolio-receipts",
   "portfolio-issues",
+  "portfolio-directives",
   "portfolio-agents",
   "portfolio-approvals",
   "portfolio-activity",

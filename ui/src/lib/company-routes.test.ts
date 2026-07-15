@@ -21,6 +21,15 @@ describe("company routes", () => {
     );
   });
 
+  it("treats /portfolio-directives as a board page, not a company prefix", () => {
+    // Regression: missing from BOARD_ROUTE_ROOTS made the HQ nav link resolve
+    // to /portfolio-directives (unprefixed), which the company gate then read
+    // as a company slug → "Company not found".
+    expect(isBoardPathWithoutPrefix("/portfolio-directives")).toBe(true);
+    expect(extractCompanyPrefixFromPath("/portfolio-directives")).toBeNull();
+    expect(applyCompanyPrefix("/portfolio-directives", "HQ")).toBe("/HQ/portfolio-directives");
+  });
+
   it("does not mistake the /clippy-popup pop-out route for a company slug", () => {
     expect(extractCompanyPrefixFromPath("/clippy-popup")).toBeNull();
     // Once Link/NavLink resolution sees no active prefix in the URL, it must

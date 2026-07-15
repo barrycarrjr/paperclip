@@ -28,6 +28,9 @@ import {
   History,
   SquarePen,
   Plus,
+  Globe2,
+  Megaphone,
+  Repeat,
 } from "lucide-react";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
@@ -36,7 +39,8 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
   const { openNewIssue, openNewAgent } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
@@ -175,6 +179,38 @@ export function CommandPalette() {
             Activity
           </CommandItem>
         </CommandGroup>
+
+        {isPortfolioRoot && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Portfolio">
+              <CommandItem value="portfolio brief" onSelect={() => go("/portfolio-brief")}>
+                <Sunrise className="mr-2 h-4 w-4" />
+                Portfolio Brief
+              </CommandItem>
+              <CommandItem value="portfolio issues" onSelect={() => go("/portfolio-issues")}>
+                <Globe2 className="mr-2 h-4 w-4" />
+                Portfolio Issues
+              </CommandItem>
+              <CommandItem value="portfolio directives" onSelect={() => go("/portfolio-directives")}>
+                <Megaphone className="mr-2 h-4 w-4" />
+                Portfolio Directives
+              </CommandItem>
+              <CommandItem value="portfolio agents" onSelect={() => go("/portfolio-agents")}>
+                <Bot className="mr-2 h-4 w-4" />
+                Portfolio Agents
+              </CommandItem>
+              <CommandItem value="portfolio routines" onSelect={() => go("/portfolio-routines")}>
+                <Repeat className="mr-2 h-4 w-4" />
+                Portfolio Routines
+              </CommandItem>
+              <CommandItem value="portfolio costs" onSelect={() => go("/portfolio-costs")}>
+                <DollarSign className="mr-2 h-4 w-4" />
+                Portfolio Costs
+              </CommandItem>
+            </CommandGroup>
+          </>
+        )}
 
         {visibleIssues.length > 0 && (
           <>
