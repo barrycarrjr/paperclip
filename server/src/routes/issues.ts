@@ -64,7 +64,10 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
-import { PORTFOLIO_DIRECTIVE_ORIGIN_KIND } from "../services/portfolio-directive.js";
+import {
+  PORTFOLIO_DIRECTIVE_ORIGIN_KIND,
+  portfolioDirectiveService,
+} from "../services/portfolio-directive.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
 import { environmentService } from "../services/environments.js";
@@ -1090,6 +1093,55 @@ export function issueRoutes(
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
     res.json({ directives, companies: targetCompanies });
+  });
+
+  // Broadcast a directive straight from the HQ Directives page (the one-tap
+  // path — same fan-out the `broadcast_directive` Clippy tool uses, but
+  // callable without a chat turn). Board-only, HQ-only.
+  const broadcastDirectiveSchema = z.object({
+    intent: z.string().trim().min(1).max(4000),
+    title: z.string().trim().max(200).optional(),
+    companyIds: z.array(z.string()).max(500).optional(),
+    includePortfolioRoot: z.boolean().optional(),
+  });
+  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    assertBoard(req);
+
+    const companySvc = serviceIndex.companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+    const isPortfolioRootAccess =
+      req.actor.source === "local_implicit" ||
+      req.actor.isInstanceAdmin === true ||
+      req.actor.isPortfolioRootUserAdmin === true;
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const parsed = broadcastDirectiveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    const result = await portfolioDirectiveService(db).broadcast({
+      actor: {
+        userId: req.actor.userId ?? "board",
+        isInstanceAdmin: req.actor.isInstanceAdmin === true,
+        companyIds: req.actor.companyIds ?? [],
+      },
+      intent: parsed.data.intent,
+      title: parsed.data.title,
+      companyIds: parsed.data.companyIds,
+      includePortfolioRoot: parsed.data.includePortfolioRoot,
+    });
+    res.status(201).json(result);
   });
 
   router.get("/companies/:companyId/labels", async (req, res) => {
