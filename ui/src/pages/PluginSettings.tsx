@@ -662,41 +662,51 @@ interface PluginConfigFormProps {
 function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginStatus, supportsConfigTest, secrets }: PluginConfigFormProps) {
   const queryClient = useQueryClient();
 
-  // Form values: start with saved values, fall back to schema defaults
-  const [values, setValues] = useState<Record<string, unknown>>(() => ({
-    ...getDefaultValues(schema),
-    ...(initialValues ?? {}),
-  }));
+  // The canonical saved config merged with schema defaults. Recomputed when the
+  // saved config (or schema) changes. The query hands us a fresh object on every
+  // refetch even when the content is identical, so we compare by serialized
+  // content (below) rather than reference to avoid needless churn.
+  const savedSnapshot = useMemo(
+    () => ({ ...getDefaultValues(schema), ...(initialValues ?? {}) }),
+    [schema, initialValues],
+  );
 
-  // Sync when saved config loads asynchronously — only on first load so we
-  // don't overwrite in-progress user edits if the query refetches (e.g. on
-  // window focus).
-  const hasHydratedRef = useRef(false);
+  // Form values: start from the saved config, fall back to schema defaults.
+  const [values, setValues] = useState<Record<string, unknown>>(savedSnapshot);
+
+  // Re-sync the form from the saved config whenever it actually changes — but
+  // only when the user has no unsaved edits, so a background refetch (window
+  // focus / poll) can't clobber in-progress changes. This replaces a one-time
+  // hydration guard whose failure mode left `values` stale relative to the
+  // saved config: validation reads `values`, so a stale snapshot caused
+  // false-positive "required field is empty" errors even though the input
+  // visibly showed the saved value.
+  const lastSyncedRef = useRef<string>(JSON.stringify(savedSnapshot));
   useEffect(() => {
-    if (initialValues && !hasHydratedRef.current) {
-      hasHydratedRef.current = true;
-      setValues({
-        ...getDefaultValues(schema),
-        ...initialValues,
-      });
-    }
-  }, [initialValues, schema]);
+    const savedStr = JSON.stringify(savedSnapshot);
+    if (savedStr === lastSyncedRef.current) return; // saved config unchanged
+    const hasUnsavedEdits = JSON.stringify(values) !== lastSyncedRef.current;
+    if (hasUnsavedEdits) return; // preserve in-progress edits
+    lastSyncedRef.current = savedStr;
+    setValues(savedSnapshot);
+  }, [savedSnapshot, values]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saveMessage, setSaveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [testResult, setTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Dirty tracking: compare against initial values
-  const isDirty = JSON.stringify(values) !== JSON.stringify({
-    ...getDefaultValues(schema),
-    ...(initialValues ?? {}),
-  });
+  // Dirty tracking: compare against the saved config snapshot.
+  const isDirty = JSON.stringify(values) !== JSON.stringify(savedSnapshot);
 
   // Save mutation
   const saveMutation = useMutation({
     mutationFn: (configJson: Record<string, unknown>) =>
       pluginsApi.saveConfig(pluginId, configJson),
-    onSuccess: () => {
+    onSuccess: (_data, configJson) => {
+      // Adopt what we just saved as the synced baseline so the refetch the
+      // invalidation triggers isn't mistaken for an external change with
+      // unsaved edits on top.
+      lastSyncedRef.current = JSON.stringify({ ...getDefaultValues(schema), ...configJson });
       setSaveMessage({ type: "success", text: "Configuration saved." });
       setTestResult(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.plugins.config(pluginId) });
