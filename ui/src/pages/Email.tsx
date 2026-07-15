@@ -25,6 +25,8 @@ import {
   AlignLeft,
   RefreshCw,
   Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +73,10 @@ import type { IssueDocument } from "@paperclipai/shared";
 const TRIAGE_FOLDER = "_paperclip/triage";
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
+
+// Width of the mailbox column's thin rail when collapsed (px). Wide enough for
+// one icon-sized button; kept in sync with the `w-11` rail below.
+const LEFT_PANE_COLLAPSED_WIDTH = 44;
 
 // Draft persistence — keep operator's typed text across page refreshes and
 // component remounts. Same pattern used by CommentThread / IssueChatThread.
@@ -435,25 +441,43 @@ export function Email() {
   const [leftPaneWidth, setLeftPaneWidth] = useState(() => {
     try { return parseInt(localStorage.getItem("email-leftPaneWidth") || "176", 10); } catch { return 176; }
   });
-  const leftPaneDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  // Collapse the whole mailbox/folders column down to a thin rail. Persisted
+  // separately from width so the operator's portrait-monitor layout survives a
+  // refresh — same treatment the width already gets.
+  const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(() => {
+    try { return localStorage.getItem("email-leftPaneCollapsed") === "true"; } catch { return false; }
+  });
+  const setLeftPaneCollapsedPersist = (v: boolean) => {
+    setLeftPaneCollapsed(v);
+    try { localStorage.setItem("email-leftPaneCollapsed", String(v)); } catch {}
+  };
   const startLeftPaneDrag = (e: React.MouseEvent) => {
-    leftPaneDragRef.current = { startX: e.clientX, startWidth: leftPaneWidth };
+    const startX = e.clientX;
+    // When collapsed, grow from the rail width so the edge tracks the cursor
+    // 1:1 as the column pops open on the first real drag movement.
+    const startWidth = leftPaneCollapsed ? LEFT_PANE_COLLAPSED_WIDTH : leftPaneWidth;
+    let moved = false;
+    let lastWidth = startWidth;
     const onMove = (ev: MouseEvent) => {
-      if (!leftPaneDragRef.current) return;
-      const next = Math.max(120, Math.min(400, leftPaneDragRef.current.startWidth + ev.clientX - leftPaneDragRef.current.startX));
-      setLeftPaneWidth(next);
+      const delta = ev.clientX - startX;
+      // Ignore sub-pixel jitter so a plain click (or the click pair behind a
+      // double-click) doesn't count as a resize and doesn't expand the column.
+      if (!moved && Math.abs(delta) < 3) return;
+      if (!moved) {
+        moved = true;
+        if (leftPaneCollapsed) setLeftPaneCollapsed(false);
+      }
+      lastWidth = Math.max(120, Math.min(400, startWidth + delta));
+      setLeftPaneWidth(lastWidth);
     };
-    let lastWidth = leftPaneWidth;
-    const onMove2 = (ev: MouseEvent) => {
-      if (!leftPaneDragRef.current) return;
-      lastWidth = Math.max(120, Math.min(400, leftPaneDragRef.current.startWidth + ev.clientX - leftPaneDragRef.current.startX));
-    };
-    window.addEventListener("mousemove", onMove2);
     const onUp = () => {
-      leftPaneDragRef.current = null;
-      try { localStorage.setItem("email-leftPaneWidth", String(lastWidth)); } catch {}
+      if (moved) {
+        try {
+          localStorage.setItem("email-leftPaneWidth", String(lastWidth));
+          localStorage.setItem("email-leftPaneCollapsed", "false");
+        } catch {}
+      }
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mousemove", onMove2);
       window.removeEventListener("mouseup", onUp);
     };
     window.addEventListener("mousemove", onMove);
@@ -1105,10 +1129,44 @@ export function Email() {
 
   // ── Shared: left pane ─────────────────────────────────────────────────────
 
-  const leftPane = (
+  const leftPane = leftPaneCollapsed ? (
+    <div
+      className="shrink-0 border-r border-border flex flex-col items-center bg-sidebar py-2"
+      style={{ width: LEFT_PANE_COLLAPSED_WIDTH }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setLeftPaneCollapsedPersist(false)}
+            aria-label="Expand mailbox column"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="right">Show mailboxes &amp; folders</TooltipContent>
+      </Tooltip>
+    </div>
+  ) : (
     <div className="shrink-0 border-r border-border flex flex-col bg-sidebar" style={{ width: leftPaneWidth }}>
-      <div className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-        Mailboxes
+      <div className="flex items-center justify-between pl-3 pr-1 py-2">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Mailboxes
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setLeftPaneCollapsedPersist(true)}
+              aria-label="Collapse mailbox column"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Collapse column</TooltipContent>
+        </Tooltip>
       </div>
       <ScrollArea className="flex-1">
         {mailboxesLoading ? (
@@ -1731,10 +1789,16 @@ export function Email() {
     <div className="flex h-full overflow-hidden">
       {leftPane}
 
-      {/* Drag handle for left pane */}
+      {/* Drag handle for left pane — drag to resize, double-click to collapse/expand */}
       <div
         className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
         onMouseDown={startLeftPaneDrag}
+        onDoubleClick={() => setLeftPaneCollapsedPersist(!leftPaneCollapsed)}
+        title={
+          leftPaneCollapsed
+            ? "Drag or double-click to expand"
+            : "Drag to resize · double-click to collapse"
+        }
       />
 
       {selectedUid ? (
