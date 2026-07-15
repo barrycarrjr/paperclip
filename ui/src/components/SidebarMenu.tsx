@@ -13,6 +13,7 @@ import {
   Bot,
   Sunrise,
   FolderKanban,
+  Megaphone,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@paperclipai/shared";
@@ -92,6 +93,13 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
                 label: "Portfolio Issues",
                 icon: Globe2,
                 info: "A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies.",
+              },
+              {
+                id: "portfolio-directives",
+                to: "/portfolio-directives",
+                label: "Portfolio Directives",
+                icon: Megaphone,
+                info: "Directives you've broadcast from HQ — one high-level intent fanned out to each company's CEO. Watch each cascade land and track how far each company has taken it.",
               },
               {
                 id: "portfolio-agents",

@@ -79,7 +79,9 @@ export interface BroadcastDirectiveInput {
 const TERMINAL_AGENT_STATUSES = ["terminated", "archived", "disabled", "suspended"];
 // Company states that shouldn't receive directives.
 const INACTIVE_COMPANY_STATUSES = ["archived", "deleted", "suspended"];
-const ORIGIN_KIND = "portfolio_directive";
+/** originKind tag shared by every issue in a directive fan-out. */
+export const PORTFOLIO_DIRECTIVE_ORIGIN_KIND = "portfolio_directive";
+const ORIGIN_KIND = PORTFOLIO_DIRECTIVE_ORIGIN_KIND;
 
 const ORDINARY_TITLE_MAX = 120;
 
