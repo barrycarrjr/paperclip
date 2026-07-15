@@ -292,7 +292,7 @@ export async function createApp(
   // alongside External MCP infrastructure but with the role inverted (we
   // host an MCP server here; external-mcp-server-manager.ts is the client
   // counterpart).
-  const pluginMcpBridge = createPluginMcpBridge({ pluginToolDispatcher: toolDispatcher });
+  const pluginMcpBridge = createPluginMcpBridge({ pluginToolDispatcher: toolDispatcher, db });
   setPluginMcpBridge(pluginMcpBridge);
   api.use(internalMcpRoutes());
 

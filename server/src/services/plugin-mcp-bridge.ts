@@ -41,12 +41,18 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { Db } from "@paperclipai/db";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
 import type {
   PluginToolDispatcher,
   AgentToolDescriptor,
 } from "./plugin-tool-dispatcher.js";
-import type { ToolActor } from "./chat-tools.js";
+import {
+  executeChatTool,
+  listChatToolSpecs,
+  type ToolActor,
+  type ToolContext,
+} from "./chat-tools.js";
 import { logger } from "../middleware/logger.js";
 
 // ─── Token store ──────────────────────────────────────────────────────
@@ -148,6 +154,14 @@ export interface PluginMcpBridge {
 
 export interface CreatePluginMcpBridgeOptions {
   pluginToolDispatcher: PluginToolDispatcher;
+  /**
+   * Database handle used to execute Clippy's built-in chat tools
+   * (create_reminder, create_issue, broadcast_directive, list_companies,
+   * etc.) for adapter-mode sessions. Without this, adapter-mode Clippy
+   * (claude_local) would only see plugin tools over the bridge and lose
+   * every built-in tool the native provider path exposes.
+   */
+  db: Db;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────
@@ -155,7 +169,7 @@ export interface CreatePluginMcpBridgeOptions {
 export function createPluginMcpBridge(
   options: CreatePluginMcpBridgeOptions,
 ): PluginMcpBridge {
-  const { pluginToolDispatcher } = options;
+  const { pluginToolDispatcher, db } = options;
   const log = logger.child({ service: "plugin-mcp-bridge" });
   let totalMinted = 0;
   let totalRevoked = 0;
@@ -238,6 +252,18 @@ export function createPluginMcpBridge(
       // standard assertCompanyAccess pattern. So we expose all registered
       // plugin tools here and let the worker reject if appropriate.
       server.setRequestHandler(ListToolsRequestSchema, async () => {
+        // Built-in Clippy chat tools (create_reminder, create_issue,
+        // broadcast_directive, list_companies, …). These live in the
+        // native provider's tool list too; exposing them here gives
+        // adapter-mode Clippy (claude_local) the same built-in surface.
+        // Their names never contain "__", so they never collide with the
+        // projected plugin names below and partition cleanly at call time.
+        const builtInTools = listChatToolSpecs().map((s) => ({
+          name: s.name,
+          description: s.description,
+          inputSchema: s.input_schema,
+        }));
+
         let descriptors: AgentToolDescriptor[] = [];
         try {
           descriptors = await pluginToolDispatcher.listToolsForAgent({
@@ -251,15 +277,18 @@ export function createPluginMcpBridge(
           descriptors = [];
         }
         return {
-          tools: descriptors.map((d) => ({
-            // MCP tool names need to match Claude Code's expected format.
-            // The dispatcher emits `<pluginKey>:<toolName>` — rewrite to
-            // `<pluginKey>__<toolName>` to match Anthropic's tool-name
-            // regex (`^[a-zA-Z0-9_-]{1,64}$`, no colons).
-            name: d.name.replace(":", "__"),
-            description: `${d.displayName} — ${d.description}`,
-            inputSchema: d.parametersSchema,
-          })),
+          tools: [
+            ...builtInTools,
+            ...descriptors.map((d) => ({
+              // MCP tool names need to match Claude Code's expected format.
+              // The dispatcher emits `<pluginKey>:<toolName>` — rewrite to
+              // `<pluginKey>__<toolName>` to match Anthropic's tool-name
+              // regex (`^[a-zA-Z0-9_-]{1,64}$`, no colons).
+              name: d.name.replace(":", "__"),
+              description: `${d.displayName} — ${d.description}`,
+              inputSchema: d.parametersSchema,
+            })),
+          ],
         };
       });
 
@@ -267,6 +296,35 @@ export function createPluginMcpBridge(
       // from the bridge session.
       server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const incomingName = request.params.name;
+
+        // Built-in chat tools carry no "__" separator. Route them through
+        // executeChatTool with a ToolContext synthesized from the bridge
+        // session, matching what chat.ts's native tool-loop does. Plugin
+        // tools (with "__") fall through to the dispatcher path below.
+        if (!incomingName.includes("__")) {
+          const toolCtx: ToolContext = {
+            db,
+            actor: session.actor,
+            defaultCompanyId: session.companyId,
+            chatSessionId: session.chatSessionId,
+          };
+          const outcome = await executeChatTool(
+            incomingName,
+            request.params.arguments ?? {},
+            toolCtx,
+            pluginToolDispatcher,
+          );
+          if (!outcome.ok) {
+            return {
+              content: [{ type: "text", text: outcome.error }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify(outcome.result) }],
+          };
+        }
+
         const namespacedName = incomingName.includes("__")
           ? (() => {
               const idx = incomingName.indexOf("__");
