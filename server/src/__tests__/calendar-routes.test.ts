@@ -109,11 +109,19 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     };
   }
 
-  function createApp(actor: Record<string, unknown>) {
+  function createApp(actor: Record<string, unknown>, opts: { remoteAddress?: string } = {}) {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
       (req as any).actor = actor;
+      // Let a test pin the TCP peer address so the loopback exemption on the
+      // internal desktop-notification routes can be exercised both ways.
+      if (opts.remoteAddress) {
+        Object.defineProperty(req.socket, "remoteAddress", {
+          value: opts.remoteAddress,
+          configurable: true,
+        });
+      }
       next();
     });
     app.use("/api", calendarRoutes(db));
@@ -335,6 +343,41 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     const res = await request(app).get("/api/internal/desktop-notifications/pending");
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("Desktop notifications are only available to the local user");
+  });
+
+  it("allows the local desktop tray (tokenless loopback) to poll and ack in authenticated mode", async () => {
+    const companyId = await seedCompany();
+    // Seed a pending desktop delivery as a normal user.
+    const userApp = createApp(toolSessionActor(USER_A, companyId));
+    const title = `Tray loopback ${randomUUID()}`;
+    const createRes = await request(userApp)
+      .post(`/api/companies/${companyId}/events`)
+      .send({ title, scheduleKind: "once", channels: ["desktop"], anchorAt: "2026-08-03T09:00:00-04:00" });
+    expect(createRes.status, JSON.stringify(createRes.body)).toBe(201);
+    expect((await request(userApp).post(`/api/events/${createRes.body.id}/fire`)).status).toBe(200);
+
+    // The tray presents no auth token (actor.type "none") and polls over
+    // loopback -> the exemption lets it read and ack without a login.
+    const trayApp = createApp({ type: "none", source: "none" }, { remoteAddress: "127.0.0.1" });
+    const pendingRes = await request(trayApp).get("/api/internal/desktop-notifications/pending");
+    expect(pendingRes.status).toBe(200);
+    const mine = (pendingRes.body.notifications as Array<{ id: string; title: string }>).filter(
+      (n) => n.title === title,
+    );
+    expect(mine.length).toBe(1);
+
+    const ackRes = await request(trayApp)
+      .post("/api/internal/desktop-notifications/ack")
+      .send({ ids: [mine[0]!.id] });
+    expect(ackRes.status).toBe(200);
+    expect(ackRes.body.acknowledged).toEqual([mine[0]!.id]);
+  });
+
+  it("still rejects a tokenless NON-loopback caller on the desktop endpoint (401)", async () => {
+    // Same tokenless actor, but not from loopback -> the exemption must not apply.
+    const app = createApp({ type: "none", source: "none" }, { remoteAddress: "203.0.113.7" });
+    const res = await request(app).get("/api/internal/desktop-notifications/pending");
+    expect(res.status).toBe(401);
   });
 
   // --- 5. Portfolio gating ----------------------------------------------------
