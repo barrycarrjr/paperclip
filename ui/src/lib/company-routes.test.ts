@@ -30,6 +30,18 @@ describe("company routes", () => {
     expect(applyCompanyPrefix("/portfolio-directives", "HQ")).toBe("/HQ/portfolio-directives");
   });
 
+  it("treats /portfolio-calendar and /calendar as board pages, not company prefixes", () => {
+    // Regression: the calendar/event feature added the routes and nav but not
+    // the BOARD_ROUTE_ROOTS entries, so the company gate read the paths as
+    // company slugs → "Company not found" (same failure as portfolio-directives).
+    expect(isBoardPathWithoutPrefix("/portfolio-calendar")).toBe(true);
+    expect(extractCompanyPrefixFromPath("/portfolio-calendar")).toBeNull();
+    expect(applyCompanyPrefix("/portfolio-calendar", "HQ")).toBe("/HQ/portfolio-calendar");
+    expect(isBoardPathWithoutPrefix("/calendar")).toBe(true);
+    expect(extractCompanyPrefixFromPath("/calendar")).toBeNull();
+    expect(applyCompanyPrefix("/calendar", "HQ")).toBe("/HQ/calendar");
+  });
+
   it("does not mistake the /clippy-popup pop-out route for a company slug", () => {
     expect(extractCompanyPrefixFromPath("/clippy-popup")).toBeNull();
     // Once Link/NavLink resolution sees no active prefix in the URL, it must

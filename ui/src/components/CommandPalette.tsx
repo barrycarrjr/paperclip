@@ -31,6 +31,7 @@ import {
   Globe2,
   Megaphone,
   Repeat,
+  CalendarClock,
 } from "lucide-react";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
@@ -166,6 +167,10 @@ export function CommandPalette() {
             <Target className="mr-2 h-4 w-4" />
             Goals
           </CommandItem>
+          <CommandItem onSelect={() => go("/calendar")}>
+            <CalendarClock className="mr-2 h-4 w-4" />
+            Calendar
+          </CommandItem>
           <CommandItem onSelect={() => go("/agents")}>
             <Bot className="mr-2 h-4 w-4" />
             Agents
@@ -203,6 +208,10 @@ export function CommandPalette() {
               <CommandItem value="portfolio routines" onSelect={() => go("/portfolio-routines")}>
                 <Repeat className="mr-2 h-4 w-4" />
                 Portfolio Routines
+              </CommandItem>
+              <CommandItem value="portfolio calendar" onSelect={() => go("/portfolio-calendar")}>
+                <CalendarClock className="mr-2 h-4 w-4" />
+                Portfolio Calendar
               </CommandItem>
               <CommandItem value="portfolio costs" onSelect={() => go("/portfolio-costs")}>
                 <DollarSign className="mr-2 h-4 w-4" />
