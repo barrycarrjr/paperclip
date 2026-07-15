@@ -827,6 +827,26 @@ function handleLiveEvent(
     return;
   }
 
+  if (event.type === "calendar.event.fired") {
+    // Reminder fired: refresh calendar surfaces so next/last-run timestamps update.
+    queryClient.invalidateQueries({ queryKey: ["calendar"] });
+    // Scope to the reminder's owner the same way other branches scope to the
+    // current actor: if the payload names a different user, stay silent. When
+    // the owner (or the current user) can't be resolved, fall back to the
+    // company match that already gated this handler.
+    const eventUserId = readString(payload.userId);
+    const scopedToOther =
+      eventUserId !== null && currentActor.userId !== null && eventUserId !== currentActor.userId;
+    if (scopedToOther) return;
+    const title = readString(payload.title) ?? readString(payload.eventTitle) ?? "Reminder";
+    gatedPushToast(gate, pushToast, "calendar-fired", {
+      title: `Reminder: ${title}`,
+      tone: "info",
+      dedupeKey: `calendar-fired:${readString(payload.eventId) ?? title}:${event.id}`,
+    });
+    return;
+  }
+
   if (event.type === "activity.logged") {
     invalidateActivityQueries(queryClient, expectedCompanyId, payload, currentActor, { pathname });
     if (shouldDeferVisibleIssueCommentActivity(queryClient, pathname, payload)) {

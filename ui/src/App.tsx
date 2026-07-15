@@ -15,6 +15,7 @@ import { Issues } from "./pages/Issues";
 import { IssueDetail } from "./pages/IssueDetail";
 import { Routines } from "./pages/Routines";
 import { RoutineDetail } from "./pages/RoutineDetail";
+import { Calendar } from "./pages/Calendar";
 import { UserProfile } from "./pages/UserProfile";
 import { ExecutionWorkspaceDetail } from "./pages/ExecutionWorkspaceDetail";
 import { Goals } from "./pages/Goals";
@@ -68,6 +69,7 @@ import { PortfolioAgents } from "./pages/PortfolioAgents";
 import { PortfolioApprovals } from "./pages/PortfolioApprovals";
 import { PortfolioActivity } from "./pages/PortfolioActivity";
 import { PortfolioRoutines } from "./pages/PortfolioRoutines";
+import { PortfolioCalendar } from "./pages/PortfolioCalendar";
 import { PortfolioCosts } from "./pages/PortfolioCosts";
 import { PortfolioBrief } from "./pages/PortfolioBrief";
 import { PortfolioReceipts } from "./pages/PortfolioReceipts";
@@ -125,6 +127,7 @@ function boardRoutes() {
       <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
       <Route path="portfolio-activity" element={<PortfolioActivity />} />
       <Route path="portfolio-routines" element={<PortfolioRoutines />} />
+      <Route path="portfolio-calendar" element={<PortfolioCalendar />} />
       <Route path="portfolio-costs" element={<PortfolioCosts />} />
       <Route path="portfolio-dashboard" element={<Navigate to="/portfolio-brief" replace />} />
       <Route path="portfolio-brief" element={<PortfolioBrief />} />
@@ -139,6 +142,7 @@ function boardRoutes() {
       <Route path="issues/:issueId" element={<IssueDetail />} />
       <Route path="routines" element={<Routines />} />
       <Route path="routines/:routineId" element={<RoutineDetail />} />
+      <Route path="calendar" element={<Calendar />} />
       <Route path="execution-workspaces/:workspaceId" element={<ExecutionWorkspaceDetail />} />
       <Route path="execution-workspaces/:workspaceId/configuration" element={<ExecutionWorkspaceDetail />} />
       <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<ExecutionWorkspaceDetail />} />
@@ -341,6 +345,7 @@ export function App() {
           <Route path="issues/:issueId" element={<UnprefixedBoardRedirect />} />
           <Route path="routines" element={<UnprefixedBoardRedirect />} />
           <Route path="routines/:routineId" element={<UnprefixedBoardRedirect />} />
+          <Route path="calendar" element={<UnprefixedBoardRedirect />} />
           <Route path="u/:userSlug" element={<UnprefixedBoardRedirect />} />
           <Route path="skills/*" element={<UnprefixedBoardRedirect />} />
           <Route path="settings" element={<LegacySettingsRedirect />} />

@@ -29,6 +29,29 @@ function createDbStub(): Db {
   return stub;
 }
 
+/**
+ * A db stub that captures the values passed to `insert(...).values(...)` so
+ * tests can assert how a tool maps its input onto the calendar payload,
+ * without a real database.
+ */
+function createCapturingDb(captured: { values?: Record<string, unknown> }): Db {
+  const stub = {
+    insert() {
+      return {
+        values(v: Record<string, unknown>) {
+          captured.values = v;
+          return {
+            returning() {
+              return Promise.resolve([{ ...v, id: "evt-1" }]);
+            },
+          };
+        },
+      };
+    },
+  } as unknown as Db;
+  return stub;
+}
+
 describe("chat-tools registry", () => {
   it("listChatToolSpecs returns one spec per tool", () => {
     const specs = listChatToolSpecs();
@@ -234,5 +257,89 @@ describe("chat-tools registry", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.result).toEqual({ things: [{ id: 1 }] });
+  });
+
+  it("reminder tools are registered with correct mutating flags", () => {
+    expect(getChatTool("create_reminder")?.mutating).toBe(true);
+    expect(getChatTool("cancel_reminder")?.mutating).toBe(true);
+    expect(getChatTool("list_reminders")?.mutating).toBe(false);
+  });
+
+  it("create_reminder maps 'every 2 weeks' onto an interval calendar payload", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const result = await executeChatTool(
+      "create_reminder",
+      {
+        title: "Run payroll",
+        cadence: { kind: "interval", every: 2, unit: "week" },
+        timezone: "UTC",
+      },
+      {
+        db: createCapturingDb(captured),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(captured.values).toBeDefined();
+    expect(captured.values).toMatchObject({
+      kind: "reminder",
+      scheduleKind: "interval",
+      intervalUnit: "week",
+      intervalCount: 2,
+      timeOfDay: "09:00",
+      notify: true,
+      timezone: "UTC",
+    });
+    // Default channel is desktop. The service normalizes the ISO anchor into a
+    // Date; it should land on today at 09:00 UTC (the default time-of-day).
+    expect(captured.values!.channels).toEqual(["desktop"]);
+    expect(captured.values!.anchorAt).toBeInstanceOf(Date);
+    expect((captured.values!.anchorAt as Date).toISOString()).toMatch(/T09:00:00\.000Z$/);
+    // computeNextRun ran and produced a concrete next fire.
+    expect(captured.values!.nextRunAt).toBeInstanceOf(Date);
+  });
+
+  it("create_reminder rejects an interval cadence missing its unit", async () => {
+    const result = await executeChatTool(
+      "create_reminder",
+      { title: "x", cadence: { kind: "interval", every: 2 } },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/unit/i);
+  });
+
+  it("create_reminder rejects a once cadence with no 'at'", async () => {
+    const result = await executeChatTool(
+      "create_reminder",
+      { title: "x", cadence: { kind: "once" } },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/at\b|datetime/i);
+  });
+
+  it("cancel_reminder rejects an id that is not in the current company", async () => {
+    // The stub's select().where() resolves to [] so getById returns null.
+    const result = await executeChatTool(
+      "cancel_reminder",
+      { reminderId: "22222222-2222-2222-2222-222222222222" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/not found/i);
   });
 });

@@ -34,6 +34,7 @@ export { issues } from "./issues.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";
 export { issueRelations } from "./issue_relations.js";
 export { routines, routineTriggers, routineRuns } from "./routines.js";
+export { calendarEvents, calendarEventDeliveries } from "./calendar-events.js";
 export {
   routineTemplates,
   routineTemplateTriggers,

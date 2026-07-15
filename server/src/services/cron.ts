@@ -23,6 +23,8 @@
  * @module
  */
 
+import { unprocessable } from "../errors.js";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -370,4 +372,180 @@ function advanceToNextMonth(d: Date, months: number[]): void {
       return;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Timezone-aware helpers (shared by routines + calendar scheduling)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps the short English weekday names produced by `Intl.DateTimeFormat`
+ * (`weekday: "short"`) to their 0-based index (Sun=0 … Sat=6), matching
+ * `Date.getUTCDay()` and the cron day-of-week field.
+ */
+export const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+/**
+ * Validate that `timeZone` is an IANA identifier the runtime understands.
+ * Throws an HTTP 422 error (matching the routines service behavior) on failure.
+ */
+export function assertTimeZone(timeZone: string): void {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+  } catch {
+    throw unprocessable(`Invalid timezone: ${timeZone}`);
+  }
+}
+
+/**
+ * Return a copy of `date` with seconds and milliseconds zeroed (floored to the
+ * start of its UTC minute).
+ */
+export function floorToMinute(date: Date): Date {
+  const copy = new Date(date.getTime());
+  copy.setUTCSeconds(0, 0);
+  return copy;
+}
+
+/**
+ * The civil (wall-clock) parts of a UTC instant, as seen in `timeZone`.
+ * `month` is 1-based (1–12); `weekday` is 0-based (Sun=0 … Sat=6).
+ */
+export interface ZonedMinuteParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  weekday: number;
+}
+
+/**
+ * Break a UTC `date` into its civil (wall-clock) minute parts in `timeZone`.
+ */
+export function getZonedMinuteParts(date: Date, timeZone: string): ZonedMinuteParts {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    weekday: "short",
+  });
+  const parts = formatter.formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const weekday = WEEKDAY_INDEX[map.weekday ?? ""];
+  if (weekday == null) {
+    throw new Error(`Unable to resolve weekday for timezone ${timeZone}`);
+  }
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    weekday,
+  };
+}
+
+/**
+ * Convenience alias: the civil (wall-clock) parts of a UTC instant in `timeZone`.
+ * Thin wrapper over {@link getZonedMinuteParts}.
+ */
+export function utcToCivilParts(date: Date, timeZone: string): ZonedMinuteParts {
+  return getZonedMinuteParts(date, timeZone);
+}
+
+/**
+ * Does the civil minute of `date` (in `timeZone`) satisfy `expression`?
+ */
+export function matchesCronMinute(expression: string, timeZone: string, date: Date): boolean {
+  const cron = parseCron(expression);
+  const parts = getZonedMinuteParts(date, timeZone);
+  return (
+    cron.minutes.includes(parts.minute) &&
+    cron.hours.includes(parts.hour) &&
+    cron.daysOfMonth.includes(parts.day) &&
+    cron.months.includes(parts.month) &&
+    cron.daysOfWeek.includes(parts.weekday)
+  );
+}
+
+/**
+ * The next UTC instant strictly after `after` whose civil minute in `timeZone`
+ * matches `expression`. Returns `null` if none is found within ~5 years.
+ *
+ * Unlike {@link nextCronTick}, this evaluates the cron fields against the
+ * wall-clock time in `timeZone`, so it is daylight-saving aware.
+ *
+ * @throws {HttpError} 422 if the timezone or cron expression is invalid.
+ */
+export function nextCronTickInTimeZone(
+  expression: string,
+  timeZone: string,
+  after: Date,
+): Date | null {
+  const trimmed = expression.trim();
+  assertTimeZone(timeZone);
+  const error = validateCron(trimmed);
+  if (error) {
+    throw unprocessable(error);
+  }
+
+  const cursor = floorToMinute(after);
+  cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
+  const limit = 366 * 24 * 60 * 5;
+  for (let i = 0; i < limit; i += 1) {
+    if (matchesCronMinute(trimmed, timeZone, cursor)) {
+      return new Date(cursor.getTime());
+    }
+    cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
+  }
+  return null;
+}
+
+/**
+ * Convert a civil/wall-clock date-time in `timeZone` to the corresponding UTC
+ * `Date`. Uses a robust two-pass offset inversion so DST boundaries resolve
+ * correctly (the inverse of {@link getZonedMinuteParts}).
+ *
+ * @param year   Full civil year (e.g. 2026).
+ * @param month  Civil month, 1-based (1–12).
+ * @param day    Civil day of month (1–31).
+ * @param hour   Civil hour (0–23).
+ * @param minute Civil minute (0–59).
+ */
+export function civilToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  assertTimeZone(timeZone);
+  // Pass 1: treat the wall-clock as if it were UTC, then measure the tz offset AT that guess.
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const p1 = getZonedMinuteParts(new Date(guess), timeZone);
+  const asIfUtc1 = Date.UTC(p1.year, p1.month - 1, p1.day, p1.hour, p1.minute);
+  const offset1 = asIfUtc1 - guess; // ms the zone is ahead of UTC at the guess
+  let utc = guess - offset1;
+  // Pass 2: re-measure at the corrected instant to settle DST transitions.
+  const p2 = getZonedMinuteParts(new Date(utc), timeZone);
+  const asIfUtc2 = Date.UTC(p2.year, p2.month - 1, p2.day, p2.hour, p2.minute);
+  const offset2 = asIfUtc2 - utc;
+  if (offset2 !== offset1) {
+    utc = guess - offset2;
+  }
+  return new Date(utc);
 }

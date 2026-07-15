@@ -65,6 +65,16 @@ export const queryKeys = {
     runs: (id: string) => ["routines", "runs", id] as const,
     activity: (companyId: string, id: string) => ["routines", "activity", companyId, id] as const,
   },
+  calendar: {
+    events: (companyId: string) => ["calendar", "events", companyId] as const,
+    portfolioEvents: (companyId: string, filters?: Record<string, unknown>) =>
+      ["calendar", "portfolio-events", companyId, filters ?? {}] as const,
+    month: (companyId: string, from: string, to: string, kinds?: string) =>
+      ["calendar", "month", companyId, from, to, kinds ?? "__all"] as const,
+    portfolioMonth: (companyId: string, from: string, to: string) =>
+      ["calendar", "portfolio-month", companyId, from, to] as const,
+    event: (id: string) => ["calendar", "event", id] as const,
+  },
   executionWorkspaces: {
     list: (companyId: string, filters?: Record<string, string | boolean | undefined>) =>
       ["execution-workspaces", companyId, filters ?? {}] as const,

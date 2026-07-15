@@ -126,6 +126,45 @@ impl Config {
     }
 }
 
+// --- Desktop notifications ---------------------------------------------------
+//
+// A background thread polls the server's internal desktop-notifications queue
+// and forwards each new item to the event loop as a user event, where it is
+// shown as a native Windows toast. This lets reminders reach the user even when
+// no browser tab is open. The poll thread MUST NEVER panic — with
+// `panic = "abort"` a panic there would take the whole tray down — so every
+// network/JSON step is error-swallowing (no unwrap/expect).
+
+/// A notification ready to show as a toast. Carried through the event loop.
+#[derive(Clone)]
+struct DesktopNotification {
+    id: String,
+    title: String,
+    body: String,
+    url: Option<String>,
+}
+
+/// User event injected into tao's event loop by the poll thread.
+enum UserEvent {
+    Notify(DesktopNotification),
+}
+
+/// Shape of GET /api/internal/desktop-notifications/pending.
+#[derive(Deserialize)]
+struct PendingResponse {
+    notifications: Vec<NotificationDto>,
+}
+
+#[derive(Deserialize)]
+struct NotificationDto {
+    id: String,
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    url: Option<String>,
+}
+
 // CreateProcess flag — child gets a hidden console host. We don't use
 // DETACHED_PROCESS because pnpm.cmd is a batch script that needs a console;
 // CREATE_NO_WINDOW gives it one without showing a window.
@@ -280,7 +319,10 @@ fn spawn_server(paths: &Paths) -> Result<(), String> {
 fn run_tray(paths: Paths, config: Config) {
     // tao's event loop is what tray-icon's Win32 hidden-window posts events
     // into. Build it before constructing the tray icon (required on Windows).
-    let event_loop = EventLoopBuilder::new().build();
+    // The `<UserEvent>` type parameter lets the notification poll thread inject
+    // toast requests via an EventLoopProxy.
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
 
     let menu = Menu::new();
     let item_open = MenuItem::new("Open Paperclip", true, None);
@@ -327,10 +369,55 @@ fn run_tray(paths: Paths, config: Config) {
     let restart_in_progress = Arc::new(AtomicBool::new(false));
     let menu_channel = MenuEvent::receiver();
 
-    event_loop.run(move |_event, _, control_flow| {
+    // Background poll thread: fetch pending desktop notifications, forward each
+    // new one to the event loop as a toast request, then ack them so the server
+    // never hands them back. Error-swallowing throughout (no unwrap/expect) so a
+    // transient network or JSON failure can never abort the process.
+    let base = config.url.clone();
+    std::thread::spawn(move || {
+        let pending_url = join_url(&base, "api/internal/desktop-notifications/pending?limit=20");
+        let ack_url = join_url(&base, "api/internal/desktop-notifications/ack");
+        let mut shown: std::collections::HashSet<String> = std::collections::HashSet::new();
+        loop {
+            if let Some(items) = poll_pending(&pending_url) {
+                let mut to_ack: Vec<String> = Vec::new();
+                for n in items {
+                    // Only raise a toast the first time we see an id; still ack
+                    // it every time so the server can retire the row.
+                    if shown.insert(n.id.clone()) {
+                        let _ = proxy.send_event(UserEvent::Notify(n.clone()));
+                    }
+                    to_ack.push(n.id);
+                }
+                if !to_ack.is_empty() {
+                    ack(&ack_url, &to_ack);
+                }
+            }
+            std::thread::sleep(Duration::from_secs(10));
+        }
+    });
+
+    event_loop.run(move |event, _, control_flow| {
         // Wait for the next OS event (no busy-loop). Menu events come in
         // through the receiver channel — we drain it on every wakeup.
         *control_flow = ControlFlow::Wait;
+
+        // A notification arrived from the poll thread — show a native toast.
+        // Clicking it opens the notification's deep link, falling back to the
+        // app URL when the server didn't attach one.
+        if let tao::event::Event::UserEvent(UserEvent::Notify(n)) = &event {
+            let target = n.url.clone().unwrap_or_else(|| config.url.clone());
+            let _ = tauri_winrt_notification::Toast::new(
+                tauri_winrt_notification::Toast::POWERSHELL_APP_ID,
+            )
+            .title(&n.title)
+            .text1(&n.body)
+            .on_activated(move |_action| {
+                open_url(&target);
+                Ok(())
+            })
+            .show();
+        }
 
         while let Ok(event) = menu_channel.try_recv() {
             let id = &event.id;
@@ -548,6 +635,44 @@ fn wait_for_port(port: u16, max_secs: u32) -> bool {
         }
     }
     false
+}
+
+/// Join a base URL and a path with exactly one '/' between them. Trims a single
+/// trailing '/' from base (config.url is stored with one, e.g.
+/// "http://localhost:3100/").
+fn join_url(base: &str, path: &str) -> String {
+    let trimmed = base.strip_suffix('/').unwrap_or(base);
+    format!("{}/{}", trimmed, path)
+}
+
+/// GET the pending-notifications queue. Returns None on ANY error (network,
+/// non-2xx, body read, JSON parse) so the caller simply skips this cycle.
+fn poll_pending(url: &str) -> Option<Vec<DesktopNotification>> {
+    let resp = ureq::get(url).timeout(Duration::from_secs(4)).call().ok()?;
+    let body = resp.into_string().ok()?;
+    let parsed: PendingResponse = serde_json::from_str(&body).ok()?;
+    Some(
+        parsed
+            .notifications
+            .into_iter()
+            .map(|n| DesktopNotification {
+                id: n.id,
+                title: n.title,
+                body: n.body,
+                url: n.url,
+            })
+            .collect(),
+    )
+}
+
+/// POST the ack list. Fire-and-forget: any error is ignored (the row will just
+/// be returned again next cycle, and the `shown` set dedupes the toast).
+fn ack(url: &str, ids: &[String]) {
+    let body = serde_json::to_string(&serde_json::json!({ "ids": ids })).unwrap_or_default();
+    let _ = ureq::post(url)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(4))
+        .send_string(&body);
 }
 
 fn open_url(url: &str) {

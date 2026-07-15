@@ -7,6 +7,7 @@ import {
   Mail,
   Network,
   Repeat,
+  CalendarClock,
   GitBranch,
   MessageSquare,
   Globe2,
@@ -115,6 +116,13 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
                 icon: Repeat,
                 info: "See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place.",
               },
+              {
+                id: "portfolio-calendar",
+                to: "/portfolio-calendar",
+                label: "Portfolio Calendar",
+                icon: CalendarClock,
+                info: "Reminders and scheduled events across every company — as a combined list or a single month grid. Filter by company or status.",
+              },
               ...(showPortfolioEmailNav
                 ? [
                     {
@@ -186,6 +194,12 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           label="Routines"
           icon={Repeat}
           info="Recurring work that runs on a schedule or trigger. Use routines for anything that should happen repeatedly without you asking each time."
+        />
+        <SidebarNavItem
+          to="/calendar"
+          label="Calendar"
+          icon={CalendarClock}
+          info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
         />
         <SidebarNavItem
           to="/goals"

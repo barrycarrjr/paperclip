@@ -47,6 +47,14 @@ export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";
+export { calendarService } from "./calendar.js";
+export { sendEventSlackDm } from "./event-slack.js";
+export {
+  aggregateOccurrences,
+  getCalendarSources,
+  paperclipCalendarSource,
+  type CalendarSource,
+} from "./calendar-sources.js";
 export { templateService } from "./templates.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";

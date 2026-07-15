@@ -645,6 +645,13 @@
       "when": 1780120000000,
       "tag": "0091_drop_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1780120001000,
+      "tag": "0092_calendar_events",
+      "breakpoints": true
     }
   ]
 }

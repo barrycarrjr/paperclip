@@ -11,8 +11,11 @@ import {
   issueComments,
   issues,
 } from "@paperclipai/db";
+import type { CreateCalendarEvent } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { calendarService } from "./calendar.js";
+import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
 
@@ -601,6 +604,341 @@ const webFetchTool: ChatToolDefinition<{ url: string; maxBytes?: number }> = {
   },
 };
 
+// ─── Reminder tools (Clippy natural-language reminders) ───────────────────
+//
+// Let a chat user create/list/cancel notifying calendar events
+// (kind="reminder") in natural language ("remind me to run payroll every 2
+// weeks"). Each tool projects a simplified `cadence` object onto the shared
+// `createEventSchema` payload and delegates to `calendarService`, which owns
+// scheduling (`computeNextRun`) and delivery.
+
+const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * ISO string for TODAY (civil date in `timezone`) at `timeOfDay` local
+ * wall-clock time. Used as the interval anchor so an "every 2 weeks at 09:00"
+ * reminder is pinned to a real 09:00-local instant that stays 09:00 local
+ * across daylight-saving shifts. Falls back to `now` if the timezone-aware
+ * computation throws (e.g. an unknown IANA zone); the service's
+ * `computeNextRun` still derives the correct cadence from any anchor.
+ */
+function todayAnchorIso(timeOfDay: string, timezone: string): string {
+  try {
+    const [hour, minute] = timeOfDay.split(":").map((n) => Number.parseInt(n, 10));
+    const today = utcToCivilParts(new Date(), timezone);
+    return civilToUtc(today.year, today.month, today.day, hour!, minute!, timezone).toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
+/** Plain-language one-liner describing a reminder's cadence. */
+function humanizeReminderCadence(event: {
+  scheduleKind: string;
+  intervalUnit: string | null;
+  intervalCount: number | null;
+  timeOfDay: string | null;
+  cronExpression: string | null;
+  anchorAt: Date | string | null;
+}): string {
+  if (event.scheduleKind === "interval") {
+    const count = event.intervalCount ?? 1;
+    const unit = event.intervalUnit ?? "day";
+    const plural = count === 1 ? unit : `${unit}s`;
+    const at = event.timeOfDay ? ` at ${event.timeOfDay}` : "";
+    return `every ${count} ${plural}${at}`;
+  }
+  if (event.scheduleKind === "once") {
+    const at = event.anchorAt
+      ? event.anchorAt instanceof Date
+        ? event.anchorAt.toISOString()
+        : String(event.anchorAt)
+      : "an unspecified time";
+    return `once at ${at}`;
+  }
+  if (event.scheduleKind === "cron") {
+    return event.cronExpression
+      ? `on cron schedule "${event.cronExpression}"`
+      : "on a cron schedule";
+  }
+  return event.scheduleKind;
+}
+
+interface CreateReminderInput {
+  title: string;
+  body?: string;
+  cadence: {
+    kind: "once" | "interval" | "cron";
+    every?: number;
+    unit?: "day" | "week" | "month";
+    at?: string;
+    expression?: string;
+  };
+  time?: string;
+  timezone?: string;
+  channels?: ("desktop" | "slack")[];
+  slackTarget?: string;
+  leadMinutes?: number;
+}
+
+const createReminderTool: ChatToolDefinition<CreateReminderInput> = {
+  name: "create_reminder",
+  description:
+    "Create a notifying reminder (a calendar event that fires a notification) for the current company. Use for natural-language requests like 'remind me to run payroll every 2 weeks' or 'remind me to call the accountant tomorrow at 3pm'. Mutating — requires permission.",
+  mutating: true,
+  inputSchema: z.object({
+    title: z.string().min(1).max(200),
+    body: z.string().max(10_000).optional(),
+    cadence: z.object({
+      kind: z.enum(["once", "interval", "cron"]),
+      every: z.number().int().min(1).optional(),
+      unit: z.enum(["day", "week", "month"]).optional(),
+      at: z.string().optional(),
+      expression: z.string().optional(),
+    }),
+    time: z.string().optional(),
+    timezone: z.string().optional(),
+    channels: z.array(z.enum(["desktop", "slack"])).optional(),
+    slackTarget: z.string().optional(),
+    leadMinutes: z.number().int().min(0).optional(),
+  }),
+  spec: {
+    name: "create_reminder",
+    description:
+      "Create a notifying reminder for the current company. Map the user's phrasing onto `cadence`: interval ('every 2 weeks' -> {kind:'interval', every:2, unit:'week'}), one-time ('tomorrow at 3pm' -> {kind:'once', at:'<ISO datetime>'}), or cron ({kind:'cron', expression:'0 9 * * 1'}). Returns the created reminder with its next run time.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short reminder title, e.g. 'Run payroll'." },
+        body: { type: "string", description: "Optional longer note shown with the notification." },
+        cadence: {
+          type: "object",
+          description: "How often the reminder fires.",
+          properties: {
+            kind: { type: "string", enum: ["once", "interval", "cron"] },
+            every: {
+              type: "integer",
+              description: "Interval count (>=1). Required for kind=interval, e.g. 2 for 'every 2 weeks'.",
+            },
+            unit: {
+              type: "string",
+              enum: ["day", "week", "month"],
+              description: "Interval unit. Required for kind=interval.",
+            },
+            at: {
+              type: "string",
+              description: "ISO 8601 datetime for the single fire. Required for kind=once.",
+            },
+            expression: {
+              type: "string",
+              description: "5-field cron expression. Required for kind=cron.",
+            },
+          },
+          required: ["kind"],
+        },
+        time: {
+          type: "string",
+          description: "Local clock time 'HH:MM' (24-hour) for interval reminders. Defaults to 09:00.",
+        },
+        timezone: {
+          type: "string",
+          description: "IANA timezone (e.g. 'America/New_York'). Defaults to UTC.",
+        },
+        channels: {
+          type: "array",
+          items: { type: "string", enum: ["desktop", "slack"] },
+          description: "Notification channels. Defaults to ['desktop'].",
+        },
+        slackTarget: {
+          type: "string",
+          description: "Slack DM target. Required when channels includes 'slack'.",
+        },
+        leadMinutes: {
+          type: "integer",
+          description: "Notify this many minutes before the occurrence. Defaults to 0.",
+        },
+      },
+      required: ["title", "cadence"],
+    },
+  },
+  async handler(input, ctx) {
+    const target = ctx.defaultCompanyId;
+    if (!target) {
+      throw forbidden("No company context: select a company first");
+    }
+    await assertCompanyAccess(ctx, target);
+
+    const timezone = input.timezone?.trim() || "UTC";
+    const channels: ("desktop" | "slack")[] =
+      input.channels && input.channels.length > 0 ? input.channels : ["desktop"];
+    if (channels.includes("slack") && !input.slackTarget) {
+      throw badRequest("A Slack target is required when the slack channel is selected");
+    }
+
+    const base = {
+      title: input.title,
+      body: input.body ?? null,
+      kind: "reminder" as const,
+      timezone,
+      allDay: false,
+      durationMinutes: null,
+      notify: true,
+      channels,
+      leadTimeMinutes: input.leadMinutes ?? 0,
+      slackTarget: input.slackTarget ?? null,
+      endAt: null,
+      maxOccurrences: null,
+    };
+
+    const { cadence } = input;
+    let payload: CreateCalendarEvent;
+
+    if (cadence.kind === "interval") {
+      if (!cadence.unit) {
+        throw badRequest("Interval reminders require a unit (day, week, or month)");
+      }
+      if (cadence.every == null || cadence.every < 1) {
+        throw badRequest("Interval reminders require 'every' to be at least 1");
+      }
+      const timeOfDay = input.time?.trim() || "09:00";
+      if (!TIME_OF_DAY_RE.test(timeOfDay)) {
+        throw badRequest(`Invalid time '${timeOfDay}' — expected HH:MM (24-hour)`);
+      }
+      payload = {
+        ...base,
+        scheduleKind: "interval",
+        anchorAt: todayAnchorIso(timeOfDay, timezone),
+        intervalUnit: cadence.unit,
+        intervalCount: cadence.every,
+        timeOfDay,
+        cronExpression: null,
+      };
+    } else if (cadence.kind === "once") {
+      if (!cadence.at) {
+        throw badRequest("One-time reminders require 'at' (an ISO datetime)");
+      }
+      payload = {
+        ...base,
+        scheduleKind: "once",
+        anchorAt: cadence.at,
+        intervalUnit: null,
+        intervalCount: null,
+        timeOfDay: null,
+        cronExpression: null,
+      };
+    } else {
+      if (!cadence.expression) {
+        throw badRequest("Cron reminders require a cron 'expression'");
+      }
+      payload = {
+        ...base,
+        scheduleKind: "cron",
+        anchorAt: null,
+        intervalUnit: null,
+        intervalCount: null,
+        timeOfDay: null,
+        cronExpression: cadence.expression,
+      };
+    }
+
+    const created = await calendarService(ctx.db).create(target, payload, {
+      userId: ctx.actor.userId ?? "board",
+      agentId: null,
+    });
+
+    const cadenceSummary = humanizeReminderCadence(created);
+    const nextRunAt = created.nextRunAt ? created.nextRunAt.toISOString() : null;
+    return {
+      reminder: {
+        id: created.id,
+        title: created.title,
+        cadence: cadenceSummary,
+        nextRunAt,
+        channels: created.channels,
+        timezone: created.timezone,
+      },
+      message: `Reminder "${created.title}" created (${cadenceSummary}). ${
+        nextRunAt ? `Next run: ${nextRunAt}.` : "No upcoming run scheduled."
+      }`,
+    };
+  },
+};
+
+const listRemindersTool: ChatToolDefinition<Record<string, never>> = {
+  name: "list_reminders",
+  description:
+    "List active reminders (notifying calendar events) for the current company. Read-only.",
+  mutating: false,
+  inputSchema: z.object({}),
+  spec: {
+    name: "list_reminders",
+    description:
+      "List active reminders for the current company. Returns id, title, status, a human cadence summary, next run time, and channels.",
+    input_schema: { type: "object", properties: {} },
+  },
+  async handler(_input, ctx) {
+    const target = ctx.defaultCompanyId;
+    if (!target) {
+      throw forbidden("No company context: select a company first");
+    }
+    await assertCompanyAccess(ctx, target);
+    const events = await calendarService(ctx.db).list(target);
+    const reminders = events
+      .filter((e) => e.kind === "reminder" && e.status !== "cancelled")
+      .map((e) => ({
+        id: e.id,
+        title: e.title,
+        status: e.status,
+        cadence: humanizeReminderCadence(e),
+        nextRunAt: e.nextRunAt ? e.nextRunAt.toISOString() : null,
+        channels: e.channels,
+      }));
+    return { reminders };
+  },
+};
+
+const cancelReminderTool: ChatToolDefinition<{ reminderId: string }> = {
+  name: "cancel_reminder",
+  description: "Cancel a reminder by id so it stops firing. Mutating — requires permission.",
+  mutating: true,
+  inputSchema: z.object({ reminderId: z.string().min(1) }),
+  spec: {
+    name: "cancel_reminder",
+    description: "Cancel a reminder by id so it stops firing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reminderId: {
+          type: "string",
+          description: "The reminder (calendar event) id to cancel.",
+        },
+      },
+      required: ["reminderId"],
+    },
+  },
+  async handler({ reminderId }, ctx) {
+    const svc = calendarService(ctx.db);
+    const existing = await svc.getById(reminderId);
+    if (!existing || existing.companyId !== ctx.defaultCompanyId) {
+      throw badRequest(`Reminder ${reminderId} not found in the current company`);
+    }
+    await assertCompanyAccess(ctx, existing.companyId);
+    const updated = await svc.update(
+      reminderId,
+      { status: "cancelled" },
+      { userId: ctx.actor.userId ?? "board", agentId: null },
+    );
+    return {
+      reminder: {
+        id: reminderId,
+        title: updated?.title ?? existing.title,
+        status: updated?.status ?? "cancelled",
+      },
+      message: `Reminder "${updated?.title ?? existing.title}" cancelled.`,
+    };
+  },
+};
+
 export const CHAT_TOOLS: ChatToolDefinition[] = [
   listCompaniesTool,
   getCompanyTool,
@@ -612,6 +950,9 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   broadcastDirectiveTool,
   addCommentTool,
   webFetchTool,
+  createReminderTool,
+  listRemindersTool,
+  cancelReminderTool,
 ] as ChatToolDefinition[];
 
 const TOOLS_BY_NAME: Record<string, ChatToolDefinition> = Object.fromEntries(

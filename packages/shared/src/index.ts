@@ -48,6 +48,13 @@ export {
   ROUTINE_VARIABLE_TYPES,
   ROUTINE_RUN_STATUSES,
   ROUTINE_RUN_SOURCES,
+  CALENDAR_EVENT_KINDS,
+  CALENDAR_EVENT_STATUSES,
+  CALENDAR_CHANNELS,
+  CALENDAR_DELIVERY_CHANNELS,
+  CALENDAR_SCHEDULE_KINDS,
+  CALENDAR_INTERVAL_UNITS,
+  CALENDAR_SOURCES,
   PAUSE_REASONS,
   PROJECT_COLORS,
   APPROVAL_TYPES,
@@ -513,6 +520,20 @@ export type {
   ExternalMcpToolPreview,
   ExternalMcpTestConnectResult,
 } from "./types/index.js";
+export type {
+  CalendarEventKind,
+  CalendarChannel,
+  CalendarDeliveryChannel,
+  CalendarScheduleKind,
+  CalendarIntervalUnit,
+  CalendarSource,
+  CalendarEventStatus,
+  CalendarEvent,
+  CalendarEventDelivery,
+  CalendarOccurrence,
+  CalendarEventListItem,
+  CalendarEventDetail,
+} from "./types/calendar.js";
 export {
   EXTERNAL_MCP_TRANSPORTS,
   EXTERNAL_MCP_MUTATION_PREFIXES,
@@ -928,6 +949,15 @@ export {
   type UpdateSkillTemplate,
   type DeployTemplate,
 } from "./validators/index.js";
+
+export {
+  calendarRecurrenceSchema,
+  createEventSchema,
+  updateEventSchema,
+  type CalendarRecurrence,
+  type CreateCalendarEvent,
+  type UpdateCalendarEvent,
+} from "./validators/calendar.js";
 
 export type {
   TemplateType,

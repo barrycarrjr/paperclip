@@ -273,6 +273,20 @@ export type RoutineRunStatus = (typeof ROUTINE_RUN_STATUSES)[number];
 export const ROUTINE_RUN_SOURCES = ["schedule", "manual", "api", "webhook"] as const;
 export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
 
+export const CALENDAR_EVENT_KINDS = ["reminder", "appointment", "deadline"] as const;
+
+export const CALENDAR_EVENT_STATUSES = ["active", "paused", "completed", "cancelled"] as const;
+
+export const CALENDAR_CHANNELS = ["desktop", "slack"] as const;
+
+export const CALENDAR_DELIVERY_CHANNELS = ["desktop", "slack", "in_app"] as const;
+
+export const CALENDAR_SCHEDULE_KINDS = ["once", "interval", "cron"] as const;
+
+export const CALENDAR_INTERVAL_UNITS = ["day", "week", "month"] as const;
+
+export const CALENDAR_SOURCES = ["paperclip", "google", "outlook"] as const;
+
 export const PAUSE_REASONS = ["manual", "budget", "system"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
@@ -461,6 +475,7 @@ export const LIVE_EVENT_TYPES = [
   "plugin.ui.updated",
   "plugin.worker.crashed",
   "plugin.worker.restarted",
+  "calendar.event.fired",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 

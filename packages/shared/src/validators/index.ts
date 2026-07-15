@@ -329,6 +329,15 @@ export {
 } from "./routine.js";
 
 export {
+  calendarRecurrenceSchema,
+  createEventSchema,
+  updateEventSchema,
+  type CalendarRecurrence,
+  type CreateCalendarEvent,
+  type UpdateCalendarEvent,
+} from "./calendar.js";
+
+export {
   TEMPLATE_TYPES,
   templateTypeSchema,
   routineTemplateTriggerInputSchema,
