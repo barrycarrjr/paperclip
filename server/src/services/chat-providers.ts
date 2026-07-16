@@ -1137,10 +1137,17 @@ class AdapterExecuteProvider implements ChatProvider {
         promptTemplate: "",
         dangerouslySkipPermissions: true,
         maxTurnsPerRun: 0,
-        // When we materialized image files into the chat workspace, route
-        // the adapter's working dir there too so the CLI's Read tool can
-        // open them. Defaults are unchanged when no images are present.
-        ...(materializedImagePaths.length > 0 ? { cwd } : {}),
+        // Always route the adapter's working dir to the per-session Clippy
+        // workspace, whether or not this turn carries images. The CLI adapter
+        // sends only the latest user message and relies on `--resume` to carry
+        // the earlier conversation, but it only resumes a session whose saved
+        // cwd matches the current cwd. Injecting cwd only on image turns let
+        // the cwd flip between an image turn (workspace) and a text turn
+        // (process.cwd()), which silently refused the resume and dropped every
+        // message before the flip, with no summary marker. A stable per-session
+        // cwd keeps the whole conversation resumable. Materialized image files
+        // also live under this dir so the CLI's Read tool can open them.
+        cwd,
       };
       const adapterContext: Record<string, unknown> = {
         paperclipTaskMarkdown: userPrompt,
@@ -1186,7 +1193,6 @@ class AdapterExecuteProvider implements ChatProvider {
         wake();
       }
     })();
-    void cwd; // reserved for future per-turn cwd injection into adapter config
 
     // Drain queue until execute() resolves — or the caller aborts. We can't
     // reach inside adapter.execute() to terminate the underlying CLI, but
