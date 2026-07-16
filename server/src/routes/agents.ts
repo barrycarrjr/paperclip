@@ -63,6 +63,7 @@ import {
   findServerAdapter,
   listAdapterModels,
   refreshAdapterModels,
+  probeAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
@@ -948,12 +949,15 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const type = assertKnownAdapterType(req.params.type as string);
-    const refresh = typeof req.query.refresh === "string"
-      ? ["1", "true", "yes"].includes(req.query.refresh.toLowerCase())
-      : false;
-    const models = refresh
-      ? await refreshAdapterModels(type)
-      : await listAdapterModels(type);
+    const flag = (value: unknown): boolean =>
+      typeof value === "string" && ["1", "true", "yes"].includes(value.toLowerCase());
+    // Probe mode actually exercises each candidate model (claude_local only) and
+    // is more expensive, so it is a distinct, explicit opt-in from a plain refresh.
+    const models = flag(req.query.probe)
+      ? await probeAdapterModels(type)
+      : flag(req.query.refresh)
+        ? await refreshAdapterModels(type)
+        : await listAdapterModels(type);
     res.json(models);
   });
 

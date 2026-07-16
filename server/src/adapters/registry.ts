@@ -30,7 +30,6 @@ import {
   execute as claudeExecute,
   listClaudeSkills,
   syncClaudeSkills,
-  listClaudeModels,
   testEnvironment as claudeTestEnvironment,
   sessionCodec as claudeSessionCodec,
   getQuotaWindows as claudeGetQuotaWindows,
@@ -89,6 +88,18 @@ import {
 } from "@paperclipai/adapter-openclaw-gateway";
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { listCursorModels } from "./cursor-models.js";
+import {
+  listOllamaModels,
+  refreshOllamaModels,
+  listAiderModels,
+  refreshAiderModels,
+} from "./ollama-models.js";
+import { listGeminiModels, refreshGeminiModels } from "./gemini-models.js";
+import {
+  listClaudeModelsWithDiscovery,
+  refreshClaudeModelsWithDiscovery,
+  probeClaudeModels,
+} from "./claude-models.js";
 import {
   execute as piExecute,
   listPiSkills,
@@ -328,7 +339,8 @@ const claudeLocalAdapter: ServerAdapterModule = {
   sessionCodec: claudeSessionCodec,
   sessionManagement: getAdapterSessionManagement("claude_local") ?? undefined,
   models: claudeModels,
-  listModels: listClaudeModels,
+  listModels: listClaudeModelsWithDiscovery,
+  refreshModels: refreshClaudeModelsWithDiscovery,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
@@ -428,6 +440,8 @@ const geminiLocalAdapter: ServerAdapterModule = {
   sessionCodec: geminiSessionCodec,
   sessionManagement: getAdapterSessionManagement("gemini_local") ?? undefined,
   models: geminiModels,
+  listModels: listGeminiModels,
+  refreshModels: refreshGeminiModels,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
@@ -456,6 +470,8 @@ const aiderLocalAdapter: ServerAdapterModule = {
   sessionCodec: aiderSessionCodec,
   sessionManagement: getAdapterSessionManagement("aider_local") ?? undefined,
   models: aiderModels,
+  listModels: listAiderModels,
+  refreshModels: refreshAiderModels,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
@@ -486,6 +502,8 @@ const ollamaLocalAdapter: ServerAdapterModule = {
   sessionCodec: ollamaSessionCodec,
   sessionManagement: getAdapterSessionManagement("ollama_local") ?? undefined,
   models: ollamaModels,
+  listModels: listOllamaModels,
+  refreshModels: refreshOllamaModels,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: false,
   requiresMaterializedRuntimeSkills: false,
@@ -784,6 +802,20 @@ export async function refreshAdapterModels(type: string): Promise<{ id: string; 
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
+}
+
+/**
+ * Opt-in probe: validate a model list by actually exercising it, rather than
+ * trusting a static or discovered list. Today only claude_local supports this
+ * (its CLI can't enumerate a subscription's models, so we test-run each curated
+ * candidate). Other adapters fall back to a normal live refresh. Probing spends
+ * a little per model, so it is never the nightly path — only the on-demand one.
+ */
+export async function probeAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+  if (type === "claude_local") {
+    return probeClaudeModels();
+  }
+  return refreshAdapterModels(type);
 }
 
 export function listServerAdapters(): ServerAdapterModule[] {

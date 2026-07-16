@@ -1,6 +1,11 @@
 export { companyService } from "./companies.js";
 export { companySkillService } from "./company-skills.js";
 export { agentService, deduplicateAgentName } from "./agents.js";
+export {
+  adapterModelRefreshService,
+  type DailyModelRefreshResult,
+  type VanishedModelFlag,
+} from "./adapter-model-refresh.js";
 export { agentCapabilitiesService, AGENT_CAPABILITY_NAMESPACE, type AgentCapabilityMatch } from "./agent-capabilities.js";
 export { agentInstructionsService, syncInstructionsBundleConfigFromFilePath } from "./agent-instructions.js";
 export {

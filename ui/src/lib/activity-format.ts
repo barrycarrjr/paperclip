@@ -40,6 +40,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "agent.paused": "paused",
   "agent.resumed": "resumed",
   "agent.terminated": "terminated",
+  "agent.model_unavailable": "paused (assigned model no longer available) for",
   "agent.key_created": "created API key for",
   "agent.budget_updated": "updated budget for",
   "agent.runtime_session_reset": "reset session for",

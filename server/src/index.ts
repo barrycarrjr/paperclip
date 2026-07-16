@@ -31,6 +31,7 @@ import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
+  adapterModelRefreshService,
   calendarService,
   heartbeatService,
   instanceSettingsService,
@@ -888,6 +889,10 @@ export async function startServer(): Promise<StartedServer> {
     const heartbeat = heartbeatService(db as any, { pluginWorkerManager });
     const routines = routineService(db as any, { pluginWorkerManager });
     const calendar = calendarService(db as any);
+    const modelRefresh = adapterModelRefreshService(db as any);
+    // Adapter model lists are refreshed at most once per calendar day (UTC).
+    // Tracks the last day we ran so the frequent scheduler tick fires it just once.
+    let lastAdapterModelRefreshDay: string | null = null;
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -958,7 +963,32 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "calendar reminder tick failed");
         });
-  
+
+      // Refresh adapter model menus from each provider once per day, and pause
+      // (never silently reassign) any agent whose assigned model has vanished.
+      const modelRefreshDay = new Date().toISOString().slice(0, 10);
+      if (modelRefreshDay !== lastAdapterModelRefreshDay) {
+        lastAdapterModelRefreshDay = modelRefreshDay;
+        void modelRefresh
+          .runDailyRefresh()
+          .then((r) => {
+            if (r.paused.length > 0) {
+              logger.warn(
+                { paused: r.paused, indeterminate: r.indeterminate },
+                "adapter model refresh paused agents whose assigned model is no longer offered by its provider",
+              );
+            } else {
+              logger.info(
+                { refreshed: r.refreshed, indeterminate: r.indeterminate },
+                "adapter model refresh completed",
+              );
+            }
+          })
+          .catch((err) => {
+            logger.error({ err }, "adapter model refresh failed");
+          });
+      }
+
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
       void heartbeat
