@@ -1,9 +1,9 @@
-import path from "node:path";
 import fs from "node:fs";
 import pino from "pino";
 import { pinoHttp } from "pino-http";
 import { readConfigFile } from "../config-file.js";
 import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
+import { buildFileLogTarget } from "./log-file-target.js";
 import { shouldSilenceHttpSuccessLog } from "./http-log-policy.js";
 
 function resolveServerLogDir(): string {
@@ -19,8 +19,6 @@ function resolveServerLogDir(): string {
 const logDir = resolveServerLogDir();
 fs.mkdirSync(logDir, { recursive: true });
 
-const logFile = path.join(logDir, "server.log");
-
 const sharedOpts = {
   translateTime: "SYS:HH:MM:ss",
   ignore: "pid,hostname",
@@ -30,18 +28,18 @@ const sharedOpts = {
 export const logger = pino({
   level: "debug",
   redact: ["req.headers.authorization"],
-}, pino.transport({
+  // The explicit generic keeps TS from unifying every target's options into
+  // one exact shape (pretty's options and pino-roll's options share nothing).
+}, pino.transport<Record<string, unknown>>({
   targets: [
     {
       target: "pino-pretty",
       options: { ...sharedOpts, ignore: "pid,hostname,req,res,responseTime", colorize: true, destination: 1 },
       level: "info",
     },
-    {
-      target: "pino-pretty",
-      options: { ...sharedOpts, colorize: false, destination: logFile, mkdir: true },
-      level: "debug",
-    },
+    // Size-capped rolling files (server.1.log, ...) — the old single
+    // server.log grew unbounded. See buildFileLogTarget for the cap policy.
+    buildFileLogTarget(logDir),
   ],
 }));
 
