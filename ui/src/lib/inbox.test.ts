@@ -485,7 +485,12 @@ describe("inbox helpers", () => {
     // but the badge kept counting it because computeInboxBadgeData wasn't
     // checking the dismissals map for issues — only for approvals/runs/joins.
     const issue = makeIssue("dismissed-and-unread", true);
+    // Dismissal is compared against issueLastActivityTimestamp, which reads the
+    // canonical lastActivityAt first. The server derives that as the max of
+    // updatedAt, latest comment, and latest log, so the two move together in
+    // real data and the fixture has to set both.
     issue.updatedAt = new Date("2026-05-11T03:43:42.914Z");
+    issue.lastActivityAt = new Date("2026-05-11T03:43:42.914Z");
 
     const dismissedAtByKey = new Map<string, number>([
       [`issue:${issue.id}`, new Date("2026-05-11T14:36:11.539Z").getTime()],
@@ -508,8 +513,11 @@ describe("inbox helpers", () => {
 
   it("re-counts a dismissed issue once newer activity occurs (timestamp-aware)", () => {
     const issue = makeIssue("dismissed-but-touched-again", true);
-    // Dismissed 9am, then updated 10am — should count again.
+    // Dismissed 9am, then new activity at 10am — should count again. Both
+    // fields move because the server derives lastActivityAt as the max of
+    // updatedAt, latest comment, and latest log.
     issue.updatedAt = new Date("2026-05-11T10:00:00.000Z");
+    issue.lastActivityAt = new Date("2026-05-11T10:00:00.000Z");
     const dismissedAtByKey = new Map<string, number>([
       [`issue:${issue.id}`, new Date("2026-05-11T09:00:00.000Z").getTime()],
     ]);

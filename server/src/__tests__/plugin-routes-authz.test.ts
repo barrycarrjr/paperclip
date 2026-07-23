@@ -247,7 +247,13 @@ describe.sequential("plugin install and upgrade authz", () => {
       .send({ version: "1.1.0" });
 
     expect(res.status).toBe(200);
-    expect(mockLifecycle.upgrade).toHaveBeenCalledWith(pluginId, "1.1.0");
+    // The route passes a source path (unused here) and the capability
+    // acknowledgement options bag added with the escalation flow. Assert the
+    // full call so a future signature change surfaces here rather than
+    // silently passing.
+    expect(mockLifecycle.upgrade).toHaveBeenCalledWith(pluginId, "1.1.0", undefined, {
+      acknowledgeCapabilities: undefined,
+    });
   }, 20_000);
 });
 
