@@ -27,6 +27,9 @@
  *   declared in their manifest may call it (enforced by `host-client-factory`).
  * - The host handler itself does not cache resolved values. Each call goes
  *   through the secret provider to honour rotation.
+ * - Rate limiting is split in two: a tight budget for refs outside the
+ *   plugin's own config (UUID enumeration) and a generous backstop for refs
+ *   inside it (a plugin stuck in a resolve loop). See the constants below.
  *
  * @see PLUGIN_SPEC.md §22 — Secrets
  * @see host-client-factory.ts — capability gating
@@ -38,6 +41,7 @@ import type { Db } from "@paperclipai/db";
 import { companySecrets, companySecretVersions, pluginConfig } from "@paperclipai/db";
 import type { SecretProvider } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
+import { logger } from "../middleware/logger.js";
 import { pluginRegistryService } from "./plugin-registry.js";
 import {
   collectSecretRefPaths,
@@ -68,6 +72,12 @@ function secretVersionNotFound(secretRef: string): Error {
 function invalidSecretRef(secretRef: string): Error {
   const err = new Error(`Invalid secret reference: ${secretRef}`);
   err.name = "InvalidSecretRefError";
+  return err;
+}
+
+function rateLimitExceeded(): Error {
+  const err = new Error("Rate limit exceeded for secret resolution");
+  err.name = "RateLimitExceededError";
   return err;
 }
 
@@ -162,6 +172,47 @@ export interface PluginSecretsService {
   resolve(params: PluginSecretsResolveParams): Promise<string>;
 }
 
+/** Simple sliding-window rate limiter for secret resolution attempts. */
+function createRateLimiter(maxAttempts: number, windowMs: number) {
+  const attempts = new Map<string, number[]>();
+
+  return {
+    check(key: string): boolean {
+      const now = Date.now();
+      const windowStart = now - windowMs;
+      const existing = (attempts.get(key) ?? []).filter((ts) => ts > windowStart);
+      if (existing.length >= maxAttempts) return false;
+      existing.push(now);
+      attempts.set(key, existing);
+      return true;
+    },
+  };
+}
+
+/** Window both rate-limit buckets slide over. */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Budget for attempts that name a secret this plugin is *not* configured to
+ * use. Guessing UUIDs is the attack this bucket exists to stop, so it stays
+ * tight. A plugin that asks for a ref outside its own config is either
+ * misconfigured or probing.
+ */
+const UNKNOWN_REF_LIMIT = 30;
+
+/**
+ * Backstop for refs that *are* in this plugin's own config. These resolutions
+ * are legitimate and can be frequent: a mail plugin resolves its IMAP password
+ * on every connection, so an operator triaging a queue while background polls
+ * run needs dozens a minute. Charging them against the enumeration budget above
+ * is what made ordinary bursts fail with a bridge 502, so this ceiling only
+ * catches a plugin stuck in a resolve loop. Sized off a real install whose
+ * busiest minute wanted roughly 225 resolutions (several mailboxes polling,
+ * IMAP idle notifications, and an operator clicking through a triage queue),
+ * with headroom on top; a genuine runaway loop blows past it in a second.
+ */
+const KNOWN_REF_LIMIT = 1_200;
+
 /**
  * Create a `HostServices.secrets` adapter for a specific plugin.
  *
@@ -185,31 +236,28 @@ export interface PluginSecretsService {
  * @param options - Database connection and plugin identity
  * @returns A `PluginSecretsService` suitable for `HostServices.secrets`
  */
-/** Simple sliding-window rate limiter for secret resolution attempts. */
-function createRateLimiter(maxAttempts: number, windowMs: number) {
-  const attempts = new Map<string, number[]>();
-
-  return {
-    check(key: string): boolean {
-      const now = Date.now();
-      const windowStart = now - windowMs;
-      const existing = (attempts.get(key) ?? []).filter((ts) => ts > windowStart);
-      if (existing.length >= maxAttempts) return false;
-      existing.push(now);
-      attempts.set(key, existing);
-      return true;
-    },
-  };
-}
-
 export function createPluginSecretsHandler(
   options: PluginSecretsHandlerOptions,
 ): PluginSecretsService {
   const { db, pluginId } = options;
   const registry = pluginRegistryService(db);
 
-  // Rate limit: max 30 resolution attempts per plugin per minute
-  const rateLimiter = createRateLimiter(30, 60_000);
+  // Two separate budgets. Enumeration attempts (refs outside this plugin's own
+  // config) are the thing worth throttling hard; resolutions of the plugin's
+  // own configured refs only need a runaway-loop backstop.
+  const unknownRefLimiter = createRateLimiter(UNKNOWN_REF_LIMIT, RATE_LIMIT_WINDOW_MS);
+  const knownRefLimiter = createRateLimiter(KNOWN_REF_LIMIT, RATE_LIMIT_WINDOW_MS);
+
+  /** Charge an off-config attempt and throw once the budget is spent. */
+  function chargeUnknownRefAttempt(): void {
+    if (!unknownRefLimiter.check(pluginId)) {
+      throw rateLimitExceeded();
+    }
+  }
+
+  // A plugin in a resolve loop keeps hitting the backstop, so warn at most once
+  // per window rather than once per rejected call.
+  let lastBackstopWarnAt = 0;
 
   let cachedAllowedRefs: Set<string> | null = null;
   let cachedAllowedRefsExpiry = 0;
@@ -220,24 +268,17 @@ export function createPluginSecretsHandler(
       const { secretRef } = params;
 
       // ---------------------------------------------------------------
-      // 0. Rate limiting — prevent brute-force UUID enumeration
-      // ---------------------------------------------------------------
-      if (!rateLimiter.check(pluginId)) {
-        const err = new Error("Rate limit exceeded for secret resolution");
-        err.name = "RateLimitExceededError";
-        throw err;
-      }
-
-      // ---------------------------------------------------------------
       // 1. Validate the ref format
       // ---------------------------------------------------------------
       if (!secretRef || typeof secretRef !== "string" || secretRef.trim().length === 0) {
+        chargeUnknownRefAttempt();
         throw invalidSecretRef(secretRef ?? "<empty>");
       }
 
       const trimmedRef = secretRef.trim();
 
       if (!isUuidSecretRef(trimmedRef)) {
+        chargeUnknownRefAttempt();
         throw invalidSecretRef(trimmedRef);
       }
 
@@ -262,8 +303,23 @@ export function createPluginSecretsHandler(
       }
 
       if (!cachedAllowedRefs.has(trimmedRef)) {
+        chargeUnknownRefAttempt();
         // Return "not found" to avoid leaking whether the secret exists
         throw secretNotFound(trimmedRef);
+      }
+
+      // ---------------------------------------------------------------
+      // 1c. Runaway-loop backstop for in-config refs
+      // ---------------------------------------------------------------
+      if (!knownRefLimiter.check(pluginId)) {
+        if (now - lastBackstopWarnAt > RATE_LIMIT_WINDOW_MS) {
+          lastBackstopWarnAt = now;
+          logger.warn(
+            { pluginId, limit: KNOWN_REF_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS },
+            "plugin exceeded the secret resolution backstop for its own configured secrets",
+          );
+        }
+        throw rateLimitExceeded();
       }
 
       // ---------------------------------------------------------------

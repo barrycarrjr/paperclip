@@ -26,8 +26,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const errorBody = await res.json().catch(() => null);
+    // Most routes answer with `{ error }`, but the plugin bridge answers with
+    // `{ code, message }`. Without the second lookup every bridge failure
+    // reached the operator as a bare "Request failed: 502".
+    const shape = errorBody as { error?: string; message?: string } | null;
     throw new ApiError(
-      (errorBody as { error?: string } | null)?.error ?? `Request failed: ${res.status}`,
+      shape?.error ?? shape?.message ?? `Request failed: ${res.status}`,
       res.status,
       errorBody,
     );
