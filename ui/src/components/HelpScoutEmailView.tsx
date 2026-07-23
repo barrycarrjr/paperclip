@@ -10,6 +10,7 @@ import {
   AlertCircle,
   StickyNote,
   Send,
+  Sparkles,
   X,
   Clock,
 } from "lucide-react";
@@ -25,6 +26,20 @@ import {
   type HSStatusFilter,
   type HSThread,
 } from "../api/helpScoutBridge";
+import { emailDraftsApi } from "../api/emailDrafts";
+import type { AvailableModel } from "../api/chat";
+import { DraftModelSelect } from "./DraftModelSelect";
+import { pickDraftSource } from "../lib/helpscout-draft-source";
+import {
+  COMPOSER_HEIGHT_STORAGE_KEY,
+  DEFAULT_COMPOSER_HEIGHT,
+  DEFAULT_LIST_WIDTH,
+  LIST_WIDTH_STORAGE_KEY,
+  clampComposerHeight,
+  clampListWidth,
+  loadPaneSize,
+  savePaneSize,
+} from "../lib/helpscout-pane-layout";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
@@ -57,7 +72,13 @@ interface HelpScoutEmailViewProps {
   initialConversationId: string | null;
   initialAction: "reply" | "handoff" | null;
   leftPaneSlot: React.ReactNode;
-  leftPaneWidth: number;
+  /** The mailbox column's resize handle, owned by the Email page so both mail
+   *  surfaces drag the same width. */
+  leftPaneHandleSlot: React.ReactNode;
+  /** AI Draft model, "" = server auto-picks. Shared with the IMAP composer. */
+  draftModel: string;
+  onDraftModelChange: (model: string) => void;
+  draftModels: AvailableModel[];
 }
 
 export function HelpScoutEmailView({
@@ -65,7 +86,10 @@ export function HelpScoutEmailView({
   initialConversationId,
   initialAction,
   leftPaneSlot,
-  leftPaneWidth: _leftPaneWidth,
+  leftPaneHandleSlot,
+  draftModel,
+  onDraftModelChange,
+  draftModels,
 }: HelpScoutEmailViewProps) {
   const queryClient = useQueryClient();
   const { pluginId, primaryCompanyId, accountKey, mailboxId } = mailbox;
@@ -95,6 +119,56 @@ export function HelpScoutEmailView({
   function showToast(t: string) {
     setToast(t);
     setTimeout(() => setToast(null), 3000);
+  }
+
+  // ── Resizable panes ───────────────────────────────────────────────────────
+  // Conversation list width (everything right of it is the message preview)
+  // and composer height. Both persist so the operator's layout survives a
+  // refresh, same treatment the mailbox column's width already gets.
+
+  const [listWidth, setListWidth] = useState(() =>
+    loadPaneSize(LIST_WIDTH_STORAGE_KEY, DEFAULT_LIST_WIDTH, clampListWidth),
+  );
+  const [composerHeight, setComposerHeight] = useState(() =>
+    loadPaneSize(COMPOSER_HEIGHT_STORAGE_KEY, DEFAULT_COMPOSER_HEIGHT, clampComposerHeight),
+  );
+
+  function startListDrag(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = listWidth;
+    let last = startWidth;
+    const onMove = (ev: MouseEvent) => {
+      last = clampListWidth(startWidth + (ev.clientX - startX));
+      setListWidth(last);
+    };
+    const onUp = () => {
+      savePaneSize(LIST_WIDTH_STORAGE_KEY, last);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  // Dragging the composer's top edge upward makes it taller, so the delta is
+  // inverted relative to the cursor's Y movement.
+  function startComposerDrag(e: React.MouseEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = composerHeight;
+    let last = startHeight;
+    const onMove = (ev: MouseEvent) => {
+      last = clampComposerHeight(startHeight - (ev.clientY - startY));
+      setComposerHeight(last);
+    };
+    const onUp = () => {
+      savePaneSize(COMPOSER_HEIGHT_STORAGE_KEY, last);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }
 
   // ── Conversation list ─────────────────────────────────────────────────────
@@ -185,6 +259,22 @@ export function HelpScoutEmailView({
       invalidateList();
     },
     onError: (err) => showToast(`Reply failed: ${(err as Error).message}`),
+  });
+
+  // Whatever's already in the reply box when AI Draft is clicked is treated as
+  // instructions ("tell them we're closed Monday", "keep it short"), not as the
+  // body — the returned draft replaces it. Same contract as the IMAP composer.
+  const draftMutation = useMutation({
+    mutationFn: (input: { source: NonNullable<ReturnType<typeof pickDraftSource>>; instructions: string }) =>
+      emailDraftsApi.draftReply({
+        subject: input.source.subject,
+        from: input.source.from,
+        bodyText: input.source.bodyText,
+        instructions: input.instructions.trim() || undefined,
+        model: draftModel || undefined,
+      }),
+    onSuccess: (result) => setReplyBody(result.draft),
+    onError: (err) => showToast(`Draft failed: ${(err as Error).message}`),
   });
 
   const noteMutation = useMutation({
@@ -302,10 +392,12 @@ export function HelpScoutEmailView({
 
   const selectedSummary = conversations.find((c) => c.id === selectedConvId) ?? null;
   const fullStatus = (full?.status as string | undefined) ?? selectedSummary?.status ?? null;
+  const draftSource = useMemo(() => pickDraftSource(full), [full]);
 
   return (
     <div className="flex h-full w-full min-h-0">
       {leftPaneSlot}
+      {leftPaneHandleSlot}
 
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
@@ -331,7 +423,7 @@ export function HelpScoutEmailView({
         </div>
 
         <div className="flex-1 min-h-0 flex">
-          <div className="w-[360px] shrink-0 border-r border-border flex flex-col">
+          <div className="shrink-0 flex flex-col" style={{ width: listWidth }}>
             <ScrollArea className="flex-1">
               <ConversationListColumn
                 conversations={conversations}
@@ -342,6 +434,13 @@ export function HelpScoutEmailView({
               />
             </ScrollArea>
           </div>
+
+          {/* Drag left to give the message preview more room */}
+          <div
+            className="w-1 shrink-0 cursor-col-resize border-r border-border hover:bg-primary/30 active:bg-primary/50 transition-colors"
+            onMouseDown={startListDrag}
+            title="Drag to resize the conversation list"
+          />
 
           <div className="flex-1 min-w-0 flex flex-col">
             {selectedConvId == null ? (
@@ -523,65 +622,119 @@ export function HelpScoutEmailView({
                 </ScrollArea>
 
                 {replyOpen && (
-                  <div className="border-t border-border p-3 shrink-0 space-y-2">
-                    <Textarea
-                      value={replyBody}
-                      onChange={(e) => setReplyBody(e.target.value)}
-                      placeholder="Reply to the customer"
-                      className="min-h-[120px] text-sm"
+                  <div className="border-t border-border shrink-0">
+                    <div
+                      className="h-1.5 cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+                      onMouseDown={startComposerDrag}
+                      title="Drag up to make the reply box taller"
                     />
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setReplyOpen(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={!replyBody.trim() || replyMutation.isPending}
-                        onClick={() => replyMutation.mutate(replyBody)}
-                      >
-                        {replyMutation.isPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Send className="h-3.5 w-3.5 mr-1" />
-                        )}
-                        Send reply
-                      </Button>
+                    <div className="px-3 pb-3 space-y-2">
+                      <Textarea
+                        value={replyBody}
+                        onChange={(e) => setReplyBody(e.target.value)}
+                        placeholder="Reply to the customer"
+                        // field-sizing-fixed so the dragged height wins over
+                        // the Textarea default's grow-with-content sizing.
+                        className="text-sm resize-none field-sizing-fixed"
+                        style={{ height: composerHeight }}
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <DraftModelSelect
+                          value={draftModel}
+                          onChange={onDraftModelChange}
+                          models={draftModels}
+                        />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!draftSource || draftMutation.isPending}
+                              onClick={() => {
+                                if (draftSource) {
+                                  draftMutation.mutate({
+                                    source: draftSource,
+                                    instructions: replyBody,
+                                  });
+                                }
+                              }}
+                            >
+                              {draftMutation.isPending ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-3.5 w-3.5" />
+                              )}
+                              AI Draft
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {!draftSource
+                              ? "No customer message to draft a reply to"
+                              : replyBody.trim()
+                                ? "Use what you've typed as instructions and draft a reply"
+                                : "Draft a reply with AI"}
+                          </TooltipContent>
+                        </Tooltip>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setReplyOpen(false)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={!replyBody.trim() || replyMutation.isPending}
+                          onClick={() => replyMutation.mutate(replyBody)}
+                        >
+                          {replyMutation.isPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Send className="h-3.5 w-3.5 mr-1" />
+                          )}
+                          Send reply
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}
 
                 {noteOpen && (
-                  <div className="border-t border-border p-3 shrink-0 space-y-2 bg-muted/30">
-                    <Textarea
-                      value={noteBody}
-                      onChange={(e) => setNoteBody(e.target.value)}
-                      placeholder="Internal note (customer never sees this)"
-                      className="min-h-[100px] text-sm"
+                  <div className="border-t border-border shrink-0 bg-muted/30">
+                    <div
+                      className="h-1.5 cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+                      onMouseDown={startComposerDrag}
+                      title="Drag up to make the note box taller"
                     />
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setNoteOpen(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={!noteBody.trim() || noteMutation.isPending}
-                        onClick={() => noteMutation.mutate(noteBody)}
-                      >
-                        {noteMutation.isPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <StickyNote className="h-3.5 w-3.5 mr-1" />
-                        )}
-                        Add note
-                      </Button>
+                    <div className="px-3 pb-3 space-y-2">
+                      <Textarea
+                        value={noteBody}
+                        onChange={(e) => setNoteBody(e.target.value)}
+                        placeholder="Internal note (customer never sees this)"
+                        className="text-sm resize-none field-sizing-fixed"
+                        style={{ height: composerHeight }}
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setNoteOpen(false)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={!noteBody.trim() || noteMutation.isPending}
+                          onClick={() => noteMutation.mutate(noteBody)}
+                        >
+                          {noteMutation.isPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <StickyNote className="h-3.5 w-3.5 mr-1" />
+                          )}
+                          Add note
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}

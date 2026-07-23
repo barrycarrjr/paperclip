@@ -41,13 +41,6 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -59,6 +52,7 @@ import {
   type HelpScoutMailboxRef,
 } from "../lib/mailboxKind";
 import { HelpScoutEmailView } from "../components/HelpScoutEmailView";
+import { DraftModelSelect } from "../components/DraftModelSelect";
 import { emailDraftsApi } from "../api/emailDrafts";
 import { chatApi } from "../api/chat";
 import { issuesApi } from "../api/issues";
@@ -1769,6 +1763,22 @@ export function Email() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Drag handle for the mailbox column — drag to resize, double-click to
+  // collapse/expand. Shared with the Help Scout view so both mail surfaces
+  // resize the same way.
+  const leftPaneDragHandle = (
+    <div
+      className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+      onMouseDown={startLeftPaneDrag}
+      onDoubleClick={() => setLeftPaneCollapsedPersist(!leftPaneCollapsed)}
+      title={
+        leftPaneCollapsed
+          ? "Drag or double-click to expand"
+          : "Drag to resize · double-click to collapse"
+      }
+    />
+  );
+
   if (selectedHelpScoutRef && selectedHelpScoutRef.pluginId) {
     return (
       <HelpScoutEmailView
@@ -1780,7 +1790,10 @@ export function Email() {
             : null
         }
         leftPaneSlot={leftPane}
-        leftPaneWidth={leftPaneWidth}
+        leftPaneHandleSlot={leftPaneDragHandle}
+        draftModel={draftModel}
+        onDraftModelChange={updateDraftModel}
+        draftModels={draftModels}
       />
     );
   }
@@ -1789,17 +1802,7 @@ export function Email() {
     <div className="flex h-full overflow-hidden">
       {leftPane}
 
-      {/* Drag handle for left pane — drag to resize, double-click to collapse/expand */}
-      <div
-        className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
-        onMouseDown={startLeftPaneDrag}
-        onDoubleClick={() => setLeftPaneCollapsedPersist(!leftPaneCollapsed)}
-        title={
-          leftPaneCollapsed
-            ? "Drag or double-click to expand"
-            : "Drag to resize · double-click to collapse"
-        }
-      />
+      {leftPaneDragHandle}
 
       {selectedUid ? (
         // ── 3-pane view: narrow list + detail ──────────────────────────────
@@ -2125,38 +2128,11 @@ export function Email() {
                       onContentChange={setReplyHasContent}
                     />
                     <div className="flex items-center justify-end gap-2">
-                      <Select
-                        value={draftModel || "__auto__"}
-                        onValueChange={(v) => updateDraftModel(v === "__auto__" ? "" : v)}
-                      >
-                        <SelectTrigger
-                          size="sm"
-                          className="h-8 w-auto max-w-[180px] gap-1 px-2 text-xs"
-                          title="Model used for AI Draft"
-                        >
-                          <SelectValue placeholder="Auto" />
-                        </SelectTrigger>
-                        <SelectContent align="end" className="max-h-72">
-                          <SelectItem value="__auto__">Auto (server picks)</SelectItem>
-                          {draftModels.length === 0 ? (
-                            <SelectItem value="__none__" disabled>
-                              No models available
-                            </SelectItem>
-                          ) : (
-                            draftModels.map((m) => {
-                              const display = formatDraftModelLabel(m.model);
-                              return (
-                                <SelectItem key={`${m.provider}:${m.model}:${m.source ?? ""}`} value={m.model}>
-                                  <span className="font-mono">{display}</span>
-                                  {m.source ? (
-                                    <span className="ml-2 text-[10px] text-muted-foreground">via {m.source}</span>
-                                  ) : null}
-                                </SelectItem>
-                              );
-                            })
-                          )}
-                        </SelectContent>
-                      </Select>
+                      <DraftModelSelect
+                        value={draftModel}
+                        onChange={updateDraftModel}
+                        models={draftModels}
+                      />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
@@ -2396,12 +2372,3 @@ function extractSender(msg: MailHeader): string {
   return addrMatch ? addrMatch[1]! : msg.from;
 }
 
-// Adapter-routed model ids encode as `adapter:<adapterType>:<modelId>`.
-// Strip the prefix so the dropdown shows the plain model name; the adapter
-// source is rendered separately as a "via X" hint.
-function formatDraftModelLabel(modelId: string): string {
-  if (!modelId.startsWith("adapter:")) return modelId;
-  const rest = modelId.slice("adapter:".length);
-  const sep = rest.indexOf(":");
-  return sep > 0 ? rest.slice(sep + 1) : modelId;
-}
