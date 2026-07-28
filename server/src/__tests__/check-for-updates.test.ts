@@ -216,4 +216,83 @@ describe("checkForRemoteUpdate", () => {
     expect(result.error).toBe("github_unreachable");
     expect(result.available).toBe(false);
   });
+
+  // install.json's `commit` is only rewritten by the final step of
+  // update-paperclip.bat. An update that dies before that step (and any local
+  // commit or manual `git pull`) leaves it behind the real checkout, so the
+  // live HEAD has to win or the UI offers an update that already happened.
+  describe("local commit resolution", () => {
+    const LIVE_HEAD = "7050126a0000000000000000000000000000beef";
+
+    it("prefers the checkout's live HEAD over a stale marker commit", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => LIVE_HEAD);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: LIVE_HEAD }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.localCommit).toBe(LIVE_HEAD);
+      expect(result.available).toBe(false);
+      expect(headImpl).toHaveBeenCalledWith(SAMPLE_INSTALL.repoPath);
+    });
+
+    it("still reports an update when the live HEAD is behind the remote", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => LIVE_HEAD);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: "feedface" }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.localCommit).toBe(LIVE_HEAD);
+      expect(result.remoteCommit).toBe("feedface");
+      expect(result.available).toBe(true);
+    });
+
+    it("falls back to the marker commit when HEAD can't be read", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => null);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: "feedface" }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.localCommit).toBe(SAMPLE_INSTALL.commit);
+      expect(result.available).toBe(true);
+    });
+
+    it("uses the live HEAD on the early-return paths too", async () => {
+      mockInstall({ remote: "https://gitlab.com/foo/bar.git" });
+      const headImpl = vi.fn(async () => LIVE_HEAD);
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: vi.fn() as never,
+        headImpl,
+      });
+
+      expect(result.error).toBe("unsupported_remote");
+      expect(result.localCommit).toBe(LIVE_HEAD);
+    });
+
+    it("reports no update when both HEAD and marker are unreadable", async () => {
+      mockInstall({ commit: undefined });
+      const headImpl = vi.fn(async () => null);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: "feedface" }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.localCommit).toBeNull();
+      expect(result.available).toBe(false);
+    });
+  });
 });

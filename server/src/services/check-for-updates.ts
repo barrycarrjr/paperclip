@@ -1,7 +1,15 @@
 /**
- * Compares the local checkout's commit (recorded in `~/.paperclip/install.json`
- * by install-paperclip.bat / update-paperclip.bat) against the latest commit on
- * the install's tracked branch via the GitHub REST API.
+ * Compares the local checkout's current commit against the latest commit on the
+ * install's tracked branch via the GitHub REST API.
+ *
+ * The local side is read from the checkout itself (`git rev-parse HEAD`), not
+ * from the `commit` field in `~/.paperclip/install.json`. That field is only
+ * rewritten when the update flow runs all the way to its final step, so any
+ * other way the checkout moves forward (a local commit, a manual `git pull`, or
+ * an update that dies partway through) leaves it pointing at an older commit
+ * and the UI keeps offering an update that has already been applied. The marker
+ * is still the source of truth for *where* the checkout lives, and its recorded
+ * commit is kept as a fallback for when git can't be run.
  *
  * The result drives the UI's "update available" indicator. Cached in-process
  * with a short TTL so repeated UI polls and multi-tab sessions don't burn
@@ -13,14 +21,20 @@
  * hosts) are not supported here; we surface a benign `unsupported_remote`
  * error and the UI hides its indicator.
  */
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { gitHubApiBase, ghFetch } from "./github-fetch.js";
 import { logger } from "../middleware/logger.js";
 
 const DEFAULT_BRANCH = "master";
 const REMOTE_FETCH_TTL_MS = 5 * 60 * 1000;
+/** Upper bound on the `git rev-parse HEAD` call so a wedged git can't stall the route. */
+const GIT_HEAD_TIMEOUT_MS = 5_000;
+
+const execFileAsync = promisify(execFile);
 
 export type UpdateCheckErrorReason =
   | "no_install_marker"
@@ -39,6 +53,7 @@ export interface UpdateCheckResult {
 }
 
 interface InstallInfo {
+  repoPath: string | null;
   remote: string | null;
   branch: string | null;
   commit: string | null;
@@ -63,15 +78,40 @@ function readInstallInfo(): InstallInfo | null {
     // Strip a UTF-8 BOM the install scripts can leave behind on Windows.
     const cleaned = raw.replace(/^﻿/, "");
     const parsed = JSON.parse(cleaned) as {
+      repoPath?: unknown;
       remote?: unknown;
       branch?: unknown;
       commit?: unknown;
     };
+    const repoPath = typeof parsed.repoPath === "string" && parsed.repoPath.length > 0 ? parsed.repoPath : null;
     const remote = typeof parsed.remote === "string" && parsed.remote.length > 0 ? parsed.remote : null;
     const branch = typeof parsed.branch === "string" && parsed.branch.length > 0 ? parsed.branch : null;
     const commit = typeof parsed.commit === "string" && parsed.commit.length > 0 ? parsed.commit : null;
-    return { remote, branch, commit };
+    return { repoPath, remote, branch, commit };
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the checkout's current HEAD commit. Returns null (and the caller falls
+ * back to the install marker) whenever we can't get a definitive answer: no
+ * recorded repo path, the path no longer exists, git isn't installed, or the
+ * directory isn't a git checkout.
+ */
+async function readCheckoutHead(repoPath: string | null): Promise<string | null> {
+  if (!repoPath || !existsSync(repoPath)) return null;
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", repoPath, "rev-parse", "HEAD"], {
+      timeout: GIT_HEAD_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    const sha = stdout.trim();
+    // Guard against git printing something unexpected (a warning, an empty
+    // line on a repo with no commits) and it being taken for a real SHA.
+    return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+  } catch (err) {
+    logger.warn({ err, repoPath }, "Update check: could not read local git HEAD");
     return null;
   }
 }
@@ -126,6 +166,8 @@ interface FetchOptions {
   now?: () => number;
   /** Override `ghFetch` for tests. */
   fetchImpl?: typeof ghFetch;
+  /** Override the local `git rev-parse HEAD` read for tests. */
+  headImpl?: (repoPath: string | null) => Promise<string | null>;
 }
 
 /**
@@ -206,10 +248,15 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
     };
   }
 
+  // Prefer the checkout's real HEAD; the marker's recorded commit goes stale
+  // any time the checkout moves without a completed update run.
+  const readHead = opts.headImpl ?? readCheckoutHead;
+  const localCommit = (await readHead(info.repoPath)) ?? info.commit;
+
   if (!info.remote) {
     return {
       available: false,
-      localCommit: info.commit,
+      localCommit,
       remoteCommit: null,
       branch: info.branch,
       lastChecked,
@@ -221,7 +268,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
   if (!parsed || !isGitHubHostname(parsed.hostname)) {
     return {
       available: false,
-      localCommit: info.commit,
+      localCommit,
       remoteCommit: null,
       branch: info.branch,
       lastChecked,
@@ -235,7 +282,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
   if (!remoteCommit) {
     return {
       available: false,
-      localCommit: info.commit,
+      localCommit,
       remoteCommit: null,
       branch,
       lastChecked,
@@ -243,10 +290,10 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
     };
   }
 
-  const available = Boolean(info.commit) && info.commit !== remoteCommit;
+  const available = Boolean(localCommit) && localCommit !== remoteCommit;
   return {
     available,
-    localCommit: info.commit,
+    localCommit,
     remoteCommit,
     branch,
     lastChecked,
