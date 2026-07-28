@@ -39,6 +39,10 @@ export interface HSThread {
   customer?: { email?: string; first?: string; last?: string };
   createdAt?: string;
   state?: string;
+  /** Only on `lineitem` threads, which record a state change (closed,
+   *  assigned, moved) and carry no body. `text` is Help Scout's own readable
+   *  summary; `type` is an internal slug like `changed-ticket-status`. */
+  action?: { type?: string; text?: string };
 }
 
 /** Full conversation as Help Scout returns it; we keep this loose because the

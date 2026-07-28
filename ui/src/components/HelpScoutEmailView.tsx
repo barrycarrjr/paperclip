@@ -35,6 +35,7 @@ import { DraftModelSelect } from "./DraftModelSelect";
 import { DraftInstructionsField } from "./DraftInstructionsField";
 import { pickDraftSource } from "../lib/helpscout-draft-source";
 import { isComposeReady } from "../lib/helpscout-compose";
+import { describeThreadEvent, isThreadEvent } from "../lib/helpscout-thread-event";
 import {
   COMPOSER_HEIGHT_STORAGE_KEY,
   DEFAULT_COMPOSER_HEIGHT,
@@ -1074,6 +1075,19 @@ function ThreadCard({ thread }: { thread: HSThread }) {
   const body = thread.body || thread.text || "";
   const isNote = kind === "note";
   const isReply = kind === "reply" || kind === "message";
+
+  // A lineitem is a state change, not a message — it has no body by design.
+  // Render it the way Help Scout does: a thin timeline marker, not a card.
+  if (isThreadEvent(thread)) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />
+        <span className="shrink-0">{describeThreadEvent(thread)}</span>
+        {ts && <span className="shrink-0 text-[10px]">{timeAgo(ts)}</span>}
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    );
+  }
 
   return (
     <div
