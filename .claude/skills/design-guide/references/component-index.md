@@ -163,6 +163,24 @@ Use in property rows, comment headers, assignee displays, and anywhere a user/ag
 <InlineEditor value={title} onSave={updateTitle} as="h2" className="text-xl font-bold" />
 ```
 
+### DraftInstructionsField
+
+**File:** `DraftInstructionsField.tsx`
+**Props:** `value: string`, `onChange: (val: string) => void`, `onSubmit: () => void`, `refining?: boolean`, `disabled?: boolean`, `className?: string`
+**Usage:** Steering box for an AI Draft button — the operator types what the reply should say, then presses Enter or clicks the button. Sits directly above a reply composer. Set `refining` once there is draft text to change, which switches the placeholder from "what to say" to "what to change".
+
+```tsx
+<DraftInstructionsField
+  value={draftInstructions}
+  onChange={setDraftInstructions}
+  onSubmit={runDraft}
+  refining={hasDraft}
+  disabled={draftMutation.isPending}
+/>
+```
+
+Used by the Help Scout and IMAP reply composers on the Email page.
+
 ### PageSkeleton
 
 **File:** `PageSkeleton.tsx`

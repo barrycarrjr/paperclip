@@ -119,6 +119,39 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    /** Start a brand new conversation — the mail view's "compose". Needs
+     *  help-scout plugin >= 0.5.16; older builds have no such action. */
+    createConversation: async (
+      accountKey: string,
+      input: {
+        mailboxId?: string;
+        to: string;
+        subject: string;
+        body: string;
+        firstName?: string;
+        lastName?: string;
+      },
+    ): Promise<{ ok: true; id: string | null }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "helpscout.create-conversation",
+        {
+          companyId,
+          accountKey,
+          mailboxId: input.mailboxId,
+          subject: input.subject,
+          body: input.body,
+          customer: {
+            email: input.to,
+            firstName: input.firstName,
+            lastName: input.lastName,
+          },
+        },
+        companyId,
+      );
+      return extract(result);
+    },
+
     sendReply: async (
       accountKey: string,
       conversationId: string,

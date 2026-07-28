@@ -11,6 +11,7 @@ import {
   StickyNote,
   Send,
   Sparkles,
+  Pencil,
   X,
   Clock,
 } from "lucide-react";
@@ -19,6 +20,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   makeHelpScoutBridgeApi,
   type HSConversationSummary,
@@ -29,7 +32,9 @@ import {
 import { emailDraftsApi } from "../api/emailDrafts";
 import type { AvailableModel } from "../api/chat";
 import { DraftModelSelect } from "./DraftModelSelect";
+import { DraftInstructionsField } from "./DraftInstructionsField";
 import { pickDraftSource } from "../lib/helpscout-draft-source";
+import { isComposeReady } from "../lib/helpscout-compose";
 import {
   COMPOSER_HEIGHT_STORAGE_KEY,
   DEFAULT_COMPOSER_HEIGHT,
@@ -112,9 +117,18 @@ export function HelpScoutEmailView({
   );
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
+  const [draftInstructions, setDraftInstructions] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteBody, setNoteBody] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  // Compose a brand new conversation. Plain controlled state rather than the
+  // Email page's DraftInput isolation — this component is small enough that a
+  // re-render per keystroke costs nothing.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeTo, setComposeTo] = useState("");
+  const [composeSubject, setComposeSubject] = useState("");
+  const [composeBody, setComposeBody] = useState("");
+  const [composeInstructions, setComposeInstructions] = useState("");
 
   function showToast(t: string) {
     setToast(t);
@@ -243,9 +257,16 @@ export function HelpScoutEmailView({
     if (pendingReplyOnOpen && full && full.id !== undefined) {
       setReplyOpen(true);
       setReplyBody("");
+      setDraftInstructions("");
       setPendingReplyOnOpen(false);
     }
   }, [full, pendingReplyOnOpen]);
+
+  // Draft instructions belong to one conversation — "tell them Q3 for guest
+  // checkout" must never carry over to the next customer.
+  useEffect(() => {
+    setDraftInstructions("");
+  }, [selectedConvId]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -254,6 +275,7 @@ export function HelpScoutEmailView({
     onSuccess: () => {
       setReplyOpen(false);
       setReplyBody("");
+      setDraftInstructions("");
       showToast("Reply sent.");
       invalidateFull();
       invalidateList();
@@ -261,20 +283,93 @@ export function HelpScoutEmailView({
     onError: (err) => showToast(`Reply failed: ${(err as Error).message}`),
   });
 
-  // Whatever's already in the reply box when AI Draft is clicked is treated as
-  // instructions ("tell them we're closed Monday", "keep it short"), not as the
-  // body — the returned draft replaces it. Same contract as the IMAP composer.
+  // The instructions field steers the draft; the reply box holds the reply
+  // itself. When the box already has text we send it along so the model revises
+  // it in place, which is what makes a second click a refinement rather than a
+  // fresh start. Same contract as the IMAP composer.
   const draftMutation = useMutation({
-    mutationFn: (input: { source: NonNullable<ReturnType<typeof pickDraftSource>>; instructions: string }) =>
+    mutationFn: (input: {
+      source: NonNullable<ReturnType<typeof pickDraftSource>>;
+      instructions: string;
+      currentDraft: string;
+    }) =>
       emailDraftsApi.draftReply({
         subject: input.source.subject,
         from: input.source.from,
         bodyText: input.source.bodyText,
         instructions: input.instructions.trim() || undefined,
+        currentDraft: input.currentDraft.trim() || undefined,
         model: draftModel || undefined,
       }),
     onSuccess: (result) => setReplyBody(result.draft),
     onError: (err) => showToast(`Draft failed: ${(err as Error).message}`),
+  });
+
+  function runDraft() {
+    if (!draftSource || draftMutation.isPending) return;
+    draftMutation.mutate({
+      source: draftSource,
+      instructions: draftInstructions,
+      currentDraft: replyBody,
+    });
+  }
+
+  const composeMutation = useMutation({
+    mutationFn: (input: { to: string; subject: string; body: string }) =>
+      api.createConversation(accountKey, { ...input, mailboxId }),
+    onSuccess: (result) => {
+      setComposeOpen(false);
+      setComposeTo("");
+      setComposeSubject("");
+      setComposeBody("");
+      setComposeInstructions("");
+      showToast("Message sent.");
+      invalidateList();
+      // Help Scout files a new conversation as "active"; jump straight to it so
+      // the operator sees it even when the current filter would hide it.
+      if (result.id) setSelectedConvId(result.id);
+    },
+    onError: (err) => showToast(`Send failed: ${(err as Error).message}`),
+  });
+
+  // AI draft for a brand new message. Nothing to reply to here, so the
+  // instructions carry the whole message — "chase them for artwork files".
+  const composeDraftMutation = useMutation({
+    mutationFn: () =>
+      emailDraftsApi.draftReply({
+        mode: "new",
+        to: composeTo.trim() || undefined,
+        subject: composeSubject.trim() || undefined,
+        bodyText: "",
+        instructions: composeInstructions.trim() || undefined,
+        currentDraft: composeBody.trim() || undefined,
+        model: draftModel || undefined,
+      }),
+    onSuccess: (result) => setComposeBody(result.draft),
+    onError: (err) => showToast(`Draft failed: ${(err as Error).message}`),
+  });
+
+  function runComposeDraft() {
+    if (composeDraftMutation.isPending) return;
+    if (!composeInstructions.trim() && !composeSubject.trim() && !composeBody.trim()) {
+      showToast("Tell the AI what the message should say first.");
+      return;
+    }
+    composeDraftMutation.mutate();
+  }
+
+  function openCompose() {
+    setComposeTo("");
+    setComposeSubject("");
+    setComposeBody("");
+    setComposeInstructions("");
+    setComposeOpen(true);
+  }
+
+  const composeReady = isComposeReady({
+    to: composeTo,
+    subject: composeSubject,
+    body: composeBody,
   });
 
   const noteMutation = useMutation({
@@ -419,6 +514,20 @@ export function HelpScoutEmailView({
                 {opt.label}
               </button>
             ))}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="ml-1"
+                  onClick={openCompose}
+                  aria-label="Compose new message"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Compose new message</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -478,6 +587,7 @@ export function HelpScoutEmailView({
                           onClick={() => {
                             setReplyOpen(true);
                             setReplyBody("");
+                            setDraftInstructions("");
                           }}
                           aria-label="Reply"
                         >
@@ -638,6 +748,13 @@ export function HelpScoutEmailView({
                         className="text-sm resize-none field-sizing-fixed"
                         style={{ height: composerHeight }}
                       />
+                      <DraftInstructionsField
+                        value={draftInstructions}
+                        onChange={setDraftInstructions}
+                        onSubmit={runDraft}
+                        refining={!!replyBody.trim()}
+                        disabled={!draftSource || draftMutation.isPending}
+                      />
                       <div className="flex items-center justify-end gap-2">
                         <DraftModelSelect
                           value={draftModel}
@@ -650,29 +767,22 @@ export function HelpScoutEmailView({
                               size="sm"
                               variant="outline"
                               disabled={!draftSource || draftMutation.isPending}
-                              onClick={() => {
-                                if (draftSource) {
-                                  draftMutation.mutate({
-                                    source: draftSource,
-                                    instructions: replyBody,
-                                  });
-                                }
-                              }}
+                              onClick={runDraft}
                             >
                               {draftMutation.isPending ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               ) : (
                                 <Sparkles className="h-3.5 w-3.5" />
                               )}
-                              AI Draft
+                              {replyBody.trim() ? "AI Revise" : "AI Draft"}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
                             {!draftSource
                               ? "No customer message to draft a reply to"
                               : replyBody.trim()
-                                ? "Use what you've typed as instructions and draft a reply"
-                                : "Draft a reply with AI"}
+                                ? "Rewrite the reply above, applying your instructions"
+                                : "Write a reply with AI, following your instructions"}
                           </TooltipContent>
                         </Tooltip>
                         <Button
@@ -743,6 +853,104 @@ export function HelpScoutEmailView({
           </div>
         </div>
       </div>
+
+      <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>New message from {mailbox.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
+              <Input
+                value={composeTo}
+                onChange={(e) => setComposeTo(e.target.value)}
+                placeholder="customer@example.com"
+                className="text-sm"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                Subject
+              </label>
+              <Input
+                value={composeSubject}
+                onChange={(e) => setComposeSubject(e.target.value)}
+                placeholder="Subject"
+                className="text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                Message
+              </label>
+              <Textarea
+                value={composeBody}
+                onChange={(e) => setComposeBody(e.target.value)}
+                placeholder="Write your message…"
+                className="min-h-[180px] max-h-[400px] text-sm resize-none overflow-y-auto"
+              />
+            </div>
+            <DraftInstructionsField
+              value={composeInstructions}
+              onChange={setComposeInstructions}
+              onSubmit={runComposeDraft}
+              refining={!!composeBody.trim()}
+              disabled={composeDraftMutation.isPending}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <DraftModelSelect
+              value={draftModel}
+              onChange={onDraftModelChange}
+              models={draftModels}
+            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  disabled={composeDraftMutation.isPending}
+                  onClick={runComposeDraft}
+                >
+                  {composeDraftMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  {composeBody.trim() ? "AI Revise" : "AI Draft"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {composeBody.trim()
+                  ? "Rewrite the message above, applying your instructions"
+                  : "Write the message with AI, following your instructions"}
+              </TooltipContent>
+            </Tooltip>
+            <div className="flex-1" />
+            <Button variant="ghost" onClick={() => setComposeOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!composeReady || composeMutation.isPending}
+              onClick={() =>
+                composeMutation.mutate({
+                  to: composeTo.trim(),
+                  subject: composeSubject.trim(),
+                  body: composeBody.trim(),
+                })
+              }
+            >
+              {composeMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {toast && (
         <div className="fixed bottom-4 right-4 bg-foreground text-background text-xs px-3 py-2 rounded shadow-lg z-50">

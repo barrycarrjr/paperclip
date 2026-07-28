@@ -121,6 +121,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { InlineEditor } from "@/components/InlineEditor";
+import { DraftInstructionsField } from "@/components/DraftInstructionsField";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
 import { IssueReferencePill } from "@/components/IssueReferencePill";
@@ -181,6 +182,7 @@ export function DesignGuide() {
   const [collapsibleOpen, setCollapsibleOpen] = useState(false);
   const [inlineText, setInlineText] = useState("Click to edit this text");
   const [inlineTitle, setInlineTitle] = useState("Editable Title");
+  const [draftInstructions, setDraftInstructions] = useState("");
   const [inlineDesc, setInlineDesc] = useState(
     "This is an editable description. Click to edit it — the textarea auto-sizes to fit the content without layout shift."
   );
@@ -224,8 +226,8 @@ export function DesignGuide() {
             <div className="flex flex-wrap gap-2">
               {[
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
-                "FilterBar", "InlineEditor", "PageSkeleton", "Identity", "CommentThread", "MarkdownEditor",
-                "PropertiesPanel", "Sidebar", "CommandPalette",
+                "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
+                "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -511,6 +513,37 @@ export function DesignGuide() {
               <div className="flex items-center gap-2">
                 <Checkbox id="check3" disabled />
                 <Label htmlFor="check3">Disabled item</Label>
+              </div>
+            </div>
+          </SubSection>
+
+          <SubSection title="Draft Instructions Field">
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Empty (first draft)</p>
+                <DraftInstructionsField
+                  value={draftInstructions}
+                  onChange={setDraftInstructions}
+                  onSubmit={() => {}}
+                />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Refining an existing draft</p>
+                <DraftInstructionsField
+                  value={draftInstructions}
+                  onChange={setDraftInstructions}
+                  onSubmit={() => {}}
+                  refining
+                />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Disabled (draft in flight)</p>
+                <DraftInstructionsField
+                  value={draftInstructions}
+                  onChange={setDraftInstructions}
+                  onSubmit={() => {}}
+                  disabled
+                />
               </div>
             </div>
           </SubSection>

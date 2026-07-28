@@ -10,16 +10,36 @@ import {
   type CanonicalMessage,
   type ChatProvider,
 } from "../services/chat-providers.js";
+import { buildDraftUserText, stripDraftPreamble } from "../services/email-draft-text.js";
 
 const draftReplySchema = z.object({
   subject: z.string().max(500).optional(),
   from: z.string().max(500).optional(),
+  /** Recipient — only meaningful when composing a new message. */
+  to: z.string().max(500).optional(),
   bodyText: z.string().max(50_000).default(""),
   instructions: z.string().max(2000).optional(),
+  /** Reply text already in the composer — when set, the model revises it
+   *  instead of starting over, so the operator can nudge a draft repeatedly. */
+  currentDraft: z.string().max(20_000).optional(),
+  /** "reply" answers an email the operator received; "new" writes a first
+   *  message to someone, where there is no incoming email to work from. */
+  mode: z.enum(["reply", "new"]).default("reply"),
   model: z.string().max(200).optional(),
 });
 
-const SYSTEM_PROMPT = [
+/** Shared tail — the composer pastes the response in verbatim, so it has to
+ *  be the message and nothing else. */
+const OUTPUT_RULES = [
+  "Your entire response is pasted straight into the operator's compose box and sent to",
+  "the recipient as-is, so it must contain nothing but the message itself:",
+  "- Begin with the first word of the message. Never announce what you are about to do.",
+  '- Never write lead-ins like "Here is the draft:", "Sure, here you go:", or "Let me write that".',
+  "- Never restate or comment on the task, the instructions, or your reasoning.",
+  "- Add no commentary afterwards either — no \"let me know if you'd like changes\".",
+].join("\n");
+
+const REPLY_SYSTEM_PROMPT = [
   "You are drafting a reply to an email on behalf of the operator who received it.",
   "Read the email and produce a polite, concise reply.",
   "",
@@ -29,7 +49,28 @@ const SYSTEM_PROMPT = [
   "- Address the points raised; do not invent facts.",
   "- If the email asks specific questions you cannot answer, acknowledge the question and ask for the missing detail rather than guessing.",
   "- Keep it under 200 words unless the email is unusually detailed.",
-  "- Output plain text only — no markdown, no headers, no preamble like \"Here is a draft\".",
+  "- Output plain text only — no markdown, no headers.",
+  "",
+  OUTPUT_RULES,
+].join("\n");
+
+const NEW_MESSAGE_SYSTEM_PROMPT = [
+  "You are writing a new outbound email on behalf of the operator. There is no",
+  "incoming email — the operator's instructions describe what they want to say.",
+  "",
+  "Guidelines:",
+  "- Write only the body. Do not include a salutation line, a subject line, or a signature.",
+  "- Professional and warm, and as brief as the message allows.",
+  "- Invent nothing. Order numbers, dates, prices, names, commitments and delivery",
+  "  times must come from the operator's instructions. If a detail is missing, either",
+  "  leave it out or ask the recipient for it — never make one up and never write a",
+  "  placeholder like [date] or [order number].",
+  "- If the instructions are too thin to write from, write the shortest honest message",
+  "  that opens the conversation rather than padding it with invented specifics.",
+  "- Keep it under 200 words unless the instructions call for more.",
+  "- Output plain text only — no markdown, no headers.",
+  "",
+  OUTPUT_RULES,
 ].join("\n");
 
 // When the caller explicitly chose a model, honor it — including adapter-routed
@@ -67,7 +108,25 @@ export function emailDraftRoutes() {
     const parsed = draftReplySchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.message);
 
-    const { subject, from, bodyText, instructions, model: requestedModel } = parsed.data;
+    const {
+      subject,
+      from,
+      to,
+      bodyText,
+      instructions,
+      currentDraft,
+      mode,
+      model: requestedModel,
+    } = parsed.data;
+    const revising = !!currentDraft?.trim();
+
+    // A new message has no incoming email, so the instructions (or at minimum a
+    // subject) are the only thing to write from. Without either, the model can
+    // only invent — better to say so than to hand back a fabricated email.
+    if (mode === "new" && !instructions?.trim() && !subject?.trim() && !revising) {
+      throw badRequest("Tell the AI what the message should say, or fill in a subject first.");
+    }
+
     const pick = pickProviderAndModel(requestedModel);
     if (!pick) {
       throw badRequest(
@@ -78,19 +137,15 @@ export function emailDraftRoutes() {
     }
     const { provider, model } = pick;
 
-    const userText = [
-      "Email I am replying to:",
-      from ? `From: ${from}` : null,
-      subject ? `Subject: ${subject}` : null,
-      "",
-      bodyText.slice(0, 30_000) || "(empty body)",
-      "",
-      instructions ? `Additional instructions from the operator: ${instructions}` : null,
-      "",
-      "Write the body of the reply now.",
-    ]
-      .filter((line): line is string => line !== null)
-      .join("\n");
+    const userText = buildDraftUserText({
+      mode,
+      subject,
+      from,
+      to,
+      bodyText,
+      instructions,
+      currentDraft,
+    });
 
     const messages: CanonicalMessage[] = [{ role: "user", content: userText }];
 
@@ -112,7 +167,7 @@ export function emailDraftRoutes() {
     try {
       const stream = provider.streamTurn({
         model,
-        system: SYSTEM_PROMPT,
+        system: mode === "new" ? NEW_MESSAGE_SYSTEM_PROMPT : REPLY_SYSTEM_PROMPT,
         messages,
         adapterContext,
       });
@@ -138,7 +193,7 @@ export function emailDraftRoutes() {
       return;
     }
 
-    res.json({ draft: accumulated.trim(), model });
+    res.json({ draft: stripDraftPreamble(accumulated), model });
   });
 
   return router;

@@ -53,6 +53,7 @@ import {
 } from "../lib/mailboxKind";
 import { HelpScoutEmailView } from "../components/HelpScoutEmailView";
 import { DraftModelSelect } from "../components/DraftModelSelect";
+import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
 import { chatApi } from "../api/chat";
 import { issuesApi } from "../api/issues";
@@ -485,6 +486,9 @@ export function Email() {
   const [replyAll, setReplyAll] = useState(false);
   const [replyHasContent, setReplyHasContent] = useState(false);
   const replyComposerRef = useRef<DraftFieldHandle>(null);
+  // Steering text for AI Draft. Deliberately separate from the reply body: it
+  // survives drafting so a second click refines rather than starting over.
+  const [draftInstructions, setDraftInstructions] = useState("");
   // AI Draft model — empty string = let server auto-pick. Persisted so the
   // operator doesn't have to re-pick on every reply.
   const [draftModel, setDraftModel] = useState<string>(() => {
@@ -511,6 +515,9 @@ export function Email() {
   // uses the singleton compose-* keys, "forward" uses per-message forward-*.
   const [composeMode, setComposeMode] = useState<"new" | "forward">("new");
   const [composeSourceUid, setComposeSourceUid] = useState<number | null>(null);
+  // Steering text for the compose dialog's AI Draft. Only offered for "new" —
+  // rewriting a forward would mangle the message being forwarded.
+  const [composeInstructions, setComposeInstructions] = useState("");
 
   // ── Available LLM models (for AI Draft picker) ────────────────────────────
 
@@ -698,6 +705,8 @@ export function Email() {
   function openReplyFor(uid: number) {
     const saved = selectedMailbox ? loadDraft(replyDraftKey(selectedMailbox, uid)) : "";
     setReplyHasContent(saved.trim().length > 0);
+    // Instructions are per-message — never carry them into the next reply.
+    setDraftInstructions("");
     setReplyOpen(true);
     setTimeout(() => replyComposerRef.current?.focus(), 50);
   }
@@ -736,6 +745,7 @@ export function Email() {
     setComposeToHasContent(to.trim().length > 0);
     setComposeSubjectHasContent(subject.trim().length > 0);
     setComposeBodyHasContent(body.trim().length > 0);
+    setComposeInstructions("");
     setComposeOpen(true);
   }
 
@@ -1023,21 +1033,31 @@ export function Email() {
       if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
       setReplyOpen(false);
       setReplyHasContent(false);
+      setDraftInstructions("");
       showToast("Reply sent");
     },
   });
 
-  // Whatever's in the reply textarea when AI Draft is clicked is treated as
-  // optional instructions for the model ("ask about timeline", "decline
-  // politely", etc.), not as the body itself — the returned draft replaces
-  // the textarea content.
+  // The instructions field steers the model ("ask about timeline", "decline
+  // politely"); the textarea holds the reply itself. Anything already in the
+  // textarea rides along as currentDraft so the model revises it in place —
+  // that's what turns a second click into a refinement.
   const draftMutation = useMutation({
-    mutationFn: async ({ msg, instructions }: { msg: ParsedEmailMessage; instructions?: string }) =>
+    mutationFn: async ({
+      msg,
+      instructions,
+      currentDraft,
+    }: {
+      msg: ParsedEmailMessage;
+      instructions?: string;
+      currentDraft?: string;
+    }) =>
       emailDraftsApi.draftReply({
         from: msg.from,
         subject: msg.subject,
         bodyText: msg.markdown || msg.text || "",
         instructions: instructions?.trim() || undefined,
+        currentDraft: currentDraft?.trim() || undefined,
         model: draftModel || undefined,
       }),
     onSuccess: (result) => {
@@ -1049,6 +1069,48 @@ export function Email() {
       showToast(`Draft failed: ${message}`);
     },
   });
+
+  // AI draft for a brand new message — no incoming email, so the operator's
+  // instructions carry the whole thing.
+  const composeDraftMutation = useMutation({
+    mutationFn: async () =>
+      emailDraftsApi.draftReply({
+        mode: "new",
+        to: composeToRef.current?.getValue().trim() || undefined,
+        subject: composeSubjectRef.current?.getValue().trim() || undefined,
+        bodyText: "",
+        instructions: composeInstructions.trim() || undefined,
+        currentDraft: composeBodyRef.current?.getValue().trim() || undefined,
+        model: draftModel || undefined,
+      }),
+    onSuccess: (result) => {
+      composeBodyRef.current?.setValue(result.draft);
+      setTimeout(() => composeBodyRef.current?.focus(), 50);
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Draft failed: ${message}`);
+    },
+  });
+
+  function runComposeDraft() {
+    if (composeDraftMutation.isPending) return;
+    const hasSubject = (composeSubjectRef.current?.getValue().trim() ?? "").length > 0;
+    if (!composeInstructions.trim() && !hasSubject && !composeBodyHasContent) {
+      showToast("Tell the AI what the message should say first.");
+      return;
+    }
+    composeDraftMutation.mutate();
+  }
+
+  function runDraft(msg: ParsedEmailMessage | null | undefined) {
+    if (!msg || draftMutation.isPending) return;
+    draftMutation.mutate({
+      msg,
+      instructions: draftInstructions,
+      currentDraft: replyComposerRef.current?.getValue() ?? "",
+    });
+  }
 
   const composeMutation = useMutation({
     mutationFn: async ({ to, subject, body }: { to: string; subject: string; body: string }) => {
@@ -1066,6 +1128,7 @@ export function Email() {
       setComposeToHasContent(false);
       setComposeSubjectHasContent(false);
       setComposeBodyHasContent(false);
+      setComposeInstructions("");
       setComposeMode("new");
       setComposeSourceUid(null);
       showToast("Message sent");
@@ -2127,6 +2190,13 @@ export function Email() {
                       className="min-h-[100px] text-sm resize-none"
                       onContentChange={setReplyHasContent}
                     />
+                    <DraftInstructionsField
+                      value={draftInstructions}
+                      onChange={setDraftInstructions}
+                      onSubmit={() => runDraft(fullMessage)}
+                      refining={replyHasContent}
+                      disabled={!fullMessage || draftMutation.isPending}
+                    />
                     <div className="flex items-center justify-end gap-2">
                       <DraftModelSelect
                         value={draftModel}
@@ -2139,25 +2209,20 @@ export function Email() {
                             size="sm"
                             variant="outline"
                             disabled={!fullMessage || draftMutation.isPending}
-                            onClick={() => {
-                              if (fullMessage) {
-                                const instructions = replyComposerRef.current?.getValue() ?? "";
-                                draftMutation.mutate({ msg: fullMessage, instructions });
-                              }
-                            }}
+                            onClick={() => runDraft(fullMessage)}
                           >
                             {draftMutation.isPending ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
                               <Sparkles className="h-3.5 w-3.5" />
                             )}
-                            AI Draft
+                            {replyHasContent ? "AI Revise" : "AI Draft"}
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
                           {replyHasContent
-                            ? "Use what you've typed as instructions and draft a reply"
-                            : "Draft a reply with AI"}
+                            ? "Rewrite the reply above, applying your instructions"
+                            : "Write a reply with AI, following your instructions"}
                         </TooltipContent>
                       </Tooltip>
                       <Button
@@ -2251,8 +2316,48 @@ export function Email() {
                 onContentChange={setComposeBodyHasContent}
               />
             </div>
+            {composeMode === "new" && (
+              <DraftInstructionsField
+                value={composeInstructions}
+                onChange={setComposeInstructions}
+                onSubmit={runComposeDraft}
+                refining={composeBodyHasContent}
+                disabled={composeDraftMutation.isPending}
+              />
+            )}
           </div>
           <div className="flex justify-end gap-2">
+            {composeMode === "new" && (
+              <>
+                <DraftModelSelect
+                  value={draftModel}
+                  onChange={updateDraftModel}
+                  models={draftModels}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      disabled={composeDraftMutation.isPending}
+                      onClick={runComposeDraft}
+                    >
+                      {composeDraftMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4" />
+                      )}
+                      {composeBodyHasContent ? "AI Revise" : "AI Draft"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {composeBodyHasContent
+                      ? "Rewrite the message above, applying your instructions"
+                      : "Write the message with AI, following your instructions"}
+                  </TooltipContent>
+                </Tooltip>
+                <div className="flex-1" />
+              </>
+            )}
             <Button variant="ghost" onClick={() => setComposeOpen(false)}>
               Cancel
             </Button>
