@@ -63,6 +63,14 @@ import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import { dismissReviewSender } from "../lib/email-triage-rules";
+import {
+  applyImapOverrides,
+  imapMailboxScope,
+  imapOverrideStore,
+  isImapMessageListKey,
+  type ImapOverrideKind,
+} from "../lib/mailboxTriageOverrides";
+import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
 import type { IssueDocument } from "@paperclipai/shared";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
@@ -403,9 +411,6 @@ export function Email() {
     }
     setShowAllMessages(v);
   };
-  const [optimisticallyRemovedUids, setOptimisticallyRemovedUids] = useState<Set<number>>(
-    new Set(),
-  );
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
@@ -602,8 +607,20 @@ export function Email() {
     refetchInterval: 30_000,
   });
 
+  // Triage notes are shared with the Portfolio Email panel rather than held in
+  // local state, so a row acted on here is already gone when the operator
+  // switches to the portfolio view (and the other way round). Scoped by folder
+  // because IMAP uids are per-folder. See lib/mailboxTriageOverrides.ts.
+  const overrideScope =
+    pluginId && selectedCompanyId && selectedMailbox
+      ? imapMailboxScope(pluginId, selectedCompanyId, selectedMailbox, selectedFolder)
+      : null;
+  const overrides = useImapTriageOverrides(overrideScope);
+
   const allMessages = messagesData?.messages ?? [];
-  const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
+  const messages = applyImapOverrides(allMessages, overrides, {
+    unseenOnly: !showAllMessages,
+  });
 
   // Reset the open message + transient compose state when the operator
   // switches mailbox or folder. We track the previous (mailbox, folder) and
@@ -622,9 +639,10 @@ export function Email() {
     if (prevMailboxFolderRef.current === sig) return;
     prevMailboxFolderRef.current = sig;
     setSelectedUid(null);
-    setOptimisticallyRemovedUids(new Set());
     setReplyOpen(false);
     setPendingRowAction(null);
+    // No triage-note reset here: the notes are keyed by mailbox and folder, so
+    // switching either already selects a different set.
   }, [selectedMailbox, selectedFolder]);
 
   // ── Sender rules (used to highlight per-row action icons) ─────────────────
@@ -810,9 +828,14 @@ export function Email() {
     setTimeout(() => setActionToast(null), 4000);
   }
 
-  function optimisticallyRemove(uid: number) {
-    setOptimisticallyRemovedUids((prev) => new Set([...prev, uid]));
-    if (selectedUid === uid) setSelectedUid(null);
+  function noteOverride(uid: number, kind: ImapOverrideKind) {
+    if (overrideScope) imapOverrideStore.set(overrideScope, uid, kind);
+    // Marking unread is the one action that isn't a dismissal, so it leaves the
+    // reading pane on the message. Everything else closes it.
+    if (kind !== "unread" && selectedUid === uid) setSelectedUid(null);
+  }
+  function clearOverride(uid: number) {
+    if (overrideScope) imapOverrideStore.clear(overrideScope, uid);
   }
 
   async function applyRulesTransform(
@@ -841,15 +864,27 @@ export function Email() {
     });
   }
 
-  function invalidateMessageList() {
-    queryClient.invalidateQueries({ queryKey: messageListKey });
+  // Every cached variant of this mailbox's list, not just the one on screen, so
+  // the Portfolio Email panel's copy is refreshed too. The triage note keeps
+  // the row hidden meanwhile, so an IMAP server that still reports the old flag
+  // can't flash it back.
+  function invalidateMessageLists() {
+    if (!pluginId || !selectedCompanyId || !selectedMailbox) return;
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        isImapMessageListKey(q.queryKey, {
+          pluginId,
+          companyId: selectedCompanyId,
+          mailboxKey: selectedMailbox,
+        }),
+    });
   }
 
   // ── Triage mutations ──────────────────────────────────────────────────────
 
   const autoTriageMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "gone");
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, TRIAGE_FOLDER);
       const sender = extractSender(msg);
       // DB is the source of truth; setRule also sweeps unread INBOX for any
@@ -860,17 +895,13 @@ export function Email() {
     },
     onSuccess: ({ sender, sweptCount }) => {
       invalidateRules();
-      invalidateMessageList();
+      invalidateMessageLists();
       const tail = sweptCount > 0 ? ` (+ ${sweptCount} existing)` : "";
       showToast(`Auto-triaged: ${sender}${tail}`);
     },
     onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
-      invalidateMessageList();
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
@@ -888,71 +919,60 @@ export function Email() {
 
   const markReadMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "read");
       await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
       await maybeAddImplicitKeepAlways(msg);
     },
     onSuccess: (_, msg) => {
       invalidateRules();
+      invalidateMessageLists();
       showToast(`Marked read: ${msg.subject || "(no subject)"}`);
     },
     onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
+      clearOverride(msg.uid);
     },
   });
 
   const markUnreadMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
+      noteOverride(msg.uid, "unread");
       await emailApi!.markUnread(selectedMailbox!, msg.uid, selectedFolder);
     },
     onSuccess: (_, msg) => {
-      invalidateMessageList();
+      invalidateMessageLists();
       showToast(`Marked unread: ${msg.subject || "(no subject)"}`);
     },
     onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "gone");
       const result = await emailApi!.deleteMessage(selectedMailbox!, msg.uid, selectedFolder);
       return result;
     },
     onSuccess: () => {
+      invalidateMessageLists();
       showToast("Deleted");
     },
     onError: (_err, msg) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
-      invalidateMessageList();
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
   const moveToFolderMutation = useMutation({
     mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "gone");
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
     },
+    onSuccess: () => invalidateMessageLists(),
     onError: (_err, { msg }) => {
-      setOptimisticallyRemovedUids((prev) => {
-        const next = new Set(prev);
-        next.delete(msg.uid);
-        return next;
-      });
-      invalidateMessageList();
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
@@ -1009,8 +1029,9 @@ export function Email() {
       return { issueId: issue.id, uid: msg.uid };
     },
     onSuccess: ({ issueId, uid }) => {
-      optimisticallyRemove(uid);
+      noteOverride(uid, "read");
       invalidateRules();
+      invalidateMessageLists();
       setHandoffDialogOpen(false);
       setHandoffNote("");
       setHandoffAgentId(null);
@@ -1028,8 +1049,9 @@ export function Email() {
       if (msg) await maybeAddImplicitKeepAlways(msg);
     },
     onSuccess: (_, { uid }) => {
-      optimisticallyRemove(uid);
+      noteOverride(uid, "read");
       invalidateRules();
+      invalidateMessageLists();
       if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
       setReplyOpen(false);
       setReplyHasContent(false);

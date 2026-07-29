@@ -44,6 +44,14 @@ import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { dismissReviewSender } from "../lib/email-triage-rules";
+import {
+  applyImapOverrides,
+  imapMailboxScope,
+  imapOverrideStore,
+  isImapMessageListKey,
+  type ImapOverrideKind,
+} from "../lib/mailboxTriageOverrides";
+import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
 import { cn, ellipsize } from "../lib/utils";
 
 const MAX_SENDER_CHARS = 60;
@@ -460,9 +468,11 @@ function MailboxPanel({
     [pluginId, primaryCompanyId],
   );
 
-  const [optimisticallyRemovedUids, setOptimisticallyRemovedUids] = useState<Set<number>>(
-    new Set(),
-  );
+  // Triage notes are shared with the per-company Email page rather than held in
+  // local state, so a row acted on there is already gone when the operator
+  // lands back here. See lib/mailboxTriageOverrides.ts.
+  const overrideScope = imapMailboxScope(pluginId, primaryCompanyId, key, pollFolder);
+  const overrides = useImapTriageOverrides(overrideScope);
 
   const messageListKey = [
     "email",
@@ -545,19 +555,26 @@ function MailboxPanel({
       queryKey: ["email", pluginId, primaryCompanyId, key, "rules"],
     });
   }
-  function invalidateMessageList() {
-    queryClient.invalidateQueries({ queryKey: messageListKey });
+  // Every cached variant of this mailbox's list, not just the one this panel is
+  // showing, so the Email page's copy (other folder, other unread toggle) is
+  // refreshed too. The triage note above keeps the row hidden meanwhile, so an
+  // IMAP server that still reports the old flag can't flash it back.
+  function invalidateMessageLists() {
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        isImapMessageListKey(q.queryKey, {
+          pluginId,
+          companyId: primaryCompanyId,
+          mailboxKey: key,
+        }),
+    });
   }
 
-  function optimisticallyRemove(uid: number) {
-    setOptimisticallyRemovedUids((prev) => new Set([...prev, uid]));
+  function noteOverride(uid: number, kind: ImapOverrideKind) {
+    imapOverrideStore.set(overrideScope, uid, kind);
   }
-  function unremove(uid: number) {
-    setOptimisticallyRemovedUids((prev) => {
-      const next = new Set(prev);
-      next.delete(uid);
-      return next;
-    });
+  function clearOverride(uid: number) {
+    imapOverrideStore.clear(overrideScope, uid);
   }
 
   async function applyRulesTransform(
@@ -608,21 +625,29 @@ function MailboxPanel({
 
   const markReadMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "read");
       await emailApi.markRead(key, msg.uid, pollFolder);
       await maybeAddImplicitKeepAlways(msg);
     },
     onSuccess: () => {
       invalidateRules();
+      invalidateMessageLists();
     },
     onError: (_err, msg) => {
-      unremove(msg.uid);
+      clearOverride(msg.uid);
     },
   });
 
   const markUnreadMutation = useMutation({
-    mutationFn: (msg: MailHeader) => emailApi.markUnread(key, msg.uid, pollFolder),
-    onSuccess: () => invalidateMessageList(),
+    mutationFn: async (msg: MailHeader) => {
+      noteOverride(msg.uid, "unread");
+      await emailApi.markUnread(key, msg.uid, pollFolder);
+    },
+    onSuccess: () => invalidateMessageLists(),
+    onError: (_err, msg) => {
+      clearOverride(msg.uid);
+      invalidateMessageLists();
+    },
   });
 
   const keepAlwaysMutation = useMutation({
@@ -636,7 +661,7 @@ function MailboxPanel({
 
   const autoTriageMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "gone");
       await emailApi.moveMessage(key, msg.uid, pollFolder, TRIAGE_FOLDER);
       const sender = extractSender(msg);
       await emailApi.setRule(key, sender, "auto-triage");
@@ -644,27 +669,28 @@ function MailboxPanel({
     },
     onSuccess: () => {
       invalidateRules();
-      invalidateMessageList();
+      invalidateMessageLists();
     },
     onError: (_err, msg) => {
-      unremove(msg.uid);
-      invalidateMessageList();
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (msg: MailHeader) => {
-      optimisticallyRemove(msg.uid);
+      noteOverride(msg.uid, "gone");
       await emailApi.deleteMessage(key, msg.uid, pollFolder);
     },
+    onSuccess: () => invalidateMessageLists(),
     onError: (_err, msg) => {
-      unremove(msg.uid);
-      invalidateMessageList();
+      clearOverride(msg.uid);
+      invalidateMessageLists();
     },
   });
 
   const allMessages = messagesData?.messages ?? [];
-  const messages = allMessages.filter((m) => !optimisticallyRemovedUids.has(m.uid));
+  const messages = applyImapOverrides(allMessages, overrides, { unseenOnly: !showAll });
 
   const displayLabel = mailboxLabel(name, key);
   const displayEmail = mailboxEmail(name, key);

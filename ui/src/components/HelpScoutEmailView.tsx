@@ -47,6 +47,14 @@ import {
   savePaneSize,
 } from "../lib/helpscout-pane-layout";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
+import {
+  applyHelpScoutOverrides,
+  helpScoutMailboxScope,
+  helpScoutOverrideStore,
+  helpScoutStatusMatchesFilter,
+  isHelpScoutListKey,
+} from "../lib/mailboxTriageOverrides";
+import { useHelpScoutTriageOverrides } from "../hooks/useTriageOverrides";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 
@@ -209,36 +217,42 @@ export function HelpScoutEmailView({
     refetchInterval: 30_000,
   });
 
-  // Optimistic list removal so close/auto-noise/spam clicks update the row
-  // instantly rather than waiting for the API round-trip + refetch + Help
-  // Scout's own eventual consistency on status changes.
-  const [optimisticallyRemovedIds, setOptimisticallyRemovedIds] = useState<Set<string>>(
-    new Set(),
-  );
+  // Triage notes record the status we just set, so close/auto-noise/spam clicks
+  // update the row instantly rather than waiting for the API round-trip, the
+  // refetch, and Help Scout's own eventual consistency on status changes.
+  //
+  // They live in a shared store rather than local state for two reasons: the
+  // Portfolio Email panel reads the same notes, so a conversation closed here
+  // is already gone when the operator lands there; and because the note records
+  // a status rather than "hide this id", a conversation closed under "active"
+  // correctly reappears when the operator pivots to the "closed" tab, which is
+  // what the old reset-on-filter-change effect was for.
+  const overrideScope = helpScoutMailboxScope(pluginId, primaryCompanyId, accountKey, mailboxId);
+  const overrides = useHelpScoutTriageOverrides(overrideScope);
 
-  // A conversation we removed from "active" should re-appear if the operator
-  // pivots to "closed" — reset the set whenever the listKey identity changes.
-  useEffect(() => {
-    setOptimisticallyRemovedIds(new Set());
-  }, [status, accountKey, mailboxId]);
-
-  function optimisticallyRemoveConv(id: string) {
-    setOptimisticallyRemovedIds((prev) => new Set([...prev, id]));
+  function noteStatus(id: string, next: string) {
+    helpScoutOverrideStore.set(overrideScope, id, next);
   }
-  function unremoveConv(id: string) {
-    setOptimisticallyRemovedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+  function clearStatus(id: string) {
+    helpScoutOverrideStore.clear(overrideScope, id);
   }
 
-  const conversations = (listData?.conversations ?? []).filter(
-    (c) => !optimisticallyRemovedIds.has(c.id),
-  );
+  const conversations = applyHelpScoutOverrides(listData?.conversations ?? [], overrides, {
+    filter: status,
+  });
 
+  // Every cached status variant for this mailbox, not just the tab on screen, so
+  // the Portfolio Email panel's copy is refreshed too.
   function invalidateList() {
-    queryClient.invalidateQueries({ queryKey: listKey });
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        isHelpScoutListKey(q.queryKey, {
+          pluginId,
+          companyId: primaryCompanyId,
+          accountKey,
+          mailboxId,
+        }),
+    });
   }
 
   // ── Full conversation (threads) ───────────────────────────────────────────
@@ -396,12 +410,12 @@ export function HelpScoutEmailView({
   const autoNoiseMutation = useMutation({
     mutationFn: async () => {
       const id = selectedConvId!;
-      optimisticallyRemoveConv(id);
+      noteStatus(id, "closed");
       try {
         await api.addLabel(accountKey, id, [AUTO_NOISE_LABEL]);
         await api.changeStatus(accountKey, id, "closed");
       } catch (e) {
-        unremoveConv(id);
+        clearStatus(id);
         throw e;
       }
     },
@@ -416,11 +430,11 @@ export function HelpScoutEmailView({
   const closeMutation = useMutation({
     mutationFn: async () => {
       const id = selectedConvId!;
-      optimisticallyRemoveConv(id);
+      noteStatus(id, "closed");
       try {
         return await api.changeStatus(accountKey, id, "closed");
       } catch (e) {
-        unremoveConv(id);
+        clearStatus(id);
         throw e;
       }
     },
@@ -432,18 +446,18 @@ export function HelpScoutEmailView({
     onError: (err) => showToast(`Close failed: ${(err as Error).message}`),
   });
 
-  // "Pending" = HS's "I see this, parking it." Only optimistically take the
-  // row off the list when the current filter excludes pending — under "open"
-  // or "pending" the row should stay visible (just with a different dot).
-  const pendingStillMatchesFilter = status === "open" || status === "pending";
+  // "Pending" = HS's "I see this, parking it." Under "open" or "pending" the row
+  // stays visible (just with a different dot), so only the other filters clear
+  // the reading pane. The list works that out from the note on its own.
+  const pendingStillMatchesFilter = helpScoutStatusMatchesFilter("pending", status);
   const pendingMutation = useMutation({
     mutationFn: async () => {
       const id = selectedConvId!;
-      if (!pendingStillMatchesFilter) optimisticallyRemoveConv(id);
+      noteStatus(id, "pending");
       try {
         return await api.changeStatus(accountKey, id, "pending");
       } catch (e) {
-        if (!pendingStillMatchesFilter) unremoveConv(id);
+        clearStatus(id);
         throw e;
       }
     },
@@ -457,7 +471,16 @@ export function HelpScoutEmailView({
   });
 
   const reopenMutation = useMutation({
-    mutationFn: () => api.changeStatus(accountKey, selectedConvId!, "active"),
+    mutationFn: async () => {
+      const id = selectedConvId!;
+      noteStatus(id, "active");
+      try {
+        return await api.changeStatus(accountKey, id, "active");
+      } catch (e) {
+        clearStatus(id);
+        throw e;
+      }
+    },
     onSuccess: () => {
       showToast("Reopened.");
       invalidateList();
@@ -468,11 +491,11 @@ export function HelpScoutEmailView({
   const spamMutation = useMutation({
     mutationFn: async () => {
       const id = selectedConvId!;
-      optimisticallyRemoveConv(id);
+      noteStatus(id, "spam");
       try {
         return await api.changeStatus(accountKey, id, "spam");
       } catch (e) {
-        unremoveConv(id);
+        clearStatus(id);
         throw e;
       }
     },

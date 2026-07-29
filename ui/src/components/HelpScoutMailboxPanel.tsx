@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Mail,
@@ -23,6 +23,13 @@ import {
 } from "../api/helpScoutBridge";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { mailboxRefId } from "../lib/mailboxKind";
+import {
+  applyHelpScoutOverrides,
+  helpScoutMailboxScope,
+  helpScoutOverrideStore,
+  isHelpScoutListKey,
+} from "../lib/mailboxTriageOverrides";
+import { useHelpScoutTriageOverrides } from "../hooks/useTriageOverrides";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, ellipsize } from "../lib/utils";
@@ -56,9 +63,13 @@ export function HelpScoutMailboxPanel({
     [pluginId, primaryCompanyId],
   );
 
-  const [optimisticallyRemoved, setOptimisticallyRemoved] = useState<Set<string>>(
-    new Set(),
-  );
+  // Triage notes are shared with HelpScoutEmailView on the per-company Email
+  // page, so a conversation closed there is already gone when the operator
+  // lands back here. They also outlive a refetch, which Help Scout needs: its
+  // API keeps reporting the old status for a few seconds after a change.
+  // See lib/mailboxTriageOverrides.ts.
+  const overrideScope = helpScoutMailboxScope(pluginId, primaryCompanyId, accountKey, mailboxId);
+  const overrides = useHelpScoutTriageOverrides(overrideScope);
 
   // "active" = HS analog of unread (needs action). "open" = active + pending.
   // The page-level showAll toggle gates pending conversations the same way it
@@ -82,81 +93,88 @@ export function HelpScoutMailboxPanel({
     refetchInterval: 30_000,
   });
 
-  function invalidateList() {
-    queryClient.invalidateQueries({ queryKey: listKey });
+  // Every cached status variant for this mailbox, not just the one on screen,
+  // so the Email page's tab is refreshed too.
+  function invalidateLists() {
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        isHelpScoutListKey(q.queryKey, {
+          pluginId,
+          companyId: primaryCompanyId,
+          accountKey,
+          mailboxId,
+        }),
+    });
   }
 
-  function optimisticallyRemove(id: string) {
-    setOptimisticallyRemoved((prev) => new Set([...prev, id]));
+  function noteStatus(id: string, status: string) {
+    helpScoutOverrideStore.set(overrideScope, id, status);
   }
-  function unremove(id: string) {
-    setOptimisticallyRemoved((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+  function clearStatus(id: string) {
+    helpScoutOverrideStore.clear(overrideScope, id);
   }
 
   const keepActiveMutation = useMutation({
     mutationFn: (conv: HSConversationSummary) =>
       api.addLabel(accountKey, conv.id, [KEEP_ALWAYS_LABEL]),
-    onSuccess: () => invalidateList(),
+    onSuccess: () => invalidateLists(),
   });
 
   const autoNoiseMutation = useMutation({
     mutationFn: async (conv: HSConversationSummary) => {
-      optimisticallyRemove(conv.id);
+      noteStatus(conv.id, "closed");
       await api.addLabel(accountKey, conv.id, [AUTO_NOISE_LABEL]);
       await api.changeStatus(accountKey, conv.id, "closed");
     },
+    onSuccess: () => invalidateLists(),
     onError: (_err, conv) => {
-      unremove(conv.id);
-      invalidateList();
+      clearStatus(conv.id);
+      invalidateLists();
     },
   });
 
-  // Pending = HS analog of "I see it, dealing with it later". When the panel
-  // is in unread-only mode (showAll=false, status="active"), marking pending
-  // takes the row out of view → optimistic remove. When showAll=true the row
-  // still matches the "open" filter, so we just refresh to flip the dot color.
+  // Pending = HS analog of "I see it, dealing with it later". The note records
+  // the new status rather than "hide this row", so each list works out its own
+  // answer: it drops off an active-only panel and stays on a showAll one with
+  // the dot recoloured.
   const pendingMutation = useMutation({
     mutationFn: async (conv: HSConversationSummary) => {
-      if (!showAll) optimisticallyRemove(conv.id);
+      noteStatus(conv.id, "pending");
       await api.changeStatus(accountKey, conv.id, "pending");
     },
-    onSuccess: () => {
-      if (showAll) invalidateList();
-    },
+    onSuccess: () => invalidateLists(),
     onError: (_err, conv) => {
-      unremove(conv.id);
-      invalidateList();
+      clearStatus(conv.id);
+      invalidateLists();
     },
   });
 
   const closeMutation = useMutation({
     mutationFn: async (conv: HSConversationSummary) => {
-      optimisticallyRemove(conv.id);
+      noteStatus(conv.id, "closed");
       await api.changeStatus(accountKey, conv.id, "closed");
     },
+    onSuccess: () => invalidateLists(),
     onError: (_err, conv) => {
-      unremove(conv.id);
-      invalidateList();
+      clearStatus(conv.id);
+      invalidateLists();
     },
   });
 
   const spamMutation = useMutation({
     mutationFn: async (conv: HSConversationSummary) => {
-      optimisticallyRemove(conv.id);
+      noteStatus(conv.id, "spam");
       await api.changeStatus(accountKey, conv.id, "spam");
     },
+    onSuccess: () => invalidateLists(),
     onError: (_err, conv) => {
-      unremove(conv.id);
-      invalidateList();
+      clearStatus(conv.id);
+      invalidateLists();
     },
   });
 
   const all = data?.conversations ?? [];
-  const conversations = all.filter((c) => !optimisticallyRemoved.has(c.id));
+  const conversations = applyHelpScoutOverrides(all, overrides, { filter: listStatus });
   const activeCount = conversations.filter((c) => c.status === "active").length;
   const pendingCount = conversations.filter((c) => c.status === "pending").length;
 
