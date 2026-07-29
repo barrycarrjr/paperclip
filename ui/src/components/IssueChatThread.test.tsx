@@ -923,7 +923,10 @@ describe("IssueChatThread", () => {
     expect(composer).not.toBeNull();
     expect(composer?.className).toContain("rounded-md");
     expect(composer?.className).not.toContain("rounded-lg");
-    expect(composer?.className).toContain("p-[15px]");
+    // 15px of padding, spelled either as a Tailwind 4 spacing multiple (p-3.75,
+    // i.e. 3.75 times the 4px base) or as an arbitrary value. Assert the value
+    // rather than the spelling, so rewriting the idiom doesn't fail the test.
+    expect(composer?.className).toMatch(/(^|\s)p-(3\.75|\[15px\])(\s|$)/);
 
     const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement | null;
     expect(editor?.dataset.contentClassName).toContain("max-h-[28dvh]");

@@ -24,7 +24,11 @@ describe("StatusIcon", () => {
 
     expect(html).toContain('data-blocker-attention-state="covered"');
     expect(html).toContain('aria-label="Blocked · waiting on active sub-issue PAP-2"');
-    expect(html).toContain('title="Blocked · waiting on active sub-issue PAP-2"');
+    // aria-label is the bare attention label; the tooltip leads with that same
+    // label and then appends the status description (see statusTooltip in
+    // StatusIcon.tsx). Assert the prefix and that something follows it, so a
+    // copy edit to the description can't fail this test.
+    expect(html).toMatch(/title="Blocked · waiting on active sub-issue PAP-2 [^"]+"/);
     expect(html).toContain("border-cyan-600");
     expect(html).not.toContain("border-red-600");
     expect(html).not.toContain("border-dashed");
