@@ -32,6 +32,7 @@ import {
 import { emailDraftsApi } from "../api/emailDrafts";
 import type { AvailableModel } from "../api/chat";
 import { DraftModelSelect } from "./DraftModelSelect";
+import { MailSearchBar } from "./MailSearchBar";
 import { DraftInstructionsField } from "./DraftInstructionsField";
 import { pickDraftSource } from "../lib/helpscout-draft-source";
 import { isComposeReady } from "../lib/helpscout-compose";
@@ -116,6 +117,23 @@ export function HelpScoutEmailView({
   const [status, setStatus] = useState<HSStatusFilter>(() => loadPersistedStatus());
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConversationId);
 
+  // `searchInput` is what is typed; `searchQuery` is what has been submitted.
+  // Help Scout's search is a server-side query, so it runs on Enter rather than
+  // per keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchActive = searchQuery.length > 0;
+
+  function submitSearch() {
+    setSearchQuery(searchInput.trim());
+    setSelectedConvId(null);
+  }
+
+  function clearSearch() {
+    setSearchInput("");
+    setSearchQuery("");
+  }
+
   useEffect(() => {
     try {
       localStorage.setItem(STATUS_FILTER_STORAGE_KEY, status);
@@ -196,13 +214,19 @@ export function HelpScoutEmailView({
 
   // ── Conversation list ─────────────────────────────────────────────────────
 
+  // A search spans every status. Leaving the tab filter on would mean a
+  // conversation the operator closed last week could not be found again, which
+  // is most of what people search for.
+  const effectiveStatus: HSStatusFilter = searchActive ? "all" : status;
+
   const listKey = [
     "helpscout",
     pluginId,
     primaryCompanyId,
     accountKey,
     mailboxId,
-    status,
+    effectiveStatus,
+    ...(searchActive ? ["search", searchQuery] : []),
   ];
 
   const { data: listData, isLoading: listLoading, error: listError } = useQuery({
@@ -211,10 +235,13 @@ export function HelpScoutEmailView({
       api.listConversations({
         accountKey,
         mailboxId,
-        status,
+        status: effectiveStatus,
+        ...(searchActive ? { query: searchQuery } : {}),
         limit: 50,
       }),
-    refetchInterval: 30_000,
+    // Search results are a deliberate one-off query, not the live inbox, so
+    // they are not put on the 30s refresh the folder view uses.
+    refetchInterval: searchActive ? false : 30_000,
   });
 
   // Triage notes record the status we just set, so close/auto-noise/spam clicks
@@ -238,7 +265,7 @@ export function HelpScoutEmailView({
   }
 
   const conversations = applyHelpScoutOverrides(listData?.conversations ?? [], overrides, {
-    filter: status,
+    filter: effectiveStatus,
   });
 
   // Every cached status variant for this mailbox, not just the tab on screen, so
@@ -520,19 +547,25 @@ export function HelpScoutEmailView({
 
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
-          <span className="text-sm font-medium truncate">{mailbox.name}</span>
+          <span className="text-sm font-medium truncate">
+            {searchActive ? `Search results in ${mailbox.name}` : mailbox.name}
+          </span>
           <div className="flex items-center gap-1">
             {STATUS_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
+                // While searching, the status tabs are inert: the search
+                // deliberately spans every status. Clicking one leaves search.
                 onClick={() => {
                   setStatus(opt.value);
                   setSelectedConvId(null);
+                  clearSearch();
                 }}
                 className={cn(
                   "text-xs px-2 py-1 rounded hover:bg-accent",
-                  status === opt.value && "bg-accent font-medium",
+                  !searchActive && status === opt.value && "bg-accent font-medium",
+                  searchActive && "text-muted-foreground",
                 )}
               >
                 {opt.label}
@@ -554,6 +587,24 @@ export function HelpScoutEmailView({
             </Tooltip>
           </div>
         </div>
+
+        <MailSearchBar
+          value={searchInput}
+          onChange={setSearchInput}
+          onSubmit={submitSearch}
+          onClear={clearSearch}
+          summary={
+            searchActive && !listLoading && !listError
+              ? conversations.length === 1
+                ? "1 result"
+                : `${conversations.length} results`
+              : null
+          }
+          busy={searchActive && listLoading}
+          note={searchActive ? "Searching every status in this mailbox." : null}
+          placeholder="Search this mailbox, then press Enter"
+          aria-label="Search Help Scout conversations"
+        />
 
         <div className="flex-1 min-h-0 flex">
           <div className="shrink-0 flex flex-col" style={{ width: listWidth }}>

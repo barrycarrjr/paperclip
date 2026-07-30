@@ -63,6 +63,45 @@ describe("makeEmailToolsApi", () => {
     });
   });
 
+  describe("searchMessages", () => {
+    it("passes the filters through to email.search", async () => {
+      mockBridgeGetData.mockResolvedValue({ data: { results: [] } });
+      await api.searchMessages({ text: "invoice", mailbox: "personal", limit: 50 });
+      expect(mockBridgeGetData).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.search",
+        { companyId: COMPANY_ID, text: "invoice", mailbox: "personal", limit: 50 },
+        COMPANY_ID,
+      );
+    });
+
+    it("omits mailbox and folder so the search spans everything the company can see", async () => {
+      mockBridgeGetData.mockResolvedValue({ data: { results: [] } });
+      await api.searchMessages({ text: "refund" });
+      expect(mockBridgeGetData).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.search",
+        { companyId: COMPANY_ID, text: "refund" },
+        COMPANY_ID,
+      );
+    });
+
+    it("returns the mailbox and folder each hit was found in", async () => {
+      mockBridgeGetData.mockResolvedValue({
+        data: {
+          results: [{ uid: 5, mailbox: "personal", folder: "[Gmail]/All Mail", subject: "Receipt" }],
+          truncated: false,
+          searchedMailboxes: ["personal"],
+          skippedFolders: [],
+          errors: [],
+        },
+      });
+      const result = await api.searchMessages({ text: "receipt" });
+      expect(result.results[0].mailbox).toBe("personal");
+      expect(result.results[0].folder).toBe("[Gmail]/All Mail");
+    });
+  });
+
   describe("fetchMessage", () => {
     it("calls bridgeGetData with mailbox, uid, and folder", async () => {
       const fakeMsg = { uid: 42, from: "test@example.com", subject: "Hi", date: "", text: "", html: "", markdown: "", messageId: null, inReplyTo: null, references: [], fromAddress: null, to: [], cc: [], attachments: [] };

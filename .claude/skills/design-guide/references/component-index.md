@@ -139,6 +139,24 @@ Always use in a responsive grid: `grid md:grid-cols-2 xl:grid-cols-4 gap-4`.
 <FilterBar filters={filters} onRemove={handleRemove} onClear={() => setFilters([])} />
 ```
 
+### MailSearchBar
+
+**File:** `MailSearchBar.tsx`
+**Props:** `value: string`, `onChange: (value) => void`, `onSubmit: () => void`, `onClear: () => void`, `placeholder?: string`, `summary?: string | null`, `busy?: boolean`, `note?: ReactNode`, `className?: string`, `aria-label?: string`
+**Usage:** Search input for the mail panes (IMAP and Help Scout). Submit-driven, not search-as-you-type: the query runs server-side across folders and accounts, so it fires on Enter or the magnifier. Escape and the inline X both call `onClear`. Put the result count in `summary`, and use `note` to say when coverage was incomplete (folders skipped or unreadable) so a thin result set is not read as a definitive "not there".
+
+```tsx
+<MailSearchBar
+  value={searchInput}
+  onChange={setSearchInput}
+  onSubmit={submitSearch}
+  onClear={clearSearch}
+  summary="12 results"
+  busy={isFetching}
+  note="Could not search personal/Archive. Results may be incomplete."
+/>
+```
+
 ### Identity
 
 **File:** `Identity.tsx`

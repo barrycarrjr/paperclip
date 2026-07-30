@@ -41,6 +41,39 @@ export interface ListMessagesOptions {
   limit?: number;
 }
 
+export interface SearchMessagesOptions {
+  /** Omit to search every mailbox this company can see. */
+  mailbox?: string;
+  /** Omit to search across folders rather than just one. */
+  folder?: string;
+  /** Free text, matched against headers and body. */
+  text?: string;
+  from?: string;
+  subject?: string;
+  since?: string;
+  before?: string;
+  unseen?: boolean;
+  includeTrash?: boolean;
+  limit?: number;
+}
+
+/** A `MailHeader` plus where it was found — search crosses mailboxes and folders. */
+export interface SearchHit extends MailHeader {
+  mailbox: string;
+  folder: string;
+}
+
+export interface SearchMessagesResult {
+  results: SearchHit[];
+  /** More matched than `limit`; the operator is seeing the newest slice. */
+  truncated: boolean;
+  searchedMailboxes: string[];
+  /** Folders deliberately not searched (Trash/Junk, or beyond the folder cap). */
+  skippedFolders: string[];
+  /** Folders or mailboxes that failed, so partial results aren't read as "nothing found". */
+  errors: Array<{ mailbox: string; folder?: string; message: string }>;
+}
+
 export interface SenderRule {
   senderPattern: string;
   ruleType: "auto-triage" | "keep-always" | "mute";
@@ -74,6 +107,16 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.fetch-message",
         { companyId, mailbox, uid, ...(folder ? { folder } : {}) },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    searchMessages: async (opts: SearchMessagesOptions): Promise<SearchMessagesResult> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "email.search",
+        { companyId, ...opts },
         companyId,
       );
       return extract(result);

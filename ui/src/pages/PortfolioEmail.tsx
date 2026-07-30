@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Mail,
   MailOpen,
@@ -37,7 +37,7 @@ import {
   makeEmailToolsApi,
   type MailHeader,
 } from "../api/emailTools";
-import { HELP_SCOUT_PLUGIN_KEY } from "../api/helpScoutBridge";
+import { HELP_SCOUT_PLUGIN_KEY, makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { issuesApi } from "../api/issues";
 import { ApiError } from "../api/client";
@@ -58,6 +58,7 @@ const MAX_SENDER_CHARS = 60;
 const MAX_SUBJECT_CHARS = 80;
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmptyState } from "../components/EmptyState";
+import { MailSearchBar } from "../components/MailSearchBar";
 import { PageSkeleton } from "../components/PageSkeleton";
 import {
   HelpScoutMailboxPanel,
@@ -106,6 +107,24 @@ function mailboxLabel(name: string | undefined, key: string): string {
 function extractSender(msg: MailHeader): string {
   const addrMatch = msg.from.match(/<([^>]+)>/);
   return addrMatch ? addrMatch[1]! : msg.from;
+}
+
+/**
+ * One row of the merged search list. IMAP messages and Help Scout
+ * conversations are different underneath, so they are normalised to this
+ * before being sorted together — each keeps its own way of opening itself.
+ */
+interface PortfolioSearchRow {
+  id: string;
+  date: string;
+  from: string;
+  subject: string;
+  /** Needs attention: IMAP unread, or a Help Scout conversation still active. */
+  unseen: boolean;
+  /** Which mailbox and folder this came from. */
+  where: string;
+  company: Company | null;
+  onOpen: () => void;
 }
 
 export function PortfolioEmail() {
@@ -239,6 +258,140 @@ export function PortfolioEmail() {
     }
     return out;
   }, [helpScoutPluginId, helpScoutConfig, companyById, selectedCompanyId]);
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  //
+  // This page stacks one panel per mailbox, so search fans out the same way:
+  // one query per mailbox on screen, merged into a single newest-first list.
+  // Going per mailbox rather than asking for "everything this company can see"
+  // keeps the result set exactly the mailboxes shown here, and avoids the same
+  // message arriving twice from two companies that both allow one mailbox.
+
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchActive = searchQuery.length > 0;
+
+  const imapSearches = useQueries({
+    queries: resolvedMailboxes.map((mb) => ({
+      queryKey: [
+        "portfolio-email",
+        "search",
+        pluginId,
+        mb.primaryCompanyId,
+        mb.key,
+        searchQuery,
+      ],
+      queryFn: () =>
+        makeEmailToolsApi(pluginId!, mb.primaryCompanyId).searchMessages({
+          mailbox: mb.key,
+          text: searchQuery,
+          limit: 50,
+        }),
+      enabled: !!pluginId && searchActive,
+      staleTime: 60_000,
+    })),
+  });
+
+  const helpScoutSearches = useQueries({
+    queries: resolvedHelpScoutMailboxes.map(({ ref }) => ({
+      queryKey: [
+        "portfolio-email",
+        "hs-search",
+        ref.pluginId,
+        ref.primaryCompanyId,
+        ref.accountKey,
+        ref.mailboxId,
+        searchQuery,
+      ],
+      queryFn: () =>
+        makeHelpScoutBridgeApi(ref.pluginId, ref.primaryCompanyId).listConversations({
+          accountKey: ref.accountKey,
+          mailboxId: ref.mailboxId,
+          // Every status: a conversation closed last month is exactly the kind
+          // of thing someone searches for.
+          status: "all" as const,
+          query: searchQuery,
+          limit: 50,
+        }),
+      enabled: searchActive,
+      staleTime: 60_000,
+    })),
+  });
+
+  const searchLoading =
+    searchActive &&
+    (imapSearches.some((q) => q.isFetching) || helpScoutSearches.some((q) => q.isFetching));
+
+  // Mailboxes that could not be searched at all, plus folders the plugin
+  // reported as failed. Surfaced so a thin result set is not mistaken for a
+  // definitive "not there".
+  const searchFailures: string[] = [];
+  const searchRows: PortfolioSearchRow[] = [];
+
+  if (searchActive) {
+    resolvedMailboxes.forEach((mb, i) => {
+      const q = imapSearches[i];
+      if (q?.error) {
+        searchFailures.push(mb.name || mb.key);
+        return;
+      }
+      for (const hit of q?.data?.results ?? []) {
+        searchRows.push({
+          id: `imap:${mb.primaryCompanyId}:${hit.mailbox}:${hit.folder}:${hit.uid}`,
+          date: hit.date,
+          from: hit.from,
+          subject: hit.subject,
+          unseen: hit.unseen,
+          where: `${mb.name || mb.key} · ${hit.folder}`,
+          company: mb.primaryCompany,
+          // Pass the hit's own folder, not the mailbox's polled folder, or the
+          // Email page opens the wrong folder and reports "message not found".
+          onOpen: () => openInCompany(hit.mailbox, hit.uid, mb.primaryCompanyId, hit.folder),
+        });
+      }
+      for (const failure of q?.data?.errors ?? []) {
+        searchFailures.push(failure.folder ? `${failure.mailbox}/${failure.folder}` : failure.mailbox);
+      }
+    });
+
+    resolvedHelpScoutMailboxes.forEach(({ ref, primaryCompany }, i) => {
+      const q = helpScoutSearches[i];
+      if (q?.error) {
+        searchFailures.push(ref.name || ref.accountKey);
+        return;
+      }
+      for (const conv of q?.data?.conversations ?? []) {
+        const who = conv.customer?.name || conv.customer?.email || "Unknown sender";
+        searchRows.push({
+          id: `hs:${ref.primaryCompanyId}:${ref.accountKey}:${conv.id}`,
+          date: conv.modifiedAt ?? "",
+          from: who,
+          subject: conv.subject ?? "(no subject)",
+          // Help Scout has no unread flag; "active" is its needs-a-reply state.
+          unseen: conv.status === "active",
+          where: `${ref.name || ref.accountKey} · Help Scout`,
+          company: primaryCompany,
+          onOpen: () => openHelpScoutInCompany(ref, conv.id),
+        });
+      }
+    });
+
+    searchRows.sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return Date.parse(b.date) - Date.parse(a.date);
+    });
+  }
+
+  function submitSearch() {
+    setSearchQuery(searchInput.trim());
+  }
+
+  function clearSearch() {
+    setSearchInput("");
+    setSearchQuery("");
+  }
 
   const [showAll, setShowAll] = useState(() => {
     try {
@@ -407,6 +560,82 @@ export function PortfolioEmail() {
         </div>
       </div>
 
+      <MailSearchBar
+        value={searchInput}
+        onChange={setSearchInput}
+        onSubmit={submitSearch}
+        onClear={clearSearch}
+        className="px-6"
+        placeholder="Search every mailbox, then press Enter"
+        busy={searchLoading}
+        summary={
+          searchActive && !searchLoading
+            ? searchRows.length === 1
+              ? "1 result"
+              : `${searchRows.length} results`
+            : null
+        }
+        note={
+          searchActive && searchFailures.length > 0
+            ? `Could not search ${searchFailures.join(", ")}. Results may be incomplete.`
+            : null
+        }
+      />
+
+      {searchActive ? (
+        <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
+          {searchLoading && searchRows.length === 0 ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : searchRows.length === 0 ? (
+            <div className="py-10 text-center text-xs text-muted-foreground">
+              No mail matches “{searchQuery}”.
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {searchRows.map((row) => (
+                <div
+                  key={row.id}
+                  onClick={row.onOpen}
+                  className="flex items-center gap-3 px-6 py-3 hover:bg-accent/50 transition-colors cursor-pointer"
+                >
+                  <span
+                    className={cn(
+                      "shrink-0 h-1.5 w-1.5 rounded-full",
+                      row.unseen ? "bg-blue-500" : "bg-transparent",
+                    )}
+                  />
+                  {row.company && (
+                    <CompanyPatternIcon
+                      companyName={row.company.name}
+                      logoUrl={row.company.logoUrl}
+                      brandColor={row.company.brandColor}
+                      className="h-4 w-4 shrink-0 rounded-[3px]"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className={cn("text-xs truncate", row.unseen && "font-semibold")}>
+                        {ellipsize(row.from, MAX_SENDER_CHARS)}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {row.date ? timeAgo(new Date(row.date)) : ""}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate mt-0.5">
+                      {ellipsize(row.subject, MAX_SUBJECT_CHARS)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+                      {row.where}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      ) : (
       <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
         <div className="px-6 py-4 space-y-4 min-w-0">
           {pluginId &&
@@ -439,6 +668,7 @@ export function PortfolioEmail() {
           ))}
         </div>
       </ScrollArea>
+      )}
     </div>
   );
 }

@@ -120,6 +120,7 @@ import { EntityRow } from "@/components/EntityRow";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
+import { MailSearchBar } from "@/components/MailSearchBar";
 import { InlineEditor } from "@/components/InlineEditor";
 import { DraftInstructionsField } from "@/components/DraftInstructionsField";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -190,6 +191,8 @@ export function DesignGuide() {
     { key: "status", label: "Status", value: "Active" },
     { key: "priority", label: "Priority", value: "High" },
   ]);
+  const [mailSearch, setMailSearch] = useState("");
+  const [mailSearchSummary, setMailSearchSummary] = useState<string | null>(null);
 
   return (
     <div className="space-y-10 max-w-4xl">
@@ -954,6 +957,66 @@ export function DesignGuide() {
             Reset filters
           </Button>
         )}
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  MAIL SEARCH BAR                                              */}
+      {/* ============================================================ */}
+      <Section title="Mail Search Bar">
+        <p className="text-sm text-muted-foreground">
+          Submit-driven search for the mail panes. Behind it is a server-side query across
+          folders and accounts, so it runs on Enter rather than as you type. Use{" "}
+          <code className="font-mono text-xs">summary</code> for the result count and{" "}
+          <code className="font-mono text-xs">note</code> to admit incomplete coverage.
+        </p>
+        <SubSection title="Interactive">
+          <div className="border border-border rounded-md overflow-hidden max-w-md">
+            <MailSearchBar
+              value={mailSearch}
+              onChange={setMailSearch}
+              onSubmit={() => setMailSearchSummary(`0 results for “${mailSearch}”`)}
+              onClear={() => {
+                setMailSearch("");
+                setMailSearchSummary(null);
+              }}
+              summary={mailSearchSummary}
+            />
+          </div>
+        </SubSection>
+        <SubSection title="With results">
+          <div className="border border-border rounded-md overflow-hidden max-w-md">
+            <MailSearchBar
+              value="invoice"
+              onChange={() => {}}
+              onSubmit={() => {}}
+              onClear={() => {}}
+              summary="12 results"
+            />
+          </div>
+        </SubSection>
+        <SubSection title="Busy">
+          <div className="border border-border rounded-md overflow-hidden max-w-md">
+            <MailSearchBar
+              value="invoice"
+              onChange={() => {}}
+              onSubmit={() => {}}
+              onClear={() => {}}
+              busy
+            />
+          </div>
+        </SubSection>
+        <SubSection title="Partial coverage">
+          <div className="border border-border rounded-md overflow-hidden max-w-md">
+            <MailSearchBar
+              value="invoice"
+              onChange={() => {}}
+              onSubmit={() => {}}
+              onClear={() => {}}
+              summary="3 results"
+              note="Could not search personal/Archive. Results may be incomplete."
+            />
+          </div>
+        </SubSection>
       </Section>
 
       {/* ============================================================ */}

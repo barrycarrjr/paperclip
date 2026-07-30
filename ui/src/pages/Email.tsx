@@ -45,8 +45,14 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { useHelpScoutPlugin } from "../hooks/useHelpScoutPlugin";
-import { makeEmailToolsApi, type MailHeader, type ParsedEmailMessage } from "../api/emailTools";
+import {
+  makeEmailToolsApi,
+  type MailHeader,
+  type ParsedEmailMessage,
+  type SearchHit as EmailSearchHit,
+} from "../api/emailTools";
 import { makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
+import { MailSearchBar } from "../components/MailSearchBar";
 import {
   parseMailboxRefId,
   type HelpScoutMailboxRef,
@@ -645,6 +651,64 @@ export function Email() {
     // switching either already selects a different set.
   }, [selectedMailbox, selectedFolder]);
 
+  // ── Search ────────────────────────────────────────────────────────────────
+  //
+  // Scope is deliberately wider than the list behind it: no `mailbox` and no
+  // `folder`, so the plugin searches every mailbox this company can see, across
+  // folders. Someone searching for a message does not know, and should not have
+  // to know, which account it landed in or whether it has been filed away.
+  //
+  // The unread-only toggle is intentionally not applied. It filters the working
+  // inbox; a search that hid already-read mail would miss most of what people
+  // search for.
+
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchActive = searchQuery.length > 0;
+
+  const {
+    data: searchData,
+    isFetching: searchFetching,
+    error: searchError,
+  } = useQuery({
+    queryKey: ["email", pluginId, selectedCompanyId, "search", searchQuery],
+    queryFn: () => emailApi!.searchMessages({ text: searchQuery, limit: 100 }),
+    enabled: !!emailApi && searchActive,
+    staleTime: 60_000,
+  });
+
+  const searchResults = searchData?.results ?? [];
+
+  function submitSearch() {
+    const next = searchInput.trim();
+    if (!next) {
+      setSearchQuery("");
+      return;
+    }
+    setSearchQuery(next);
+  }
+
+  function clearSearch() {
+    setSearchInput("");
+    setSearchQuery("");
+  }
+
+  /**
+   * Opens a hit that may live in another mailbox or folder.
+   *
+   * Changing mailbox/folder would normally trip the reset effect above and
+   * clear the very uid being opened, so its watermark is moved forward in the
+   * same click rather than letting it observe a change.
+   */
+  function openSearchHit(hit: EmailSearchHit) {
+    prevMailboxFolderRef.current = `${hit.mailbox}::${hit.folder}`;
+    setSelectedMailbox(hit.mailbox);
+    setSelectedFolder(hit.folder);
+    setSelectedUid(hit.uid);
+    setReplyOpen(false);
+    setPendingRowAction(null);
+  }
+
   // ── Sender rules (used to highlight per-row action icons) ─────────────────
 
   const { data: rulesData } = useQuery({
@@ -1193,7 +1257,17 @@ export function Email() {
     );
   }
 
-  const selectedMsg = messages.find((m) => m.uid === selectedUid) ?? null;
+  // Falls back to the search results because a message opened from a search
+  // often is not in the folder list behind it — it may be older than the list's
+  // limit, or read while the list is filtered to unread. Without this the
+  // detail pane renders (it fetches by uid) but its action bar has no header to
+  // act on, so mark-read, keep-always and the rest quietly do nothing.
+  const selectedMsg =
+    messages.find((m) => m.uid === selectedUid) ??
+    searchResults.find(
+      (h) => h.uid === selectedUid && h.mailbox === selectedMailbox && h.folder === selectedFolder,
+    ) ??
+    null;
 
   // ── Mailbox name helpers ──────────────────────────────────────────────────
   // Name format: "Display Name - email@domain.com"
@@ -1353,10 +1427,50 @@ export function Email() {
 
   // ── Shared: message list header ───────────────────────────────────────────
 
+  const searchSummary = (() => {
+    if (!searchActive || searchFetching || searchError) return null;
+    const n = searchResults.length;
+    const label = n === 1 ? "1 result" : `${n} results`;
+    return searchData?.truncated ? `${label}+` : label;
+  })();
+
+  // Partial coverage has to be visible: "no results" and "we did not look
+  // there" are different answers, and only one of them means the mail is gone.
+  const searchNote = (() => {
+    if (!searchActive) return null;
+    if (searchError) return <span className="text-destructive">{(searchError as Error).message}</span>;
+    const failures = searchData?.errors ?? [];
+    if (failures.length > 0) {
+      const where = failures
+        .map((f) => (f.folder ? `${f.mailbox}/${f.folder}` : f.mailbox))
+        .join(", ");
+      return `Could not search ${where}. Results may be incomplete.`;
+    }
+    if (searchData?.truncated) return "Showing the newest matches. Narrow the search to see older ones.";
+    return null;
+  })();
+
+  const searchBar = (
+    <MailSearchBar
+      value={searchInput}
+      onChange={setSearchInput}
+      onSubmit={submitSearch}
+      onClear={clearSearch}
+      summary={searchSummary}
+      busy={searchActive && searchFetching}
+      note={searchNote}
+      placeholder="Search all mailboxes, then press Enter"
+    />
+  );
+
   const listHeader = (
     <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
       <span className="text-sm font-medium truncate">
-        {selectedMailboxInfo ? mailboxLabel(selectedMailboxInfo) : selectedMailbox || "Select a mailbox"}
+        {searchActive
+          ? "Search results"
+          : selectedMailboxInfo
+            ? mailboxLabel(selectedMailboxInfo)
+            : selectedMailbox || "Select a mailbox"}
       </span>
       <div className="flex items-center gap-1">
         {selectedUid && (
@@ -1641,7 +1755,88 @@ export function Email() {
     );
   }
 
+  /**
+   * A search hit renders without the inline row actions the folder list has.
+   * Those mutations are bound to the currently selected mailbox and folder, and
+   * a hit can come from neither — triaging from here would act on the wrong
+   * message. Clicking the row switches to its mailbox and folder first, which
+   * puts the full set of actions back in reach against the right target.
+   */
+  function renderSearchRow(hit: EmailSearchHit, compact: boolean) {
+    const isOpen =
+      selectedUid === hit.uid &&
+      selectedMailbox === hit.mailbox &&
+      selectedFolder === hit.folder;
+    return (
+      <div
+        key={`${hit.mailbox}:${hit.folder}:${hit.uid}`}
+        className={cn(
+          "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
+          isOpen && "bg-accent",
+          compact ? "py-2.5" : "py-3",
+        )}
+        onClick={() => openSearchHit(hit)}
+      >
+        <span
+          className={cn(
+            "shrink-0 h-1.5 w-1.5 rounded-full",
+            hit.unseen ? "bg-blue-500" : "bg-transparent",
+          )}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className={cn("text-xs truncate", hit.unseen && "font-semibold")}>{hit.from}</span>
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {hit.date ? timeAgo(new Date(hit.date)) : ""}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground truncate mt-0.5">{hit.subject}</div>
+          {/* Results cross mailboxes and folders, so each row has to say where
+              it came from or the list is ambiguous. */}
+          <div className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+            {mailboxes.find((m) => m.key === hit.mailbox)?.name ?? hit.mailbox} · {hit.folder}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function SearchListBody({ compact }: { compact: boolean }) {
+    if (searchFetching && searchResults.length === 0) {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      );
+    }
+    if (searchError) {
+      return (
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center space-y-1">
+            <AlertCircle className="h-5 w-5 text-destructive mx-auto" />
+            <p className="text-xs text-muted-foreground">{(searchError as Error).message}</p>
+          </div>
+        </div>
+      );
+    }
+    if (searchResults.length === 0) {
+      return (
+        <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground px-4 text-center">
+          No messages match “{searchQuery}”.
+        </div>
+      );
+    }
+    return (
+      <ScrollArea className="flex-1">
+        <div className="divide-y divide-border">
+          {searchResults.map((hit) => renderSearchRow(hit, compact))}
+        </div>
+      </ScrollArea>
+    );
+  }
+
   function MessageListBody({ compact }: { compact: boolean }) {
+    if (searchActive) return <SearchListBody compact={compact} />;
     if (messagesError) {
       return (
         <div className="flex-1 flex items-center justify-center px-4">
@@ -1895,6 +2090,7 @@ export function Email() {
           {/* Center: narrow list */}
           <div className="w-72 shrink-0 border-r border-border flex flex-col group">
             {listHeader}
+            {searchBar}
             <MessageListBody compact />
           </div>
 
@@ -2275,6 +2471,7 @@ export function Email() {
         // ── 2-pane view: expanded list with per-row actions ─────────────────
         <div className="flex-1 min-w-0 flex flex-col">
           {listHeader}
+          {searchBar}
           <MessageListBody compact={false} />
         </div>
       )}
