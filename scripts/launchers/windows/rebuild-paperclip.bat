@@ -86,7 +86,7 @@ if errorlevel 2 (
 )
 
 REM Exit any running tray instance before spawning a fresh one. paperclip.exe
-REM holds a single-instance lock on port 53100; a second launch finds it bound,
+REM holds a single-instance lock (a named mutex); a second launch finds it held,
 REM treats it as a duplicate, and silently opens the dead browser tab instead of
 REM starting the server. Killing the tray here releases that lock cleanly.
 powershell -NoProfile -Command "Get-Process -Name paperclip -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"

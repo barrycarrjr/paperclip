@@ -16,12 +16,12 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -30,8 +30,9 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
-use windows_sys::Win32::Foundation::SYSTEMTIME;
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, SYSTEMTIME};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK, SW_SHOWNORMAL,
@@ -39,11 +40,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 const STARTUP_TIMEOUT_SECS: u32 = 90;
 const RESTART_PORT_FREE_TIMEOUT_SECS: u32 = 15;
-// Loopback port reserved for the single-instance lock. Any port in the
-// dynamic/private range (49152+) would do; we pick a fixed value so the lock
-// is reliable across instances. If something else already has this port,
-// the launcher will think another launcher is running — annoying but safe.
-const SINGLE_INSTANCE_LOCK_PORT: u16 = 53100;
+// Name of the single-instance mutex. Session-local (no "Global\" prefix) on
+// purpose: tray icons are per-desktop-session, and the port-bound check keeps
+// a second session from spawning a duplicate server anyway.
+const SINGLE_INSTANCE_MUTEX_NAME: &str = "paperclip-launcher-single-instance";
 
 const DEFAULT_URL: &str = "http://localhost:3100/";
 const DEFAULT_PORT: u16 = 3100;
@@ -619,19 +619,37 @@ fn is_dark_taskbar_theme() -> bool {
 }
 
 fn acquire_single_instance_lock() -> bool {
-    // Bind a TCP listener on loopback. If another launcher already holds it,
-    // bind fails — that's the "second instance" signal. The OS releases the
-    // port when this process exits, so no stale-lock cleanup needed.
-    static LOCK: OnceLock<TcpListener> = OnceLock::new();
-    match TcpListener::bind(format!("127.0.0.1:{}", SINGLE_INSTANCE_LOCK_PORT)) {
-        Ok(listener) => {
-            // Park the listener in a OnceLock for the process lifetime so it
-            // isn't dropped (which would release the port).
-            let _ = LOCK.set(listener);
-            true
-        }
-        Err(_) => false,
+    // Named kernel mutex: exists exactly as long as some process holds a
+    // handle to it, so the OS cleans up on exit — no stale-lock handling.
+    //
+    // This replaced an earlier TCP-listener lock on 127.0.0.1:53100. That
+    // port sits inside the Windows dynamic range (49152+), so any process's
+    // outgoing connection could land on it by chance; the launcher then
+    // mistook the stranger for a running instance, opened the browser, and
+    // exited without ever starting the server. A named mutex is invisible to
+    // network traffic, so nothing unrelated can ever collide with it.
+    acquire_named_mutex(SINGLE_INSTANCE_MUTEX_NAME)
+}
+
+fn acquire_named_mutex(name: &str) -> bool {
+    let name_w = wide(name);
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name_w.as_ptr()) };
+    if handle.is_null() {
+        // Couldn't even create the mutex — something is deeply wrong. Err on
+        // the side of launching: worst case is a duplicate tray icon, while
+        // refusing would leave the user with no server and no tray at all.
+        return true;
     }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        // Another launcher created it first. Close OUR handle (the owner's
+        // stays valid) and report "not acquired".
+        unsafe { CloseHandle(handle) };
+        return false;
+    }
+    // We created it. Deliberately never CloseHandle: the handle must live as
+    // long as this process so the mutex keeps existing for later launches to
+    // detect.
+    true
 }
 
 fn port_is_bound(port: u16) -> bool {
@@ -758,4 +776,34 @@ fn format_now() -> String {
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acquire_named_mutex;
+
+    // Test mutex names carry the test process id so a parallel `cargo test`
+    // (or a developer's live tray, which uses the real name) can't collide.
+    fn unique_name(tag: &str) -> String {
+        format!("paperclip-launcher-test-{}-{}", tag, std::process::id())
+    }
+
+    #[test]
+    fn first_acquire_succeeds_second_reports_taken() {
+        let name = unique_name("dup");
+        assert!(acquire_named_mutex(&name), "fresh name should acquire");
+        // The first acquire leaks its handle on purpose (process-lifetime
+        // lock), so within this same process the name now reads as taken —
+        // exactly what a second launcher instance would observe.
+        assert!(
+            !acquire_named_mutex(&name),
+            "second acquire of a held name should report taken"
+        );
+    }
+
+    #[test]
+    fn distinct_names_do_not_interfere() {
+        assert!(acquire_named_mutex(&unique_name("a")));
+        assert!(acquire_named_mutex(&unique_name("b")));
+    }
 }

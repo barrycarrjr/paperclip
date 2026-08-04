@@ -163,8 +163,8 @@ function spawnRestartTrampoline(): void {
   //   1. Sleeps RESTART_TRAMPOLINE_DELAY_MS to let our SIGTERM handler get
   //      going (postgres shutdown, worker drain, port release).
   //   2. On Windows, kills any lingering paperclip.exe (the tray launcher).
-  //      paperclip.exe holds a single-instance lock on TCP 127.0.0.1:53100
-  //      that survives our server SIGTERM — it's a separate process from
+  //      paperclip.exe holds a single-instance lock (a named mutex) that
+  //      survives our server SIGTERM — it's a separate process from
   //      the server. If we don't kill it, the new paperclip.exe we're about
   //      to spawn fails the lock, just opens the browser, and exits without
   //      starting a server. The user is left with a dead tab pointing at a

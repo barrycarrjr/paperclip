@@ -6,8 +6,11 @@ hidden-window launcher and system-tray for paperclip on Windows.
 ## What it does
 
 1. **Single-instance lock** — second double-click while the tray is up
-   just opens the browser. (Bound to a fixed loopback port; the OS releases
-   it when the launcher exits.)
+   just opens the browser. (A named Windows mutex; the OS releases it when
+   the launcher exits. Deliberately not a loopback-port lock — a fixed port
+   in the dynamic range can be grabbed by any process's outgoing connection,
+   which made the launcher think it was already running and silently skip
+   the server start.)
 2. **Spawns the server hidden** if the configured port (default 3100)
    isn't bound. Stdout/stderr append to
    `%USERPROFILE%\.paperclip\logs\paperclip-YYYYMMDD.log`.

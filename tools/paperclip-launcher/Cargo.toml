@@ -1,6 +1,6 @@
 [package]
 name = "paperclip-launcher"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 publish = false
 description = "Hidden-window launcher + tray icon for paperclip on Windows"
@@ -31,6 +31,10 @@ tauri-winrt-notification = "0.8"
 ureq = { version = "2", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    # Win32_Security is required for CreateMutexW to exist: its signature
+    # takes a *const SECURITY_ATTRIBUTES, and windows-sys only emits a
+    # function when the features for every type it references are enabled.
+    "Win32_Security",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
