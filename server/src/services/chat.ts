@@ -14,7 +14,7 @@ import {
 } from "./chat-tools.js";
 import { DRAFT_RESULT_HEADER } from "./tool-draft-gate.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
-import { chatPermissions } from "./chat-permissions.js";
+import { CHAT_PERMISSION_TTL_MS, chatPermissions } from "./chat-permissions.js";
 import {
   getProviderForModel,
   listAvailableModels,
@@ -83,7 +83,13 @@ export type StreamEvent =
       input: unknown;
       mutating: boolean;
     }
-  | { type: "permission_required"; toolUseId: string; name: string; input: unknown }
+  | {
+      type: "permission_required";
+      toolUseId: string;
+      name: string;
+      input: unknown;
+      ttlMs: number;
+    }
   | { type: "tool_result_block"; toolUseId: string; ok: boolean; result: unknown }
   | { type: "message_completed"; messageId: string }
   | { type: "done"; stopReason: string }
@@ -728,6 +734,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
             toolUseId: block.id,
             name: block.name,
             input: block.input,
+            ttlMs: CHAT_PERMISSION_TTL_MS,
           };
           const decision = await chatPermissions.await(block.id, sessionId);
           approved = decision === "approve";

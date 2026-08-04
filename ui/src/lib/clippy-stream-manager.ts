@@ -1,30 +1,21 @@
-import type { ChatContentBlock } from "../api/chat";
 import { postChatMessageStream, type ChatStreamEvent } from "./chat-stream";
+import {
+  EMPTY_STREAM_STATE,
+  finalizeUnfinishedToolCalls,
+  reduceClippyStreamEvent,
+  type ClippyTranscriptEntry,
+  type LiveToolCall,
+  type PendingPermission,
+  type SessionStreamState,
+} from "./clippy-stream-reducer";
 
-export interface PendingPermission {
-  toolUseId: string;
-  name: string;
-  input: unknown;
-}
-
-export interface ClippyTranscriptEntry {
-  id: string;
-  role: "user" | "assistant" | "tool";
-  blocks: ChatContentBlock[];
-  pending?: boolean;
-}
-
-export interface SessionStreamState {
-  streaming: boolean;
-  pendingAssistant: ClippyTranscriptEntry | null;
-  pendingPermissions: PendingPermission[];
-}
-
-const EMPTY_STATE: SessionStreamState = {
-  streaming: false,
-  pendingAssistant: null,
-  pendingPermissions: [],
-};
+export type {
+  ClippyTranscriptEntry,
+  LiveToolCall,
+  PendingPermission,
+  SessionStreamState,
+} from "./clippy-stream-reducer";
+export { EMPTY_STREAM_STATE } from "./clippy-stream-reducer";
 
 type Listener = () => void;
 
@@ -42,15 +33,20 @@ const states = new Map<string, SessionStreamState>();
 const listeners = new Map<string, Set<Listener>>();
 const aborts = new Map<string, () => void>();
 const refreshCallbacks = new Map<string, RefreshCallbacks>();
+// Cross-session listeners (e.g. the drawer launcher badge) notified on any
+// session's state change.
+const globalListeners = new Set<Listener>();
 
 function getState(sessionId: string): SessionStreamState {
-  return states.get(sessionId) ?? EMPTY_STATE;
+  return states.get(sessionId) ?? EMPTY_STREAM_STATE;
 }
 
 function notify(sessionId: string) {
   const subs = listeners.get(sessionId);
-  if (!subs) return;
-  for (const fn of subs) fn();
+  if (subs) {
+    for (const fn of subs) fn();
+  }
+  for (const fn of globalListeners) fn();
 }
 
 function setState(
@@ -62,96 +58,22 @@ function setState(
   notify(sessionId);
 }
 
-function ensurePending(prev: ClippyTranscriptEntry | null): ClippyTranscriptEntry {
-  return (
-    prev ?? {
-      id: `pending-${Date.now()}`,
-      role: "assistant",
-      blocks: [],
-      pending: true,
-    }
-  );
-}
-
 function applyEvent(sessionId: string, event: ChatStreamEvent) {
+  if (event.type !== "ping") {
+    setState(sessionId, (prev) => reduceClippyStreamEvent(prev, event, Date.now()));
+  }
   switch (event.type) {
-    case "message_started":
-      setState(sessionId, (prev) => ({
-        ...prev,
-        streaming: true,
-        pendingAssistant: ensurePending(prev.pendingAssistant),
-      }));
-      break;
-    case "text_delta":
-      setState(sessionId, (prev) => {
-        const base = ensurePending(prev.pendingAssistant);
-        const blocks = [...base.blocks];
-        const last = blocks[blocks.length - 1];
-        if (last && last.type === "text") {
-          blocks[blocks.length - 1] = { type: "text", text: last.text + event.delta };
-        } else {
-          blocks.push({ type: "text", text: event.delta });
-        }
-        return { ...prev, streaming: true, pendingAssistant: { ...base, blocks } };
-      });
-      break;
-    case "tool_use_block":
-      setState(sessionId, (prev) => {
-        const base = ensurePending(prev.pendingAssistant);
-        return {
-          ...prev,
-          streaming: true,
-          pendingAssistant: {
-            ...base,
-            blocks: [
-              ...base.blocks,
-              { type: "tool_use", id: event.toolUseId, name: event.name, input: event.input },
-            ],
-          },
-        };
-      });
-      break;
-    case "permission_required":
-      setState(sessionId, (prev) => ({
-        ...prev,
-        pendingPermissions: [
-          ...prev.pendingPermissions,
-          { toolUseId: event.toolUseId, name: event.name, input: event.input },
-        ],
-      }));
-      break;
-    case "tool_result_block":
-      setState(sessionId, (prev) => ({
-        ...prev,
-        pendingPermissions: prev.pendingPermissions.filter(
-          (p) => p.toolUseId !== event.toolUseId,
-        ),
-      }));
-      break;
     case "message_completed":
-      setState(sessionId, (prev) => ({ ...prev, pendingAssistant: null }));
-      refreshCallbacks.get(sessionId)?.onMessage?.();
-      break;
     case "session_state":
       refreshCallbacks.get(sessionId)?.onMessage?.();
       break;
     case "done":
-      setState(sessionId, () => EMPTY_STATE);
       refreshCallbacks.get(sessionId)?.onDone?.();
       break;
     case "error":
-      setState(sessionId, () => ({
-        streaming: false,
-        pendingAssistant: {
-          id: `pending-error-${Date.now()}`,
-          role: "assistant",
-          blocks: [{ type: "text", text: `Error: ${event.error}` }],
-        },
-        pendingPermissions: [],
-      }));
       refreshCallbacks.get(sessionId)?.onMessage?.();
       break;
-    case "ping":
+    default:
       break;
   }
 }
@@ -176,6 +98,26 @@ export const clippyStreamManager = {
     return getState(sessionId);
   },
 
+  /** Subscribe to changes in any session's stream state. */
+  subscribeGlobal(listener: Listener): () => void {
+    globalListeners.add(listener);
+    return () => {
+      globalListeners.delete(listener);
+    };
+  },
+
+  /**
+   * Number of actions across all sessions waiting on the user right now
+   * (pending permission prompts). Powers the launcher-button badge.
+   */
+  getPendingActionCount(): number {
+    let count = 0;
+    for (const state of states.values()) {
+      count += state.pendingPermissions.length;
+    }
+    return count;
+  },
+
   setRefreshCallbacks(sessionId: string, callbacks: RefreshCallbacks) {
     refreshCallbacks.set(sessionId, callbacks);
   },
@@ -189,6 +131,7 @@ export const clippyStreamManager = {
       throw new Error("A turn is already streaming");
     }
     setState(sessionId, () => ({
+      ...EMPTY_STREAM_STATE,
       streaming: true,
       pendingAssistant: {
         id: `pending-${Date.now()}`,
@@ -196,7 +139,7 @@ export const clippyStreamManager = {
         blocks: [],
         pending: true,
       },
-      pendingPermissions: [],
+      lastEventAt: Date.now(),
     }));
 
     const handle = postChatMessageStream(
@@ -208,11 +151,19 @@ export const clippyStreamManager = {
     aborts.set(sessionId, handle.abort);
 
     const done = handle.done.finally(() => {
+      // Only clean up if this turn still owns the session. A stop-and-send
+      // replaces the aborts entry synchronously before this settles; a plain
+      // Stop deletes it. In both cases this stale finally must not delete
+      // the new turn's abort handle or wipe its state.
+      if (aborts.get(sessionId) !== handle.abort) return;
       aborts.delete(sessionId);
       // Defensive: if the SSE returned without a terminal `done`/`error`
       // event (network drop), still clear streaming so the UI isn't stuck.
       if (getState(sessionId).streaming) {
-        setState(sessionId, () => EMPTY_STATE);
+        setState(sessionId, (prev) => ({
+          ...EMPTY_STREAM_STATE,
+          toolCalls: finalizeUnfinishedToolCalls(prev.toolCalls, Date.now()),
+        }));
       }
     });
 
@@ -225,6 +176,28 @@ export const clippyStreamManager = {
       fn();
       aborts.delete(sessionId);
     }
-    setState(sessionId, () => EMPTY_STATE);
+    // Keep tool-call evidence: completed calls stay completed, unfinished
+    // ones are marked interrupted instead of ticking "running…" forever.
+    setState(sessionId, (prev) => ({
+      ...EMPTY_STREAM_STATE,
+      toolCalls: finalizeUnfinishedToolCalls(prev.toolCalls, Date.now()),
+    }));
+  },
+
+  /**
+   * Forget a session entirely (e.g. after it is deleted). Aborts any
+   * in-flight turn — closing the POST socket also cancels the server-side
+   * permission wait — and drops its state so pending prompts stop counting
+   * toward the launcher badge.
+   */
+  disposeSession(sessionId: string) {
+    const fn = aborts.get(sessionId);
+    if (fn) {
+      fn();
+      aborts.delete(sessionId);
+    }
+    states.delete(sessionId);
+    refreshCallbacks.delete(sessionId);
+    notify(sessionId);
   },
 };

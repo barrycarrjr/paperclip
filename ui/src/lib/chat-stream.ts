@@ -11,7 +11,14 @@ export type ChatStreamEvent =
       input: unknown;
       mutating: boolean;
     }
-  | { type: "permission_required"; toolUseId: string; name: string; input: unknown }
+  | {
+      type: "permission_required";
+      toolUseId: string;
+      name: string;
+      input: unknown;
+      /** How long the server waits before auto-denying, for the countdown. */
+      ttlMs?: number;
+    }
   | { type: "tool_result_block"; toolUseId: string; ok: boolean; result: unknown }
   | { type: "message_completed"; messageId: string }
   | { type: "done"; stopReason: string }

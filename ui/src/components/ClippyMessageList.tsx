@@ -1,18 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Download, FileText, MessageSquare } from "lucide-react";
+import { ArrowDown, Download, FileText, Info, Loader2, MessageSquare } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { MarkdownBody } from "./MarkdownBody";
 import { ClippyToolCallCard } from "./ClippyToolCallCard";
 import { ClippyPermissionCard } from "./ClippyPermissionCard";
 import type { ClippyTranscriptEntry } from "../hooks/useChatSession";
+import type { LiveToolCall, PendingPermission } from "../lib/clippy-stream-manager";
+import { resolveStreamActivity } from "../lib/clippy-stream-reducer";
 import type { ChatContentBlock } from "../api/chat";
+import { useNowTick } from "../hooks/useNowTick";
+import { formatElapsed } from "../lib/clippy-tool-labels";
 
 interface Props {
   transcript: ClippyTranscriptEntry[];
-  pendingPermissions: { toolUseId: string; name: string; input: unknown }[];
+  pendingPermissions: PendingPermission[];
   onPermissionDecision: (toolUseId: string, decision: "approve" | "deny") => void;
   streaming: boolean;
+  /** Live per-tool-call state from the stream (badges, results, timing). */
+  liveToolCalls?: Record<string, LiveToolCall>;
+  /** Epoch ms of the last stream event; drives the quiet-stream indicator. */
+  lastEventAt?: number | null;
 }
 
 export function ClippyMessageList({
@@ -20,6 +28,8 @@ export function ClippyMessageList({
   pendingPermissions,
   onPermissionDecision,
   streaming,
+  liveToolCalls = {},
+  lastEventAt = null,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -78,7 +88,15 @@ export function ClippyMessageList({
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {transcript.map((entry) => {
-            if (entry.role === "tool") return null;
+            if (entry.role === "tool") {
+              // Tool-role rows are mostly tool_result blocks (mined into
+              // toolResultsByUseId above), but the draft-approval loop also
+              // appends plain-text tool messages ("The user approved your
+              // earlier draft… the tool ran and returned…"). Those close the
+              // loop for the reader, so render them as system notes instead
+              // of dropping them.
+              return <SystemNote key={entry.id} blocks={entry.blocks} />;
+            }
             return (
               <MessageBubble
                 key={entry.id}
@@ -86,16 +104,23 @@ export function ClippyMessageList({
                 blocks={entry.blocks}
                 pending={entry.pending}
                 toolResults={toolResultsByUseId}
+                liveToolCalls={liveToolCalls}
                 pendingPermissions={pendingPermissions}
                 onPermissionDecision={onPermissionDecision}
               />
             );
           })}
-          {streaming &&
-            transcript.length > 0 &&
-            transcript[transcript.length - 1].role !== "assistant" && (
-              <div className="text-xs text-muted-foreground">Clippy is thinking…</div>
-            )}
+          <StreamActivityLine
+            streaming={streaming}
+            lastEventAt={lastEventAt}
+            hasAssistantContent={
+              transcript.length > 0 &&
+              transcript[transcript.length - 1].role === "assistant" &&
+              transcript[transcript.length - 1].blocks.length > 0
+            }
+            hasPendingPermission={pendingPermissions.length > 0}
+            hasRunningTool={Object.values(liveToolCalls).some((c) => c.completedAt == null)}
+          />
         </div>
       </div>
       {showJump && (
@@ -117,6 +142,7 @@ function MessageBubble({
   blocks,
   pending,
   toolResults,
+  liveToolCalls,
   pendingPermissions,
   onPermissionDecision,
 }: {
@@ -124,7 +150,8 @@ function MessageBubble({
   blocks: ChatContentBlock[];
   pending?: boolean;
   toolResults: Map<string, ChatContentBlock & { type: "tool_result" }>;
-  pendingPermissions: { toolUseId: string; name: string; input: unknown }[];
+  liveToolCalls: Record<string, LiveToolCall>;
+  pendingPermissions: PendingPermission[];
   onPermissionDecision: (toolUseId: string, decision: "approve" | "deny") => void;
 }) {
   const isUser = role === "user";
@@ -189,19 +216,46 @@ function MessageBubble({
                     key={block.id}
                     toolName={block.name}
                     input={block.input}
+                    expiresAt={pendingPerm.expiresAt}
                     onApprove={() => onPermissionDecision(block.id, "approve")}
                     onDeny={() => onPermissionDecision(block.id, "deny")}
                   />
                 );
               }
-              const result = toolResults.get(block.id);
+              // Persisted tool_result blocks are canonical; the live stream
+              // state fills the gap between "result streamed in" and the
+              // next react-query refetch, and carries badges and timing the
+              // persisted transcript doesn't have. Only consult live state
+              // when no persisted result exists: providers with synthetic
+              // toolUseIds (call_0 style) can reuse ids across turns, and a
+              // historical card must not inherit the current turn's timing.
+              const persisted = toolResults.get(block.id);
+              const live = persisted ? undefined : liveToolCalls[block.id];
+              const result = persisted
+                ? { ok: !persisted.is_error, data: tryParse(persisted.content) }
+                : live?.result
+                  ? { ok: live.result.ok, data: live.result.result }
+                  : undefined;
+              // No result and no live stream state (e.g. after a reload)
+              // means the call's outcome is unknown — say so instead of
+              // claiming it is still running.
+              const status = result
+                ? isDeniedResult(result)
+                  ? "denied"
+                  : "completed"
+                : live
+                  ? "pending"
+                  : "interrupted";
               return (
                 <ClippyToolCallCard
                   key={block.id}
                   name={block.name}
                   input={block.input}
-                  status={result ? "completed" : "pending"}
-                  result={result ? { ok: !result.is_error, data: tryParse(result.content) } : undefined}
+                  status={status}
+                  result={result}
+                  mutating={live?.mutating}
+                  startedAt={live?.startedAt}
+                  completedAt={live?.completedAt}
                 />
               );
             })}
@@ -218,6 +272,82 @@ function tryParse(s: string): unknown {
   } catch {
     return s;
   }
+}
+
+/** Matches the server's synthesized denial result for both the persisted
+ * (`"User denied this action."` string) and live (`{ error: … }`) shapes. */
+function isDeniedResult(result: { ok: boolean; data: unknown }): boolean {
+  if (result.ok) return false;
+  const text =
+    typeof result.data === "string"
+      ? result.data
+      : typeof (result.data as { error?: unknown } | null)?.error === "string"
+        ? ((result.data as { error: string }).error)
+        : "";
+  return text.includes("denied this action");
+}
+
+/**
+ * The draft-approval loop appends tool-role messages with plain text
+ * ("[Paperclip] The user approved your earlier draft…"). Render them as
+ * subdued system notes so the reader sees the loop close in the thread.
+ */
+function SystemNote({ blocks }: { blocks: ChatContentBlock[] }) {
+  const text = blocks
+    .filter((b): b is ChatContentBlock & { type: "text" } => b.type === "text")
+    .map((b) => b.text.replace(/^\[Paperclip\]\s*/, ""))
+    .join("\n\n");
+  if (!text) return null;
+  return (
+    <div className="flex items-start gap-2 border-l-2 border-border pl-2.5 text-xs text-muted-foreground">
+      <Info className="mt-0.5 h-3 w-3 shrink-0" />
+      <MarkdownBody className="min-w-0 text-xs [&_p]:my-0.5">{text}</MarkdownBody>
+    </div>
+  );
+}
+
+/**
+ * Live status line under the transcript. Covers the two silent stretches of
+ * a turn: before the first token ("thinking"), and the quiet gap after text
+ * stops while the model assembles its next tool call — previously the UI
+ * just froze there with no indicator. Suppressed while a permission prompt
+ * or a running tool card is already telling the story.
+ */
+function StreamActivityLine({
+  streaming,
+  lastEventAt,
+  hasAssistantContent,
+  hasPendingPermission,
+  hasRunningTool,
+}: {
+  streaming: boolean;
+  lastEventAt: number | null;
+  hasAssistantContent: boolean;
+  hasPendingPermission: boolean;
+  hasRunningTool: boolean;
+}) {
+  const now = useNowTick(streaming);
+  const activity = resolveStreamActivity({
+    streaming,
+    lastEventAt,
+    hasAssistantContent,
+    hasPendingPermission,
+    hasRunningTool,
+    now,
+  });
+  if (!activity) return null;
+  if (activity.kind === "thinking") {
+    return <div className="text-xs text-muted-foreground">Clippy is thinking…</div>;
+  }
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />
+      <span>
+        Preparing the next action ·{" "}
+        <span className="tabular-nums">{formatElapsed(activity.quietMs)}</span>
+      </span>
+    </div>
+  );
 }
 
 function ImageAttachment({

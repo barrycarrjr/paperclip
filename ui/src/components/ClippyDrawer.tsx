@@ -229,6 +229,19 @@ export function ClippyDrawer() {
     streamingSnapshot,
   );
 
+  // Actions waiting on the user (pending permission prompts) across ALL chat
+  // sessions — surfaced on the launcher so a prompt behind a closed drawer
+  // is never invisible.
+  const pendingActionCount = useSyncExternalStore(
+    clippyStreamManager.subscribeGlobal,
+    clippyStreamManager.getPendingActionCount,
+    clippyStreamManager.getPendingActionCount,
+  );
+  const launcherLabel =
+    pendingActionCount > 0
+      ? `Open Clippy (${pendingActionCount} action${pendingActionCount === 1 ? "" : "s"} waiting on you)`
+      : "Open Clippy";
+
   return (
     <>
       <Button
@@ -236,10 +249,15 @@ export function ClippyDrawer() {
         size="icon"
         className="fixed bottom-4 right-4 z-40 h-12 w-12 rounded-full shadow-lg"
         onClick={() => setOpen(true)}
-        aria-label="Open Clippy"
-        title="Open Clippy"
+        aria-label={launcherLabel}
+        title={launcherLabel}
       >
         <MessageCircle className="h-5 w-5" />
+        {pendingActionCount > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-amber-950">
+            {pendingActionCount}
+          </span>
+        )}
       </Button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent

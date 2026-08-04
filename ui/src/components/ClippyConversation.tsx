@@ -12,6 +12,8 @@ export function ClippyConversation({ sessionId }: Props) {
     transcript,
     streaming,
     pendingPermissions,
+    liveToolCalls,
+    lastEventAt,
     send,
     abortAndSend,
     decidePermission,
@@ -37,6 +39,8 @@ export function ClippyConversation({ sessionId }: Props) {
         pendingPermissions={pendingPermissions}
         onPermissionDecision={decidePermission}
         streaming={streaming}
+        liveToolCalls={liveToolCalls}
+        lastEventAt={lastEventAt}
       />
       <ClippyComposer
         sessionId={sessionId}

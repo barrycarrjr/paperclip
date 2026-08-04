@@ -8,7 +8,9 @@ interface PendingPermission {
   sessionId: string;
 }
 
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+/** How long a permission prompt waits before the server auto-denies it.
+ * Exported so the stream can tell the UI (countdown on the prompt card). */
+export const CHAT_PERMISSION_TTL_MS = 5 * 60 * 1000;
 
 // Keyed by `${sessionId}:${toolUseId}` so two concurrent sessions that
 // happen to mint the same toolUseId (synthetic ids like `call_0` from
@@ -28,7 +30,7 @@ export interface ChatPermissionStore {
 
 export function chatPermissionStore(): ChatPermissionStore {
   return {
-    await(toolUseId, sessionId, ttlMs = DEFAULT_TTL_MS) {
+    await(toolUseId, sessionId, ttlMs = CHAT_PERMISSION_TTL_MS) {
       return new Promise<PermissionDecision>((resolve) => {
         const key = permKey(sessionId, toolUseId);
         const existing = pending.get(key);

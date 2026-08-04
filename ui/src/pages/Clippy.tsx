@@ -34,6 +34,7 @@ import {
   type ChatSessionStatus,
 } from "../api/chat";
 import { ClippyConversation } from "../components/ClippyConversation";
+import { clippyStreamManager } from "../lib/clippy-stream-manager";
 import { cn } from "../lib/utils";
 
 type LastActivity = "1d" | "7d" | "30d" | "all";
@@ -176,6 +177,9 @@ export function Clippy() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => chatApi.deleteSession(id),
     onSuccess: (_, deletedId) => {
+      // Drop any in-flight stream state for the deleted session so a
+      // pending permission prompt stops counting toward the launcher badge.
+      clippyStreamManager.disposeSession(deletedId);
       qc.invalidateQueries({ queryKey: ["clippy", "sessions"] });
       if (activeId === deletedId) setActiveId(null);
     },

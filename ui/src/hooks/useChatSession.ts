@@ -8,10 +8,13 @@ import {
 } from "../api/chat";
 import {
   clippyStreamManager,
+  EMPTY_STREAM_STATE,
   type ClippyTranscriptEntry,
+  type LiveToolCall,
   type PendingPermission,
   type SessionStreamState,
 } from "../lib/clippy-stream-manager";
+import { mergeTranscript } from "../lib/clippy-transcript";
 
 export type { ClippyTranscriptEntry } from "../lib/clippy-stream-manager";
 
@@ -22,6 +25,10 @@ export interface UseChatSessionResult {
   loading: boolean;
   streaming: boolean;
   pendingPermissions: PendingPermission[];
+  /** Live per-tool-call state (badges, streamed results, timing). */
+  liveToolCalls: Record<string, LiveToolCall>;
+  /** Epoch ms of the last stream event, for the quiet-stream indicator. */
+  lastEventAt: number | null;
   send: (text: string, attachmentIds?: string[]) => Promise<void>;
   /** Abort the in-flight stream and immediately start a new turn. */
   abortAndSend: (text: string, attachmentIds?: string[]) => Promise<void>;
@@ -32,11 +39,7 @@ export interface UseChatSessionResult {
   abort: () => void;
 }
 
-const EMPTY_STATE: SessionStreamState = {
-  streaming: false,
-  pendingAssistant: null,
-  pendingPermissions: [],
-};
+const EMPTY_STATE: SessionStreamState = EMPTY_STREAM_STATE;
 
 export function useChatSession(sessionId: string | null): UseChatSessionResult {
   const qc = useQueryClient();
@@ -155,16 +158,10 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
   );
 
   const messages = messagesQuery.data ?? [];
-  const transcript: ClippyTranscriptEntry[] = messages.map((m) => ({
-    id: m.id,
-    role: m.role,
-    blocks: m.content,
-  }));
-  if (streamState.pendingAssistant) {
-    if (!messages.some((m) => m.id === streamState.pendingAssistant!.id)) {
-      transcript.push(streamState.pendingAssistant);
-    }
-  }
+  const transcript: ClippyTranscriptEntry[] = mergeTranscript(
+    messages,
+    streamState.pendingAssistant,
+  );
 
   return {
     session: sessionQuery.data ?? null,
@@ -173,6 +170,8 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     loading: sessionQuery.isLoading || messagesQuery.isLoading,
     streaming: streamState.streaming,
     pendingPermissions: streamState.pendingPermissions,
+    liveToolCalls: streamState.toolCalls,
+    lastEventAt: streamState.lastEventAt,
     send,
     abortAndSend: (text, attachmentIds) => send(text, attachmentIds, { force: true }),
     decidePermission,
