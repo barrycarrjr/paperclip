@@ -46,6 +46,7 @@ import {
   issueService,
   logActivity,
   syncInstructionsBundleConfigFromFilePath,
+  workProductService,
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
@@ -3140,6 +3141,19 @@ export function agentRoutes(
         await getCurrentUserRedactionOptions(),
       ),
     );
+  });
+
+  // Work products created by one run, for the run story page's "made by
+  // this run" rail. Same auth shape as GET /heartbeat-runs/:runId.
+  router.get("/heartbeat-runs/:runId/work-products", async (req, res) => {
+    const runId = req.params.runId as string;
+    const run = await heartbeat.getRun(runId);
+    if (!run) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, run.companyId);
+    res.json(await workProductService(db).listForRun(runId));
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {

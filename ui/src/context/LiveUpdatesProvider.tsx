@@ -13,6 +13,7 @@ import { upsertIssueCommentInPages } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById } from "../lib/optimistic-issue-runs";
 import { queryKeys } from "../lib/queryKeys";
 import { toCompanyRelativePath } from "../lib/company-routes";
+import { TERMINAL_RUN_STATUSES } from "../lib/liveIssueIds";
 import { useLocation } from "../lib/router";
 
 const TOAST_COOLDOWN_WINDOW_MS = 10_000;
@@ -20,7 +21,6 @@ const TOAST_COOLDOWN_MAX = 3;
 const RECONNECT_SUPPRESS_MS = 2000;
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
-const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 
 type LiveUpdatesSocketLike = {
   readyState: number;
@@ -622,6 +622,16 @@ function invalidateHeartbeatQueries(
   if (agentId) {
     queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(companyId, agentId) });
+  }
+
+  // The open run page's own query: without this, a run's terminal fields
+  // (finishedAt, exit code, usage, the agent's report) froze at first fetch
+  // because `hydratedRun ?? initialRun` prefers the stale hydrated copy.
+  const runId = readString(payload.runId);
+  if (runId) {
+    // Prefix match also covers ["heartbeat-run", runId, ...] children
+    // (workspace operations, work products).
+    queryClient.invalidateQueries({ queryKey: queryKeys.runDetail(runId) });
   }
 }
 

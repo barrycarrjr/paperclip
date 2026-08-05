@@ -41,6 +41,16 @@ export function workProductService(db: Db) {
       return rows.map(toIssueWorkProduct);
     },
 
+    /** Everything a single heartbeat run produced, for the run story page. */
+    listForRun: async (runId: string) => {
+      const rows = await db
+        .select()
+        .from(issueWorkProducts)
+        .where(eq(issueWorkProducts.createdByRunId, runId))
+        .orderBy(desc(issueWorkProducts.isPrimary), desc(issueWorkProducts.updatedAt));
+      return rows.map(toIssueWorkProduct);
+    },
+
     getById: async (id: string) => {
       const row = await db
         .select()

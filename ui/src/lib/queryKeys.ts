@@ -171,6 +171,7 @@ export const queryKeys = {
     ["heartbeats", companyId, agentId] as const,
   runDetail: (runId: string) => ["heartbeat-run", runId] as const,
   runWorkspaceOperations: (runId: string) => ["heartbeat-run", runId, "workspace-operations"] as const,
+  runWorkProducts: (runId: string) => ["heartbeat-run", runId, "work-products"] as const,
   liveRuns: (companyId: string) => ["live-runs", companyId] as const,
   runIssues: (runId: string) => ["run-issues", runId] as const,
   org: (companyId: string) => ["org", companyId] as const,

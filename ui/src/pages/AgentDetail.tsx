@@ -34,6 +34,8 @@ import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
+import { RunReportCard, runReportText } from "../components/RunReportCard";
+import { RunWorkProductsCard } from "../components/RunWorkProductsCard";
 import { CopyText } from "../components/CopyText";
 import { EntityRow } from "../components/EntityRow";
 import { Identity } from "../components/Identity";
@@ -92,6 +94,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
 import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
+import { TERMINAL_RUN_STATUSES } from "../lib/liveIssueIds";
 import {
   isUuidLike,
   type Agent,
@@ -3150,7 +3153,7 @@ function RunsTab({
   if (isMobile) {
     if (selectedRun) {
       return (
-        <div className="space-y-3 min-w-0 overflow-x-hidden">
+        <div className="space-y-3 min-w-0 overflow-x-hidden @container">
           <Link
             to={`/agents/${agentRouteId}/runs`}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors no-underline"
@@ -3188,7 +3191,7 @@ function RunsTab({
 
       {/* Right: run detail — natural height, page scrolls */}
       {selectedRun && (
-        <div className="flex-1 min-w-0 pl-4">
+        <div className="flex-1 min-w-0 pl-4 @container">
           <RunDetail key={selectedRun.id} run={selectedRun} agentRouteId={agentRouteId} adapterType={adapterType} adapterConfig={adapterConfig} />
         </div>
       )}
@@ -3205,6 +3208,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     queryKey: queryKeys.runDetail(initialRun.id),
     queryFn: () => heartbeatsApi.get(initialRun.id),
     enabled: Boolean(initialRun.id),
+    // Non-terminal runs poll so status/usage/result don't freeze at first
+    // fetch (scheduled_retry is NOT terminal: the same row is promoted back
+    // to queued later); terminal runs rely on websocket invalidation only.
+    refetchInterval: (query) => {
+      const status = (query.state.data ?? initialRun).status;
+      return TERMINAL_RUN_STATUSES.has(status) ? false : 5_000;
+    },
   });
   const run = hydratedRun ?? initialRun;
   const metrics = runMetrics(run);
@@ -3378,8 +3388,19 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const hasNonZeroExit = run.exitCode !== null && run.exitCode !== 0;
   const retryState = describeRunRetryState(run);
 
+  const isLiveRun = !TERMINAL_RUN_STATUSES.has(run.status);
+
   return (
-    <div className="space-y-4 min-w-0">
+    // Story layout: main column plus a right rail. Gated on the CONTAINER
+    // being at least @4xl (56rem) wide, not the viewport: RunDetail sits to
+    // the right of the company rail, sidebar, and run list, so a viewport
+    // breakpoint would crush the story column on ordinary laptop widths.
+    // The rail must stay sticky and never scroll itself; a scrollable rail
+    // would hijack the transcript auto-follow's findScrollContainer.
+    <div className="min-w-0 @4xl:grid @4xl:grid-cols-[minmax(0,1fr)_20rem] @4xl:gap-4 @4xl:items-start">
+      <div className="space-y-4 min-w-0">
+      {/* The agent's own account leads the story. */}
+      <RunReportCard summary={runReportText(run.resultJson)} isLive={isLiveRun} />
       {/* Run summary card */}
       <div className="border border-border rounded-lg overflow-hidden">
         <div className="flex flex-col sm:flex-row">
@@ -3763,6 +3784,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
 
       {/* Log viewer */}
       <LogViewer run={run} adapterType={adapterType} />
+      </div>
+      <aside className="mt-4 space-y-3 min-w-0 @4xl:mt-0 @4xl:sticky @4xl:top-4">
+        <RunWorkProductsCard runId={run.id} isLive={isLiveRun} />
+      </aside>
       <ScrollToBottom />
     </div>
   );
