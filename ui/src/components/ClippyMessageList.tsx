@@ -81,8 +81,10 @@ export function ClippyMessageList({
             <MessageSquare className="mb-2 h-8 w-8 opacity-40" />
             <div className="font-medium">Ask Clippy anything</div>
             <div className="mt-1 max-w-sm text-xs">
-              Switch to <span className="font-medium">Agent</span> mode to let Clippy run tools and
-              make changes for you.
+              Clippy can look things up and take actions for you; each action
+              shows up as a card as it runs. With{" "}
+              <span className="font-medium">Ask permission</span> selected below,
+              anything that makes a real change waits for your OK.
             </div>
           </div>
         )}

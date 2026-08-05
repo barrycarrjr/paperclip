@@ -35,6 +35,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { PendingQuestionRow } from "../components/PendingQuestionRow";
+import { ReviewGateRow } from "../components/ReviewGateRow";
 import {
   ChartCard,
   RunActivityChart,
@@ -129,6 +130,24 @@ export function MorningBrief() {
     queryFn: () => issuesApi.listPendingInteractions(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+
+  // Issues in a review/approval gate waiting on a human.
+  const { data: pendingReviews } = useQuery({
+    queryKey: ["pending-reviews", selectedCompanyId],
+    queryFn: () => issuesApi.listPendingReviews(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  // Only the named participant can act on a gate (the server rejects anyone
+  // else), so scope to the signed-in user. local_implicit boards have no
+  // session user and see everything.
+  const sessionUserId = session?.user?.id ?? null;
+  const myPendingReviews = useMemo(
+    () =>
+      (pendingReviews ?? []).filter((gate) =>
+        sessionUserId ? gate.participantUserId === sessionUserId : true,
+      ),
+    [pendingReviews, sessionUserId],
+  );
 
   const { data: issues } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
@@ -614,6 +633,11 @@ export function MorningBrief() {
                 {pendingQuestions!.length} question{pendingQuestions!.length === 1 ? "" : "s"}
               </span>
             )}
+            {myPendingReviews.length > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300">
+                {myPendingReviews.length} review{myPendingReviews.length === 1 ? "" : "s"}
+              </span>
+            )}
             {pendingApprovals > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 {pendingApprovals} draft{pendingApprovals === 1 ? "" : "s"}
@@ -627,7 +651,7 @@ export function MorningBrief() {
           </div>
         </div>
 
-        {pendingApprovals === 0 && reviewQueue.length === 0 && (pendingQuestions?.length ?? 0) === 0 ? (
+        {pendingApprovals === 0 && reviewQueue.length === 0 && (pendingQuestions?.length ?? 0) === 0 && myPendingReviews.length === 0 ? (
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
@@ -636,6 +660,29 @@ export function MorningBrief() {
           </div>
         ) : (
           <div className="space-y-4">
+            {myPendingReviews.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Finished work waiting for your sign-off
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    The issue stays open until you review it
+                  </span>
+                </div>
+                <div className="border border-border bg-card divide-y divide-border">
+                  {myPendingReviews.slice(0, QUESTIONS_SHOWN).map((gate) => (
+                    <ReviewGateRow key={gate.issueId} gate={gate} />
+                  ))}
+                  {myPendingReviews.length > QUESTIONS_SHOWN && (
+                    <div className="px-4 py-2.5 text-center text-[12px] text-muted-foreground">
+                      + {myPendingReviews.length - QUESTIONS_SHOWN} more on their issues
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {(pendingQuestions?.length ?? 0) > 0 && (
               <div>
                 <div className="mb-1.5 flex items-baseline justify-between">

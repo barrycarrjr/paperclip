@@ -27,6 +27,20 @@ export type PendingCompanyInteraction = IssueThreadInteraction & {
   issueTitle: string;
 };
 
+/** An issue sitting in a review/approval gate that a human must act on. */
+export interface PendingReviewGate {
+  issueId: string;
+  companyId: string;
+  identifier: string | null;
+  title: string;
+  priority: IssuePriority;
+  stageType: "review" | "approval" | null;
+  participantUserId: string | null;
+  reviewInstructions: string | null;
+  /** Last activity on the issue, NOT when the gate opened. */
+  updatedAt: string;
+}
+
 export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
 };
@@ -228,6 +242,14 @@ export const issuesApi = {
   listPortfolioPendingInteractions: (hqCompanyId: string) =>
     api.get<{ interactions: PendingCompanyInteraction[]; companies: Company[] }>(
       `/companies/${hqCompanyId}/portfolio-issue-thread-interactions`,
+    ),
+  listPendingReviews: (companyId: string, limit?: number) =>
+    api.get<PendingReviewGate[]>(
+      `/companies/${companyId}/issues-pending-review${limit ? `?limit=${limit}` : ""}`,
+    ),
+  listPortfolioPendingReviews: (hqCompanyId: string) =>
+    api.get<{ reviews: PendingReviewGate[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-issues-pending-review`,
     ),
   createInteraction: (id: string, data: Record<string, unknown>) =>
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions`, data),

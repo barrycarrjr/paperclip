@@ -28,7 +28,7 @@ import {
   projects,
 } from "@paperclipai/db";
 import type { IssueBlockerAttention, IssueRelationIssueSummary } from "@paperclipai/shared";
-import { extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
+import { extractAgentMentionIds, extractProjectMentionIds, isUuidLike, issueExecutionStateSchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -1974,6 +1974,67 @@ export function issueService(db: Db) {
 
   return {
     clearExecutionRunIfTerminal,
+
+    /**
+     * Issues sitting in a review/approval gate that a HUMAN must act on:
+     * executionState.status === "pending" with a user-type participant.
+     * Agent participants are excluded on purpose (the wakeup pipeline
+     * already wakes them). Do NOT widen this to executionState IS NOT NULL:
+     * completed and changes_requested both persist state, and in
+     * changes_requested the currentParticipant still names the reviewer
+     * while the executor actually owes the work. Powers the Brief's
+     * "Awaiting your tap" section.
+     */
+    listPendingHumanReviewsForCompany: async (
+      companyId: string,
+      options: { limit?: number } = {},
+    ) => {
+      const limit = Math.min(Math.max(Math.floor(options.limit ?? 50), 1), 200);
+      const rows = await db
+        .select({
+          issueId: issues.id,
+          identifier: issues.identifier,
+          title: issues.title,
+          priority: issues.priority,
+          executionState: issues.executionState,
+          updatedAt: issues.updatedAt,
+        })
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            // status = in_review rides the (companyId, status) index; the
+            // jsonb predicates then filter the small remainder.
+            eq(issues.status, "in_review"),
+            sql`${issues.executionState} ->> 'status' = 'pending'`,
+            sql`${issues.executionState} -> 'currentParticipant' ->> 'type' = 'user'`,
+            isNull(issues.hiddenAt),
+          ),
+        )
+        .orderBy(asc(issues.updatedAt), asc(issues.id))
+        .limit(limit);
+
+      return rows.flatMap((row) => {
+        const parsed = issueExecutionStateSchema.safeParse(row.executionState);
+        if (!parsed.success) return [];
+        const state = parsed.data;
+        return [
+          {
+            issueId: row.issueId,
+            companyId,
+            identifier: row.identifier,
+            title: row.title,
+            priority: row.priority,
+            stageType: state.currentStageType,
+            participantUserId: state.currentParticipant?.userId ?? null,
+            reviewInstructions: state.reviewRequest?.instructions ?? null,
+            // The row's last activity, NOT when the gate opened; the state
+            // blob carries no timestamp. Label it honestly in the UI.
+            updatedAt: row.updatedAt,
+          },
+        ];
+      });
+    },
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];

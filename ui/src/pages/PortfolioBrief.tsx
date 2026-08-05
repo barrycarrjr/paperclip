@@ -23,7 +23,8 @@ import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsStrip } from "../components/ActiveAgentsPanel";
 import { agentsApi } from "../api/agents";
 import { PendingQuestionRow } from "../components/PendingQuestionRow";
-import type { PendingCompanyInteraction } from "../api/issues";
+import { ReviewGateRow } from "../components/ReviewGateRow";
+import type { PendingCompanyInteraction, PendingReviewGate } from "../api/issues";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -414,6 +415,23 @@ export function PortfolioBrief() {
     [portfolioQuestions, companies],
   );
   const questionsTotal = questionBuckets.reduce((sum, b) => sum + b.total, 0);
+
+  // Issues in a review/approval gate waiting on a human, portfolio-wide.
+  const { data: portfolioReviews } = useQuery({
+    queryKey: ["portfolio-pending-reviews", selectedCompanyId],
+    queryFn: () => issuesApi.listPortfolioPendingReviews(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isPortfolioRoot,
+  });
+  const reviewGateBuckets: CompanyBucket<PendingReviewGate>[] = useMemo(() => {
+    // Only the named participant can act on a gate (the server rejects
+    // anyone else), so scope to the signed-in user. local_implicit boards
+    // have no session user and see everything.
+    const mine = (portfolioReviews?.reviews ?? []).filter((gate) =>
+      currentUserId ? gate.participantUserId === currentUserId : true,
+    );
+    return groupByCompany(mine, companies);
+  }, [portfolioReviews, companies, currentUserId]);
+  const reviewGatesTotal = reviewGateBuckets.reduce((sum, b) => sum + b.total, 0);
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const agent of portfolioAgents?.agents ?? []) map.set(agent.id, agent.name);
@@ -863,6 +881,11 @@ export function PortfolioBrief() {
                 {questionsTotal} question{questionsTotal === 1 ? "" : "s"}
               </span>
             )}
+            {reviewGatesTotal > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300">
+                {reviewGatesTotal} review{reviewGatesTotal === 1 ? "" : "s"}
+              </span>
+            )}
             {draftsTotal > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 {draftsTotal} draft{draftsTotal === 1 ? "" : "s"}
@@ -884,7 +907,7 @@ export function PortfolioBrief() {
           )}
         </div>
 
-        {draftsTotal === 0 && reviewTotal === 0 && questionsTotal === 0 ? (
+        {draftsTotal === 0 && reviewTotal === 0 && questionsTotal === 0 && reviewGatesTotal === 0 ? (
           <EmptySection
             icon={CheckCircle2}
             message="Nothing waiting on you across the portfolio."
@@ -892,6 +915,37 @@ export function PortfolioBrief() {
           />
         ) : (
           <div className="space-y-5">
+            {reviewGatesTotal > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Finished work waiting for your sign-off
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    The issue stays open until you review it
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {reviewGateBuckets.map(({ company, items }) => (
+                    <CompanyBlock
+                      key={company.id}
+                      company={company}
+                      total={items.length}
+                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
+                    >
+                      {items.map((gate) => (
+                        <ReviewGateRow
+                          key={gate.issueId}
+                          gate={gate}
+                          hrefPrefix={`/${company.issuePrefix}`}
+                        />
+                      ))}
+                    </CompanyBlock>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {questionsTotal > 0 && (
               <div>
                 <div className="mb-1.5 flex items-baseline justify-between">
