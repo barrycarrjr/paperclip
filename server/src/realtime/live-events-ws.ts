@@ -4,11 +4,19 @@ import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
-import { subscribeCompanyLiveEvents } from "../services/live-events.js";
+import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
+import {
+  getAllBufferedEventsSince,
+  getBufferedEventsSince,
+  getLatestLiveEventId,
+  LIVE_EVENTS_BOOT_ID,
+  subscribeAllCompanyLiveEvents,
+  subscribeCompanyLiveEvents,
+} from "../services/live-events.js";
 
 interface WsSocket {
   readyState: number;
@@ -42,8 +50,13 @@ const { WebSocket, WebSocketServer } = require("ws") as {
 
 interface UpgradeContext {
   companyId: string;
+  /** "company" = one company's events; "portfolio" = every company (HQ only). */
+  scope: "company" | "portfolio";
   actorType: "board" | "agent";
   actorId: string;
+  /** Replay cursor from the client, valid only when replayBootId matches. */
+  replaySinceId: number | null;
+  replayBootId: string | null;
 }
 
 interface IncomingMessageWithContext extends IncomingMessage {
@@ -60,12 +73,15 @@ function rejectUpgrade(socket: Duplex, statusLine: string, message: string) {
   socket.destroy();
 }
 
-function parseCompanyId(pathname: string) {
-  const match = pathname.match(/^\/api\/companies\/([^/]+)\/events\/ws$/);
+function parseLiveEventsPath(
+  pathname: string,
+): { companyId: string; scope: "company" | "portfolio" } | null {
+  const match = pathname.match(/^\/api\/companies\/([^/]+)\/(events|portfolio-events)\/ws$/);
   if (!match) return null;
 
   try {
-    return decodeURIComponent(match[1] ?? "");
+    const companyId = decodeURIComponent(match[1] ?? "");
+    return { companyId, scope: match[2] === "portfolio-events" ? "portfolio" : "company" };
   } catch {
     return null;
   }
@@ -92,27 +108,51 @@ function headersFromIncomingMessage(req: IncomingMessage): Headers {
   return headers;
 }
 
+function parseReplayParams(url: URL): { replaySinceId: number | null; replayBootId: string | null } {
+  const sinceRaw = url.searchParams.get("since");
+  const since = sinceRaw != null ? Number(sinceRaw) : NaN;
+  return {
+    replaySinceId: Number.isFinite(since) && since >= 0 ? since : null,
+    replayBootId: url.searchParams.get("boot")?.trim() || null,
+  };
+}
+
 async function authorizeUpgrade(
   db: Db,
   req: IncomingMessage,
-  companyId: string,
+  target: { companyId: string; scope: "company" | "portfolio" },
   url: URL,
   opts: {
     deploymentMode: DeploymentMode;
     resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
   },
 ): Promise<UpgradeContext | null> {
+  const { companyId, scope } = target;
+  const replay = parseReplayParams(url);
   const queryToken = url.searchParams.get("token")?.trim() ?? "";
   const authToken = parseBearerToken(req.headers.authorization);
   const token = authToken ?? (queryToken.length > 0 ? queryToken : null);
+
+  // The portfolio feed only hangs off the portfolio-root company, mirroring
+  // the REST portfolio endpoints' guard.
+  if (scope === "portfolio") {
+    const company = await db
+      .select({ isPortfolioRoot: companies.isPortfolioRoot })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .then((rows) => rows[0] ?? null);
+    if (!company?.isPortfolioRoot) return null;
+  }
 
   // Browser board context has no bearer token in local_trusted and authenticated modes.
   if (!token) {
     if (opts.deploymentMode === "local_trusted") {
       return {
         companyId,
+        scope,
         actorType: "board",
         actorId: "board",
+        ...replay,
       };
     }
 
@@ -131,7 +171,10 @@ async function authorizeUpgrade(
         .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
         .then((rows) => rows[0] ?? null),
       db
-        .select({ companyId: companyMemberships.companyId })
+        .select({
+          companyId: companyMemberships.companyId,
+          membershipRole: companyMemberships.membershipRole,
+        })
         .from(companyMemberships)
         .where(
           and(
@@ -142,13 +185,39 @@ async function authorizeUpgrade(
         ),
     ]);
 
-    const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
-    if (!roleRow && !hasCompanyMembership) return null;
+    if (scope === "portfolio") {
+      // Portfolio feed: instance admin, or owner/admin membership on the
+      // HQ company - the same principals the REST portfolio guard accepts.
+      const isHqAdmin = memberships.some(
+        (row) =>
+          row.companyId === companyId &&
+          (row.membershipRole === "owner" || row.membershipRole === "admin"),
+      );
+      if (!roleRow && !isHqAdmin) return null;
+    } else {
+      const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
+      if (!roleRow && !hasCompanyMembership) {
+        // Mirror REST's read bypass: an HQ owner/admin may read any
+        // company's feed even without a membership row on it, matching
+        // assertCompanyAccess's isPortfolioRootUserAdmin escape hatch.
+        const hqCompanyId = await getPortfolioRootCompanyId(db);
+        const isHqAdmin =
+          hqCompanyId != null &&
+          memberships.some(
+            (row) =>
+              row.companyId === hqCompanyId &&
+              (row.membershipRole === "owner" || row.membershipRole === "admin"),
+          );
+        if (!isHqAdmin) return null;
+      }
+    }
 
     return {
       companyId,
+      scope,
       actorType: "board",
       actorId: userId,
+      ...replay,
     };
   }
 
@@ -159,7 +228,24 @@ async function authorizeUpgrade(
     .where(and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt)))
     .then((rows) => rows[0] ?? null);
 
+  // Agent keys must belong to the target company; for the portfolio feed
+  // that means an HQ agent key (companyId is the portfolio root here).
   if (!key || key.companyId !== companyId) {
+    return null;
+  }
+
+  // An unrevoked key for a terminated agent must not keep a live feed;
+  // mirrors the REST actor middleware's status rejection.
+  const agentRecord = await db
+    .select({ status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, key.agentId))
+    .then((rows) => rows[0] ?? null);
+  if (
+    !agentRecord ||
+    agentRecord.status === "terminated" ||
+    agentRecord.status === "pending_approval"
+  ) {
     return null;
   }
 
@@ -170,8 +256,10 @@ async function authorizeUpgrade(
 
   return {
     companyId,
+    scope,
     actorType: "agent",
     actorId: key.agentId,
+    ...replay,
   };
 }
 
@@ -205,10 +293,39 @@ export function setupLiveEventsWebSocketServer(
       return;
     }
 
-    const unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
+    const deliver = (event: unknown) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       socket.send(JSON.stringify(event));
+    };
+
+    // Hello first: carries the boot id so the client can tell whether its
+    // replay cursor is still meaningful (event ids reset every boot).
+    deliver({
+      kind: "hello",
+      bootId: LIVE_EVENTS_BOOT_ID,
+      latestEventId: getLatestLiveEventId(),
+      scope: context.scope,
     });
+
+    // Replay what the client missed, but only when the cursor is from THIS
+    // boot. A cursor the buffer can't bridge gets an honest resync signal
+    // (the client invalidates everything) instead of silent loss.
+    if (context.replaySinceId != null && context.replayBootId === LIVE_EVENTS_BOOT_ID) {
+      const replay =
+        context.scope === "portfolio"
+          ? getAllBufferedEventsSince(context.replaySinceId)
+          : getBufferedEventsSince(context.companyId, context.replaySinceId);
+      if (!replay.bridged) {
+        deliver({ kind: "resync" });
+      } else {
+        for (const event of replay.events) deliver(event);
+      }
+    }
+
+    const unsubscribe =
+      context.scope === "portfolio"
+        ? subscribeAllCompanyLiveEvents(deliver)
+        : subscribeCompanyLiveEvents(context.companyId, deliver);
 
     cleanupByClient.set(socket, unsubscribe);
     aliveByClient.set(socket, true);
@@ -240,13 +357,13 @@ export function setupLiveEventsWebSocketServer(
     }
 
     const url = new URL(req.url, "http://localhost");
-    const companyId = parseCompanyId(url.pathname);
-    if (!companyId) {
+    const target = parseLiveEventsPath(url.pathname);
+    if (!target) {
       socket.destroy();
       return;
     }
 
-    void authorizeUpgrade(db, req, companyId, url, {
+    void authorizeUpgrade(db, req, target, url, {
       deploymentMode: opts.deploymentMode,
       resolveSessionFromHeaders: opts.resolveSessionFromHeaders,
     })

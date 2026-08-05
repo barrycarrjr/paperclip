@@ -680,3 +680,71 @@ describe("LiveUpdatesProvider run lifecycle toasts", () => {
     });
   });
 });
+
+describe("live socket replay helpers", () => {
+  const { buildLiveSocketPath, parseLiveSocketFrame, shouldColdResyncOnHello } =
+    __liveUpdatesTestUtils;
+
+  it("appends the replay cursor only when both halves exist", () => {
+    expect(buildLiveSocketPath("/api/x/ws", { sinceId: null, bootId: null })).toBe("/api/x/ws");
+    expect(buildLiveSocketPath("/api/x/ws", { sinceId: 7, bootId: null })).toBe("/api/x/ws");
+    expect(buildLiveSocketPath("/api/x/ws", { sinceId: null, bootId: "b" })).toBe("/api/x/ws");
+    expect(buildLiveSocketPath("/api/x/ws", { sinceId: 7, bootId: "b-1" })).toBe(
+      "/api/x/ws?since=7&boot=b-1",
+    );
+  });
+
+  it("distinguishes control frames from live events and rejects junk", () => {
+    expect(parseLiveSocketFrame('{"kind":"hello","bootId":"b"}')).toEqual({
+      control: { kind: "hello", bootId: "b" },
+    });
+    expect(parseLiveSocketFrame('{"kind":"resync"}')).toEqual({
+      control: { kind: "resync", bootId: undefined },
+    });
+    const event = parseLiveSocketFrame(
+      '{"id":4,"companyId":"c","type":"activity.logged","createdAt":"t","payload":{}}',
+    );
+    expect(event && "event" in event && event.event.id).toBe(4);
+    expect(parseLiveSocketFrame("not json")).toBeNull();
+    expect(parseLiveSocketFrame('"just a string"')).toBeNull();
+  });
+
+  it("cold-resyncs only when a known boot id changes", () => {
+    expect(shouldColdResyncOnHello({ sinceId: 9, bootId: null }, "b-2")).toBe(false);
+    expect(shouldColdResyncOnHello({ sinceId: 9, bootId: "b-1" }, "b-1")).toBe(false);
+    expect(shouldColdResyncOnHello({ sinceId: 9, bootId: "b-1" }, "b-2")).toBe(true);
+    expect(shouldColdResyncOnHello({ sinceId: 9, bootId: "b-1" }, undefined)).toBe(false);
+  });
+});
+
+describe("applyHelloFrame", () => {
+  const { applyHelloFrame } = __liveUpdatesTestUtils;
+
+  it("seeds a fresh cursor from the hello's latest event id", () => {
+    const cursor = { sinceId: null, bootId: null };
+    const resync = applyHelloFrame(cursor, { kind: "hello", bootId: "b1", latestEventId: 40 });
+    expect(resync).toBe(false);
+    expect(cursor).toEqual({ sinceId: 40, bootId: "b1" });
+  });
+
+  it("re-anchors a stale cursor when the server rebooted, and asks for a resync", () => {
+    const cursor = { sinceId: 5000, bootId: "b1" };
+    const resync = applyHelloFrame(cursor, { kind: "hello", bootId: "b2", latestEventId: 40 });
+    expect(resync).toBe(true);
+    expect(cursor).toEqual({ sinceId: 40, bootId: "b2" });
+  });
+
+  it("keeps a live cursor untouched on a same-boot hello", () => {
+    const cursor = { sinceId: 90, bootId: "b1" };
+    const resync = applyHelloFrame(cursor, { kind: "hello", bootId: "b1", latestEventId: 120 });
+    expect(resync).toBe(false);
+    expect(cursor).toEqual({ sinceId: 90, bootId: "b1" });
+  });
+
+  it("drops the cursor safely when the hello carries no latest id", () => {
+    const cursor = { sinceId: 5000, bootId: "b1" };
+    const resync = applyHelloFrame(cursor, { kind: "hello", bootId: "b2" });
+    expect(resync).toBe(true);
+    expect(cursor).toEqual({ sinceId: null, bootId: "b2" });
+  });
+});

@@ -914,14 +914,94 @@ function closeSocketQuietly(target: LiveUpdatesSocketLike | null, reason: string
   }
 }
 
+/** Cursor a live socket keeps so a reconnect can ask for replay. */
+interface LiveReplayCursor {
+  sinceId: number | null;
+  bootId: string | null;
+}
+
+/** Control frames the server sends besides plain LiveEvents. */
+interface LiveControlFrame {
+  kind: "hello" | "resync";
+  bootId?: string;
+  latestEventId?: number;
+}
+
+function parseLiveSocketFrame(
+  raw: string,
+): { control: LiveControlFrame } | { event: LiveEvent } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.kind === "hello" || record.kind === "resync") {
+    return {
+      control: {
+        kind: record.kind,
+        bootId: typeof record.bootId === "string" ? record.bootId : undefined,
+        latestEventId:
+          typeof record.latestEventId === "number" ? record.latestEventId : undefined,
+      },
+    };
+  }
+  if (typeof record.id === "number" && typeof record.type === "string") {
+    return { event: parsed as LiveEvent };
+  }
+  return null;
+}
+
+/**
+ * Fold a hello frame into the replay cursor. Two silent-loss traps live
+ * here, both review-caught: (1) after a server restart the old sinceId is
+ * from a dead id namespace and MUST be re-anchored, or later reconnects
+ * "bridge" against a bogus high cursor and replay nothing; (2) a cursor
+ * that never saw an event must still be seeded from hello.latestEventId,
+ * or a quiet-feed disconnect loses everything with no resync.
+ * Returns whether the caller must cold-resync.
+ */
+function applyHelloFrame(cursor: LiveReplayCursor, control: LiveControlFrame): boolean {
+  const bootChanged = shouldColdResyncOnHello(cursor, control.bootId);
+  if (bootChanged || cursor.sinceId == null) {
+    cursor.sinceId = control.latestEventId ?? null;
+  }
+  cursor.bootId = control.bootId ?? cursor.bootId;
+  return bootChanged;
+}
+
+/**
+ * Append the replay cursor to a live socket path. Only meaningful when both
+ * halves exist: an id without the boot it was minted under is unusable
+ * (event ids reset every server restart).
+ */
+function buildLiveSocketPath(basePath: string, cursor: LiveReplayCursor): string {
+  if (cursor.sinceId == null || !cursor.bootId) return basePath;
+  return `${basePath}?since=${cursor.sinceId}&boot=${encodeURIComponent(cursor.bootId)}`;
+}
+
+/**
+ * Server restarted (boot id changed) or the replay buffer couldn't bridge
+ * the gap: the only honest recovery is refetching everything mounted.
+ */
+function shouldColdResyncOnHello(cursor: LiveReplayCursor, helloBootId: string | undefined): boolean {
+  return Boolean(cursor.bootId && helloBootId && cursor.bootId !== helloBootId);
+}
+
 export const __liveUpdatesTestUtils = {
   buildAgentStatusToast,
   buildRunStatusToast,
+  applyHelloFrame,
+  buildLiveSocketPath,
   closeSocketQuietly,
   hydrateVisibleIssueComment,
   invalidateActivityQueries,
   invalidateVisibleIssueRunQueries,
+  parseLiveSocketFrame,
   resolveLiveCompanyId,
+  shouldColdResyncOnHello,
   shouldDeferIssueRefetchForVisibleAgentActivity,
   shouldDeferVisibleIssueCommentActivity,
   shouldSuppressActivityToastForVisibleIssue,
@@ -935,6 +1015,9 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
   const { pushToast } = useToastActions();
   const location = useLocation();
   const gateRef = useRef<ToastGate>({ cooldownHits: new Map(), suppressUntil: 0 });
+  // Both sockets cold-resync on a server restart; one unfiltered refetch of
+  // everything mounted is enough, so dedupe across them.
+  const lastFullInvalidateAtRef = useRef(0);
   const pathnameRef = useRef(location.pathname);
   const { data: session, status: sessionStatus } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -968,6 +1051,19 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
     let reconnectAttempt = 0;
     let reconnectTimer: number | null = null;
     let socket: WebSocket | null = null;
+    // Survives reconnects within this company's socket; resets on company
+    // switch (effect re-run), since a cursor from another company's stream
+    // is meaningless.
+    const cursor: LiveReplayCursor = { sinceId: null, bootId: null };
+
+    const coldResync = () => {
+      // Everything mounted refetches; suppress the resulting toast burst
+      // the same way a plain reconnect does. Deduped across both sockets.
+      gateRef.current.suppressUntil = Date.now() + RECONNECT_SUPPRESS_MS;
+      if (Date.now() - lastFullInvalidateAtRef.current < 5_000) return;
+      lastFullInvalidateAtRef.current = Date.now();
+      void queryClient.invalidateQueries();
+    };
 
     const clearReconnect = () => {
       if (reconnectTimer !== null) {
@@ -989,7 +1085,8 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
     const connect = () => {
       if (closed) return;
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const url = `${protocol}://${window.location.host}/api/companies/${encodeURIComponent(liveCompanyId)}/events/ws`;
+      const basePath = `/api/companies/${encodeURIComponent(liveCompanyId)}/events/ws`;
+      const url = `${protocol}://${window.location.host}${buildLiveSocketPath(basePath, cursor)}`;
       const nextSocket = new WebSocket(url);
       socket = nextSocket;
 
@@ -1008,15 +1105,26 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
         const raw = typeof message.data === "string" ? message.data : "";
         if (!raw) return;
 
-        try {
-          const parsed = JSON.parse(raw) as LiveEvent;
-          handleLiveEvent(queryClient, liveCompanyId, pathnameRef.current, parsed, pushToast, gateRef.current, {
-            userId: currentActorRef.current.userId,
-            agentId: currentActorRef.current.agentId,
-          });
-        } catch {
-          // Ignore non-JSON payloads.
+        const frame = parseLiveSocketFrame(raw);
+        if (!frame) return;
+        if ("control" in frame) {
+          if (frame.control.kind === "resync") {
+            coldResync();
+            return;
+          }
+          // hello: re-anchor the cursor; a changed boot id also means the
+          // server restarted, so refetch everything once.
+          if (applyHelloFrame(cursor, frame.control)) {
+            coldResync();
+          }
+          return;
         }
+        const parsed = frame.event;
+        cursor.sinceId = Math.max(cursor.sinceId ?? 0, parsed.id);
+        handleLiveEvent(queryClient, liveCompanyId, pathnameRef.current, parsed, pushToast, gateRef.current, {
+          userId: currentActorRef.current.userId,
+          agentId: currentActorRef.current.agentId,
+        });
       };
 
       nextSocket.onerror = () => {
@@ -1046,6 +1154,118 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
       closeSocketQuietly(activeSocket, "provider_unmount");
     };
   }, [queryClient, liveCompanyId, pushToast, canConnectSocket, socketAuthKey]);
+
+  // Portfolio-wide feed: a second socket, HQ only. Mirrors the company
+  // socket's lifecycle (deliberate duplication - the company effect above is
+  // battle-tested and this stays independently tearable). Differences: it
+  // dispatches each event under the event's OWN companyId so cross-company
+  // invalidations hit the right caches, it never toasts (toast links resolve
+  // against the selected company and would point at the wrong company), and
+  // it skips events for the selected company, which the socket above owns.
+  const isPortfolioRoot = selectedCompany?.isPortfolioRoot === true;
+  useEffect(() => {
+    if (!canConnectSocket || !liveCompanyId || !isPortfolioRoot) return;
+
+    let closed = false;
+    let reconnectAttempt = 0;
+    let reconnectTimer: number | null = null;
+    let socket: WebSocket | null = null;
+    const cursor: LiveReplayCursor = { sinceId: null, bootId: null };
+    // Permanently suppressed toast gate: portfolio events invalidate only.
+    const silentGate: ToastGate = {
+      cooldownHits: new Map(),
+      suppressUntil: Number.MAX_SAFE_INTEGER,
+    };
+
+    const coldResync = () => {
+      gateRef.current.suppressUntil = Date.now() + RECONNECT_SUPPRESS_MS;
+      if (Date.now() - lastFullInvalidateAtRef.current < 5_000) return;
+      lastFullInvalidateAtRef.current = Date.now();
+      void queryClient.invalidateQueries();
+    };
+
+    const clearReconnect = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (closed) return;
+      reconnectAttempt += 1;
+      const delayMs = Math.min(15000, 1000 * 2 ** Math.min(reconnectAttempt - 1, 4));
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delayMs);
+    };
+
+    const connect = () => {
+      if (closed) return;
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const basePath = `/api/companies/${encodeURIComponent(liveCompanyId)}/portfolio-events/ws`;
+      const url = `${protocol}://${window.location.host}${buildLiveSocketPath(basePath, cursor)}`;
+      const nextSocket = new WebSocket(url);
+      socket = nextSocket;
+
+      nextSocket.onopen = () => {
+        if (closed || socket !== nextSocket) {
+          closeSocketQuietly(nextSocket, "stale_connection");
+          return;
+        }
+        reconnectAttempt = 0;
+      };
+
+      nextSocket.onmessage = (message) => {
+        const raw = typeof message.data === "string" ? message.data : "";
+        if (!raw) return;
+
+        const frame = parseLiveSocketFrame(raw);
+        if (!frame) return;
+        if ("control" in frame) {
+          if (frame.control.kind === "resync") {
+            coldResync();
+            return;
+          }
+          if (applyHelloFrame(cursor, frame.control)) {
+            coldResync();
+          }
+          return;
+        }
+        const parsed = frame.event;
+        cursor.sinceId = Math.max(cursor.sinceId ?? 0, parsed.id);
+        // The company socket above owns the selected company's events.
+        if (parsed.companyId === liveCompanyId) return;
+        handleLiveEvent(queryClient, parsed.companyId, pathnameRef.current, parsed, pushToast, silentGate, {
+          userId: currentActorRef.current.userId,
+          agentId: currentActorRef.current.agentId,
+        });
+      };
+
+      nextSocket.onerror = () => {
+        // onclose drives the reconnect.
+      };
+
+      nextSocket.onclose = () => {
+        if (socket !== nextSocket) return;
+        socket = null;
+        if (closed) return;
+        scheduleReconnect();
+      };
+    };
+
+    const connectTimer = window.setTimeout(connect, 0);
+
+    return () => {
+      closed = true;
+      window.clearTimeout(connectTimer);
+      clearReconnect();
+      const activeSocket = socket;
+      socket = null;
+      closeSocketQuietly(activeSocket, "provider_unmount");
+    };
+  }, [queryClient, liveCompanyId, pushToast, canConnectSocket, socketAuthKey, isPortfolioRoot]);
 
   return <>{children}</>;
 }
