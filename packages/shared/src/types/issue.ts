@@ -99,6 +99,8 @@ export interface DocumentRevision {
   changeSummary: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
+  /** Optional: absent on responses from routes that don't select it. */
+  createdByRunId?: string | null;
   createdAt: Date;
 }
 

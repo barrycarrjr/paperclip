@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
@@ -159,6 +159,7 @@ export function documentService(db: Db) {
           changeSummary: documentRevisions.changeSummary,
           createdByAgentId: documentRevisions.createdByAgentId,
           createdByUserId: documentRevisions.createdByUserId,
+          createdByRunId: documentRevisions.createdByRunId,
           createdAt: documentRevisions.createdAt,
         })
         .from(issueDocuments)
@@ -166,6 +167,40 @@ export function documentService(db: Db) {
         .innerJoin(documentRevisions, eq(documentRevisions.documentId, documents.id))
         .where(and(eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, key)))
         .orderBy(desc(documentRevisions.revisionNumber));
+    },
+
+    /**
+     * Document revisions a single heartbeat run wrote (handoff summaries and
+     * other issue documents), for the run story page. Body is omitted on
+     * purpose: the run page links to the document, it doesn't inline it.
+     */
+    listRevisionsForRun: async (runId: string, companyId: string) => {
+      return db
+        .select({
+          revisionId: documentRevisions.id,
+          documentId: documentRevisions.documentId,
+          issueId: issueDocuments.issueId,
+          issueIdentifier: issues.identifier,
+          issueTitle: issues.title,
+          key: issueDocuments.key,
+          title: documentRevisions.title,
+          revisionNumber: documentRevisions.revisionNumber,
+          changeSummary: documentRevisions.changeSummary,
+          createdAt: documentRevisions.createdAt,
+        })
+        .from(documentRevisions)
+        .innerJoin(issueDocuments, eq(issueDocuments.documentId, documentRevisions.documentId))
+        .innerJoin(issues, eq(issueDocuments.issueId, issues.id))
+        .where(
+          and(
+            eq(documentRevisions.createdByRunId, runId),
+            // Match the stricter revisions-by-run precedent in activity.ts.
+            eq(documentRevisions.companyId, companyId),
+            // Hidden issues stay hidden here like on every other surface.
+            isNull(issues.hiddenAt),
+          ),
+        )
+        .orderBy(desc(documentRevisions.createdAt), desc(documentRevisions.revisionNumber));
     },
 
     upsertIssueDocument: async (input: {

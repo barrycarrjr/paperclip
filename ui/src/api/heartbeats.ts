@@ -7,6 +7,20 @@ import type {
 } from "@paperclipai/shared";
 import { api } from "./client";
 
+/** A document revision one run wrote (handoff summary, plan, notes). */
+export interface RunDocumentRevision {
+  revisionId: string;
+  documentId: string;
+  issueId: string;
+  issueIdentifier: string | null;
+  issueTitle: string;
+  key: string;
+  title: string | null;
+  revisionNumber: number;
+  changeSummary: string | null;
+  createdAt: string;
+}
+
 export interface RunLivenessFields {
   livenessState: HeartbeatRun["livenessState"];
   livenessReason: string | null;
@@ -124,4 +138,6 @@ export const heartbeatsApi = {
     api.get<InstanceSchedulerHeartbeatsResponse>("/instance/scheduler-heartbeats"),
   listRunWorkProducts: (runId: string) =>
     api.get<IssueWorkProduct[]>(`/heartbeat-runs/${runId}/work-products`),
+  listRunDocumentRevisions: (runId: string) =>
+    api.get<RunDocumentRevision[]>(`/heartbeat-runs/${runId}/document-revisions`),
 };

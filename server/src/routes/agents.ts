@@ -45,6 +45,7 @@ import {
   issueApprovalService,
   issueService,
   logActivity,
+  documentService,
   syncInstructionsBundleConfigFromFilePath,
   workProductService,
   workspaceOperationService,
@@ -3154,6 +3155,19 @@ export function agentRoutes(
     }
     assertCompanyAccess(req, run.companyId);
     res.json(await workProductService(db).listForRun(runId));
+  });
+
+  // Document revisions (handoff summaries etc.) one run wrote, for the run
+  // story page. Same auth shape as the sibling run routes.
+  router.get("/heartbeat-runs/:runId/document-revisions", async (req, res) => {
+    const runId = req.params.runId as string;
+    const run = await heartbeat.getRun(runId);
+    if (!run) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, run.companyId);
+    res.json(await documentService(db).listRevisionsForRun(runId, run.companyId));
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {

@@ -36,6 +36,7 @@ import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { RunReportCard, runReportText } from "../components/RunReportCard";
 import { RunWorkProductsCard } from "../components/RunWorkProductsCard";
+import { RunDocumentsCard } from "../components/RunDocumentsCard";
 import { CopyText } from "../components/CopyText";
 import { EntityRow } from "../components/EntityRow";
 import { Identity } from "../components/Identity";
@@ -3787,6 +3788,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
       </div>
       <aside className="mt-4 space-y-3 min-w-0 @4xl:mt-0 @4xl:sticky @4xl:top-4">
         <RunWorkProductsCard runId={run.id} isLive={isLiveRun} />
+        <RunDocumentsCard runId={run.id} isLive={isLiveRun} />
       </aside>
       <ScrollToBottom />
     </div>
