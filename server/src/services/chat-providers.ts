@@ -5,6 +5,7 @@ import * as nodePath from "node:path";
 import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
+import { runningProcesses, signalRunningProcess } from "@paperclipai/adapter-utils/server-utils";
 import type { AnthropicToolSpec } from "./chat-tools.js";
 
 /**
@@ -1109,8 +1110,18 @@ class AdapterExecuteProvider implements ChatProvider {
     // companyId so company-scoped adapter operations (secrets, runtime state,
     // budget) resolve to a real company; agent.id is synthetic since Clippy
     // is not a real registered agent.
+    // Already aborted before we spawn anything? Return without starting the
+    // CLI at all. Otherwise the abort listener is attached after the spawn
+    // races ahead, and Stop during turn startup would leave the process
+    // running with nothing left to kill it.
+    if (input.signal?.aborted) {
+      return { content: [], stopReason: "end_turn" };
+    }
+
+    // runId lives at this scope so the abort handler can find the spawned
+    // CLI process in runningProcesses and actually terminate it.
+    const runId = randomId();
     const executePromise = (async () => {
-      const runId = randomId();
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(
             `clippy-${ctx.sessionId}`,
@@ -1194,10 +1205,23 @@ class AdapterExecuteProvider implements ChatProvider {
       }
     })();
 
-    // Drain queue until execute() resolves — or the caller aborts. We can't
-    // reach inside adapter.execute() to terminate the underlying CLI, but
-    // we stop yielding events so the SSE consumer winds down immediately.
-    const onAbort = () => wake();
+    // Drain queue until execute() resolves — or the caller aborts. On abort
+    // we terminate the underlying CLI process too: adapter.execute() spawned
+    // it via runChildProcess, which registered the handle in
+    // runningProcesses under our runId. Graceful first, forced shortly
+    // after, so Stop actually stops the agent instead of letting it keep
+    // working (and billing) invisibly.
+    const onAbort = () => {
+      const running = runningProcesses.get(runId);
+      if (running) {
+        signalRunningProcess(running, "SIGTERM");
+        setTimeout(() => {
+          const stillRunning = runningProcesses.get(runId);
+          if (stillRunning) signalRunningProcess(stillRunning, "SIGKILL");
+        }, Math.max(1, running.graceSec) * 1000).unref?.();
+      }
+      wake();
+    };
     input.signal?.addEventListener("abort", onAbort, { once: true });
     try {
       while (true) {

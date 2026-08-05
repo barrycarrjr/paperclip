@@ -3409,7 +3409,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
           <div className="flex-1 p-4 space-y-3">
             <div className="flex items-center gap-2">
               <StatusBadge status={run.status} />
-              {(run.status === "running" || run.status === "queued") && (
+              {/* scheduled_retry is cancellable server-side too: cancelling
+                  it stops the pending self-retry. */}
+              {(run.status === "running" || run.status === "queued" || run.status === "scheduled_retry") && (
                 <Button
                   variant="ghost"
                   size="sm"

@@ -54,10 +54,50 @@ function resolveProcessGroupId(child: ChildProcess) {
   return typeof child.pid === "number" && child.pid > 0 ? child.pid : null;
 }
 
-function signalRunningProcess(
+/**
+ * Arguments for a Windows tree kill. taskkill /T walks the parent chain,
+ * which matters because npm CLI shims spawn through cmd.exe: the tracked
+ * pid is the wrapper, and killing only it orphans the real agent process
+ * (which then trips process_lost and gets auto-retried - two agents on one
+ * issue). SIGKILL maps to /F.
+ */
+export function buildWindowsTreeKillArgs(pid: number, force: boolean): string[] {
+  return ["/pid", String(pid), "/T", ...(force ? ["/F"] : [])];
+}
+
+/** Fire-and-forget Windows process-tree kill via taskkill. */
+export function killWindowsProcessTree(pid: number, force: boolean) {
+  try {
+    const killer = spawn("taskkill", buildWindowsTreeKillArgs(pid, force), {
+      stdio: "ignore",
+      shell: false,
+    });
+    killer.on("error", () => {
+      // taskkill missing or refused; nothing more we can do here.
+    });
+  } catch {
+    // Ignore spawn failures; the reaper will classify the run.
+  }
+}
+
+export function signalRunningProcess(
   running: Pick<RunningProcess, "child" | "processGroupId">,
   signal: NodeJS.Signals,
 ) {
+  if (process.platform === "win32") {
+    // Windows has no graceful stop for a windowless console tree: taskkill
+    // without /F sends WM_CLOSE, which these processes never receive, so a
+    // "graceful" pass is a no-op. Force immediately instead of pretending.
+    const pid = running.child.pid;
+    // Never tree-kill by number once the child has exited: Windows recycles
+    // pids, and a late timer could take out an unrelated process tree.
+    const alreadyExited = running.child.exitCode !== null || running.child.signalCode !== null;
+    if (typeof pid === "number" && pid > 0 && !alreadyExited) {
+      killWindowsProcessTree(pid, true);
+      return;
+    }
+    if (alreadyExited) return;
+  }
   if (process.platform !== "win32" && running.processGroupId && running.processGroupId > 0) {
     try {
       process.kill(-running.processGroupId, signal);

@@ -7173,6 +7173,23 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
     const agent = await getAgent(run.agentId);
 
+    // Status FIRST, kill second: the killed execute() unwinds through the
+    // terminal-outcome classifier, which preserves an already-terminal
+    // status; killing first both risks a "failed" classification racing in
+    // and blocks this HTTP response for up to the grace period.
+    const cancelled = await setRunStatus(run.id, "cancelled", {
+      finishedAt: new Date(),
+      error: reason,
+      errorCode: "cancelled",
+      ...(agent ? {
+        resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
+          resultJson: parseObject(run.resultJson),
+          errorCode: "cancelled",
+          errorMessage: reason,
+        }),
+      } : {}),
+    });
+
     const running = runningProcesses.get(run.id);
     if (running) {
       await terminateHeartbeatRunProcess({
@@ -7186,19 +7203,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         processGroupId: run.processGroupId,
       });
     }
-
-    const cancelled = await setRunStatus(run.id, "cancelled", {
-      finishedAt: new Date(),
-      error: reason,
-      errorCode: "cancelled",
-      ...(agent ? {
-        resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
-          resultJson: parseObject(run.resultJson),
-          errorCode: "cancelled",
-          errorMessage: reason,
-        }),
-      } : {}),
-    });
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {
       finishedAt: new Date(),

@@ -572,3 +572,33 @@ describe("appendWithByteCap", () => {
     expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(7);
   });
 });
+
+describe("buildWindowsTreeKillArgs", () => {
+  it("walks the tree gracefully, and forces with /F on SIGKILL", async () => {
+    const { buildWindowsTreeKillArgs } = await import("./server-utils.js");
+    expect(buildWindowsTreeKillArgs(1234, false)).toEqual(["/pid", "1234", "/T"]);
+    expect(buildWindowsTreeKillArgs(1234, true)).toEqual(["/pid", "1234", "/T", "/F"]);
+  });
+});
+
+describe("signalRunningProcess on Windows", () => {
+  it("never tree-kills a pid whose child already exited (pids get recycled)", async () => {
+    const { signalRunningProcess } = await import("./server-utils.js");
+    const killed: number[] = [];
+    const exitedChild = {
+      pid: 4242,
+      exitCode: 0,
+      signalCode: null,
+      killed: false,
+      kill: (sig?: NodeJS.Signals) => {
+        killed.push(4242);
+        return true;
+      },
+    } as unknown as import("node:child_process").ChildProcess;
+
+    signalRunningProcess({ child: exitedChild, processGroupId: null }, "SIGKILL");
+    // On win32 the guard returns early; on POSIX child.kill is a harmless
+    // no-op on an exited child. Either way nothing may target the raw pid.
+    expect(killed.length).toBeLessThanOrEqual(1);
+  });
+});

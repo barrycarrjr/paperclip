@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { killWindowsProcessTree } from "@paperclipai/adapter-utils/server-utils";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -294,7 +295,23 @@ export async function terminateLocalService(
   opts?: { signal?: NodeJS.Signals; forceAfterMs?: number },
 ) {
   const signal = opts?.signal ?? "SIGTERM";
-  const targetProcessGroup = process.platform !== "win32" && record.processGroupId && record.processGroupId > 0;
+
+  // Windows: kill the whole TREE, forced, immediately. Three reasons this
+  // has no grace period: the tracked pid is often a cmd.exe shim whose
+  // node.exe grandchild is the real agent (so /T is required or the agent
+  // is orphaned and keeps running); taskkill without /F cannot signal a
+  // windowless console tree at all, so a graceful pass would be theatre;
+  // and awaiting a delay here would stall every caller (the cancel route,
+  // comment interrupts, agent and budget pause loops) for the full grace.
+  // The old single-pid path was also an immediate forced terminate, so this
+  // keeps the latency and adds the tree.
+  if (process.platform === "win32") {
+    if (!isPidAlive(record.pid)) return;
+    killWindowsProcessTree(record.pid, true);
+    return;
+  }
+
+  const targetProcessGroup = Boolean(record.processGroupId && record.processGroupId > 0);
   try {
     if (targetProcessGroup) {
       process.kill(-record.processGroupId!, signal);
