@@ -21,6 +21,12 @@ import type {
 } from "@paperclipai/shared";
 import { api } from "./client";
 
+/** A pending agent question with its issue's display fields attached. */
+export type PendingCompanyInteraction = IssueThreadInteraction & {
+  issueIdentifier: string | null;
+  issueTitle: string;
+};
+
 export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
 };
@@ -215,6 +221,14 @@ export const issuesApi = {
   },
   listInteractions: (id: string) =>
     api.get<IssueThreadInteraction[]>(`/issues/${id}/interactions`),
+  listPendingInteractions: (companyId: string, limit?: number) =>
+    api.get<PendingCompanyInteraction[]>(
+      `/companies/${companyId}/issue-thread-interactions?status=pending${limit ? `&limit=${limit}` : ""}`,
+    ),
+  listPortfolioPendingInteractions: (hqCompanyId: string) =>
+    api.get<{ interactions: PendingCompanyInteraction[]; companies: Company[] }>(
+      `/companies/${hqCompanyId}/portfolio-issue-thread-interactions`,
+    ),
   createInteraction: (id: string, data: Record<string, unknown>) =>
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions`, data),
   acceptInteraction: (

@@ -123,8 +123,14 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
 
 export function agentRoutes(
   db: Db,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    /** HEARTBEAT_SCHEDULER_ENABLED: when false, no timer wakes and no
+     * scheduled retry ever fires, so schedulerActive must report false. */
+    schedulerGloballyEnabled?: boolean;
+  } = {},
 ) {
+  const schedulerGloballyEnabled = options.schedulerGloballyEnabled ?? true;
   // Legacy hardcoded maps — used as fallback when adapter module does not
   // declare capability flags explicitly.
   const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
@@ -605,6 +611,27 @@ export function agentRoutes(
     return {
       enabled: parseBooleanLike(heartbeat.enabled) ?? false,
       intervalSec: Math.max(0, parseNumberLike(heartbeat.intervalSec) ?? 0),
+    };
+  }
+
+  /**
+   * Derived scheduler-heartbeat fields appended to company-scoped agent
+   * responses so the UI can show "next wake" without reading runtimeConfig
+   * (which is redacted for members lacking agents:create). Mirrors the
+   * status eligibility used by heartbeat.tickTimers and the instance
+   * scheduler-heartbeats route.
+   */
+  function schedulerHeartbeatFieldsForAgent(agent: { status: string; runtimeConfig: unknown }) {
+    const policy = parseSchedulerHeartbeatPolicy(agent.runtimeConfig);
+    const statusEligible =
+      agent.status !== "paused" &&
+      agent.status !== "terminated" &&
+      agent.status !== "pending_approval";
+    return {
+      heartbeatIntervalSec: policy.intervalSec,
+      heartbeatEnabled: policy.enabled,
+      schedulerActive:
+        schedulerGloballyEnabled && statusEligible && policy.enabled && policy.intervalSec > 0,
     };
   }
 
@@ -1148,12 +1175,19 @@ export function agentRoutes(
       return;
     }
     const result = await svc.list(companyId);
+    // Derived before redaction, appended after: restricted viewers keep the
+    // schedule facts (interval, enabled, active) without seeing the raw
+    // runtimeConfig they come from.
+    const withSchedule = result.map((agent) => ({
+      ...agent,
+      ...schedulerHeartbeatFieldsForAgent(agent),
+    }));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(result);
+      res.json(withSchedule);
       return;
     }
-    res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+    res.json(withSchedule.map((agent) => redactForRestrictedAgentView(agent)));
   });
 
   /**
@@ -1234,7 +1268,13 @@ export function agentRoutes(
       allAgents = allAgents.filter((a) => roles.has(a.role));
     }
 
-    res.json({ agents: allAgents, companies: targetCompanies });
+    res.json({
+      agents: allAgents.map((agent) => ({
+        ...agent,
+        ...schedulerHeartbeatFieldsForAgent(agent),
+      })),
+      companies: targetCompanies,
+    });
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {
@@ -1279,7 +1319,11 @@ export function agentRoutes(
           adapterType: row.adapterType,
           intervalSec: policy.intervalSec,
           heartbeatEnabled: policy.enabled,
-          schedulerActive: statusEligible && policy.enabled && policy.intervalSec > 0,
+          schedulerActive:
+            schedulerGloballyEnabled &&
+            statusEligible &&
+            policy.enabled &&
+            policy.intervalSec > 0,
           lastHeartbeatAt: row.lastHeartbeatAt,
         };
       })
@@ -1297,7 +1341,7 @@ export function agentRoutes(
         return left.agentName.localeCompare(right.agentName);
       });
 
-    res.json(items);
+    res.json({ agents: items, schedulerEnabled: schedulerGloballyEnabled });
   });
 
   router.get("/companies/:companyId/org", async (req, res) => {
@@ -3027,6 +3071,10 @@ export function agentRoutes(
       lastOutputStream: heartbeatRuns.lastOutputStream,
       lastOutputBytes: heartbeatRuns.lastOutputBytes,
       processStartedAt: heartbeatRuns.processStartedAt,
+      retryOfRunId: heartbeatRuns.retryOfRunId,
+      scheduledRetryAt: heartbeatRuns.scheduledRetryAt,
+      scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+      scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
       issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
     };
 
@@ -3037,7 +3085,9 @@ export function agentRoutes(
       .where(
         and(
           eq(heartbeatRuns.companyId, companyId),
-          inArray(heartbeatRuns.status, ["queued", "running"]),
+          // scheduled_retry counts as live: the agent will run again on its
+          // own, and hiding it is why self-healing looked like silence.
+          inArray(heartbeatRuns.status, ["queued", "running", "scheduled_retry"]),
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt));
@@ -3054,7 +3104,7 @@ export function agentRoutes(
         .where(
           and(
             eq(heartbeatRuns.companyId, companyId),
-            not(inArray(heartbeatRuns.status, ["queued", "running"])),
+            not(inArray(heartbeatRuns.status, ["queued", "running", "scheduled_retry"])),
             ...(activeIds.length > 0 ? [not(inArray(heartbeatRuns.id, activeIds))] : []),
           ),
         )

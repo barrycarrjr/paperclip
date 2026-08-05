@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/hover-card";
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
+import { isLiveRunStatus } from "../lib/liveIssueIds";
 import { SidebarMenu } from "./SidebarMenu";
 
 /**
@@ -378,7 +379,12 @@ export function CompanyRail() {
   const hasLiveAgentsByCompanyId = useMemo(() => {
     const result = new Map<string, boolean>();
     companyIds.forEach((companyId, index) => {
-      result.set(companyId, (liveRunsQueries[index]?.data?.length ?? 0) > 0);
+      // Only queued/running pulse the dot; scheduled_retry rows in the
+      // response mean "will run later", not "working now".
+      result.set(
+        companyId,
+        (liveRunsQueries[index]?.data ?? []).some((r) => isLiveRunStatus(r.status)),
+      );
     });
     return result;
   }, [companyIds, liveRunsQueries]);

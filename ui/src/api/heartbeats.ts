@@ -1,7 +1,7 @@
 import type {
   HeartbeatRun,
   HeartbeatRunEvent,
-  InstanceSchedulerHeartbeatAgent,
+  InstanceSchedulerHeartbeatsResponse,
   WorkspaceOperation,
 } from "@paperclipai/shared";
 import { api } from "./client";
@@ -56,6 +56,10 @@ export interface LiveRunForIssue {
   lastUsefulActionAt?: string | null;
   nextAction?: string | null;
   outputSilence?: HeartbeatRun["outputSilence"];
+  retryOfRunId?: string | null;
+  scheduledRetryAt?: string | null;
+  scheduledRetryAttempt?: number;
+  scheduledRetryReason?: string | null;
 }
 
 export interface WatchdogDecisionInput {
@@ -116,5 +120,5 @@ export const heartbeatsApi = {
     return api.get<LiveRunForIssue[]>(`/companies/${companyId}/live-runs${qs ? `?${qs}` : ""}`);
   },
   listInstanceSchedulerAgents: () =>
-    api.get<InstanceSchedulerHeartbeatAgent[]>("/instance/scheduler-heartbeats"),
+    api.get<InstanceSchedulerHeartbeatsResponse>("/instance/scheduler-heartbeats"),
 };

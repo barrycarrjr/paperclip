@@ -3062,6 +3062,60 @@ export function issueRoutes(
     res.json(interactions);
   });
 
+  // Unanswered agent questions across one company, for the Brief's
+  // "Awaiting your tap" section. Only pending interactions are listable
+  // company-wide; resolved history stays per-issue.
+  router.get("/companies/:companyId/issue-thread-interactions", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    const status = (req.query.status as string | undefined) ?? "pending";
+    if (status !== "pending") {
+      res.status(400).json({ error: "Only status=pending is supported" });
+      return;
+    }
+    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined;
+    const interactions = await issueThreadInteractionService(db).listPendingForCompany(
+      companyId,
+      { limit },
+    );
+    res.json(interactions);
+  });
+
+  // Portfolio variant: pending agent questions across every company, HQ
+  // only. Guard mirrors /companies/:companyId/portfolio-approvals.
+  router.get("/companies/:companyId/portfolio-issue-thread-interactions", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const companySvc = serviceIndex.companyService(db);
+    const hqCompany = await companySvc.getById(companyId);
+    if (!hqCompany?.isPortfolioRoot) {
+      res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
+      return;
+    }
+    const isPortfolioRootAccess =
+      req.actor.type === "agent"
+        ? req.actor.isPortfolioRootAgent
+        : req.actor.type === "board" && (
+            req.actor.source === "local_implicit" ||
+            req.actor.isInstanceAdmin ||
+            req.actor.isPortfolioRootUserAdmin
+          );
+    if (!isPortfolioRootAccess) {
+      res.status(403).json({ error: "Portfolio root access required" });
+      return;
+    }
+
+    const interactionSvc = issueThreadInteractionService(db);
+    const allCompanies = await companySvc.list();
+    const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    const interactionArrays = await Promise.all(
+      targetCompanies.map((company) => interactionSvc.listPendingForCompany(company.id)),
+    );
+    res.json({ interactions: interactionArrays.flat(), companies: targetCompanies });
+  });
+
   router.post("/issues/:id/interactions", validate(createIssueThreadInteractionSchema), async (req, res) => {
     const id = req.params.id as string;
     const issue = await svc.getById(id);

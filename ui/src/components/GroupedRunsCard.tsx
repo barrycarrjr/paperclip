@@ -3,6 +3,7 @@ import { Link } from "@/lib/router";
 import type { Issue } from "@paperclipai/shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import { isRunActive } from "./ActiveAgentsPanel";
+import { runNowLine } from "../lib/run-now-line";
 import { cn, relativeTime } from "../lib/utils";
 import { Identity } from "./Identity";
 import { ArrowDownRight, CheckCircle2, ExternalLink } from "lucide-react";
@@ -185,7 +186,11 @@ export const GroupedRunsCard = memo(function GroupedRunsCard({
                         className="[&>span:last-child]:!text-[11px]"
                       />
                       <div className="mt-0.5 text-[10px] text-muted-foreground">
-                        {active ? "Live now" : finishedLabel}
+                        {active
+                          ? "Live now"
+                          : run.status === "scheduled_retry"
+                            ? runNowLine(run)?.text ?? "Will retry on its own"
+                            : finishedLabel}
                       </div>
                     </div>
                   </div>

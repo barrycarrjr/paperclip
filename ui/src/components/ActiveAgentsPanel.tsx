@@ -1,17 +1,21 @@
 import { memo, useMemo } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import type { Issue } from "@paperclipai/shared";
+import type { Agent, Issue } from "@paperclipai/shared";
+import { agentsApi } from "../api/agents";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import type { TranscriptEntry } from "../adapters";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Moon } from "lucide-react";
+import { formatNextWake, nextWakeAtMs } from "../lib/next-wake";
+import { useNowTick } from "../hooks/useNowTick";
 import { Identity } from "./Identity";
 import { RunChatSurface } from "./RunChatSurface";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
 import { GroupedRunsCard, groupRunsByIssue } from "./GroupedRunsCard";
+import { runNowLine, RUN_NOW_LINE_TONE_CLASSES } from "../lib/run-now-line";
 
 const MIN_DASHBOARD_RUNS = 4;
 const DASHBOARD_RUN_CARD_LIMIT = 4;
@@ -42,6 +46,8 @@ interface ActiveAgentsPanelProps {
   emptyMessage?: string;
   queryScope?: string;
   showMoreLink?: boolean;
+  /** Show the "asleep until" strip for scheduled agents with no active run. */
+  showSleepingAgents?: boolean;
 }
 
 export function ActiveAgentsPanel({
@@ -55,6 +61,7 @@ export function ActiveAgentsPanel({
   emptyMessage = "No recent agent runs.",
   queryScope = "dashboard",
   showMoreLink = true,
+  showSleepingAgents = true,
 }: ActiveAgentsPanelProps) {
   const { data: liveRuns } = useQuery({
     queryKey: [...queryKeys.liveRuns(companyId), queryScope, { minRunCount, fetchLimit }],
@@ -128,6 +135,77 @@ export function ActiveAgentsPanel({
           </Link>
         </div>
       )}
+      {showSleepingAgents && (
+        <SleepingAgentsStrip companyId={companyId} runs={runs} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Scheduled agents with no active run, each with its next wake time. Ends
+ * the "is it ever going to run?" guesswork for quiet agents. Data comes from
+ * the schedule fields the agents endpoint now appends.
+ */
+export function SleepingAgentsStrip({
+  companyId,
+  runs,
+  agents: agentsProp,
+}: {
+  companyId: string;
+  runs: LiveRunForIssue[];
+  /** Pre-fetched agents (portfolio pages); omit to fetch for the company. */
+  agents?: Agent[];
+}) {
+  const { data: fetchedAgents } = useQuery({
+    queryKey: queryKeys.agents.list(companyId),
+    queryFn: () => agentsApi.list(companyId),
+    enabled: agentsProp == null,
+  });
+  const agents = agentsProp ?? fetchedAgents ?? [];
+  // scheduled_retry counts as busy here: an agent with a pending retry gets
+  // its "Will retry <time>" card, and a second "wakes in Xm" strip entry
+  // would contradict it.
+  const busyAgentIds = useMemo(
+    () =>
+      new Set(
+        runs
+          .filter((r) => isRunActive(r) || r.status === "scheduled_retry")
+          .map((r) => r.agentId),
+      ),
+    [runs],
+  );
+  const now = useNowTick(true, 30_000);
+  const sleeping = useMemo(
+    () =>
+      agents
+        .map((agent) => ({ agent, wakeAt: nextWakeAtMs(agent) }))
+        .filter(
+          (entry): entry is { agent: Agent; wakeAt: number } =>
+            entry.wakeAt != null && !busyAgentIds.has(entry.agent.id),
+        )
+        .sort((a, b) => a.wakeAt - b.wakeAt),
+    [agents, busyAgentIds],
+  );
+  if (sleeping.length === 0) return null;
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1">
+        <Moon className="h-3 w-3" /> Asleep:
+      </span>
+      {sleeping.map(({ agent, wakeAt }) => (
+        <Link
+          key={agent.id}
+          to={`/agents/${agent.id}`}
+          className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
+          title={`${agent.name} runs on a schedule and last reported ${
+            agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "never"
+          }.`}
+        >
+          <span className="font-medium">{agent.name}</span>
+          <span className="tabular-nums">· {formatNextWake(wakeAt, now)}</span>
+        </Link>
+      ))}
     </div>
   );
 }
@@ -172,8 +250,17 @@ export const AgentRunCard = memo(function AgentRunCard({
               <Identity name={run.agentName} size="sm" className="[&>span:last-child]:!text-[11px]" />
             </div>
             <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span>{isActive ? "Live now" : run.finishedAt ? `Finished ${relativeTime(run.finishedAt)}` : `Started ${relativeTime(run.createdAt)}`}</span>
+              <span>
+                {isActive
+                  ? "Live now"
+                  : run.status === "scheduled_retry"
+                    ? "Will retry"
+                    : run.finishedAt
+                      ? `Finished ${relativeTime(run.finishedAt)}`
+                      : `Started ${relativeTime(run.createdAt)}`}
+              </span>
             </div>
+            <RunNowLineText run={run} />
           </div>
 
           <Link
@@ -212,3 +299,17 @@ export const AgentRunCard = memo(function AgentRunCard({
     </div>
   );
 });
+
+/** One-line "what is happening right now" under the card's status line. */
+function RunNowLineText({ run }: { run: LiveRunForIssue }) {
+  const line = runNowLine(run);
+  if (!line) return null;
+  return (
+    <div
+      className={cn("mt-1 truncate text-[11px]", RUN_NOW_LINE_TONE_CLASSES[line.tone])}
+      title={line.title}
+    >
+      {line.text}
+    </div>
+  );
+}

@@ -243,6 +243,7 @@ export type {
   AgentTaskSession,
   AgentWakeupRequest,
   InstanceSchedulerHeartbeatAgent,
+  InstanceSchedulerHeartbeatsResponse,
 } from "./heartbeat.js";
 export type { LiveEvent } from "./live.js";
 export type { DashboardRunActivityDay, DashboardSummary } from "./dashboard.js";

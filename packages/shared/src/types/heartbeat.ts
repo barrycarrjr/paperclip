@@ -178,3 +178,10 @@ export interface InstanceSchedulerHeartbeatAgent {
   schedulerActive: boolean;
   lastHeartbeatAt: Date | null;
 }
+
+export interface InstanceSchedulerHeartbeatsResponse {
+  agents: InstanceSchedulerHeartbeatAgent[];
+  /** HEARTBEAT_SCHEDULER_ENABLED: false means no timer will ever fire on
+   * this instance, whatever the per-agent settings say. */
+  schedulerEnabled: boolean;
+}

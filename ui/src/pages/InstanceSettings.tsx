@@ -130,7 +130,8 @@ export function InstanceSettings() {
     },
   });
 
-  const agents = heartbeatsQuery.data ?? [];
+  const agents = heartbeatsQuery.data?.agents ?? [];
+  const schedulerEnabled = heartbeatsQuery.data?.schedulerEnabled ?? true;
   const activeCount = agents.filter((agent) => agent.schedulerActive).length;
   const disabledCount = agents.length - activeCount;
   const enabledCount = agents.filter((agent) => agent.heartbeatEnabled).length;
@@ -176,6 +177,16 @@ export function InstanceSettings() {
         <p className="text-sm text-muted-foreground">
           Each heartbeat, the agent wakes up, checks its work, does something useful, and exits — agents do not run continuously.
         </p>
+        {!schedulerEnabled && (
+          <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300">
+            <p className="font-medium">The heartbeat scheduler is switched off for this whole instance.</p>
+            <p className="mt-1">
+              No timer below will fire and no scheduled retry will run, whatever the per-agent
+              settings say. It is controlled by the HEARTBEAT_SCHEDULER_ENABLED setting in the
+              server&apos;s environment; restart the server after changing it.
+            </p>
+          </div>
+        )}
         <div className="mt-2 space-y-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Most agents don&apos;t need this.</p>
           <p>

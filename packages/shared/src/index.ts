@@ -411,6 +411,7 @@ export type {
   AgentTaskSession,
   AgentWakeupRequest,
   InstanceSchedulerHeartbeatAgent,
+  InstanceSchedulerHeartbeatsResponse,
   LiveEvent,
   DashboardRunActivityDay,
   DashboardSummary,

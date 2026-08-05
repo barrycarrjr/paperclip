@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
@@ -609,6 +609,42 @@ export function issueThreadInteractionService(db: Db) {
         .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id));
 
       return rows.map((row) => hydrateInteraction(row));
+    },
+
+    /**
+     * Every unanswered agent question in a company (pending interactions),
+     * oldest first, with the issue identifier/title for display. Powers the
+     * Brief's "Awaiting your tap" section; uses the
+     * (companyId, issueId, status) index via its companyId prefix.
+     */
+    listPendingForCompany: async (companyId: string, options: { limit?: number } = {}) => {
+      const limit = Math.min(Math.max(Math.floor(options.limit ?? 50), 1), 200);
+      const rows = await db
+        .select({
+          interaction: issueThreadInteractions,
+          issueIdentifier: issues.identifier,
+          issueTitle: issues.title,
+        })
+        .from(issueThreadInteractions)
+        .innerJoin(issues, eq(issueThreadInteractions.issueId, issues.id))
+        .where(
+          and(
+            eq(issueThreadInteractions.companyId, companyId),
+            eq(issueThreadInteractions.status, "pending"),
+            // Match the other list surfaces: hidden issues stay hidden, and
+            // a question on a closed issue is moot, not "waiting on you".
+            isNull(issues.hiddenAt),
+            notInArray(issues.status, ["done", "cancelled"]),
+          ),
+        )
+        .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id))
+        .limit(limit);
+
+      return rows.map((row) => ({
+        ...hydrateInteraction(row.interaction),
+        issueIdentifier: row.issueIdentifier,
+        issueTitle: row.issueTitle,
+      }));
     },
 
     getById: async (interactionId: string) => {

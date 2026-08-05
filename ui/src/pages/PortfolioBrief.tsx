@@ -12,7 +12,7 @@ import {
   Mail,
   Bot,
 } from "lucide-react";
-import type { ActivityEvent, Approval, Company, DashboardSummary, Issue, IssueDocument } from "@paperclipai/shared";
+import type { ActivityEvent, Agent, Approval, Company, DashboardSummary, Issue, IssueDocument } from "@paperclipai/shared";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
@@ -20,7 +20,10 @@ import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
-import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive } from "../components/ActiveAgentsPanel";
+import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsStrip } from "../components/ActiveAgentsPanel";
+import { agentsApi } from "../api/agents";
+import { PendingQuestionRow } from "../components/PendingQuestionRow";
+import type { PendingCompanyInteraction } from "../api/issues";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -34,6 +37,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { approvalLabel, typeIcon, defaultTypeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import {
   dismissReviewSender,
@@ -317,6 +321,32 @@ export function PortfolioBrief() {
     return map;
   }, [companies, liveRunsQueries]);
 
+  // One portfolio-wide agents fetch (schedule fields included) powering the
+  // per-company "asleep until" strips in the agents section.
+  const { data: portfolioAgents } = useQuery({
+    queryKey: ["portfolio-agents", selectedCompanyId, "brief"],
+    queryFn: () => agentsApi.listPortfolio(selectedCompanyId as string),
+    enabled: isPortfolioRoot && !!selectedCompanyId,
+  });
+  const agentsByCompany = useMemo(() => {
+    const map = new Map<string, Agent[]>();
+    for (const agent of portfolioAgents?.agents ?? []) {
+      const list = map.get(agent.companyId) ?? [];
+      list.push(agent);
+      map.set(agent.companyId, list);
+    }
+    return map;
+  }, [portfolioAgents]);
+  // Companies whose only story is "everyone is asleep" still deserve a row
+  // in the agents section; hiding them was the old blind spot.
+  const companiesWithSleepers = useMemo(() => {
+    const set = new Set<string>();
+    for (const [companyId, agents] of agentsByCompany) {
+      if (agents.some((agent) => nextWakeAtMs(agent) != null)) set.add(companyId);
+    }
+    return set;
+  }, [agentsByCompany]);
+
   const liveRunsAllFlat = useMemo(() => {
     const all: LiveRunForIssue[] = [];
     for (const runs of liveRunsByCompany.values()) all.push(...runs);
@@ -372,6 +402,23 @@ export function PortfolioBrief() {
   const draftBuckets: CompanyBucket<Approval>[] = useMemo(() => {
     return groupByCompany(approvalsData?.approvals ?? [], companies);
   }, [approvalsData, companies]);
+
+  // Unanswered agent questions across the portfolio, grouped by company.
+  const { data: portfolioQuestions } = useQuery({
+    queryKey: ["portfolio-pending-interactions", selectedCompanyId],
+    queryFn: () => issuesApi.listPortfolioPendingInteractions(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isPortfolioRoot,
+  });
+  const questionBuckets: CompanyBucket<PendingCompanyInteraction>[] = useMemo(
+    () => groupByCompany(portfolioQuestions?.interactions ?? [], companies),
+    [portfolioQuestions, companies],
+  );
+  const questionsTotal = questionBuckets.reduce((sum, b) => sum + b.total, 0);
+  const agentNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of portfolioAgents?.agents ?? []) map.set(agent.id, agent.name);
+    return map;
+  }, [portfolioAgents]);
 
   const myUserId = session?.user?.id ?? null;
   const issueBuckets: CompanyBucket<Issue>[] = useMemo(() => {
@@ -811,6 +858,11 @@ export function PortfolioBrief() {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Awaiting your tap
             </h2>
+            {questionsTotal > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                {questionsTotal} question{questionsTotal === 1 ? "" : "s"}
+              </span>
+            )}
             {draftsTotal > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 {draftsTotal} draft{draftsTotal === 1 ? "" : "s"}
@@ -832,7 +884,7 @@ export function PortfolioBrief() {
           )}
         </div>
 
-        {draftsTotal === 0 && reviewTotal === 0 ? (
+        {draftsTotal === 0 && reviewTotal === 0 && questionsTotal === 0 ? (
           <EmptySection
             icon={CheckCircle2}
             message="Nothing waiting on you across the portfolio."
@@ -840,6 +892,42 @@ export function PortfolioBrief() {
           />
         ) : (
           <div className="space-y-5">
+            {questionsTotal > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Questions from agents
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    Agents are waiting on your decision
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {questionBuckets.map(({ company, items }) => (
+                    <CompanyBlock
+                      key={company.id}
+                      company={company}
+                      total={items.length}
+                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
+                    >
+                      {items.map((interaction) => (
+                        <PendingQuestionRow
+                          key={interaction.id}
+                          interaction={interaction}
+                          agentName={
+                            interaction.createdByAgentId
+                              ? agentNameById.get(interaction.createdByAgentId) ?? null
+                              : null
+                          }
+                          hrefPrefix={`/${company.issuePrefix}`}
+                        />
+                      ))}
+                    </CompanyBlock>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {draftsTotal > 0 && (
               <div>
                 <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
@@ -965,7 +1053,7 @@ export function PortfolioBrief() {
           }
           right={{ label: "View all runs →", to: "/dashboard/live" }}
         />
-        {liveRunsTotal === 0 ? (
+        {liveRunsTotal === 0 && !companiesWithSleepers.size ? (
           <EmptySection
             icon={Bot}
             message="No recent agent runs across the portfolio."
@@ -973,7 +1061,11 @@ export function PortfolioBrief() {
         ) : (
           <div className="space-y-3">
             {companies
-              .filter((c) => (liveRunsByCompany.get(c.id) ?? []).length > 0)
+              .filter(
+                (c) =>
+                  (liveRunsByCompany.get(c.id) ?? []).length > 0 ||
+                  companiesWithSleepers.has(c.id),
+              )
               .map((company) => {
                 const runs = liveRunsByCompany.get(company.id) ?? [];
                 const visible = runs.slice(0, AGENT_RUNS_PER_COMPANY);
@@ -1003,6 +1095,7 @@ export function PortfolioBrief() {
                         {runs.length} run{runs.length === 1 ? "" : "s"}
                       </span>
                     </div>
+                    {visible.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-3">
                       {groupRunsByIssue(visible).map((entry) =>
                         entry.kind === "group" ? (
@@ -1029,6 +1122,14 @@ export function PortfolioBrief() {
                           />
                         ),
                       )}
+                    </div>
+                    )}
+                    <div className="px-4 pb-3">
+                      <SleepingAgentsStrip
+                        companyId={company.id}
+                        runs={runs}
+                        agents={agentsByCompany.get(company.id) ?? []}
+                      />
                     </div>
                   </div>
                 );

@@ -83,6 +83,14 @@ export interface Agent {
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Derived scheduler-heartbeat facts appended by company-scoped agent
+   * routes (survive runtimeConfig redaction). Optional: absent on older
+   * responses and on routes that don't append them.
+   */
+  heartbeatIntervalSec?: number;
+  heartbeatEnabled?: boolean;
+  schedulerActive?: boolean;
 }
 
 export interface AgentDetail extends Agent {

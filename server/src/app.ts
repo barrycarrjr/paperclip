@@ -157,6 +157,7 @@ export async function createApp(
     localPluginDir?: string;
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
+    heartbeatSchedulerEnabled?: boolean;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
   },
@@ -228,7 +229,12 @@ export async function createApp(
   );
   api.use("/companies", companyRoutes(db, opts.storageService));
   api.use(companySkillRoutes(db));
-  api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(
+    agentRoutes(db, {
+      pluginWorkerManager: workerManager,
+      schedulerGloballyEnabled: opts.heartbeatSchedulerEnabled,
+    }),
+  );
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {

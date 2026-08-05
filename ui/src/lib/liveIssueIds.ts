@@ -1,6 +1,6 @@
 import type { LiveRunForIssue } from "../api/heartbeats";
 
-function isLiveRunStatus(status: string): boolean {
+export function isLiveRunStatus(status: string): boolean {
   return status === "queued" || status === "running";
 }
 

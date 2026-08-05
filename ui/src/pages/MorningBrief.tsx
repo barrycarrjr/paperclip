@@ -34,6 +34,7 @@ import { Identity } from "../components/Identity";
 import { StatusIcon } from "../components/StatusIcon";
 import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
+import { PendingQuestionRow } from "../components/PendingQuestionRow";
 import {
   ChartCard,
   RunActivityChart,
@@ -62,6 +63,7 @@ const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 200;
 const OUTCOMES_SHOWN = 8;
 const DRAFTS_SHOWN = 5;
+const QUESTIONS_SHOWN = 5;
 const REVIEW_QUEUE_SHOWN = 5;
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
@@ -118,6 +120,13 @@ export function MorningBrief() {
   const { data: approvals } = useQuery({
     queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
     queryFn: () => approvalsApi.list(selectedCompanyId!, "pending"),
+    enabled: !!selectedCompanyId,
+  });
+
+  // Unanswered agent questions: pending thread interactions, company-wide.
+  const { data: pendingQuestions } = useQuery({
+    queryKey: ["pending-interactions", selectedCompanyId],
+    queryFn: () => issuesApi.listPendingInteractions(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
@@ -600,6 +609,11 @@ export function MorningBrief() {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Awaiting your tap
             </h2>
+            {(pendingQuestions?.length ?? 0) > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                {pendingQuestions!.length} question{pendingQuestions!.length === 1 ? "" : "s"}
+              </span>
+            )}
             {pendingApprovals > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 {pendingApprovals} draft{pendingApprovals === 1 ? "" : "s"}
@@ -613,7 +627,7 @@ export function MorningBrief() {
           </div>
         </div>
 
-        {pendingApprovals === 0 && reviewQueue.length === 0 ? (
+        {pendingApprovals === 0 && reviewQueue.length === 0 && (pendingQuestions?.length ?? 0) === 0 ? (
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
@@ -622,6 +636,37 @@ export function MorningBrief() {
           </div>
         ) : (
           <div className="space-y-4">
+            {(pendingQuestions?.length ?? 0) > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                    Questions from agents
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    Agents are waiting on your decision
+                  </span>
+                </div>
+                <div className="border border-border bg-card divide-y divide-border">
+                  {pendingQuestions!.slice(0, QUESTIONS_SHOWN).map((interaction) => (
+                    <PendingQuestionRow
+                      key={interaction.id}
+                      interaction={interaction}
+                      agentName={
+                        interaction.createdByAgentId
+                          ? agentMap.get(interaction.createdByAgentId)?.name ?? null
+                          : null
+                      }
+                    />
+                  ))}
+                  {pendingQuestions!.length > QUESTIONS_SHOWN && (
+                    <div className="px-4 py-2.5 text-center text-[12px] text-muted-foreground">
+                      + {pendingQuestions!.length - QUESTIONS_SHOWN} more on their issues
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {pendingApprovals > 0 && (
               <div>
                 <div className="mb-1.5 flex items-baseline justify-between">

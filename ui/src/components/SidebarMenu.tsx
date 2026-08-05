@@ -1,17 +1,20 @@
 import {
   Inbox,
+  Activity,
   Brain,
   CircleDot,
   Target,
   DollarSign,
   Mail,
   Network,
+  Receipt,
   Repeat,
   CalendarClock,
   GitBranch,
   MessageSquare,
   Globe2,
   Bot,
+  ShieldCheck,
   Sunrise,
   FolderKanban,
   Megaphone,
@@ -21,9 +24,11 @@ import type { Company } from "@paperclipai/shared";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { PortfolioNavList, type PortfolioNavEntry } from "./PortfolioNavList";
+import { isLiveRunStatus } from "../lib/liveIssueIds";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
+import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -53,7 +58,9 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
     queryFn: () => heartbeatsApi.liveRunsForCompany(company.id),
     refetchInterval: 10_000,
   });
-  const liveRunCount = liveRuns?.length ?? 0;
+  // scheduled_retry rows now come back from live-runs; only queued/running
+  // count as "live" for the pulsing badge.
+  const liveRunCount = (liveRuns ?? []).filter((r) => isLiveRunStatus(r.status)).length;
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(company.id),
@@ -62,6 +69,11 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   const activeAgentCount = (agents ?? []).filter(
     (a) => a.status !== "terminated",
   ).length;
+  const { data: sidebarBadges } = useQuery({
+    queryKey: queryKeys.sidebarBadges(company.id),
+    queryFn: () => sidebarBadgesApi.get(company.id),
+  });
+  const pendingApprovalCount = sidebarBadges?.approvals ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
     useEmailToolsPlugin(company.id);
@@ -89,6 +101,13 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
                 info: "Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company.",
               },
               {
+                id: "portfolio-approvals",
+                to: "/portfolio-approvals",
+                label: "Portfolio Approvals",
+                icon: ShieldCheck,
+                info: "Every draft and approval waiting on you, across all companies, in one list.",
+              },
+              {
                 id: "portfolio-issues",
                 to: "/portfolio-issues",
                 label: "Portfolio Issues",
@@ -108,6 +127,20 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
                 label: "Portfolio Agents",
                 icon: Bot,
                 info: "See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide.",
+              },
+              {
+                id: "portfolio-activity",
+                to: "/portfolio-activity",
+                label: "Portfolio Activity",
+                icon: Activity,
+                info: "The raw record of everything agents and people did, across all companies, newest first.",
+              },
+              {
+                id: "portfolio-receipts",
+                to: "/portfolio-receipts",
+                label: "Portfolio Receipts",
+                icon: Receipt,
+                info: "What your agents actually produced across all companies (emails sent, drafts made, issues finished), grouped by day.",
               },
               {
                 id: "portfolio-routines",
@@ -233,6 +266,31 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
             info="Isolated environments where agents can work in parallel without stepping on each other's files. (Experimental.)"
           />
         ) : null}
+      </SidebarSection>
+
+      <SidebarSection
+        label="Records"
+        info="What already happened in this company: decisions waiting on you, outcomes produced, and the raw activity log."
+      >
+        <SidebarNavItem
+          to="/approvals/pending"
+          label="Approvals"
+          icon={ShieldCheck}
+          badge={pendingApprovalCount > 0 ? pendingApprovalCount : undefined}
+          info="Actions agents drafted that will not run until you approve them. The number shows how many are waiting."
+        />
+        <SidebarNavItem
+          to="/receipts"
+          label="Receipts"
+          icon={Receipt}
+          info="What your agents actually produced (emails sent, drafts made, issues finished), grouped by day."
+        />
+        <SidebarNavItem
+          to="/activity"
+          label="Activity"
+          icon={Activity}
+          info="The raw record of everything agents and people did in this company, newest first."
+        />
       </SidebarSection>
 
       <SidebarSection
