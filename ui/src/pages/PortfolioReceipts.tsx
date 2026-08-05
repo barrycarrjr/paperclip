@@ -2,23 +2,33 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { History, Sparkles } from "lucide-react";
-import type { ActivityEvent, Company } from "@paperclipai/shared";
+import type { ActivityEvent, Agent, Company } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
+import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { PageTabBar } from "../components/PageTabBar";
+import { Tabs } from "@/components/ui/tabs";
+import { Identity } from "../components/Identity";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { entityLink } from "../components/ActivityRow";
+import { activityEntityName } from "../lib/activity-entity-names";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import {
   summarizeOutcome,
   isOutcomeAction,
   OUTCOME_CATEGORY_LABELS,
+  OUTCOME_TONE_CLASS,
   type OutcomeCategory,
 } from "../lib/outcomes";
 
-const PORTFOLIO_RECEIPTS_LIMIT = 800;
+const PORTFOLIO_RECEIPTS_LIMIT = 500;
+// The server fetches up to PORTFOLIO_RECEIPTS_LIMIT events per company, merges
+// every company's feed, then slices the merged list to this many events total.
+const PORTFOLIO_MERGED_EVENT_CAP = 200;
 type FilterKey = OutcomeCategory | "all";
 
 const FILTER_ORDER: FilterKey[] = [
@@ -75,6 +85,19 @@ export function PortfolioReceipts() {
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
+  // One portfolio-wide agents fetch so rows can show which agent acted.
+  const { data: portfolioAgentsData } = useQuery({
+    queryKey: ["portfolio-receipts", "agents", selectedCompanyId],
+    queryFn: () => agentsApi.listPortfolio(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isPortfolioRoot,
+  });
+
+  const agentMap = useMemo(() => {
+    const map = new Map<string, Agent>();
+    for (const a of portfolioAgentsData?.agents ?? []) map.set(a.id, a);
+    return map;
+  }, [portfolioAgentsData?.agents]);
+
   const companyMap = useMemo(() => {
     const map = new Map<string, Company>();
     for (const c of data?.companies ?? []) map.set(c.id, c);
@@ -107,19 +130,19 @@ export function PortfolioReceipts() {
     for (const event of outcomes) {
       if (companyFilter && event.companyId !== companyFilter) continue;
       counts.all += 1;
-      const o = summarizeOutcome(event);
+      const o = summarizeOutcome(event, { agentMap });
       counts[o.category] += 1;
     }
     return counts;
-  }, [outcomes, companyFilter]);
+  }, [outcomes, agentMap, companyFilter]);
 
   const filtered = useMemo(() => {
     return outcomes.filter((event) => {
       if (companyFilter && event.companyId !== companyFilter) return false;
       if (filter === "all") return true;
-      return summarizeOutcome(event).category === filter;
+      return summarizeOutcome(event, { agentMap }).category === filter;
     });
-  }, [outcomes, filter, companyFilter]);
+  }, [outcomes, agentMap, filter, companyFilter]);
 
   const groupedByDay = useMemo(() => {
     const groups = new Map<string, { label: string; date: Date; events: ActivityEvent[] }>();
@@ -150,6 +173,23 @@ export function PortfolioReceipts() {
   if (isLoading) {
     return <PageSkeleton variant="list" />;
   }
+
+  // Zero-count tabs are hidden rather than disabled (PageTabBar has no
+  // disabled state). The active tab always stays visible so the selection
+  // never points at a tab that is not on screen.
+  const tabItems = FILTER_ORDER
+    .filter((key) => key === "all" || key === filter || categoryCounts[key] > 0)
+    .map((key) => ({
+      value: key,
+      label: (
+        <>
+          {OUTCOME_CATEGORY_LABELS[key]}
+          <span className="ml-1.5 text-[10px] tabular-nums text-muted-foreground/70">
+            {categoryCounts[key]}
+          </span>
+        </>
+      ),
+    }));
 
   return (
     <div className="space-y-4">
@@ -197,32 +237,9 @@ export function PortfolioReceipts() {
         ))}
       </div>
 
-      <div className="border-b border-border">
-        <div className="flex flex-wrap gap-0">
-          {FILTER_ORDER.map((key) => {
-            const count = categoryCounts[key];
-            const active = filter === key;
-            const disabled = key !== "all" && count === 0;
-            return (
-              <button
-                key={key}
-                onClick={() => !disabled && setFilter(key)}
-                disabled={disabled}
-                className={cn(
-                  "px-3.5 py-2 text-[12px] -mb-px border-b-2 transition-colors",
-                  active
-                    ? "text-foreground border-foreground"
-                    : "text-muted-foreground border-transparent hover:text-foreground",
-                  disabled && "opacity-40 cursor-not-allowed hover:text-muted-foreground",
-                )}
-              >
-                {OUTCOME_CATEGORY_LABELS[key]}
-                <span className="ml-1.5 text-[10px] tabular-nums text-muted-foreground/70">{count}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
+        <PageTabBar align="start" items={tabItems} />
+      </Tabs>
 
       {filtered.length === 0 ? (
         <EmptyState
@@ -236,29 +253,37 @@ export function PortfolioReceipts() {
           }
         />
       ) : (
-        <div className="border border-border bg-card">
-          {groupedByDay.map((group, gi) => (
-            <div key={group.label} className={cn(gi > 0 && "border-t border-border")}>
-              <div className="px-4 py-2.5 flex items-baseline justify-between border-b border-border bg-muted/20">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.08em]">
-                  {group.label}
-                </span>
-                <span className="text-[11px] text-muted-foreground tabular-nums">
-                  {group.events.length} outcome{group.events.length === 1 ? "" : "s"}
-                </span>
+        <div className="border border-border rounded-md overflow-hidden bg-card">
+          {groupedByDay.map((group, gi) => {
+            const total = group.events.length;
+            return (
+              <div key={group.label} className={cn(gi > 0 && "border-t border-border")}>
+                <div className="px-4 py-2 flex items-baseline justify-between border-b border-border bg-muted/50">
+                  <span className="text-sm font-medium">{group.label}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {total} outcome{total === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="divide-y divide-border">
+                  {group.events.map((event) => (
+                    <PortfolioReceiptRow
+                      key={event.id}
+                      event={event}
+                      company={companyMap.get(event.companyId)}
+                      agentMap={agentMap}
+                    />
+                  ))}
+                </div>
               </div>
-              <div className="divide-y divide-border">
-                {group.events.map((event) => (
-                  <PortfolioReceiptRow
-                    key={event.id}
-                    event={event}
-                    company={companyMap.get(event.companyId)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+
+      {(data?.events.length ?? 0) >= PORTFOLIO_MERGED_EVENT_CAP && (
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          Showing outcomes from the latest events.
+        </p>
       )}
     </div>
   );
@@ -267,35 +292,17 @@ export function PortfolioReceipts() {
 interface PortfolioReceiptRowProps {
   event: ActivityEvent;
   company: Company | undefined;
+  agentMap: Map<string, Agent>;
 }
 
-function PortfolioReceiptRow({ event, company }: PortfolioReceiptRowProps) {
-  const outcome = summarizeOutcome(event);
-  const prefix = company?.issuePrefix;
+function PortfolioReceiptRow({ event, company, agentMap }: PortfolioReceiptRowProps) {
+  const outcome = summarizeOutcome(event, { agentMap });
+  const agentName =
+    event.actorType === "agent" ? agentMap.get(event.actorId)?.name : undefined;
 
-  const link =
-    prefix
-      ? event.entityType === "issue"
-        ? `/${prefix}/issues/${event.entityId}`
-        : event.entityType === "approval"
-          ? `/${prefix}/approvals/${event.entityId}`
-          : event.entityType === "agent"
-            ? `/${prefix}/agents/${event.entityId}`
-            : event.entityType === "project"
-              ? `/${prefix}/projects/${event.entityId}`
-              : event.entityType === "goal"
-                ? `/${prefix}/goals/${event.entityId}`
-                : null
-      : null;
-
-  const chipClass = {
-    emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    amber: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    sky: "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    violet: "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
-    red: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
-    muted: "border-border bg-muted/40 text-muted-foreground",
-  }[outcome.tone];
+  const link = entityLink(event.entityType, event.entityId, activityEntityName(event), {
+    companyPrefix: company?.issuePrefix ? `/${company.issuePrefix}` : null,
+  });
 
   const time = new Date(event.createdAt).toLocaleTimeString(undefined, {
     hour: "2-digit",
@@ -322,20 +329,19 @@ function PortfolioReceiptRow({ event, company }: PortfolioReceiptRowProps) {
         </div>
         <div className="mt-0.5 text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
           {company && <span>{company.name}</span>}
+          {agentName && (
+            <>
+              <span>·</span>
+              <Identity name={agentName} size="xs" />
+            </>
+          )}
           <span>·</span>
           <span>{event.entityType}</span>
           <span>·</span>
           <span className="text-muted-foreground/70 tabular-nums">{timeAgo(event.createdAt)}</span>
         </div>
       </div>
-      <span
-        className={cn(
-          "inline-flex items-center px-2 py-0.5 text-[10px] font-medium border whitespace-nowrap",
-          chipClass,
-        )}
-      >
-        {outcome.chip}
-      </span>
+      <span className={OUTCOME_TONE_CLASS[outcome.tone]}>{outcome.chip}</span>
     </div>
   );
 

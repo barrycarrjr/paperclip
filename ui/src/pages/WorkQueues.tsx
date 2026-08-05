@@ -4,7 +4,6 @@ import { Inbox, Plus, X } from "lucide-react";
 import type { WorkQueue, WorkQueueItem, WorkQueueItemStatus } from "@paperclipai/shared";
 import { WORK_QUEUE_ITEM_STATUSES } from "@paperclipai/shared";
 import { workQueuesApi } from "@/api/work-queues";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,8 +15,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/EmptyState";
+import { StatusBadge } from "@/components/StatusBadge";
 import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -27,17 +34,6 @@ import { useToast } from "@/context/ToastContext";
 const queueListKey = (companyId: string) => ["work-queues", companyId] as const;
 const queueItemsKey = (queueId: string, status: WorkQueueItemStatus | "all") =>
   ["work-queue-items", queueId, status] as const;
-
-const STATUS_VARIANT: Record<WorkQueueItemStatus, "default" | "secondary" | "outline" | "destructive"> = {
-  pending: "outline",
-  claimed: "secondary",
-  completed: "default",
-  failed: "destructive",
-  cancelled: "outline",
-};
-
-const selectClass =
-  "border-input h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 function formatDate(value: Date | string | null) {
   if (!value) return "—";
@@ -103,6 +99,14 @@ export function WorkQueues() {
         status: statusFilter === "all" ? undefined : statusFilter,
         limit: 200,
       }),
+    enabled: !!selectedQueueId,
+  });
+
+  // Unfiltered fetch of the same queue, used only for the per-status counts row
+  // so the counts do not change when the table's status filter changes.
+  const countsQuery = useQuery({
+    queryKey: queueItemsKey(selectedQueueId ?? "", "all"),
+    queryFn: () => workQueuesApi.listItems(selectedQueueId!, { limit: 200 }),
     enabled: !!selectedQueueId,
   });
 
@@ -200,9 +204,9 @@ export function WorkQueues() {
       failed: 0,
       cancelled: 0,
     };
-    for (const item of items) out[item.status] += 1;
+    for (const item of countsQuery.data ?? []) out[item.status] += 1;
     return out;
-  }, [items]);
+  }, [countsQuery.data]);
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Inbox} message="Select a company to view its work queues." />;
@@ -295,26 +299,26 @@ export function WorkQueues() {
           onAction={() => setCreateQueueOpen(true)}
         />
       ) : (
-        <div className="grid grid-cols-[200px_1fr] gap-4">
+        <div className="grid gap-4 sm:grid-cols-[200px_1fr]">
           <aside className="space-y-1">
             {queues.map((queue) => (
               <button
                 key={queue.id}
                 type="button"
                 onClick={() => setSelectedQueueId(queue.id)}
-                className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
+                className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm font-medium ${
                   queue.id === selectedQueueId
                     ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted"
+                    : "hover:bg-accent/50 hover:text-accent-foreground"
                 }`}
               >
-                <div className="font-medium">{queue.name}</div>
-                <div className="text-xs text-muted-foreground">/{queue.slug}</div>
-                {!queue.isActive && (
-                  <Badge variant="outline" className="mt-1 text-xs">
-                    Paused
-                  </Badge>
-                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{queue.name}</div>
+                  <div className="text-xs font-normal text-muted-foreground">
+                    /{queue.slug}
+                  </div>
+                </div>
+                {!queue.isActive && <StatusBadge status="paused" />}
               </button>
             ))}
           </aside>
@@ -333,20 +337,24 @@ export function WorkQueues() {
                     )}
                   </div>
                   <div className="ml-auto flex items-center gap-2">
-                    <select
-                      className={`${selectClass} max-w-[140px]`}
+                    <Select
                       value={statusFilter}
-                      onChange={(e) =>
-                        setStatusFilter(e.target.value as WorkQueueItemStatus | "all")
+                      onValueChange={(value) =>
+                        setStatusFilter(value as WorkQueueItemStatus | "all")
                       }
                     >
-                      <option value="all">All statuses</option>
-                      {WORK_QUEUE_ITEM_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger size="sm" className="w-[140px]">
+                        <SelectValue placeholder="Filter by status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        {WORK_QUEUE_ITEM_STATUSES.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {s.charAt(0).toUpperCase() + s.slice(1)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <Button
                       size="sm"
                       variant="outline"
@@ -360,6 +368,7 @@ export function WorkQueues() {
                 </div>
 
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <span>Latest 200:</span>
                   <span>Pending: {counts.pending}</span>
                   <span>Claimed: {counts.claimed}</span>
                   <span>Completed: {counts.completed}</span>
@@ -373,15 +382,15 @@ export function WorkQueues() {
                     message="No items match this filter."
                   />
                 ) : (
-                  <div className="rounded-md border bg-card">
-                    <table className="w-full text-sm">
-                      <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                        <tr className="border-b">
-                          <th className="px-3 py-2 font-medium">Status</th>
-                          <th className="px-3 py-2 font-medium">Source</th>
-                          <th className="px-3 py-2 font-medium">Priority</th>
-                          <th className="px-3 py-2 font-medium">Created</th>
-                          <th className="px-3 py-2 font-medium">Updated</th>
+                  <div className="border border-border rounded-md overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="border-b border-border bg-accent/20">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Source</th>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Priority</th>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Created</th>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Updated</th>
                           <th className="px-3 py-2 w-10" />
                         </tr>
                       </thead>
@@ -566,11 +575,9 @@ function ItemRow({ item, onCancel, cancelling }: ItemRowProps) {
   const [expanded, setExpanded] = useState(false);
   return (
     <>
-      <tr className="border-b last:border-b-0 align-top hover:bg-muted/40">
+      <tr className="border-b border-border last:border-b-0 align-top hover:bg-muted/40">
         <td className="px-3 py-2">
-          <Badge variant={STATUS_VARIANT[item.status]} className="capitalize">
-            {item.status}
-          </Badge>
+          <StatusBadge status={item.status} />
           {item.failureReason && (
             <div className="mt-1 max-w-xs text-xs text-destructive line-clamp-2">
               {item.failureReason}
@@ -591,13 +598,15 @@ function ItemRow({ item, onCancel, cancelling }: ItemRowProps) {
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
-          <button
+          <Button
             type="button"
-            className="mt-1 text-xs underline-offset-2 hover:underline"
+            variant="ghost"
+            size="xs"
+            className="mt-1 -ml-2"
             onClick={() => setExpanded((prev) => !prev)}
           >
             {expanded ? "Hide payload" : "Show payload"}
-          </button>
+          </Button>
         </td>
         <td className="px-3 py-2 text-xs text-muted-foreground">{item.priority}</td>
         <td className="px-3 py-2 text-xs text-muted-foreground">
@@ -621,9 +630,9 @@ function ItemRow({ item, onCancel, cancelling }: ItemRowProps) {
         </td>
       </tr>
       {expanded && (
-        <tr className="border-b last:border-b-0 bg-muted/20">
+        <tr className="border-b border-border last:border-b-0 bg-muted/20">
           <td colSpan={6} className="px-3 py-2">
-            <pre className="whitespace-pre-wrap break-all font-mono text-xs">
+            <pre className="text-xs bg-muted/40 rounded-md p-3 overflow-x-auto">
               {JSON.stringify(item.payload, null, 2)}
             </pre>
           </td>

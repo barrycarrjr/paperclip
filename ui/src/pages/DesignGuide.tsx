@@ -231,6 +231,7 @@ export function DesignGuide() {
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
+                "ActivityRow", "PageTabBar", "ApprovalCard",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -285,7 +286,7 @@ export function DesignGuide() {
       {/* ============================================================ */}
       <Section title="Typography">
         <div className="space-y-3">
-          <h2 className="text-xl font-bold">Page Title — text-xl font-bold</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">Page Title — text-2xl font-semibold tracking-tight</h2>
           <h2 className="text-lg font-semibold">Section Title — text-lg font-semibold</h2>
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
             Section Heading — text-sm font-semibold uppercase tracking-wide

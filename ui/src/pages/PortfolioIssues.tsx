@@ -10,6 +10,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialog } from "../context/DialogContext";
 import { AssigneePicker } from "../components/AssigneePicker";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { FilterPopover } from "../components/FilterPopover";
 import { PriorityIcon } from "../components/PriorityIcon";
 import { StatusIcon } from "../components/StatusIcon";
 import { Link } from "@/lib/router";
@@ -60,63 +61,6 @@ function statusLabel(status: string) {
 
 function priorityLabel(p: string) {
   return p.charAt(0).toUpperCase() + p.slice(1);
-}
-
-interface FilterOption {
-  value: string;
-  label: string;
-}
-
-interface FilterPopoverProps {
-  label: string;
-  options: FilterOption[];
-  selected: string[];
-  onChange: (next: string[]) => void;
-}
-
-function FilterPopover({ label, options, selected, onChange }: FilterPopoverProps) {
-  function toggle(value: string) {
-    onChange(
-      selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value],
-    );
-  }
-  const activeLabel = selected.length > 0 && selected.length < options.length
-    ? `${label}: ${selected.length}`
-    : label;
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn(
-            "h-7 text-xs gap-1",
-            selected.length > 0 && selected.length < options.length && "border-primary/50 text-primary",
-          )}
-        >
-          {activeLabel}
-          <ChevronDown className="h-3 w-3 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-48 p-1">
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            onClick={() => toggle(opt.value)}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"
-          >
-            <Checkbox
-              checked={selected.includes(opt.value)}
-              onCheckedChange={() => toggle(opt.value)}
-              className="h-3.5 w-3.5"
-            />
-            <span className="flex-1 text-left">{opt.label}</span>
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 interface IssueRowProps {

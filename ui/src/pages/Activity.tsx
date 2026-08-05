@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { ActivityEvent, Agent } from "@paperclipai/shared";
+import type { Agent } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
+import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
@@ -10,6 +11,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
+import { FilterBar } from "../components/FilterBar";
 import { PageSkeleton } from "../components/PageSkeleton";
 import {
   Select,
@@ -22,37 +24,13 @@ import { History } from "lucide-react";
 
 const ACTIVITY_PAGE_LIMIT = 200;
 
-function detailString(event: ActivityEvent, ...keys: string[]) {
-  const details = event.details;
-  for (const key of keys) {
-    const value = details?.[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return null;
-}
-
-function activityEntityName(event: ActivityEvent) {
-  if (event.entityType === "issue") return detailString(event, "identifier", "issueIdentifier");
-  if (event.entityType === "project") return detailString(event, "projectName", "name", "title");
-  if (event.entityType === "goal") return detailString(event, "goalTitle", "title", "name");
-  return detailString(event, "name", "title");
-}
-
-function activityEntityTitle(event: ActivityEvent) {
-  if (event.entityType === "issue") return detailString(event, "issueTitle", "title");
-  return null;
-}
-
 export function Activity() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState("all");
 
   useEffect(() => {
-    setBreadcrumbs([
-      { label: "Settings", href: "/company/settings" },
-      { label: "Activity" },
-    ]);
+    setBreadcrumbs([{ label: "Activity" }]);
   }, [setBreadcrumbs]);
 
   const { data, isLoading, error } = useQuery({
@@ -122,7 +100,16 @@ export function Activity() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          {filter !== "all" && (
+            <FilterBar
+              filters={[{ key: "type", label: "Type", value: filter }]}
+              onRemove={() => setFilter("all")}
+              onClear={() => setFilter("all")}
+            />
+          )}
+        </div>
         <Select value={filter} onValueChange={setFilter}>
           <SelectTrigger className="w-[140px] h-8 text-xs">
             <SelectValue placeholder="Filter by type" />
@@ -145,7 +132,7 @@ export function Activity() {
       )}
 
       {filtered && filtered.length > 0 && (
-        <div className="border border-border divide-y divide-border">
+        <div className="border border-border rounded-md divide-y divide-border">
           {filtered.map((event) => (
             <ActivityRow
               key={event.id}
@@ -156,6 +143,11 @@ export function Activity() {
               entityTitleMap={entityTitleMap}
             />
           ))}
+          {data && data.length === ACTIVITY_PAGE_LIMIT && (
+            <p className="px-4 py-2 text-xs text-muted-foreground">
+              Showing the latest 200 events.
+            </p>
+          )}
         </div>
       )}
     </div>

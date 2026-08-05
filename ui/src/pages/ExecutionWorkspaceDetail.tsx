@@ -5,7 +5,10 @@ import type { ExecutionWorkspace, Issue, Project, ProjectWorkspace } from "@pape
 import { ArrowLeft, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,7 +20,9 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { IssuesList } from "../components/IssuesList";
+import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
+import { StatusBadge } from "../components/StatusBadge";
 import {
   buildWorkspaceRuntimeControlSections,
   WorkspaceRuntimeControls,
@@ -213,7 +218,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 
 function StatusPill({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("inline-flex items-center rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground", className)}>
+    <div className={cn("inline-flex w-fit items-center whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-xs font-medium text-foreground", className)}>
       {children}
     </div>
   );
@@ -445,7 +450,7 @@ export function ExecutionWorkspaceDetail() {
     },
   });
 
-  if (workspaceQuery.isLoading) return <p className="text-sm text-muted-foreground">Loading workspace…</p>;
+  if (workspaceQuery.isLoading) return <PageSkeleton variant="detail" />;
   if (workspaceQuery.error) {
     return (
       <p className="text-sm text-destructive">
@@ -514,23 +519,21 @@ export function ExecutionWorkspaceDetail() {
           </Button>
           <StatusPill>{workspace.mode}</StatusPill>
           <StatusPill>{workspace.providerType}</StatusPill>
-          <StatusPill className={workspace.status === "active" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : undefined}>
-            {workspace.status}
-          </StatusPill>
+          <StatusBadge status={workspace.status} />
         </div>
 
         <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Execution workspace
           </div>
-          <h1 className="truncate text-xl font-semibold sm:text-2xl">{workspace.name}</h1>
+          <h1 className="truncate text-2xl font-semibold tracking-tight">{workspace.name}</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
             Configure the concrete runtime workspace that Paperclip reuses for this issue flow.
             <span className="hidden sm:inline"> These settings stay attached to the execution workspace so future runs can keep local paths, repo refs, provisioning, teardown, and runtime-service behavior in sync with the actual workspace being reused.</span>
           </p>
         </div>
 
-        <Card className="rounded-none">
+        <Card>
           <CardHeader>
             <CardTitle>Services and jobs</CardTitle>
             <CardDescription>
@@ -579,7 +582,7 @@ export function ExecutionWorkspaceDetail() {
 
         {activeTab === "configuration" ? (
           <div className="space-y-4 sm:space-y-6">
-            <Card className="rounded-none">
+            <Card>
               <CardHeader>
                 <CardTitle>Workspace settings</CardTitle>
                 <CardDescription>
@@ -589,7 +592,7 @@ export function ExecutionWorkspaceDetail() {
                   <Button
                     variant="destructive"
                     size="sm"
-                    className="w-full rounded-none sm:w-auto"
+                    className="w-full sm:w-auto"
                     onClick={() => setCloseDialogOpen(true)}
                     disabled={workspace.status === "archived"}
                   >
@@ -602,7 +605,7 @@ export function ExecutionWorkspaceDetail() {
 
               <div className="space-y-6">
                 <div className="space-y-4">
-                  <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">General</div>
+                  <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">General</div>
                   <Field label="Workspace name">
                     <Input
                       value={form.name}
@@ -615,7 +618,7 @@ export function ExecutionWorkspaceDetail() {
                 <Separator />
 
                 <div className="space-y-4">
-                  <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Source control</div>
+                  <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Source control</div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Branch name" hint="Useful for isolated worktrees">
                       <Input
@@ -648,7 +651,7 @@ export function ExecutionWorkspaceDetail() {
                 <Separator />
 
                 <div className="space-y-4">
-                  <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Paths</div>
+                  <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Paths</div>
                   <Field label="Working directory">
                     <Input
                       className="font-mono"
@@ -671,7 +674,7 @@ export function ExecutionWorkspaceDetail() {
                 <Separator />
 
                 <div className="space-y-4">
-                  <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Lifecycle commands</div>
+                  <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Lifecycle commands</div>
                   <Field label="Provision command" hint="Runs when Paperclip prepares this execution workspace">
                     <Textarea
                       className="min-h-20 font-mono"
@@ -703,7 +706,7 @@ export function ExecutionWorkspaceDetail() {
                 <Separator />
 
                 <div className="space-y-4">
-                  <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Runtime config</div>
+                  <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Runtime config</div>
                   <div className="rounded-md border border-dashed border-border/70 bg-background px-4 py-3">
                     <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                       <div className="space-y-1">
@@ -736,42 +739,46 @@ export function ExecutionWorkspaceDetail() {
                     </div>
                   </div>
 
-                  <details className="rounded-md border border-dashed border-border/70 bg-background px-4 py-3">
-                    <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
-                    </p>
-                    <div className="mt-3">
-                      <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
-                        <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                          <input
-                            id="inherit-runtime-config"
-                            type="checkbox"
-                            className="rounded border-border"
-                            checked={form.inheritRuntime}
-                            onChange={(event) => {
-                              const checked = event.target.checked;
-                              setForm((current) => {
-                                if (!current) return current;
-                                if (!checked && !current.workspaceRuntime.trim() && inheritedRuntimeConfig) {
-                                  return { ...current, inheritRuntime: checked, workspaceRuntime: formatJson(inheritedRuntimeConfig) };
-                                }
-                                return { ...current, inheritRuntime: checked };
-                              });
-                            }}
+                  <Collapsible className="space-y-2">
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" size="sm">Advanced runtime JSON</Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="rounded-md border border-border p-3">
+                      <p className="text-sm text-muted-foreground">
+                        Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
+                      </p>
+                      <div className="mt-3">
+                        <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+                          <div className="mb-2 flex items-center gap-2">
+                            <Checkbox
+                              id="inherit-runtime-config"
+                              checked={form.inheritRuntime}
+                              onCheckedChange={(value) => {
+                                const checked = value === true;
+                                setForm((current) => {
+                                  if (!current) return current;
+                                  if (!checked && !current.workspaceRuntime.trim() && inheritedRuntimeConfig) {
+                                    return { ...current, inheritRuntime: checked, workspaceRuntime: formatJson(inheritedRuntimeConfig) };
+                                  }
+                                  return { ...current, inheritRuntime: checked };
+                                });
+                              }}
+                            />
+                            <Label htmlFor="inherit-runtime-config" className="font-normal text-muted-foreground">
+                              Inherit project workspace runtime config
+                            </Label>
+                          </div>
+                          <Textarea
+                            className="min-h-64 font-mono sm:min-h-96"
+                            value={form.workspaceRuntime}
+                            onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
+                            disabled={form.inheritRuntime}
+                            placeholder={'{\n  "commands": [\n    {\n      "id": "web",\n      "name": "web",\n      "kind": "service",\n      "command": "pnpm dev",\n      "cwd": ".",\n      "port": { "type": "auto" }\n    },\n    {\n      "id": "db-migrate",\n      "name": "db:migrate",\n      "kind": "job",\n      "command": "pnpm db:migrate",\n      "cwd": "."\n    }\n  ]\n}'}
                           />
-                          <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
-                        </div>
-                        <Textarea
-                          className="min-h-64 font-mono sm:min-h-96"
-                          value={form.workspaceRuntime}
-                          onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
-                          disabled={form.inheritRuntime}
-                          placeholder={'{\n  "commands": [\n    {\n      "id": "web",\n      "name": "web",\n      "kind": "service",\n      "command": "pnpm dev",\n      "cwd": ".",\n      "port": { "type": "auto" }\n    },\n    {\n      "id": "db-migrate",\n      "name": "db:migrate",\n      "kind": "job",\n      "command": "pnpm db:migrate",\n      "cwd": "."\n    }\n  ]\n}'}
-                        />
-                      </Field>
-                    </div>
-                  </details>
+                        </Field>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               </div>
 
@@ -799,7 +806,7 @@ export function ExecutionWorkspaceDetail() {
               </CardContent>
             </Card>
 
-            <Card className="rounded-none">
+            <Card>
               <CardHeader>
                 <CardTitle>Workspace context</CardTitle>
                 <CardDescription>Linked objects and relationships</CardDescription>
@@ -845,7 +852,7 @@ export function ExecutionWorkspaceDetail() {
               </CardContent>
             </Card>
 
-            <Card className="rounded-none">
+            <Card>
               <CardHeader>
                 <CardTitle>Concrete location</CardTitle>
                 <CardDescription>Paths and refs</CardDescription>
@@ -891,7 +898,7 @@ export function ExecutionWorkspaceDetail() {
             </Card>
           </div>
         ) : activeTab === "runtime_logs" ? (
-          <Card className="rounded-none">
+          <Card>
             <CardHeader>
               <CardTitle>Runtime and cleanup logs</CardTitle>
               <CardDescription>Recent operations</CardDescription>
@@ -908,7 +915,7 @@ export function ExecutionWorkspaceDetail() {
             ) : workspaceOperationsQuery.data && workspaceOperationsQuery.data.length > 0 ? (
               <div className="space-y-3">
                 {workspaceOperationsQuery.data.map((operation) => (
-                  <div key={operation.id} className="rounded-none border border-border/80 bg-background px-4 py-3">
+                  <div key={operation.id} className="rounded-md border border-border/80 bg-background px-4 py-3">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1">
                         <div className="text-sm font-medium">{operation.command ?? operation.phase}</div>
@@ -922,7 +929,9 @@ export function ExecutionWorkspaceDetail() {
                           <div className="whitespace-pre-wrap break-words text-xs text-muted-foreground">{operation.stdoutExcerpt}</div>
                         ) : null}
                       </div>
-                      <StatusPill className="self-start">{operation.status}</StatusPill>
+                      <div className="self-start">
+                        <StatusBadge status={operation.status} />
+                      </div>
                     </div>
                   </div>
                 ))}

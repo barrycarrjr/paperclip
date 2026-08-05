@@ -52,7 +52,7 @@ export function ApprovalCard({
   const hasFooter = showResolutionButtons || Boolean(detailLink || onOpen);
 
   return (
-    <div className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
+    <div className="rounded-md border border-border/70 bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-3">
@@ -75,7 +75,7 @@ export function ApprovalCard({
                 )}
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-semibold leading-6 text-foreground">
+                <h3 className="text-sm font-semibold leading-6 text-foreground">
                   {subject ?? kindLabel}
                 </h3>
                 <p className="text-xs leading-5 text-muted-foreground">
@@ -102,7 +102,7 @@ export function ApprovalCard({
       </div>
 
       {approval.decisionNote && (
-        <div className="mt-4 rounded-lg border border-border/60 bg-muted/30 px-3.5 py-3 text-xs leading-5 text-muted-foreground">
+        <div className="mt-4 rounded-md border border-border/60 bg-muted/30 px-3.5 py-3 text-xs leading-5 text-muted-foreground">
           <span className="font-medium text-foreground">Decision note.</span> {approval.decisionNote}
         </div>
       )}

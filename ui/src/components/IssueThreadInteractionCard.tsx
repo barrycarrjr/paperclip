@@ -651,6 +651,16 @@ function AskUserQuestionsCard({
       ]),
     ),
   );
+  // "Other" write-in per question: whether it is picked, and its text. Kept
+  // apart from optionIds so canned options and the write-in can't collide.
+  const [otherSelected, setOtherSelected] = useState<Record<string, boolean>>({});
+  const [otherText, setOtherText] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (interaction.result?.answers ?? [])
+        .filter((answer) => answer.otherText)
+        .map((answer) => [answer.questionId, answer.otherText as string]),
+    ),
+  );
   const [working, setWorking] = useState(false);
 
   useEffect(() => {
@@ -666,9 +676,18 @@ function AskUserQuestionsCard({
 
   const questions = interaction.payload.questions;
   const requiredQuestions = questions.filter((question) => question.required);
-  const canSubmit = requiredQuestions.every(
-    (question) => (draftAnswers[question.id] ?? []).length > 0,
+  const questionAnswered = (questionId: string) =>
+    (draftAnswers[questionId] ?? []).length > 0 ||
+    (otherSelected[questionId] === true && (otherText[questionId] ?? "").trim().length > 0);
+  // A picked "Other" with an empty box blocks submit even on optional
+  // questions: submitting it silently as "no answer" would be a surprise.
+  const noEmptyOther = questions.every(
+    (question) =>
+      otherSelected[question.id] !== true ||
+      (otherText[question.id] ?? "").trim().length > 0,
   );
+  const canSubmit =
+    requiredQuestions.every((question) => questionAnswered(question.id)) && noEmptyOther;
 
   function toggleOption(questionId: string, optionId: string, selectionMode: "single" | "multi") {
     setDraftAnswers((current) => {
@@ -681,6 +700,21 @@ function AskUserQuestionsCard({
         : [...existing, optionId];
       return { ...current, [questionId]: next };
     });
+    if (selectionMode === "single") {
+      // Picking a canned option replaces a previously picked write-in.
+      setOtherSelected((current) => ({ ...current, [questionId]: false }));
+    }
+  }
+
+  function toggleOther(questionId: string, selectionMode: "single" | "multi") {
+    setOtherSelected((current) => {
+      const next = current[questionId] !== true;
+      if (next && selectionMode === "single") {
+        // Picking the write-in replaces a previously picked option.
+        setDraftAnswers((answers) => ({ ...answers, [questionId]: [] }));
+      }
+      return { ...current, [questionId]: next };
+    });
   }
 
   async function handleSubmit() {
@@ -689,10 +723,15 @@ function AskUserQuestionsCard({
     try {
       await onSubmitInteractionAnswers(
         interaction,
-        questions.map((question) => ({
-          questionId: question.id,
-          optionIds: draftAnswers[question.id] ?? [],
-        })),
+        questions.map((question) => {
+          const written =
+            otherSelected[question.id] === true ? (otherText[question.id] ?? "").trim() : "";
+          return {
+            questionId: question.id,
+            optionIds: draftAnswers[question.id] ?? [],
+            ...(written ? { otherText: written } : {}),
+          };
+        }),
       );
     } finally {
       setWorking(false);
@@ -761,6 +800,30 @@ function AskUserQuestionsCard({
                       toggleOption(question.id, option.id, question.selectionMode)}
                   />
                 ))}
+                <QuestionOptionButton
+                  id={`${interaction.id}-${question.id}-other`}
+                  label="Other"
+                  description="Type your own answer"
+                  selected={otherSelected[question.id] === true}
+                  selectionMode={question.selectionMode}
+                  onClick={() => toggleOther(question.id, question.selectionMode)}
+                />
+                {otherSelected[question.id] === true && (
+                  <Textarea
+                    value={otherText[question.id] ?? ""}
+                    onChange={(event) =>
+                      setOtherText((current) => ({
+                        ...current,
+                        [question.id]: event.target.value,
+                      }))
+                    }
+                    placeholder="Your answer"
+                    rows={3}
+                    maxLength={2000}
+                    aria-label={`Your own answer to: ${question.prompt}`}
+                    autoFocus
+                  />
+                )}
               </div>
             </div>
           ))}

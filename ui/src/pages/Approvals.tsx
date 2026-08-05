@@ -12,6 +12,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { ShieldCheck } from "lucide-react";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { EmptyState } from "../components/EmptyState";
 
 type StatusFilter = "pending" | "all";
 
@@ -75,7 +76,7 @@ export function Approvals() {
   ).length;
 
   if (!selectedCompanyId) {
-    return <p className="text-sm text-muted-foreground">Select a company first.</p>;
+    return <EmptyState icon={ShieldCheck} message="Select a company to view its approvals." />;
   }
 
   if (isLoading) {
@@ -104,12 +105,10 @@ export function Approvals() {
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
 
       {filtered.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <ShieldCheck className="h-8 w-8 text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">
-            {statusFilter === "pending" ? "No pending approvals." : "No approvals yet."}
-          </p>
-        </div>
+        <EmptyState
+          icon={ShieldCheck}
+          message={statusFilter === "pending" ? "No pending approvals." : "No approvals yet."}
+        />
       )}
 
       {filtered.length > 0 && (

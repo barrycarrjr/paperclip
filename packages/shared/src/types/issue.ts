@@ -369,6 +369,8 @@ export interface AskUserQuestionsPayload {
 export interface AskUserQuestionsAnswer {
   questionId: string;
   optionIds: string[];
+  /** The operator's own answer when none of the offered options fit. */
+  otherText?: string | null;
 }
 
 export interface AskUserQuestionsResult {

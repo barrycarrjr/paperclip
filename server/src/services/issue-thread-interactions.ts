@@ -252,19 +252,27 @@ function normalizeQuestionAnswers(args: {
       }
     }
 
-    if (question.selectionMode === "single" && uniqueOptionIds.length > 1) {
+    // A written-in answer counts as one selection: in single mode it cannot
+    // be combined with an option, and it satisfies "required" on its own.
+    const otherText = answer.otherText?.trim() || null;
+    const selectionCount = uniqueOptionIds.length + (otherText ? 1 : 0);
+    if (question.selectionMode === "single" && selectionCount > 1) {
       throw unprocessable(`Question ${answer.questionId} only allows one answer`);
     }
 
     answerByQuestionId.set(answer.questionId, {
       questionId: answer.questionId,
       optionIds: uniqueOptionIds,
+      ...(otherText ? { otherText } : {}),
     });
   }
 
   for (const question of args.questions) {
     const answer = answerByQuestionId.get(question.id);
-    if (question.required && (!answer || answer.optionIds.length === 0)) {
+    if (
+      question.required &&
+      (!answer || (answer.optionIds.length === 0 && !answer.otherText))
+    ) {
       throw unprocessable(`Question ${question.id} requires an answer`);
     }
   }

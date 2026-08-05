@@ -320,6 +320,7 @@ export const askUserQuestionsPayloadSchema = z.object({
 export const askUserQuestionsAnswerSchema = z.object({
   questionId: z.string().trim().min(1).max(120),
   optionIds: z.array(z.string().trim().min(1).max(120)).max(20),
+  otherText: z.string().trim().min(1).max(2000).nullable().optional(),
 });
 
 export const askUserQuestionsResultSchema = z.object({

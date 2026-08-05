@@ -212,4 +212,54 @@ describe("issueThreadInteractionService", () => {
     expect(state.interactionUpdates).toHaveLength(1);
     expect(state.issueTouches).toHaveLength(1);
   });
+
+  it("accepts a written-in answer, satisfying required, and rejects option+other in single mode", async () => {
+    const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+    const buildRow = () => ({
+      id: "interaction-3",
+      companyId: "company-1",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      kind: "ask_user_questions",
+      status: "pending",
+      continuationPolicy: "none",
+      payload: {
+        version: 1,
+        questions: [
+          {
+            id: "scope",
+            prompt: "Pick one scope",
+            selectionMode: "single",
+            required: true,
+            options: [{ id: "phase-1", label: "Phase 1" }],
+          },
+        ],
+      },
+      result: null,
+      resolvedAt: null,
+      createdAt: new Date("2026-04-20T10:00:00.000Z"),
+      updatedAt: new Date("2026-04-20T10:00:00.000Z"),
+    });
+    const issueRef = { id: "11111111-1111-4111-8111-111111111111", companyId: "company-1" };
+
+    // The written-in answer alone satisfies a required single-select.
+    const okState = createFakeDb({ interactionRow: buildRow() });
+    const okSvc = issueThreadInteractionService(okState.db as never);
+    const answered = await okSvc.answerQuestions(issueRef, "interaction-3", {
+      answers: [{ questionId: "scope", optionIds: [], otherText: "  Split into three phases  " }],
+    }, { userId: "local-board" });
+    expect(answered.result).toEqual({
+      version: 1,
+      answers: [{ questionId: "scope", optionIds: [], otherText: "Split into three phases" }],
+      summaryMarkdown: null,
+    });
+
+    // An option AND a written-in answer together violate single mode.
+    const conflictState = createFakeDb({ interactionRow: buildRow() });
+    const conflictSvc = issueThreadInteractionService(conflictState.db as never);
+    await expect(
+      conflictSvc.answerQuestions(issueRef, "interaction-3", {
+        answers: [{ questionId: "scope", optionIds: ["phase-1"], otherText: "also this" }],
+      }, { userId: "local-board" }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
 });

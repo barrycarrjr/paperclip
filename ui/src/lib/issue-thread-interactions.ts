@@ -129,12 +129,15 @@ export function getQuestionAnswerLabels(args: {
   answers: readonly AskUserQuestionsAnswer[];
 }) {
   const { question, answers } = args;
-  const selectedIds =
-    answers.find((answer) => answer.questionId === question.id)?.optionIds ?? [];
+  const answer = answers.find((entry) => entry.questionId === question.id);
+  const selectedIds = answer?.optionIds ?? [];
   const optionLabelById = new Map(
     question.options.map((option) => [option.id, option.label] as const),
   );
-  return selectedIds
+  const labels = selectedIds
     .map((optionId) => optionLabelById.get(optionId))
     .filter((label): label is string => typeof label === "string");
+  // The operator's written-in answer renders alongside any picked options.
+  if (answer?.otherText) labels.push(answer.otherText);
+  return labels;
 }

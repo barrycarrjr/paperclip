@@ -73,9 +73,11 @@ describe("IssueThreadInteractionCard", () => {
       "interaction-questions-default-collapse-depth-prompt",
     );
 
+    // The offered options plus the always-present "Other" write-in.
     const radios = [...host.querySelectorAll('[role="radio"]')];
-    expect(radios).toHaveLength(2);
+    expect(radios).toHaveLength(3);
     expect(radios[0]?.getAttribute("aria-checked")).toBe("false");
+    expect(radios[2]?.textContent).toContain("Other");
 
     act(() => {
       (radios[0] as HTMLButtonElement).click();
@@ -88,7 +90,29 @@ describe("IssueThreadInteractionCard", () => {
     expect(multiGroup?.getAttribute("aria-labelledby")).toBe(
       "interaction-questions-default-post-submit-summary-prompt",
     );
-    expect(host.querySelectorAll('[role="checkbox"]')).toHaveLength(3);
+    expect(host.querySelectorAll('[role="checkbox"]')).toHaveLength(4);
+  });
+
+  it("lets the operator pick Other and type their own answer", () => {
+    const host = renderCard({
+      interaction: pendingAskUserQuestionsInteraction,
+      onSubmitInteractionAnswers: vi.fn(),
+    });
+    const radios = [...host.querySelectorAll('[role="radio"]')];
+    const otherRadio = radios[radios.length - 1] as HTMLButtonElement;
+
+    act(() => {
+      otherRadio.click();
+    });
+    expect(otherRadio.getAttribute("aria-checked")).toBe("true");
+    const textbox = host.querySelector("textarea");
+    expect(textbox).toBeTruthy();
+
+    // Picking a canned option afterwards deselects the write-in (single mode).
+    act(() => {
+      (radios[0] as HTMLButtonElement).click();
+    });
+    expect(otherRadio.getAttribute("aria-checked")).toBe("false");
   });
 
   it("makes child tasks explicit in suggested task trees", () => {

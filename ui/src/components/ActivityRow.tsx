@@ -7,13 +7,24 @@ import { formatActivityVerb } from "../lib/activity-format";
 import { deriveProjectUrlKey, type ActivityEvent, type Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "../lib/company-members";
 
-function entityLink(entityType: string, entityId: string, name?: string | null): string | null {
+/**
+ * Build the canonical in-app link for an activity entity. Pass
+ * opts.companyPrefix (like "/ACME") to get a company-scoped path for
+ * portfolio surfaces; when it is missing the path is unprefixed.
+ */
+export function entityLink(
+  entityType: string,
+  entityId: string,
+  name?: string | null,
+  opts?: { companyPrefix?: string | null },
+): string | null {
+  const prefix = opts?.companyPrefix ?? "";
   switch (entityType) {
-    case "issue": return `/issues/${name ?? entityId}`;
-    case "agent": return `/agents/${entityId}`;
-    case "project": return `/projects/${deriveProjectUrlKey(name, entityId)}`;
-    case "goal": return `/goals/${entityId}`;
-    case "approval": return `/approvals/${entityId}`;
+    case "issue": return `${prefix}/issues/${name ?? entityId}`;
+    case "agent": return `${prefix}/agents/${entityId}`;
+    case "project": return `${prefix}/projects/${deriveProjectUrlKey(name, entityId)}`;
+    case "goal": return `${prefix}/goals/${entityId}`;
+    case "approval": return `${prefix}/approvals/${entityId}`;
     default: return null;
   }
 }
@@ -24,10 +35,15 @@ interface ActivityRowProps {
   userProfileMap?: Map<string, CompanyUserProfile>;
   entityNameMap: Map<string, string>;
   entityTitleMap?: Map<string, string>;
+  /**
+   * Company-scoped path prefix (like "/ACME") for portfolio surfaces.
+   * When absent, links stay unprefixed (the single-company default).
+   */
+  companyPrefix?: string;
   className?: string;
 }
 
-export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, className }: ActivityRowProps) {
+export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, companyPrefix, className }: ActivityRowProps) {
   const verb = formatActivityVerb(event.action, event.details, { agentMap, userProfileMap });
 
   const isHeartbeatEvent = event.entityType === "heartbeat_run";
@@ -42,8 +58,8 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const entityTitle = entityTitleMap?.get(`${event.entityType}:${event.entityId}`);
 
   const link = isHeartbeatEvent && heartbeatAgentId
-    ? `/agents/${heartbeatAgentId}/runs/${event.entityId}`
-    : entityLink(event.entityType, event.entityId, name);
+    ? `${companyPrefix ?? ""}/agents/${heartbeatAgentId}/runs/${event.entityId}`
+    : entityLink(event.entityType, event.entityId, name, { companyPrefix });
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;

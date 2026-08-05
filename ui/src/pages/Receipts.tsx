@@ -11,7 +11,11 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { PageTabBar } from "../components/PageTabBar";
+import { Tabs } from "@/components/ui/tabs";
 import { Identity } from "../components/Identity";
+import { entityLink } from "../components/ActivityRow";
+import { activityEntityName } from "../lib/activity-entity-names";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
@@ -19,6 +23,7 @@ import {
   summarizeOutcome,
   isOutcomeAction,
   OUTCOME_CATEGORY_LABELS,
+  OUTCOME_TONE_CLASS,
   type OutcomeCategory,
 } from "../lib/outcomes";
 
@@ -150,6 +155,23 @@ export function Receipts() {
     return <PageSkeleton variant="list" />;
   }
 
+  // Zero-count tabs are hidden rather than disabled (PageTabBar has no
+  // disabled state). The active tab always stays visible so the selection
+  // never points at a tab that is not on screen.
+  const tabItems = FILTER_ORDER
+    .filter((key) => key === "all" || key === filter || categoryCounts[key] > 0)
+    .map((key) => ({
+      value: key,
+      label: (
+        <>
+          {OUTCOME_CATEGORY_LABELS[key]}
+          <span className="ml-1.5 text-[10px] tabular-nums text-muted-foreground/70">
+            {categoryCounts[key]}
+          </span>
+        </>
+      ),
+    }));
+
   return (
     <div className="space-y-4">
       <div>
@@ -162,34 +184,9 @@ export function Receipts() {
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
       {/* Filter tabs */}
-      <div className="border-b border-border">
-        <div className="flex flex-wrap gap-0">
-          {FILTER_ORDER.map((key) => {
-            const count = categoryCounts[key];
-            const active = filter === key;
-            const disabled = key !== "all" && count === 0;
-            return (
-              <button
-                key={key}
-                onClick={() => !disabled && setFilter(key)}
-                disabled={disabled}
-                className={cn(
-                  "px-3.5 py-2 text-[12px] -mb-px border-b-2 transition-colors",
-                  active
-                    ? "text-foreground border-foreground"
-                    : "text-muted-foreground border-transparent hover:text-foreground",
-                  disabled && "opacity-40 cursor-not-allowed hover:text-muted-foreground",
-                )}
-              >
-                {OUTCOME_CATEGORY_LABELS[key]}
-                <span className="ml-1.5 text-[10px] tabular-nums text-muted-foreground/70">
-                  {count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
+        <PageTabBar align="start" items={tabItems} />
+      </Tabs>
 
       {filtered.length === 0 ? (
         <EmptyState
@@ -201,16 +198,14 @@ export function Receipts() {
           }
         />
       ) : (
-        <div className="border border-border bg-card">
+        <div className="border border-border rounded-md overflow-hidden bg-card">
           {groupedByDay.map((group, gi) => {
             const total = group.events.length;
             return (
               <div key={group.label} className={cn(gi > 0 && "border-t border-border")}>
-                <div className="px-4 py-2.5 flex items-baseline justify-between border-b border-border bg-muted/20">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.08em]">
-                    {group.label}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground tabular-nums">
+                <div className="px-4 py-2 flex items-baseline justify-between border-b border-border bg-muted/50">
+                  <span className="text-sm font-medium">{group.label}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
                     {total} outcome{total === 1 ? "" : "s"}
                   </span>
                 </div>
@@ -228,6 +223,12 @@ export function Receipts() {
             );
           })}
         </div>
+      )}
+
+      {activity && activity.length === RECEIPTS_LIMIT && (
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          Showing outcomes from the latest {RECEIPTS_LIMIT} events.
+        </p>
       )}
     </div>
   );
@@ -250,73 +251,44 @@ function ReceiptRow({ event, agentMap, userProfileMap }: ReceiptRowProps) {
           ? "System"
           : null;
 
-  const link =
-    event.entityType === "issue"
-      ? `/issues/${event.entityId}`
-      : event.entityType === "approval"
-        ? `/approvals/${event.entityId}`
-        : event.entityType === "agent"
-          ? `/agents/${event.entityId}`
-          : event.entityType === "project"
-            ? `/projects/${event.entityId}`
-            : event.entityType === "goal"
-              ? `/goals/${event.entityId}`
-              : null;
-
-  const chipClass = {
-    emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    amber: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    sky: "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    violet: "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
-    red: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
-    muted: "border-border bg-muted/40 text-muted-foreground",
-  }[outcome.tone];
-
-  const Wrapper = link
-    ? ({ children }: { children: React.ReactNode }) => (
-        <Link to={link} className="block hover:bg-accent/40 transition-colors no-underline text-inherit">
-          {children}
-        </Link>
-      )
-    : ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  const link = entityLink(event.entityType, event.entityId, activityEntityName(event));
 
   const time = new Date(event.createdAt).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
   });
 
-  return (
-    <Wrapper>
-      <div className="grid grid-cols-[68px_1fr_auto] gap-3 items-center px-4 py-2.5">
-        <span className="text-[11px] tabular-nums text-muted-foreground">{time}</span>
-        <div className="min-w-0">
-          <div className="text-sm">
-            <span className="font-medium">{outcome.verb}</span>
-            {outcome.target && (
-              <span className="text-muted-foreground"> {outcome.target}</span>
-            )}
-          </div>
-          <div className="mt-0.5 text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
-            {actorName && (
-              <>
-                <Identity name={actorName} size="xs" />
-                <span>·</span>
-              </>
-            )}
-            <span>{event.entityType}</span>
-            <span>·</span>
-            <span className="text-muted-foreground/70 tabular-nums">{timeAgo(event.createdAt)}</span>
-          </div>
-        </div>
-        <span
-          className={cn(
-            "inline-flex items-center px-2 py-0.5 text-[10px] font-medium border whitespace-nowrap",
-            chipClass,
+  const inner = (
+    <div className="grid grid-cols-[68px_1fr_auto] gap-3 items-center px-4 py-2.5">
+      <span className="text-[11px] tabular-nums text-muted-foreground">{time}</span>
+      <div className="min-w-0">
+        <div className="text-sm">
+          <span className="font-medium">{outcome.verb}</span>
+          {outcome.target && (
+            <span className="text-muted-foreground"> {outcome.target}</span>
           )}
-        >
-          {outcome.chip}
-        </span>
+        </div>
+        <div className="mt-0.5 text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+          {actorName && (
+            <>
+              <Identity name={actorName} size="xs" />
+              <span>·</span>
+            </>
+          )}
+          <span>{event.entityType}</span>
+          <span>·</span>
+          <span className="text-muted-foreground/70 tabular-nums">{timeAgo(event.createdAt)}</span>
+        </div>
       </div>
-    </Wrapper>
+      <span className={OUTCOME_TONE_CLASS[outcome.tone]}>{outcome.chip}</span>
+    </div>
+  );
+
+  return link ? (
+    <Link to={link} className="block hover:bg-accent/40 transition-colors no-underline text-inherit">
+      {inner}
+    </Link>
+  ) : (
+    <div>{inner}</div>
   );
 }

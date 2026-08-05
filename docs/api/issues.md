@@ -165,7 +165,7 @@ POST /api/issues/{issueId}/interactions
 Supported `kind` values:
 
 - `suggest_tasks`: propose child issues for the board/user to accept or reject
-- `ask_user_questions`: ask structured questions and store selected answers
+- `ask_user_questions`: ask structured questions and store the selected answers; each answer may also carry a free-text `otherText` when none of the offered options fit. Treat `otherText` as the user's answer even when `optionIds` is empty.
 - `request_confirmation`: ask the board/user to accept or reject a proposal
 
 For `request_confirmation`, `continuationPolicy: "wake_assignee"` wakes the assignee only after acceptance. Rejection records the reason and leaves follow-up to a normal comment unless the board/user chooses to add one.

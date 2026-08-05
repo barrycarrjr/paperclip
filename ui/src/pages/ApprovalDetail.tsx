@@ -10,9 +10,12 @@ import { StatusBadge } from "../components/StatusBadge";
 import { Identity } from "../components/Identity";
 import { approvalLabel, typeIcon, defaultTypeIcon, ApprovalPayloadRenderer } from "../components/ApprovalPayload";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { EmptyState } from "../components/EmptyState";
+import { CopyText } from "../components/CopyText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CheckCircle2, ChevronRight, Copy, ShieldCheck, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
 
@@ -66,9 +69,13 @@ export function ApprovalDetail() {
   useEffect(() => {
     setBreadcrumbs([
       { label: "Approvals", href: "/approvals" },
-      { label: approval?.id?.slice(0, 8) ?? approvalId ?? "Approval" },
+      {
+        label: approval
+          ? approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)
+          : "Approval",
+      },
     ]);
-  }, [setBreadcrumbs, approval, approvalId]);
+  }, [setBreadcrumbs, approval]);
 
   const refresh = () => {
     if (!approvalId) return;
@@ -142,7 +149,7 @@ export function ApprovalDetail() {
   });
 
   if (isLoading) return <PageSkeleton variant="detail" />;
-  if (!approval) return <p className="text-sm text-muted-foreground">Approval not found.</p>;
+  if (!approval) return <EmptyState icon={ShieldCheck} message="Approval not found." />;
 
   const payload = approval.payload as Record<string, unknown>;
   const linkedAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
@@ -181,7 +188,7 @@ export function ApprovalDetail() {
   return (
     <div className="space-y-6 max-w-3xl">
       {showApprovedBanner && (
-        <div className="border border-green-300 dark:border-green-700/40 bg-green-50 dark:bg-green-900/20 rounded-lg px-4 py-3 animate-in fade-in zoom-in-95 duration-300">
+        <div className="border border-green-300 dark:border-green-700/40 bg-green-50 dark:bg-green-900/20 rounded-md px-4 py-3 animate-in fade-in zoom-in-95 duration-300">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2">
               <div className="relative mt-0.5">
@@ -206,23 +213,34 @@ export function ApprovalDetail() {
           </div>
         </div>
       )}
-      <div className="border border-border rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+      <Card className="rounded-md">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
             <TypeIcon className="h-5 w-5 text-muted-foreground shrink-0" />
-            <div>
-              <h2 className="text-lg font-semibold">{approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)}</h2>
-              <p className="text-xs text-muted-foreground font-mono">{approval.id}</p>
-            </div>
-          </div>
-          <StatusBadge status={approval.status} />
-        </div>
+            {approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)}
+          </CardTitle>
+          <CardDescription className="flex items-center gap-2 font-mono text-xs">
+            <span className="break-all">{approval.id}</span>
+            <CopyText
+              text={approval.id}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              copiedLabel="Copied"
+              ariaLabel="Copy approval id"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </CopyText>
+          </CardDescription>
+          <CardAction>
+            <StatusBadge status={approval.status} />
+          </CardAction>
+        </CardHeader>
+        <CardContent className="space-y-3">
         <div className="text-sm space-y-1">
           {approval.requestedByAgentId && (
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground text-xs">Requested by</span>
               <Identity
-                name={agentNameById.get(approval.requestedByAgentId) ?? approval.requestedByAgentId.slice(0, 8)}
+                name={agentNameById.get(approval.requestedByAgentId) ?? "Agent"}
                 size="sm"
               />
             </div>
@@ -329,10 +347,14 @@ export function ApprovalDetail() {
             </Button>
           )}
         </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="border border-border rounded-lg p-4 space-y-3">
-        <h3 className="text-sm font-medium">Comments ({comments?.length ?? 0})</h3>
+      <Card className="rounded-md">
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Comments ({comments?.length ?? 0})</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
         <div className="space-y-2">
           {(comments ?? []).map((comment: ApprovalComment) => (
             <div key={comment.id} className="border border-border/60 rounded-md p-3">
@@ -340,7 +362,7 @@ export function ApprovalDetail() {
                 {comment.authorAgentId ? (
                   <Link to={`/agents/${comment.authorAgentId}`} className="hover:underline">
                     <Identity
-                      name={agentNameById.get(comment.authorAgentId) ?? comment.authorAgentId.slice(0, 8)}
+                      name={agentNameById.get(comment.authorAgentId) ?? "Agent"}
                       size="sm"
                     />
                   </Link>
@@ -370,7 +392,8 @@ export function ApprovalDetail() {
             {addCommentMutation.isPending ? "Posting…" : "Post comment"}
           </Button>
         </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

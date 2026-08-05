@@ -312,6 +312,25 @@ export function summarizeOutcome(event: ActivityEvent, _opts: SummarizeOptions =
   };
 }
 
+/**
+ * Canonical outcome chip classes, keyed by tone. Each value is the complete
+ * class list for the chip: the base pill styling (rounded-full per the design
+ * canon) plus the tone colors. Render with
+ * `<span className={OUTCOME_TONE_CLASS[outcome.tone]}>` so every surface that
+ * shows an outcome chip stays visually identical.
+ */
+const OUTCOME_CHIP_BASE =
+  "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap";
+
+export const OUTCOME_TONE_CLASS: Record<OutcomeTone, string> = {
+  emerald: `${OUTCOME_CHIP_BASE} border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400`,
+  amber: `${OUTCOME_CHIP_BASE} border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400`,
+  sky: `${OUTCOME_CHIP_BASE} border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400`,
+  violet: `${OUTCOME_CHIP_BASE} border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400`,
+  red: `${OUTCOME_CHIP_BASE} border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400`,
+  muted: `${OUTCOME_CHIP_BASE} border-border bg-muted/40 text-muted-foreground`,
+};
+
 export const OUTCOME_CATEGORY_LABELS: Record<OutcomeCategory | "all", string> = {
   all: "All",
   draft: "Drafts",
