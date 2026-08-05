@@ -1150,9 +1150,9 @@ export function CompanySettings() {
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
-              Generate an OpenClaw agent invite snippet.
+              Invite an OpenClaw agent that runs outside Paperclip to join this company.
             </span>
-            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
+            <HintIcon text="Use this for an agent that runs on its own setup (an OpenClaw agent), not one hosted by Paperclip. It creates a short-lived, copy-ready invite prompt you hand to that agent so it can request to join this company. To add an agent that Paperclip runs for you, hire one from the team instead." />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
