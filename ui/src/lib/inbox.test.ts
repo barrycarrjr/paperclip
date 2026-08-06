@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type {
   Approval,
+  AttentionRow,
   DashboardSummary,
   ExecutionWorkspace,
   HeartbeatRun,
@@ -305,6 +306,26 @@ const dashboard: DashboardSummary = {
   runActivity: [],
 };
 
+function makeAttentionRow(overrides: Partial<AttentionRow> = {}): AttentionRow {
+  const at = Date.parse("2026-03-11T03:00:00.000Z");
+  return {
+    key: "question:iss-1",
+    kind: "question",
+    companyId: "company-1",
+    title: "Which supplier?",
+    detail: null,
+    askedBy: null,
+    blocking: "waiting",
+    blockedSinceMs: at,
+    count: 1,
+    consequence: null,
+    href: "/issues/PAP-1",
+    createdAtMs: at,
+    updatedAtMs: at,
+    ...overrides,
+  };
+}
+
 describe("inbox helpers", () => {
   beforeEach(() => {
     storage.clear();
@@ -553,6 +574,79 @@ describe("inbox helpers", () => {
     expect(result.inbox).toBe(0);
   });
 
+  it("floats a stopped agent above everything, however fresh the rest is", () => {
+    // A question that halted an agent three hours ago still outranks an
+    // issue touched a second ago: the issue is not blocked on anyone.
+    const freshIssue = makeIssue("1", true);
+    freshIssue.lastActivityAt = new Date("2026-03-11T23:59:00.000Z");
+
+    const items = getInboxWorkItems({
+      issues: [freshIssue],
+      approvals: [],
+      attentionRows: [
+        makeAttentionRow({
+          key: "question:iss-9",
+          blocking: "stopped",
+          updatedAtMs: Date.parse("2026-03-11T04:00:00.000Z"),
+        }),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["attention", "issue"]);
+  });
+
+  it("leaves a non-blocking question in ordinary date order", () => {
+    const freshIssue = makeIssue("1", true);
+    freshIssue.lastActivityAt = new Date("2026-03-11T23:59:00.000Z");
+
+    const items = getInboxWorkItems({
+      issues: [freshIssue],
+      approvals: [],
+      attentionRows: [
+        makeAttentionRow({
+          key: "question:iss-9",
+          blocking: "waiting",
+          updatedAtMs: Date.parse("2026-03-11T04:00:00.000Z"),
+        }),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["issue", "attention"]);
+  });
+
+  it("keeps a stopped agent on top through the path the page actually renders", () => {
+    // The flat sort is not what the Inbox shows: with nesting on (the desktop
+    // default) the grouped section re-sorts. A rule applied in only one of
+    // them disappears exactly where it matters.
+    const freshIssue = makeIssue("1", true);
+    freshIssue.lastActivityAt = new Date("2026-03-11T23:59:00.000Z");
+
+    const items = getInboxWorkItems({
+      issues: [freshIssue],
+      approvals: [],
+      attentionRows: [
+        makeAttentionRow({
+          key: "budget:inc-1",
+          kind: "budget_stop",
+          blocking: "stopped",
+          updatedAtMs: Date.parse("2026-03-08T04:00:00.000Z"),
+        }),
+      ],
+    });
+
+    const [section] = buildGroupedInboxSections(items, "none", {}, { nestingEnabled: true });
+    expect(section.displayItems.map((item) => item.kind)).toEqual(["attention", "issue"]);
+  });
+
+  it("keys attention items by their queue key so repeats collapse", () => {
+    const [item] = getInboxWorkItems({
+      issues: [],
+      approvals: [],
+      attentionRows: [makeAttentionRow({ key: "sign_off:iss-4" })],
+    });
+    expect(getInboxWorkItemKey(item)).toBe("attention:sign_off:iss-4");
+  });
+
   it("mixes approvals into the inbox feed by most recent activity", () => {
     const newerIssue = makeIssue("1", true);
     newerIssue.lastActivityAt = new Date("2026-03-11T04:00:00.000Z");
@@ -574,6 +668,7 @@ describe("inbox helpers", () => {
         if (item.kind === "issue") return `issue:${item.issue.id}`;
         if (item.kind === "approval") return `approval:${item.approval.id}`;
         if (item.kind === "join_request") return `join:${item.joinRequest.id}`;
+        if (item.kind === "attention") return `attention:${item.row.key}`;
         return `run:${item.run.id}`;
       }),
     ).toEqual([
@@ -617,6 +712,7 @@ describe("inbox helpers", () => {
         if (item.kind === "issue") return `issue:${item.issue.id}`;
         if (item.kind === "approval") return `approval:${item.approval.id}`;
         if (item.kind === "join_request") return `join:${item.joinRequest.id}`;
+        if (item.kind === "attention") return `attention:${item.row.key}`;
         return `run:${item.run.id}`;
       }),
     ).toEqual([

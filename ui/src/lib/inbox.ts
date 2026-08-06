@@ -1,5 +1,6 @@
 import type {
   Approval,
+  AttentionRow,
   DashboardSummary,
   HeartbeatRun,
   InboxDismissal,
@@ -89,6 +90,18 @@ export type InboxWorkItem =
       kind: "join_request";
       timestamp: number;
       joinRequest: JoinRequest;
+    }
+  | {
+      /**
+       * A decision that comes straight from the attention queue and has no
+       * richer row of its own here: an unanswered agent question, a sign-off
+       * gate, a hard budget stop. Approvals, failed runs and join requests
+       * are in the queue too, but they keep their own rows above because
+       * those rows can act (approve, retry, decide) without leaving the page.
+       */
+      kind: "attention";
+      timestamp: number;
+      row: AttentionRow;
     };
 
 export interface InboxBadgeData {
@@ -762,16 +775,32 @@ export function approvalActivityTimestamp(approval: Approval): number {
   return normalizeTimestamp(approval.createdAt);
 }
 
+/**
+ * A halted agent outranks everything else in the list, however recent the
+ * rest is: nothing else here has stopped work waiting on an answer. Both
+ * the flat sort and the nesting re-sort call this, because applying it in
+ * only one of them means the rule silently disappears on whichever path the
+ * page actually takes (it took the other one).
+ */
+export function compareStoppedFirst(a: InboxWorkItem, b: InboxWorkItem): number {
+  const aStopped = a.kind === "attention" && a.row.blocking === "stopped";
+  const bStopped = b.kind === "attention" && b.row.blocking === "stopped";
+  if (aStopped === bStopped) return 0;
+  return aStopped ? -1 : 1;
+}
+
 export function getInboxWorkItems({
   issues,
   approvals,
   failedRuns = [],
   joinRequests = [],
+  attentionRows = [],
 }: {
   issues: Issue[];
   approvals: Approval[];
   failedRuns?: HeartbeatRun[];
   joinRequests?: JoinRequest[];
+  attentionRows?: AttentionRow[];
 }): InboxWorkItem[] {
   return [
     ...issues.map((issue) => ({
@@ -794,7 +823,15 @@ export function getInboxWorkItems({
       timestamp: normalizeTimestamp(joinRequest.createdAt),
       joinRequest,
     })),
+    ...attentionRows.map((row) => ({
+      kind: "attention" as const,
+      timestamp: row.updatedAtMs,
+      row,
+    })),
   ].sort((a, b) => {
+    const stoppedDiff = compareStoppedFirst(a, b);
+    if (stoppedDiff !== 0) return stoppedDiff;
+
     const timestampDiff = b.timestamp - a.timestamp;
     if (timestampDiff !== 0) return timestampDiff;
 
@@ -810,6 +847,7 @@ export function getInboxWorkItems({
 }
 
 const inboxWorkItemKindOrder: InboxWorkItem["kind"][] = [
+  "attention",
   "issue",
   "approval",
   "failed_run",
@@ -817,6 +855,7 @@ const inboxWorkItemKindOrder: InboxWorkItem["kind"][] = [
 ];
 
 const inboxWorkItemKindLabels: Record<InboxWorkItem["kind"], string> = {
+  attention: "Waiting on you",
   issue: "Issues",
   approval: "Approvals",
   failed_run: "Failed runs",
@@ -941,6 +980,8 @@ export function buildInboxNesting(items: InboxWorkItem[]): {
 
   // Merge and re-sort
   const displayItems = [...rootIssueItems, ...nonIssueItems].sort((a, b) => {
+    const stoppedDiff = compareStoppedFirst(a, b);
+    if (stoppedDiff !== 0) return stoppedDiff;
     const diff = b.timestamp - a.timestamp;
     if (diff !== 0) return diff;
     if (a.kind === "issue" && b.kind === "issue") {
@@ -981,6 +1022,7 @@ export function getInboxWorkItemKey(item: InboxWorkItem): string {
   if (item.kind === "issue") return `issue:${item.issue.id}`;
   if (item.kind === "approval") return `approval:${item.approval.id}`;
   if (item.kind === "failed_run") return `run:${item.run.id}`;
+  if (item.kind === "attention") return `attention:${item.row.key}`;
   return `join:${item.joinRequest.id}`;
 }
 

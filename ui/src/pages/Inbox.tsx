@@ -19,6 +19,9 @@ import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
+import { AttentionRow } from "../components/AttentionRow";
+import { attentionApi } from "../api/attention";
+import { attentionRowIssueId } from "@paperclipai/shared";
 import { invalidateAttention } from "../lib/invalidate-attention";
 import {
   applyIssueFilters,
@@ -148,8 +151,6 @@ import {
   type InboxWorkItemGroupBy,
 } from "../lib/inbox";
 import { useDismissedInboxAlerts, useInboxDismissals, useReadInboxItems } from "../hooks/useInboxBadge";
-import { UnifiedInbox } from "./UnifiedInbox";
-import { isUnifiedInboxEnabled, setUnifiedInboxEnabled } from "../lib/unified-inbox-flag";
 
 export { InboxIssueMetaLeading, InboxIssueTrailingColumns } from "../components/IssueColumns";
 export { IssueGroupHeader as InboxGroupHeader } from "../components/IssueGroupHeader";
@@ -665,13 +666,6 @@ function JoinRequestInboxRow({
 }
 
 export function Inbox() {
-  if (isUnifiedInboxEnabled()) {
-    return <UnifiedInbox />;
-  }
-  return <ClassicInbox />;
-}
-
-function ClassicInbox() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { isMobile } = useSidebar();
@@ -728,6 +722,15 @@ function ClassicInbox() {
   const { data: projects } = useQuery({
     queryKey: queryKeys.projects.list(selectedCompanyId!),
     queryFn: () => projectsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  // The attention queue, the same list the Brief and the badge read. Only
+  // the kinds without a richer row here: approvals, failed runs and join
+  // requests already render below with buttons that act in place.
+  const { data: attention, isLoading: isAttentionLoading } = useQuery({
+    queryKey: queryKeys.attention(selectedCompanyId!),
+    queryFn: () => attentionApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
   const { data: labels } = useQuery({
@@ -1046,6 +1049,9 @@ function ClassicInbox() {
   const showFailedRunsCategory =
     allCategoryFilter === "everything" || allCategoryFilter === "failed_runs";
   const showAlertsCategory = allCategoryFilter === "everything" || allCategoryFilter === "alerts";
+  // Questions, sign-offs and budget stops. "everything" only; there is no
+  // category chip of their own yet, so a narrowed filter hides them.
+  const showAttentionCategory = allCategoryFilter === "everything";
   const failedRunsForTab = useMemo(() => {
     if (tab === "all" && !showFailedRunsCategory) return [];
     return failedRuns;
@@ -1061,15 +1067,41 @@ function ClassicInbox() {
     return joinRequests;
   }, [joinRequests, tab, showJoinRequestsCategory, dismissedAtByKey]);
 
+  const attentionRowsForTab = useMemo(() => {
+    if (tab !== "mine" && tab !== "all") return [];
+    // On the All tab every other kind is hidden when its category is
+    // deselected; these rows follow the same rule rather than ignoring the
+    // filter and looking like a bug.
+    if (tab === "all" && !showAttentionCategory) return [];
+    return (attention?.rows ?? []).filter(
+      (row) => row.kind === "question" || row.kind === "sign_off" || row.kind === "budget_stop",
+    );
+  }, [attention, tab, showAttentionCategory]);
+
+  // An issue in a sign-off gate, or one with an unanswered question, already
+  // has a queue row saying what it needs. Listing the issue as well shows the
+  // same work twice with two different calls to action.
+  const issueIdsCoveredByAttention = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of attentionRowsForTab) {
+      const issueId = attentionRowIssueId(row);
+      if (issueId) ids.add(issueId);
+    }
+    return ids;
+  }, [attentionRowsForTab]);
+
   const workItemsToRender = useMemo(
     () =>
       getInboxWorkItems({
-        issues: tab === "all" && !showTouchedCategory ? [] : issuesToRender,
+        issues: (tab === "all" && !showTouchedCategory ? [] : issuesToRender).filter(
+          (issue) => !issueIdsCoveredByAttention.has(issue.id),
+        ),
         approvals: tab === "all" && !showApprovalsCategory ? [] : approvalsToRender,
         failedRuns: failedRunsForTab,
         joinRequests: joinRequestsForTab,
+        attentionRows: attentionRowsForTab,
       }),
-    [approvalsToRender, issuesToRender, showApprovalsCategory, showTouchedCategory, tab, failedRunsForTab, joinRequestsForTab],
+    [approvalsToRender, issuesToRender, showApprovalsCategory, showTouchedCategory, tab, failedRunsForTab, joinRequestsForTab, attentionRowsForTab, issueIdsCoveredByAttention],
   );
 
   const filteredWorkItems = useMemo(() => {
@@ -1109,6 +1141,13 @@ function ClassicInbox() {
         const jr = item.joinRequest;
         if (jr.agentName?.toLowerCase().includes(q)) return true;
         if (jr.capabilities?.toLowerCase().includes(q)) return true;
+        return false;
+      }
+      if (item.kind === "attention") {
+        const row = item.row;
+        if (row.title.toLowerCase().includes(q)) return true;
+        if (row.detail?.toLowerCase().includes(q)) return true;
+        if (row.askedBy?.toLowerCase().includes(q)) return true;
         return false;
       }
       return false;
@@ -1789,7 +1828,10 @@ function ClassicInbox() {
               if (!st.nonInboxSearchIssueIds.has(item.issue.id) && !st.archivingIssueIds.has(item.issue.id)) {
                 act.archiveIssue(item.issue.id);
               }
-            } else {
+            } else if (item.kind !== "attention") {
+              // Attention rows are deliberately not archivable: hiding one
+              // here would leave the Brief and the badge still counting it.
+              // Answer the question or sign the thing off to clear it.
               const key = getInboxWorkItemKey(item);
               if (!st.archivingNonIssueIds.has(key)) act.archiveNonIssue(key);
             }
@@ -1847,6 +1889,8 @@ function ClassicInbox() {
               act.navigate(`/approvals/${item.approval.id}`);
             } else if (item.kind === "failed_run") {
               act.navigate(`/agents/${item.run.agentId}/runs/${item.run.id}`);
+            } else if (item.kind === "attention") {
+              act.navigate(item.row.href);
             }
           }
           break;
@@ -1908,7 +1952,8 @@ function ClassicInbox() {
     !isIssuesLoading &&
     !isMineIssuesLoading &&
     !isTouchedIssuesLoading &&
-    !isRunsLoading;
+    !isRunsLoading
+    && !isAttentionLoading;
 
   const showSeparatorBefore = (key: SectionKey) => visibleSections.indexOf(key) > 0;
   const markAllReadIssues = (tab === "mine" ? visibleMineIssues : unreadTouchedIssues)
@@ -1919,7 +1964,6 @@ function ClassicInbox() {
   const activeIssueFilterCount = countActiveIssueFilters(issueFilters, true);
   return (
     <div className="space-y-6">
-      <UnifiedInboxPreviewBanner />
       <div className="space-y-2">
         {/* Search — full-width row on mobile, inline on desktop */}
         <div className="relative sm:hidden">
@@ -2352,12 +2396,14 @@ function ClassicInbox() {
                       </div>
                     );
                     const todayCutoff = Date.now() - 24 * 60 * 60 * 1000;
+                    const datesThisRow = item.kind !== "attention";
                     const showTodayDivider =
+                      datesThisRow &&
                       groupBy === "none" &&
                       item.timestamp > 0 &&
                       item.timestamp < todayCutoff &&
                       previousTimestamp >= todayCutoff;
-                    previousTimestamp = item.timestamp > 0 ? item.timestamp : previousTimestamp;
+                    if (datesThisRow && item.timestamp > 0) previousTimestamp = item.timestamp;
                     if (showTodayDivider) {
                       elements.push(
                         <div key={`today-divider-${group.key}-${index}`} className="my-2 flex items-center gap-3 px-4">
@@ -2476,6 +2522,25 @@ function ClassicInbox() {
                           {row}
                         </SwipeToArchive>
                       ) : row));
+                      continue;
+                    }
+
+                    if (item.kind === "attention") {
+                      // Questions, sign-off gates and hard budget stops. They
+                      // read exactly as they do on the Brief, because it is
+                      // the same row from the same list.
+                      const attentionKey = `attention:${item.row.key}`;
+                      elements.push(
+                        wrapItem(
+                          attentionKey,
+                          isSelected,
+                          <AttentionRow
+                            key={attentionKey}
+                            row={item.row}
+                            className={isSelected ? "bg-accent/40" : undefined}
+                          />,
+                        ),
+                      );
                       continue;
                     }
 
@@ -2610,24 +2675,3 @@ function ClassicInbox() {
   );
 }
 
-function UnifiedInboxPreviewBanner() {
-  function enable() {
-    setUnifiedInboxEnabled(true);
-    window.location.reload();
-  }
-  return (
-    <div className="border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[12px] text-sky-700 dark:text-sky-300 flex items-center justify-between">
-      <span>
-        <strong>Try the unified Inbox:</strong> approvals, drafts, email review, and failed runs
-        in one ranked list.
-      </span>
-      <button
-        type="button"
-        onClick={enable}
-        className="px-2 py-0.5 text-[11px] border border-sky-500/40 hover:bg-sky-500/20"
-      >
-        Try the unified Inbox
-      </button>
-    </div>
-  );
-}

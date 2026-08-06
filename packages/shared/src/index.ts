@@ -1,5 +1,5 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
-export { ATTENTION_KINDS } from "./types/attention.js";
+export { ATTENTION_KINDS, attentionRowIssueId } from "./types/attention.js";
 export {
   APPROVAL_TYPE_LABEL,
   approvalLabel,

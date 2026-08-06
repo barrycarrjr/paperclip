@@ -60,3 +60,17 @@ export interface AttentionQueueResponse {
   /** Total open rows, which is also the one number every badge shows. */
   count: number;
 }
+
+/**
+ * The row key is `${kind}:${id}`. For a question or a sign-off gate that id
+ * is the issue's id, which lets a surface that already lists issues avoid
+ * showing the same issue twice. Kept as one helper so the shape of the key
+ * is stated once rather than re-parsed by eye at each call site.
+ */
+export function attentionRowIssueId(row: AttentionRow): string | null {
+  if (row.kind !== "question" && row.kind !== "sign_off") return null;
+  const separator = row.key.indexOf(":");
+  if (separator < 0) return null;
+  const id = row.key.slice(separator + 1);
+  return id.length > 0 ? id : null;
+}

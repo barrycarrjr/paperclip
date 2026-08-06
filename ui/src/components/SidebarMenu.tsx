@@ -194,7 +194,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           badge={inboxBadge.inbox}
           badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
           alert={inboxBadge.failedRuns > 0}
-          info="Items that need your attention: failed runs, approvals waiting on you, join requests, and the issues you have worked on recently. Questions from agents appear on your Brief and on the issue itself."
+          info="Everything waiting on you: agents' questions, work waiting for your sign-off, approvals, failed runs, join requests, and the issues you have worked on recently."
         />
         <SidebarNavItem
           to="/clippy"
