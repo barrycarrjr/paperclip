@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Mail,
@@ -32,13 +32,14 @@ import {
 import { useHelpScoutTriageOverrides } from "../hooks/useTriageOverrides";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { timeAgo } from "../lib/timeAgo";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BulkTriageBar } from "./BulkTriageBar";
+import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn, ellipsize } from "../lib/utils";
 
 const MAX_SENDER_CHARS = 50;
 const MAX_SUBJECT_CHARS = 80;
 
-const KEEP_ALWAYS_LABEL = "keep-always";
-const AUTO_NOISE_LABEL = "auto-noise";
 
 interface HelpScoutMailboxPanelProps {
   mailbox: HelpScoutMailboxRef;
@@ -175,6 +176,16 @@ export function HelpScoutMailboxPanel({
 
   const all = data?.conversations ?? [];
   const conversations = applyHelpScoutOverrides(all, overrides, { filter: listStatus });
+
+  const bulk = useBulkTriage({ api, accountKey, noteStatus, clearStatus, invalidateLists });
+  const visibleIds = useMemo(() => conversations.map((c) => c.id), [conversations]);
+  // Rows leave on a refetch or when someone else triages them; a selection
+  // pointing at a conversation that is gone would fire into thin air.
+  const selectAllState = bulk.selectAllState(visibleIds);
+  const { syncVisible } = bulk;
+  useEffect(() => {
+    syncVisible(visibleIds);
+  }, [syncVisible, visibleIds]);
   const activeCount = conversations.filter((c) => c.status === "active").length;
   const pendingCount = conversations.filter((c) => c.status === "pending").length;
 
@@ -207,6 +218,29 @@ export function HelpScoutMailboxPanel({
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          {visibleIds.length > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="mr-1 flex items-center">
+                  <Checkbox
+                    checked={
+                      selectAllState === "all"
+                        ? true
+                        : selectAllState === "some"
+                          ? "indeterminate"
+                          : false
+                    }
+                    disabled={bulk.running}
+                    aria-label={selectAllState === "all" ? "Clear selection" : "Select all shown"}
+                    onCheckedChange={() => bulk.onSelectAll(visibleIds)}
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {selectAllState === "all" ? "Clear selection" : "Select all shown"}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <span className="text-xs text-muted-foreground">
             {activeCount} active{pendingCount > 0 ? ` · ${pendingCount} pending` : ""}
           </span>
@@ -228,8 +262,26 @@ export function HelpScoutMailboxPanel({
         </div>
       </div>
 
+      <BulkTriageBar
+        count={bulk.selectedCount}
+        progress={bulk.progress}
+        outcome={bulk.outcome}
+        onAction={(action) => {
+          void bulk.runAction(
+            action,
+            visibleIds.filter((id) => bulk.isSelected(id)),
+          );
+        }}
+        onCancel={bulk.cancel}
+        onClear={bulk.onClear}
+        className="border-x-0 border-t-0"
+      />
+
       <ConversationListBody
         conversations={conversations}
+        selectedIds={bulk.selection.selected}
+        onToggleSelect={(id, shiftKey) => bulk.onToggle(id, visibleIds, shiftKey)}
+        bulkRunning={bulk.running}
         isLoading={isLoading}
         error={error as Error | null}
         onOpen={onOpenConversation}
@@ -262,6 +314,9 @@ export function HelpScoutMailboxPanel({
 
 interface ConversationListBodyProps {
   conversations: HSConversationSummary[];
+  selectedIds: ReadonlySet<string>;
+  onToggleSelect: (conversationId: string, shiftKey: boolean) => void;
+  bulkRunning: boolean;
   isLoading: boolean;
   error: Error | null;
   onOpen: (conversationId: string, action?: "reply" | "handoff") => void;
@@ -318,6 +373,9 @@ function ConversationListBody(props: ConversationListBodyProps) {
 
 function ConversationRow({
   conv,
+  selectedIds,
+  onToggleSelect,
+  bulkRunning,
   onOpen,
   onReply,
   onHandoff,
@@ -341,21 +399,53 @@ function ConversationRow({
   const hasKeep = conv.tags.includes(KEEP_ALWAYS_LABEL);
   const hasAutoNoise = conv.tags.includes(AUTO_NOISE_LABEL);
 
+  const selected = selectedIds.has(conv.id);
+
   return (
     <div
-      className="group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer"
+      className={cn(
+        "group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden transition-colors cursor-pointer",
+        selected ? "bg-accent/60" : "hover:bg-accent/40",
+      )}
       onClick={() => onOpen(conv.id)}
     >
+      {/* The checkbox sits where the status dot was, and takes it over once
+          anything is selected, so the row does not change width mid-triage.
+          Its click must not also open the conversation. */}
       <span
-        className={cn(
-          "shrink-0 h-1.5 w-1.5 rounded-full",
-          conv.status === "active"
-            ? "bg-blue-500"
-            : conv.status === "pending"
-              ? "border border-blue-500"
-              : "bg-transparent",
-        )}
-      />
+        className="relative flex h-4 w-4 shrink-0 items-center justify-center"
+        onClick={(event) => {
+          event.stopPropagation();
+          // The guard belongs here, not only on the Checkbox: the click target
+          // is this whole span, and most of it is padding outside the 16px box
+          // that `disabled` covers.
+          if (bulkRunning) return;
+          onToggleSelect(conv.id, event.shiftKey);
+        }}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "absolute h-1.5 w-1.5 rounded-full transition-opacity",
+            selected ? "opacity-0" : "opacity-100 group-hover:opacity-0",
+            conv.status === "active"
+              ? "bg-blue-500"
+              : conv.status === "pending"
+                ? "border border-blue-500"
+                : "bg-transparent",
+          )}
+        />
+        <Checkbox
+          checked={selected}
+          disabled={bulkRunning}
+          aria-label={`Select conversation from ${customerLabel}`}
+          onCheckedChange={() => {}}
+          className={cn(
+            "transition-opacity",
+            selected ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+          )}
+        />
+      </span>
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex-1 min-w-0 overflow-hidden">

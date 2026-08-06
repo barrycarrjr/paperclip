@@ -57,10 +57,11 @@ import {
 } from "../lib/mailboxTriageOverrides";
 import { useHelpScoutTriageOverrides } from "../hooks/useTriageOverrides";
 import { timeAgo } from "../lib/timeAgo";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BulkTriageBar } from "./BulkTriageBar";
+import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn } from "../lib/utils";
 
-const KEEP_ALWAYS_LABEL = "keep-always";
-const AUTO_NOISE_LABEL = "auto-noise";
 
 const STATUS_OPTIONS: Array<{ value: HSStatusFilter; label: string }> = [
   { value: "open", label: "Open" },
@@ -281,6 +282,22 @@ export function HelpScoutEmailView({
         }),
     });
   }
+
+  const bulk = useBulkTriage({
+    api,
+    accountKey,
+    noteStatus,
+    clearStatus,
+    invalidateLists: invalidateList,
+  });
+  const visibleIds = useMemo(() => conversations.map((c) => c.id), [conversations]);
+  const bulkSelectAllState = bulk.selectAllState(visibleIds);
+  const { syncVisible: syncBulkVisible } = bulk;
+  // Rows leave on a refetch or when someone triages them from the portfolio
+  // panel, which shares this list.
+  useEffect(() => {
+    syncBulkVisible(visibleIds);
+  }, [syncBulkVisible, visibleIds]);
 
   // ── Full conversation (threads) ───────────────────────────────────────────
 
@@ -606,6 +623,39 @@ export function HelpScoutEmailView({
           aria-label="Search Help Scout conversations"
         />
 
+        {visibleIds.length > 0 && (
+          <label className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+            <Checkbox
+              checked={
+                bulkSelectAllState === "all"
+                  ? true
+                  : bulkSelectAllState === "some"
+                    ? "indeterminate"
+                    : false
+              }
+              disabled={bulk.running}
+              aria-label={bulkSelectAllState === "all" ? "Clear selection" : "Select all shown"}
+              onCheckedChange={() => bulk.onSelectAll(visibleIds)}
+            />
+            {bulkSelectAllState === "all" ? "Clear selection" : "Select all shown"}
+          </label>
+        )}
+
+        <BulkTriageBar
+          count={bulk.selectedCount}
+          progress={bulk.progress}
+          outcome={bulk.outcome}
+          onAction={(action) => {
+            void bulk.runAction(
+              action,
+              visibleIds.filter((id) => bulk.isSelected(id)),
+            );
+          }}
+          onCancel={bulk.cancel}
+          onClear={bulk.onClear}
+          className="border-x-0 border-t-0"
+        />
+
         <div className="flex-1 min-h-0 flex">
           <div className="shrink-0 flex flex-col" style={{ width: listWidth }}>
             <ScrollArea className="flex-1">
@@ -615,6 +665,9 @@ export function HelpScoutEmailView({
                 error={listError as Error | null}
                 selectedConvId={selectedConvId}
                 onSelect={setSelectedConvId}
+                checkedIds={bulk.selection.selected}
+                onToggleCheck={(id, shiftKey) => bulk.onToggle(id, visibleIds, shiftKey)}
+                bulkRunning={bulk.running}
               />
             </ScrollArea>
           </div>
@@ -1042,6 +1095,9 @@ interface ConversationListColumnProps {
   error: Error | null;
   selectedConvId: string | null;
   onSelect: (id: string) => void;
+  checkedIds: ReadonlySet<string>;
+  onToggleCheck: (id: string, shiftKey: boolean) => void;
+  bulkRunning: boolean;
 }
 
 function ConversationListColumn({
@@ -1050,6 +1106,9 @@ function ConversationListColumn({
   error,
   selectedConvId,
   onSelect,
+  checkedIds,
+  onToggleCheck,
+  bulkRunning,
 }: ConversationListColumnProps) {
   if (error) {
     return (
@@ -1078,15 +1137,41 @@ function ConversationListColumn({
       {conversations.map((c) => {
         const customer = c.customer?.name || c.customer?.email || "(unknown)";
         const isSelected = c.id === selectedConvId;
+        const isChecked = checkedIds.has(c.id);
         return (
-          <button
+          <div
             key={c.id}
+            className={cn(
+              "group flex items-start",
+              isChecked ? "bg-accent/60" : isSelected ? "bg-accent" : "hover:bg-accent/40",
+            )}
+          >
+            <span
+              className="flex h-8 w-7 shrink-0 items-center justify-center"
+              onClick={(event) => {
+                event.stopPropagation();
+                // The click target is this whole span; `disabled` on the inner
+                // Checkbox only covers its 16px box, so most of the padding
+                // would still toggle mid-run without this.
+                if (bulkRunning) return;
+                onToggleCheck(c.id, event.shiftKey);
+              }}
+            >
+              <Checkbox
+                checked={isChecked}
+                disabled={bulkRunning}
+                aria-label={`Select conversation from ${customer}`}
+                onCheckedChange={() => {}}
+                className={cn(
+                  "transition-opacity",
+                  isChecked ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                )}
+              />
+            </span>
+          <button
             type="button"
             onClick={() => onSelect(c.id)}
-            className={cn(
-              "w-full text-left px-3 py-2 hover:bg-accent/40 flex items-start gap-2",
-              isSelected && "bg-accent",
-            )}
+            className="flex-1 min-w-0 text-left pr-3 py-2 flex items-start gap-2"
           >
             <span
               className={cn(
@@ -1117,6 +1202,7 @@ function ConversationListColumn({
               </div>
             </div>
           </button>
+          </div>
         );
       })}
     </div>
