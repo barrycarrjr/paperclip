@@ -19,6 +19,7 @@ import {
   issueLabels,
   issueRelations,
   issueComments,
+  issueExecutionDecisions,
   issueDocuments,
   issueReadStates,
   issueThreadInteractions,
@@ -2014,26 +2015,44 @@ export function issueService(db: Db) {
         .orderBy(asc(issues.updatedAt), asc(issues.id))
         .limit(limit);
 
-      return rows.flatMap((row) => {
+      const parsedRows = rows.flatMap((row) => {
         const parsed = issueExecutionStateSchema.safeParse(row.executionState);
         if (!parsed.success) return [];
-        const state = parsed.data;
-        return [
-          {
-            issueId: row.issueId,
-            companyId,
-            identifier: row.identifier,
-            title: row.title,
-            priority: row.priority,
-            stageType: state.currentStageType,
-            participantUserId: state.currentParticipant?.userId ?? null,
-            reviewInstructions: state.reviewRequest?.instructions ?? null,
-            // The row's last activity, NOT when the gate opened; the state
-            // blob carries no timestamp. Label it honestly in the UI.
-            updatedAt: row.updatedAt,
-          },
-        ];
+        return [{ row, state: parsed.data }];
       });
+
+      // When the gate actually opened. The execution state blob carries no
+      // timestamp, and the issue's updatedAt moves on any edit, so a wait
+      // measured from it reads far shorter than the real one. The decision
+      // that advanced INTO this stage is the honest answer; the very first
+      // stage has no such decision and falls back to the issue.
+      const decisionIds = [
+        ...new Set(parsedRows.map(({ state }) => state.lastDecisionId).filter((id): id is string => !!id)),
+      ];
+      const decisionCreatedAtById = new Map<string, Date>();
+      if (decisionIds.length > 0) {
+        const decisions = await db
+          .select({ id: issueExecutionDecisions.id, createdAt: issueExecutionDecisions.createdAt })
+          .from(issueExecutionDecisions)
+          .where(inArray(issueExecutionDecisions.id, decisionIds));
+        for (const decision of decisions) decisionCreatedAtById.set(decision.id, decision.createdAt);
+      }
+
+      return parsedRows.map(({ row, state }) => ({
+        issueId: row.issueId,
+        companyId,
+        identifier: row.identifier,
+        title: row.title,
+        priority: row.priority,
+        stageType: state.currentStageType,
+        participantUserId: state.currentParticipant?.userId ?? null,
+        reviewInstructions: state.reviewRequest?.instructions ?? null,
+        /** When this gate started waiting on a person. */
+        pendingSinceAt:
+          (state.lastDecisionId ? decisionCreatedAtById.get(state.lastDecisionId) : undefined)
+          ?? row.updatedAt,
+        updatedAt: row.updatedAt,
+      }));
     },
 
     list: async (companyId: string, filters?: IssueFilters) => {

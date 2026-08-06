@@ -186,7 +186,9 @@ export function attentionQueueService(db: Db) {
       detail: truncate(gate.reviewInstructions ?? gate.title, 90),
       askedBy: null,
       blocking: "waiting" as const,
-      blockedSinceMs: ms(gate.updatedAt),
+      // When the gate opened, not when the issue was last touched: any
+      // edit moves updatedAt, which made a two-day wait read as minutes.
+      blockedSinceMs: ms(gate.pendingSinceAt),
       count: 1,
       consequence: "The issue stays open until you sign it off.",
       href: `/issues/${gate.identifier ?? gate.issueId}`,

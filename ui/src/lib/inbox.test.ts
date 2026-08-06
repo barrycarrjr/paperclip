@@ -464,6 +464,19 @@ describe("inbox helpers", () => {
     expect(section.displayItems.map((item) => item.kind)).toEqual(["attention", "issue"]);
   });
 
+  it("keeps a queue row for a failed run the page could not hydrate", () => {
+    // The Inbox fetches a shallower page of runs than the queue looks back
+    // over. A run past the end of it still has to appear, or the badge counts
+    // something the list cannot show.
+    const items = getInboxWorkItems({
+      issues: [],
+      approvals: [],
+      attentionRows: [makeAttentionRow({ key: "run:r-999", kind: "run_failure", blocking: "stopped" })],
+    });
+    expect(items.map((item) => item.kind)).toEqual(["attention"]);
+    expect(getInboxWorkItemKey(items[0])).toBe("attention:run:r-999");
+  });
+
   it("keys attention items by their queue key so repeats collapse", () => {
     const [item] = getInboxWorkItems({
       issues: [],

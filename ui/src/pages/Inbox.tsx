@@ -103,7 +103,13 @@ const INBOX_HEARTBEAT_RUN_LIMIT = 200;
 const INBOX_ISSUE_LIST_LIMIT = 500;
 import { Input } from "@/components/ui/input";
 import { PageTabBar } from "../components/PageTabBar";
-import type { Approval, HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
+import type {
+  Approval,
+  AttentionRow as AttentionRowData,
+  HeartbeatRun,
+  Issue,
+  JoinRequest,
+} from "@paperclipai/shared";
 import {
   ACTIONABLE_APPROVAL_STATUSES,
   DEFAULT_INBOX_ISSUE_COLUMNS,
@@ -1028,15 +1034,24 @@ export function Inbox() {
   // meant the badge and this list could disagree: an agent that failed on one
   // issue and then succeeded on another showed a red badge over an empty list.
   // The rich row below still does the rendering, because it can retry in place.
-  const failedRuns = useMemo(() => {
+  const failedRunsFromQueue = useMemo(() => {
     const runsById = new Map((heartbeatRuns ?? []).map((run) => [run.id, run]));
-    const wanted = (attention?.rows ?? [])
-      .map((row) => attentionRowRunId(row))
-      .filter((runId): runId is string => runId !== null);
-    return wanted
-      .map((runId) => runsById.get(runId))
-      .filter((run): run is NonNullable<typeof run> => run !== undefined);
+    const hydrated: HeartbeatRun[] = [];
+    const unhydrated: AttentionRowData[] = [];
+    for (const row of attention?.rows ?? []) {
+      const runId = attentionRowRunId(row);
+      if (!runId) continue;
+      const run = runsById.get(runId);
+      // This page fetches its own recent runs to render the rich row that can
+      // retry in place, and that page is shallower than the queue's lookback.
+      // A run past the end of it still gets a row - a plain queue row - rather
+      // than vanishing while the badge keeps counting it.
+      if (run) hydrated.push(run);
+      else unhydrated.push(row);
+    }
+    return { hydrated, unhydrated };
   }, [heartbeatRuns, attention]);
+  const failedRuns = failedRunsFromQueue.hydrated;
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
     if (tab === "mine") {
@@ -1073,15 +1088,17 @@ export function Inbox() {
   }, [joinRequests, tab, showJoinRequestsCategory, dismissedAtByKey]);
 
   const attentionRowsForTab = useMemo(() => {
-    if (tab !== "mine" && tab !== "all") return [];
     // On the All tab every other kind is hidden when its category is
     // deselected; these rows follow the same rule rather than ignoring the
     // filter and looking like a bug.
     if (tab === "all" && !showAttentionCategory) return [];
-    return (attention?.rows ?? []).filter(
+    const rows = (attention?.rows ?? []).filter(
       (row) => row.kind === "question" || row.kind === "sign_off" || row.kind === "budget_stop",
     );
-  }, [attention, tab, showAttentionCategory]);
+    // Plus any failed run this page could not hydrate into its rich row, so
+    // that nothing the badge counts is invisible here.
+    return [...rows, ...failedRunsFromQueue.unhydrated];
+  }, [attention, tab, showAttentionCategory, failedRunsFromQueue]);
 
   // An issue in a sign-off gate, or one with an unanswered question, already
   // has a queue row saying what it needs. Listing the issue as well shows the
