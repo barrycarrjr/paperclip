@@ -8,23 +8,28 @@ import {
   Sparkles,
   CheckCircle2,
   ListChecks,
-  Pencil,
   Mail,
   Bot,
 } from "lucide-react";
-import type { ActivityEvent, Agent, Approval, Company, DashboardSummary, Issue, IssueDocument } from "@paperclipai/shared";
+import type {
+  ActivityEvent,
+  Agent,
+  AttentionRow as AttentionRowData,
+  Company,
+  DashboardSummary,
+  Issue,
+  IssueDocument,
+} from "@paperclipai/shared";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
-import { approvalsApi } from "../api/approvals";
+import { attentionApi } from "../api/attention";
 import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsStrip } from "../components/ActiveAgentsPanel";
 import { agentsApi } from "../api/agents";
-import { PendingQuestionRow } from "../components/PendingQuestionRow";
-import { ReviewGateRow } from "../components/ReviewGateRow";
-import type { PendingCompanyInteraction, PendingReviewGate } from "../api/issues";
+import { AttentionRow } from "../components/AttentionRow";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -35,7 +40,6 @@ import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { StatusIcon } from "../components/StatusIcon";
-import { approvalLabel, typeIcon, defaultTypeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { nextWakeAtMs } from "../lib/next-wake";
@@ -54,7 +58,7 @@ import { SortableSections, type SortableSection } from "../components/SortableSe
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 400;
 const OUTCOMES_PER_COMPANY = 5;
-const DRAFTS_PER_COMPANY = 4;
+const ATTENTION_PER_COMPANY = 4;
 const ISSUES_PER_COMPANY = 3;
 const REVIEW_QUEUE_PER_COMPANY = 5;
 const AGENT_RUNS_PER_COMPANY = 4;
@@ -145,10 +149,12 @@ export function PortfolioBrief() {
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
-  const { data: approvalsData } = useQuery({
-    queryKey: ["portfolio-approvals", "brief", selectedCompanyId, "pending"],
-    queryFn: () =>
-      approvalsApi.listPortfolio(selectedCompanyId!, { status: "pending" }),
+  // Everything blocked on a human across the portfolio, in one server-side
+  // list. This replaces the three separate feeds (approvals, questions,
+  // sign-off gates) the page used to reconcile by hand.
+  const { data: attentionData } = useQuery({
+    queryKey: queryKeys.portfolioAttention(selectedCompanyId!),
+    queryFn: () => attentionApi.listPortfolio(selectedCompanyId!),
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
@@ -197,6 +203,7 @@ export function PortfolioBrief() {
   const queryClient = useQueryClient();
   const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState<Record<string, boolean>>({});
+  const [attentionExpanded, setAttentionExpanded] = useState<Record<string, boolean>>({});
 
   // Portfolio-wide view — rows can belong to any company. Use the bridge
   // directly with each row's companyId rather than a per-company emailApi.
@@ -267,11 +274,11 @@ export function PortfolioBrief() {
     const map = new Map<string, Company>();
     for (const c of dashboardData?.companies ?? []) map.set(c.id, c);
     for (const c of activityData?.companies ?? []) map.set(c.id, c);
-    for (const c of approvalsData?.companies ?? []) map.set(c.id, c);
+    for (const c of attentionData?.companies ?? []) map.set(c.id, c);
     for (const c of issuesData?.companies ?? []) map.set(c.id, c);
     for (const c of rulesData?.companies ?? []) map.set(c.id, c);
     return map;
-  }, [dashboardData, activityData, approvalsData, issuesData, rulesData]);
+  }, [dashboardData, activityData, attentionData, issuesData, rulesData]);
 
   // Filter out HQ + archived; the *order* is owned by the sidebar's per-user
   // preference (useCompanyOrder), so the Brief grid matches the sidebar
@@ -400,43 +407,24 @@ export function PortfolioBrief() {
     return groupByCompany(overnight, companies);
   }, [activityData, companies, overnightCutoff]);
 
-  const draftBuckets: CompanyBucket<Approval>[] = useMemo(() => {
-    return groupByCompany(approvalsData?.approvals ?? [], companies);
-  }, [approvalsData, companies]);
-
-  // Unanswered agent questions across the portfolio, grouped by company.
-  const { data: portfolioQuestions } = useQuery({
-    queryKey: ["portfolio-pending-interactions", selectedCompanyId],
-    queryFn: () => issuesApi.listPortfolioPendingInteractions(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isPortfolioRoot,
-  });
-  const questionBuckets: CompanyBucket<PendingCompanyInteraction>[] = useMemo(
-    () => groupByCompany(portfolioQuestions?.interactions ?? [], companies),
-    [portfolioQuestions, companies],
+  const attentionBuckets: CompanyBucket<AttentionRowData>[] = useMemo(
+    () => groupByCompany(attentionData?.rows ?? [], companies),
+    [attentionData, companies],
   );
-  const questionsTotal = questionBuckets.reduce((sum, b) => sum + b.total, 0);
-
-  // Issues in a review/approval gate waiting on a human, portfolio-wide.
-  const { data: portfolioReviews } = useQuery({
-    queryKey: ["portfolio-pending-reviews", selectedCompanyId],
-    queryFn: () => issuesApi.listPortfolioPendingReviews(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isPortfolioRoot,
-  });
-  const reviewGateBuckets: CompanyBucket<PendingReviewGate>[] = useMemo(() => {
-    // Only the named participant can act on a gate (the server rejects
-    // anyone else), so scope to the signed-in user. local_implicit boards
-    // have no session user and see everything.
-    const mine = (portfolioReviews?.reviews ?? []).filter((gate) =>
-      currentUserId ? gate.participantUserId === currentUserId : true,
-    );
-    return groupByCompany(mine, companies);
-  }, [portfolioReviews, companies, currentUserId]);
-  const reviewGatesTotal = reviewGateBuckets.reduce((sum, b) => sum + b.total, 0);
-  const agentNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const agent of portfolioAgents?.agents ?? []) map.set(agent.id, agent.name);
-    return map;
-  }, [portfolioAgents]);
+  // Both counters read the same buckets. Counting the raw response instead
+  // would include rows for companies this page does not list (HQ's own), and
+  // the chip would claim work the list below never shows.
+  const attentionTotal = attentionBuckets.reduce((sum, b) => sum + b.total, 0);
+  const stoppedTotal = attentionBuckets.reduce(
+    (sum, b) => sum + b.items.filter((r) => r.blocking === "stopped").length,
+    0,
+  );
+  // "Open all approvals" goes to a page that lists approvals and nothing
+  // else, so it must not appear for a portfolio of questions and sign-offs.
+  const approvalTotal = attentionBuckets.reduce(
+    (sum, b) => sum + b.items.filter((r) => r.kind === "approval").length,
+    0,
+  );
 
   const myUserId = session?.user?.id ?? null;
   const issueBuckets: CompanyBucket<Issue>[] = useMemo(() => {
@@ -759,12 +747,11 @@ export function PortfolioBrief() {
   })();
 
   const overnightTotal = outcomeBuckets.reduce((sum, b) => sum + b.total, 0);
-  const draftsTotal = draftBuckets.reduce((sum, b) => sum + b.total, 0);
   const issuesTotal = issueBuckets.reduce((sum, b) => sum + b.total, 0);
   const reviewTotal = reviewQueueBuckets.reduce((sum, b) => sum + b.total, 0);
 
   const heroTone: "emerald" | "amber" | "red" =
-    totals.errors > 0 || totals.activeIncidents > 0 ? "red" : draftsTotal > 0 ? "amber" : "emerald";
+    totals.errors > 0 || totals.activeIncidents > 0 ? "red" : attentionTotal > 0 ? "amber" : "emerald";
   const heroBarClass = {
     emerald: "bg-emerald-500/55",
     amber: "bg-amber-500/55",
@@ -816,7 +803,7 @@ export function PortfolioBrief() {
               <span className="text-muted-foreground">{overnightTotal} outcomes overnight</span>
               <span className="text-muted-foreground/60">·</span>
               <span className="text-muted-foreground">
-                {draftsTotal} draft{draftsTotal === 1 ? "" : "s"} ready for you
+                {attentionTotal} waiting on you
               </span>
               <span className="text-muted-foreground/60">·</span>
               <span className="text-muted-foreground">
@@ -876,19 +863,14 @@ export function PortfolioBrief() {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Awaiting your tap
             </h2>
-            {questionsTotal > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-                {questionsTotal} question{questionsTotal === 1 ? "" : "s"}
+            {stoppedTotal > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300">
+                {stoppedTotal} agent{stoppedTotal === 1 ? "" : "s"} stopped
               </span>
             )}
-            {reviewGatesTotal > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300">
-                {reviewGatesTotal} review{reviewGatesTotal === 1 ? "" : "s"}
-              </span>
-            )}
-            {draftsTotal > 0 && (
+            {attentionTotal - stoppedTotal > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-                {draftsTotal} draft{draftsTotal === 1 ? "" : "s"}
+                {attentionTotal - stoppedTotal} waiting
               </span>
             )}
             {reviewTotal > 0 && (
@@ -897,7 +879,7 @@ export function PortfolioBrief() {
               </span>
             )}
           </div>
-          {draftsTotal > 0 && (
+          {approvalTotal > 0 && (
             <Link
               to="/portfolio-approvals"
               className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
@@ -907,7 +889,7 @@ export function PortfolioBrief() {
           )}
         </div>
 
-        {draftsTotal === 0 && reviewTotal === 0 && questionsTotal === 0 && reviewGatesTotal === 0 ? (
+        {attentionTotal === 0 && reviewTotal === 0 ? (
           <EmptySection
             icon={CheckCircle2}
             message="Nothing waiting on you across the portfolio."
@@ -915,100 +897,40 @@ export function PortfolioBrief() {
           />
         ) : (
           <div className="space-y-5">
-            {reviewGatesTotal > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                    Finished work waiting for your sign-off
-                  </h3>
-                  <span className="text-[11px] text-muted-foreground">
-                    The issue stays open until you review it
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {reviewGateBuckets.map(({ company, items }) => (
-                    <CompanyBlock
-                      key={company.id}
-                      company={company}
-                      total={items.length}
-                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
-                    >
-                      {items.map((gate) => (
-                        <ReviewGateRow
-                          key={gate.issueId}
-                          gate={gate}
-                          hrefPrefix={`/${company.issuePrefix}`}
-                        />
-                      ))}
-                    </CompanyBlock>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {questionsTotal > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                    Questions from agents
-                  </h3>
-                  <span className="text-[11px] text-muted-foreground">
-                    Agents are waiting on your decision
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {questionBuckets.map(({ company, items }) => (
-                    <CompanyBlock
-                      key={company.id}
-                      company={company}
-                      total={items.length}
-                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
-                    >
-                      {items.map((interaction) => (
-                        <PendingQuestionRow
-                          key={interaction.id}
-                          interaction={interaction}
-                          agentName={
-                            interaction.createdByAgentId
-                              ? agentNameById.get(interaction.createdByAgentId) ?? null
-                              : null
-                          }
-                          hrefPrefix={`/${company.issuePrefix}`}
-                        />
-                      ))}
-                    </CompanyBlock>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {draftsTotal > 0 && (
-              <div>
-                <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                  Drafts
-                </h3>
-                <div className="space-y-3">
-                  {draftBuckets.map(({ company, items, total }) => (
-                    <CompanyBlock
-                      key={company.id}
-                      company={company}
-                      total={total}
-                      spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
-                    >
-                      {items.slice(0, DRAFTS_PER_COMPANY).map((approval) => (
-                        <DraftRow key={approval.id} approval={approval} company={company} />
-                      ))}
-                      {total > DRAFTS_PER_COMPANY && (
-                        <Link
-                          to={`/${company.issuePrefix}/approvals/pending`}
-                          className="block px-4 py-2 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground border-t border-border"
-                        >
-                          + {total - DRAFTS_PER_COMPANY} more in {company.name} →
-                        </Link>
-                      )}
-                    </CompanyBlock>
-                  ))}
-                </div>
+            {attentionTotal > 0 && (
+              <div className="space-y-3">
+                {attentionBuckets.map(({ company, items, total }) => (
+                  <CompanyBlock
+                    key={company.id}
+                    company={company}
+                    total={total}
+                    spent={summariesByCompanyId.get(company.id)?.costs?.monthSpendCents}
+                  >
+                    {(attentionExpanded[company.id]
+                      ? items
+                      : items.slice(0, ATTENTION_PER_COMPANY)
+                    ).map((row) => (
+                      <AttentionRow
+                        key={row.key}
+                        row={row}
+                        hrefPrefix={`/${company.issuePrefix}`}
+                      />
+                    ))}
+                    {total > ATTENTION_PER_COMPANY && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAttentionExpanded((cur) => ({ ...cur, [company.id]: !cur[company.id] }))
+                        }
+                        className="block w-full px-4 py-2 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground border-t border-border transition-colors"
+                      >
+                        {attentionExpanded[company.id]
+                          ? "Show fewer"
+                          : `+ ${total - ATTENTION_PER_COMPANY} more in ${company.name} — show all`}
+                      </button>
+                    )}
+                  </CompanyBlock>
+                ))}
               </div>
             )}
 
@@ -1586,48 +1508,6 @@ function ReviewQueueRow({
             Dismiss
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-interface DraftRowProps {
-  approval: Approval;
-  company: Company;
-}
-
-function DraftRow({ approval, company }: DraftRowProps) {
-  const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
-  const label = approvalLabel(approval.type, approval.payload);
-  const isOutboundDraft = approval.type === "outbound_tool_draft";
-  return (
-    <div className="group relative pl-5 pr-4 py-3">
-      <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-amber-500/55" />
-      <div className="flex items-start gap-3">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
-          {isOutboundDraft ? (
-            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-          ) : (
-            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-          )}
-        </span>
-        <div className="flex-1 min-w-0">
-          <Link
-            to={`/${company.issuePrefix}/approvals/${approval.id}`}
-            className="font-medium hover:underline truncate block"
-          >
-            {label}
-          </Link>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {timeAgo(approval.createdAt)}
-          </p>
-        </div>
-        <Link
-          to={`/${company.issuePrefix}/approvals/${approval.id}`}
-          className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 no-underline shrink-0"
-        >
-          Review
-        </Link>
       </div>
     </div>
   );

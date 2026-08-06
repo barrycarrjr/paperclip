@@ -19,7 +19,7 @@ import {
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
-import { approvalsApi } from "../api/approvals";
+import { attentionApi } from "../api/attention";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
@@ -34,8 +34,7 @@ import { Identity } from "../components/Identity";
 import { StatusIcon } from "../components/StatusIcon";
 import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
-import { PendingQuestionRow } from "../components/PendingQuestionRow";
-import { ReviewGateRow } from "../components/ReviewGateRow";
+import { AttentionRow } from "../components/AttentionRow";
 import {
   ChartCard,
   RunActivityChart,
@@ -43,7 +42,6 @@ import {
   IssueStatusChart,
   SuccessRateChart,
 } from "../components/ActivityCharts";
-import { approvalLabel, typeIcon, defaultTypeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
@@ -58,13 +56,12 @@ import {
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Agent, ActivityEvent, Approval, Issue, IssueDocument } from "@paperclipai/shared";
+import type { Agent, ActivityEvent, Issue, IssueDocument } from "@paperclipai/shared";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 200;
 const OUTCOMES_SHOWN = 8;
-const DRAFTS_SHOWN = 5;
-const QUESTIONS_SHOWN = 5;
+const ATTENTION_SHOWN = 8;
 const REVIEW_QUEUE_SHOWN = 5;
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
 const RULES_HOME_DOC_KEY = "email-triage-rules";
@@ -118,36 +115,15 @@ export function MorningBrief() {
     enabled: !!selectedCompanyId,
   });
 
-  const { data: approvals } = useQuery({
-    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
-    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending"),
+  // Everything blocked on a human, in one server-side list. The Brief used to
+  // work this out four separate ways (approvals, questions, sign-off gates)
+  // and could disagree with the badge and the Inbox about the same company.
+  const { data: attention } = useQuery({
+    queryKey: queryKeys.attention(selectedCompanyId!),
+    queryFn: () => attentionApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
-
-  // Unanswered agent questions: pending thread interactions, company-wide.
-  const { data: pendingQuestions } = useQuery({
-    queryKey: ["pending-interactions", selectedCompanyId],
-    queryFn: () => issuesApi.listPendingInteractions(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  // Issues in a review/approval gate waiting on a human.
-  const { data: pendingReviews } = useQuery({
-    queryKey: ["pending-reviews", selectedCompanyId],
-    queryFn: () => issuesApi.listPendingReviews(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-  // Only the named participant can act on a gate (the server rejects anyone
-  // else), so scope to the signed-in user. local_implicit boards have no
-  // session user and see everything.
-  const sessionUserId = session?.user?.id ?? null;
-  const myPendingReviews = useMemo(
-    () =>
-      (pendingReviews ?? []).filter((gate) =>
-        sessionUserId ? gate.participantUserId === sessionUserId : true,
-      ),
-    [pendingReviews, sessionUserId],
-  );
+  const attentionRows = attention?.rows ?? [];
 
   const { data: issues } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
@@ -170,6 +146,7 @@ export function MorningBrief() {
   const queryClient = useQueryClient();
   const [pendingRowAction, setPendingRowAction] = useState<string | null>(null);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
+  const [attentionExpanded, setAttentionExpanded] = useState(false);
 
   const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
   const emailApi = useMemo(
@@ -448,15 +425,15 @@ export function MorningBrief() {
     session?.user?.email?.split("@")[0] ||
     "there";
 
-  // Hero pulse: outcomes overnight + drafts awaiting + errors + spend
-  const pendingApprovals = approvals?.length ?? 0;
+  // Hero pulse: outcomes overnight + anything blocked on you + errors + spend
   const errors = summary?.agents.error ?? 0;
 
   // Count outcomes only from last OVERNIGHT_HOURS
   const overnightCount = outcomes.length;
 
   const allClear = errors === 0 && (summary?.budgets.activeIncidents ?? 0) === 0;
-  const heroTone: "emerald" | "amber" | "red" = errors > 0 ? "red" : pendingApprovals > 0 ? "amber" : "emerald";
+  const heroTone: "emerald" | "amber" | "red" =
+    errors > 0 ? "red" : attentionRows.length > 0 ? "amber" : "emerald";
 
   const heroBarClass = {
     emerald: "bg-emerald-500/55",
@@ -483,8 +460,11 @@ export function MorningBrief() {
   const pendingTotal = summary ? summary.pendingApprovals + summary.budgets.pendingApprovals : 0;
   const approvalsTone: "default" | "warning" = pendingTotal > 0 ? "warning" : "default";
 
-  const draftsToShow = (approvals ?? []).slice(0, DRAFTS_SHOWN);
-  const remainingDrafts = Math.max(0, (approvals?.length ?? 0) - DRAFTS_SHOWN);
+  const attentionToShow = attentionExpanded ? attentionRows : attentionRows.slice(0, ATTENTION_SHOWN);
+  const remainingAttention = attentionExpanded
+    ? 0
+    : Math.max(0, attentionRows.length - ATTENTION_SHOWN);
+  const stoppedCount = attentionRows.filter((r) => r.blocking === "stopped").length;
 
   const outcomesToShow = outcomes.slice(0, OUTCOMES_SHOWN);
   const remainingOutcomes = Math.max(0, outcomes.length - OUTCOMES_SHOWN);
@@ -621,26 +601,21 @@ export function MorningBrief() {
         </section>
       )}
 
-      {/* Awaiting your tap — drafts AND email senders both count */}
+      {/* Awaiting your tap — the attention queue, plus email senders (not a queue kind yet) */}
       <section aria-label="Awaiting your tap">
         <div className="mb-3 flex items-baseline justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Awaiting your tap
             </h2>
-            {(pendingQuestions?.length ?? 0) > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-                {pendingQuestions!.length} question{pendingQuestions!.length === 1 ? "" : "s"}
+            {stoppedCount > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300">
+                {stoppedCount} agent{stoppedCount === 1 ? "" : "s"} stopped
               </span>
             )}
-            {myPendingReviews.length > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300">
-                {myPendingReviews.length} review{myPendingReviews.length === 1 ? "" : "s"}
-              </span>
-            )}
-            {pendingApprovals > 0 && (
+            {attentionRows.length - stoppedCount > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-                {pendingApprovals} draft{pendingApprovals === 1 ? "" : "s"}
+                {attentionRows.length - stoppedCount} waiting
               </span>
             )}
             {reviewQueue.length > 0 && (
@@ -651,7 +626,7 @@ export function MorningBrief() {
           </div>
         </div>
 
-        {pendingApprovals === 0 && reviewQueue.length === 0 && (pendingQuestions?.length ?? 0) === 0 && myPendingReviews.length === 0 ? (
+        {attentionRows.length === 0 && reviewQueue.length === 0 ? (
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
@@ -660,86 +635,29 @@ export function MorningBrief() {
           </div>
         ) : (
           <div className="space-y-4">
-            {myPendingReviews.length > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                    Finished work waiting for your sign-off
-                  </h3>
-                  <span className="text-[11px] text-muted-foreground">
-                    The issue stays open until you review it
-                  </span>
-                </div>
-                <div className="border border-border bg-card divide-y divide-border">
-                  {myPendingReviews.slice(0, QUESTIONS_SHOWN).map((gate) => (
-                    <ReviewGateRow key={gate.issueId} gate={gate} />
-                  ))}
-                  {myPendingReviews.length > QUESTIONS_SHOWN && (
-                    <div className="px-4 py-2.5 text-center text-[12px] text-muted-foreground">
-                      + {myPendingReviews.length - QUESTIONS_SHOWN} more on their issues
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {(pendingQuestions?.length ?? 0) > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                    Questions from agents
-                  </h3>
-                  <span className="text-[11px] text-muted-foreground">
-                    Agents are waiting on your decision
-                  </span>
-                </div>
-                <div className="border border-border bg-card divide-y divide-border">
-                  {pendingQuestions!.slice(0, QUESTIONS_SHOWN).map((interaction) => (
-                    <PendingQuestionRow
-                      key={interaction.id}
-                      interaction={interaction}
-                      agentName={
-                        interaction.createdByAgentId
-                          ? agentMap.get(interaction.createdByAgentId)?.name ?? null
-                          : null
-                      }
-                    />
-                  ))}
-                  {pendingQuestions!.length > QUESTIONS_SHOWN && (
-                    <div className="px-4 py-2.5 text-center text-[12px] text-muted-foreground">
-                      + {pendingQuestions!.length - QUESTIONS_SHOWN} more on their issues
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {pendingApprovals > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                    Drafts
-                  </h3>
-                  <Link
-                    to="/approvals/pending"
-                    className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            {attentionRows.length > 0 && (
+              <div className="border border-border bg-card divide-y divide-border">
+                {attentionToShow.map((row) => (
+                  <AttentionRow key={row.key} row={row} nowMs={now.getTime()} />
+                ))}
+                {remainingAttention > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setAttentionExpanded((v) => !v)}
+                    className="block w-full px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
                   >
-                    Open all →
-                  </Link>
-                </div>
-                <div className="border border-border bg-card divide-y divide-border">
-                  {draftsToShow.map((a) => (
-                    <DraftRow key={a.id} approval={a} agentMap={agentMap} />
-                  ))}
-                  {remainingDrafts > 0 && (
-                    <Link
-                      to="/approvals/pending"
-                      className="block px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-                    >
-                      + {remainingDrafts} more →
-                    </Link>
-                  )}
-                </div>
+                    + {remainingAttention} more — show all
+                  </button>
+                )}
+                {attentionExpanded && attentionRows.length > ATTENTION_SHOWN && (
+                  <button
+                    type="button"
+                    onClick={() => setAttentionExpanded(false)}
+                    className="block w-full px-4 py-2.5 text-center text-[12px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+                  >
+                    Show fewer
+                  </button>
+                )}
               </div>
             )}
 
@@ -1111,64 +1029,6 @@ function ReviewQueueRow({
           >
             Dismiss
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface DraftRowProps {
-  approval: Approval;
-  agentMap: Map<string, Agent>;
-}
-
-function DraftRow({ approval, agentMap }: DraftRowProps) {
-  const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
-  const label = approvalLabel(approval.type, approval.payload);
-  const requestedBy =
-    approval.requestedByAgentId && agentMap.get(approval.requestedByAgentId)?.name;
-  const summary =
-    typeof approval.payload?.summary === "string"
-      ? approval.payload.summary
-      : typeof approval.payload?.description === "string"
-        ? approval.payload.description
-        : null;
-
-  return (
-    <div className="group relative pl-5 pr-4 py-3.5">
-      <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-amber-500/55 group-hover:bg-amber-500/80 transition-colors" />
-      <div className="flex items-start gap-3">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
-          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Link
-              to={`/approvals/${approval.id}`}
-              className="font-medium hover:underline truncate"
-            >
-              {label}
-            </Link>
-            {requestedBy && (
-              <span className="text-[11px] text-muted-foreground">· {requestedBy}</span>
-            )}
-            <span className="text-[11px] text-muted-foreground/70">
-              · {timeAgo(approval.createdAt)}
-            </span>
-          </div>
-          {summary && (
-            <p className="mt-1 text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">
-              {summary}
-            </p>
-          )}
-        </div>
-        <div className="flex gap-1.5 shrink-0">
-          <Link
-            to={`/approvals/${approval.id}`}
-            className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 no-underline"
-          >
-            Review
-          </Link>
         </div>
       </div>
     </div>

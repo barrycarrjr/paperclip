@@ -6,6 +6,7 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateAttention } from "../lib/invalidate-attention";
 import { cn } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
@@ -47,6 +48,7 @@ export function Approvals() {
     onSuccess: (_approval, id) => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
       navigate(`/approvals/${id}?resolved=approved`);
     },
     onError: (err) => {
@@ -59,6 +61,7 @@ export function Approvals() {
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Failed to reject");

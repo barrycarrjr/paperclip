@@ -169,6 +169,9 @@ export const queryKeys = {
     ["usage-quota-windows", companyId] as const,
   heartbeats: (companyId: string, agentId?: string) =>
     ["heartbeats", companyId, agentId] as const,
+  /** The one attention queue, and its portfolio roll-up. */
+  attention: (companyId: string) => ["attention", companyId] as const,
+  portfolioAttention: (hqCompanyId: string) => ["portfolio-attention", hqCompanyId] as const,
   runDetail: (runId: string) => ["heartbeat-run", runId] as const,
   runWorkspaceOperations: (runId: string) => ["heartbeat-run", runId, "workspace-operations"] as const,
   runWorkProducts: (runId: string) => ["heartbeat-run", runId, "work-products"] as const,

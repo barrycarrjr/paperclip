@@ -9,6 +9,7 @@ import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateAttention } from "../lib/invalidate-attention";
 import {
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
@@ -88,7 +89,7 @@ export function useInboxDismissals(companyId: string | null | undefined) {
     onSettled: () => {
       if (!companyId) return;
       queryClient.invalidateQueries({ queryKey });
-      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
+      invalidateAttention(queryClient, companyId);
     },
   });
 

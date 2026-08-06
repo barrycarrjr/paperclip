@@ -19,6 +19,7 @@ import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateAttention } from "../lib/invalidate-attention";
 import {
   applyIssueFilters,
   countActiveIssueFilters,
@@ -1339,6 +1340,7 @@ function ClassicInbox() {
     onSuccess: (_approval, id) => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
       navigate(`/approvals/${id}?resolved=approved`);
     },
     onError: (err) => {
@@ -1351,6 +1353,7 @@ function ClassicInbox() {
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Failed to reject");
@@ -1363,7 +1366,7 @@ function ClassicInbox() {
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.access.joinRequests(selectedCompanyId!) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId!) });
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     },
@@ -1378,7 +1381,7 @@ function ClassicInbox() {
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.access.joinRequests(selectedCompanyId!) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId!) });
+      invalidateAttention(queryClient, selectedCompanyId!);
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Failed to reject join request");
@@ -1463,7 +1466,7 @@ function ClassicInbox() {
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listMineByMe(selectedCompanyId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
+    invalidateAttention(queryClient, selectedCompanyId);
   };
 
   const archiveIssueMutation = useMutation({

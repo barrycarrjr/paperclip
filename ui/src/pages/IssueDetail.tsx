@@ -22,6 +22,7 @@ import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../li
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, buildMarkdownMentionOptions } from "../lib/company-members";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateAttention } from "../lib/invalidate-attention";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
 import {
@@ -1345,7 +1346,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listMineByMe(selectedCompanyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
+      invalidateAttention(queryClient, selectedCompanyId);
     }
   }, [queryClient, selectedCompanyId]);
   const upsertInteractionInCache = useCallback((interaction: IssueThreadInteraction) => {
@@ -1398,7 +1399,7 @@ export function IssueDetail() {
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.listMineByMe(selectedCompanyId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
+        invalidateAttention(queryClient, selectedCompanyId);
       }
     },
   });
@@ -1538,7 +1539,7 @@ export function IssueDetail() {
     onSuccess: () => {
       if (resolvedCompanyId) {
         queryClient.invalidateQueries({ queryKey: ["issues", resolvedCompanyId] });
-        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(resolvedCompanyId) });
+        invalidateAttention(queryClient, resolvedCompanyId);
       }
     },
     onError: (err) => {
@@ -1570,6 +1571,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.detail(variables.approvalId) });
       if (resolvedCompanyId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(resolvedCompanyId) });
+        invalidateAttention(queryClient, resolvedCompanyId);
       }
       pushToast({
         title: variables.action === "approve" ? "Approval approved" : "Approval rejected",

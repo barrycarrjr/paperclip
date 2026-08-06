@@ -12,6 +12,7 @@ import { useToastActions } from "./ToastContext";
 import { upsertIssueCommentInPages } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById } from "../lib/optimistic-issue-runs";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateAttention } from "../lib/invalidate-attention";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import { TERMINAL_RUN_STATUSES } from "../lib/liveIssueIds";
 import { useLocation } from "../lib/router";
@@ -616,7 +617,7 @@ function invalidateHeartbeatQueries(
   queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(companyId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(companyId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.costs(companyId) });
-  queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
+  invalidateAttention(queryClient, companyId);
 
   const agentId = readString(payload.agentId);
   if (agentId) {
@@ -644,7 +645,7 @@ function invalidateActivityQueries(
 ) {
   queryClient.invalidateQueries({ queryKey: queryKeys.activity(companyId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(companyId) });
-  queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
+  invalidateAttention(queryClient, companyId);
 
   const entityType = readString(payload.entityType);
   const entityId = readString(payload.entityId);
