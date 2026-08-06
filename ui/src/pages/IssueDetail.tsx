@@ -23,6 +23,7 @@ import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUs
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import { invalidateAttention } from "../lib/invalidate-attention";
+import { SignOffGateBanner } from "../components/SignOffGateBanner";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
 import {
@@ -1129,6 +1130,7 @@ export function IssueDetail() {
     enabled: !!selectedCompanyId,
   });
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const [signOffError, setSignOffError] = useState<string | null>(null);
   const { data: boardAccess } = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
     queryFn: () => accessApi.getCurrentBoardAccess(),
@@ -2652,6 +2654,28 @@ export function IssueDetail() {
           This issue is hidden
         </div>
       )}
+      <SignOffGateBanner
+        issue={issue}
+        currentUserId={currentUserId}
+        isPending={updateIssue.isPending}
+        error={signOffError}
+        onDecide={({ status, comment }) => {
+          setSignOffError(null);
+          updateIssue.mutate(
+            { status, comment },
+            {
+              onError: (err) =>
+                setSignOffError(err instanceof Error ? err.message : "Could not record that decision."),
+              onSuccess: () => {
+                setSignOffError(null);
+                // The gate closing changes what is waiting on this person, so
+                // the queue, the badge and the Briefs all need to hear about it.
+                invalidateAttention(queryClient, issue.companyId);
+              },
+            },
+          );
+        }}
+      />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           {activePauseHold.isRoot ? (
