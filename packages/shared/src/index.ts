@@ -1,4 +1,11 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
+export { ATTENTION_KINDS } from "./types/attention.js";
+export {
+  APPROVAL_TYPE_LABEL,
+  approvalLabel,
+  approvalSubject,
+  outboundToolLabel,
+} from "./approval-labels.js";
 export {
   COMPANY_STATUSES,
   DEPLOYMENT_MODES,
@@ -413,6 +420,10 @@ export type {
   InstanceSchedulerHeartbeatAgent,
   InstanceSchedulerHeartbeatsResponse,
   LiveEvent,
+  AttentionBlocking,
+  AttentionKind,
+  AttentionRow,
+  AttentionQueueResponse,
   DashboardRunActivityDay,
   DashboardSummary,
   ActivityEvent,
