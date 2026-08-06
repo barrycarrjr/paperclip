@@ -15,7 +15,8 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { inboxDismissalService } from "../services/inbox-dismissals.ts";
-import { sidebarBadgeService } from "../services/sidebar-badges.ts";
+import { attentionQueueService } from "../services/attention-queue.ts";
+import { summarizeAttentionForBadges } from "../routes/sidebar-badges.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -29,14 +30,14 @@ if (!embeddedPostgresSupport.supported) {
 describeEmbeddedPostgres("inbox dismissals", () => {
   let db!: ReturnType<typeof createDb>;
   let dismissalsSvc!: ReturnType<typeof inboxDismissalService>;
-  let badgesSvc!: ReturnType<typeof sidebarBadgeService>;
+  let queueSvc!: ReturnType<typeof attentionQueueService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-inbox-dismissals-");
     db = createDb(tempDb.connectionString);
     dismissalsSvc = inboxDismissalService(db);
-    badgesSvc = sidebarBadgeService(db);
+    queueSvc = attentionQueueService(db);
   }, 20_000);
 
   afterEach(async () => {
@@ -192,21 +193,25 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       ]),
     );
 
-    const badges = await badgesSvc.get(companyId, {
-      dismissals: dismissedAtByKey,
-      joinRequests: [{
-        id: hiddenJoinRequestId,
-        createdAt: new Date("2026-03-11T01:00:00.000Z"),
-        updatedAt: new Date("2026-03-11T01:00:00.000Z"),
-      }],
-      unreadTouchedIssues: 1,
+    const rows = await queueSvc.listForCompany(companyId, {
+      userId,
+      canApproveJoins: true,
+      dismissedAtByKey,
     });
+    const badges = summarizeAttentionForBadges(rows);
 
+    // inbox is 2, not 3: unread issues used to be added here and are not a
+    // decision anyone has to make, so they no longer move the badge.
     expect(badges).toEqual({
-      inbox: 3,
+      inbox: 2,
       approvals: 1,
       failedRuns: 1,
       joinRequests: 0,
     });
+    // Dismissing now hides the row itself, not just the number, so the list
+    // the operator opens matches the badge that sent them there.
+    expect(rows.map((row) => row.key).sort()).toEqual(
+      [`approval:${resurfacedApprovalId}`, `run:${visibleRunId}`].sort(),
+    );
   });
 });

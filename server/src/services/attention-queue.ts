@@ -46,6 +46,28 @@ export interface AttentionQueueActor {
   userId: string | null;
   /** Whether this actor may act on join requests for the company. */
   canApproveJoins: boolean;
+  /**
+   * This person's inbox dismissals, keyed by item key, valued by when they
+   * dismissed it. Dismissing is per-person and always was; it lives here so
+   * that hiding something hides it on every surface at once instead of only
+   * lowering a badge while the item stays on the Brief.
+   */
+  dismissedAtByKey?: ReadonlyMap<string, number>;
+}
+
+/**
+ * A dismissal only holds until the item changes. Newer activity than the
+ * dismissal means the thing the operator waved away is not the thing in
+ * front of them now, so it comes back.
+ */
+export function isAttentionRowDismissed(
+  row: AttentionRow,
+  dismissedAtByKey: ReadonlyMap<string, number> | undefined,
+): boolean {
+  if (!dismissedAtByKey?.size) return false;
+  const dismissedAt = dismissedAtByKey.get(row.key);
+  if (dismissedAt === undefined) return false;
+  return dismissedAt >= row.updatedAtMs;
 }
 
 export function attentionQueueService(db: Db) {
@@ -326,14 +348,17 @@ export function attentionQueueService(db: Db) {
           joinRequestRows(companyId, actor),
         ]);
 
-      return sortAttentionRows([
+      const all = [
         ...approvalsList,
         ...questions,
         ...signOffs,
         ...runFailures,
         ...budgetStops,
         ...joins,
-      ]);
+      ];
+      return sortAttentionRows(
+        all.filter((row) => !isAttentionRowDismissed(row, actor.dismissedAtByKey)),
+      );
     },
   };
 }

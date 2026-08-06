@@ -31,8 +31,7 @@ export type InboxCategoryFilter =
   | "issues_i_touched"
   | "join_requests"
   | "approvals"
-  | "failed_runs"
-  | "alerts";
+  | "failed_runs";
 export type InboxApprovalFilter = "all" | "actionable" | "resolved";
 export type InboxWorkItemGroupBy = "none" | "type" | "workspace";
 export const inboxIssueColumns = [
@@ -104,13 +103,18 @@ export type InboxWorkItem =
       row: AttentionRow;
     };
 
+/**
+ * The badge numbers, all derived from the attention queue in
+ * hooks/useInboxBadge.ts. `mineIssues` and `alerts` used to be here too:
+ * unread issues are a read-state rather than a decision, and health alerts
+ * are not something you can act on, so neither belongs in a count of what
+ * is waiting on you.
+ */
 export interface InboxBadgeData {
   inbox: number;
   approvals: number;
   failedRuns: number;
   joinRequests: number;
-  mineIssues: number;
-  alerts: number;
 }
 
 export interface InboxWorkItemGroup {
@@ -177,11 +181,12 @@ const defaultInboxFilterPreferences: InboxFilterPreferences = {
 };
 
 function normalizeInboxCategoryFilter(value: unknown): InboxCategoryFilter {
+  // "alerts" was a category once. A saved preference still naming it falls
+  // back to "everything" rather than selecting a category with nothing in it.
   return value === "issues_i_touched"
     || value === "join_requests"
     || value === "approvals"
     || value === "failed_runs"
-    || value === "alerts"
     ? value
     : "everything";
 }
@@ -665,9 +670,6 @@ export function isMineInboxTab(tab: InboxTab): boolean {
   return tab === "mine";
 }
 
-export function shouldShowCompanyAlerts(tab: InboxTab): boolean {
-  return tab === "all";
-}
 
 export function resolveInboxSelectionIndex(
   previousIndex: number,
@@ -690,20 +692,6 @@ export function getInboxKeyboardSelectionIndex(
     : Math.max(previousIndex - 1, 0);
 }
 
-export function getLatestFailedRunsByAgent(runs: HeartbeatRun[]): HeartbeatRun[] {
-  const sorted = [...runs].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-  const latestByAgent = new Map<string, HeartbeatRun>();
-
-  for (const run of sorted) {
-    if (!latestByAgent.has(run.agentId)) {
-      latestByAgent.set(run.agentId, run);
-    }
-  }
-
-  return Array.from(latestByAgent.values()).filter((run) => FAILED_RUN_STATUSES.has(run.status));
-}
 
 export function normalizeTimestamp(value: string | Date | null | undefined): number {
   if (!value) return 0;
@@ -1092,62 +1080,3 @@ export function shouldShowInboxSection({
   return showOnAll;
 }
 
-export function computeInboxBadgeData({
-  approvals,
-  joinRequests,
-  dashboard,
-  heartbeatRuns,
-  mineIssues,
-  dismissedAlerts,
-  dismissedAtByKey,
-  currentUserId,
-}: {
-  approvals: Approval[];
-  joinRequests: JoinRequest[];
-  dashboard: DashboardSummary | undefined;
-  heartbeatRuns: HeartbeatRun[];
-  mineIssues: Issue[];
-  dismissedAlerts: Set<string>;
-  dismissedAtByKey: ReadonlyMap<string, number>;
-  currentUserId?: string | null;
-}): InboxBadgeData {
-  const actionableApprovals = approvals.filter(
-    (approval) =>
-      isApprovalVisibleInMine(approval, currentUserId) &&
-      ACTIONABLE_APPROVAL_STATUSES.has(approval.status) &&
-      !isInboxEntityDismissed(dismissedAtByKey, `approval:${approval.id}`, approval.updatedAt),
-  ).length;
-  const failedRuns = getLatestFailedRunsByAgent(heartbeatRuns).filter(
-    (run) => !isInboxEntityDismissed(dismissedAtByKey, `run:${run.id}`, run.createdAt),
-  ).length;
-  const visibleJoinRequests = joinRequests.filter(
-    (jr) => !isInboxEntityDismissed(dismissedAtByKey, `join:${jr.id}`, jr.updatedAt ?? jr.createdAt),
-  ).length;
-  const visibleMineIssues = mineIssues.filter(
-    (issue) =>
-      issue.isUnreadForMe &&
-      !isInboxEntityDismissed(dismissedAtByKey, `issue:${issue.id}`, new Date(issueLastActivityTimestamp(issue))),
-  ).length;
-  const agentErrorCount = dashboard?.agents.error ?? 0;
-  const monthBudgetCents = dashboard?.costs.monthBudgetCents ?? 0;
-  const monthUtilizationPercent = dashboard?.costs.monthUtilizationPercent ?? 0;
-  const showAggregateAgentError =
-    agentErrorCount > 0 &&
-    failedRuns === 0 &&
-    !dismissedAlerts.has("alert:agent-errors");
-  const showBudgetAlert =
-    monthBudgetCents > 0 &&
-    monthUtilizationPercent >= 80 &&
-    !dismissedAlerts.has("alert:budget");
-  const alerts = Number(showAggregateAgentError) + Number(showBudgetAlert);
-
-  return {
-    // The inbox badge reflects personal/actionable work, not company-wide health alerts.
-    inbox: actionableApprovals + visibleJoinRequests + failedRuns + visibleMineIssues,
-    approvals: actionableApprovals,
-    failedRuns,
-    joinRequests: visibleJoinRequests,
-    mineIssues: visibleMineIssues,
-    alerts,
-  };
-}

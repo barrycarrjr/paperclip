@@ -74,3 +74,16 @@ export function attentionRowIssueId(row: AttentionRow): string | null {
   const id = row.key.slice(separator + 1);
   return id.length > 0 ? id : null;
 }
+
+/**
+ * The run whose failure this row stands for. A row can represent several
+ * failures of the same work ("failed 5 times"); this is the newest one, and
+ * the id any dismissal of the row is recorded against.
+ */
+export function attentionRowRunId(row: AttentionRow): string | null {
+  if (row.kind !== "run_failure") return null;
+  const separator = row.key.indexOf(":");
+  if (separator < 0) return null;
+  const id = row.key.slice(separator + 1);
+  return id.length > 0 ? id : null;
+}

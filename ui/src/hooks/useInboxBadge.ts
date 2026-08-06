@@ -1,29 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { accessApi } from "../api/access";
-import { ApiError } from "../api/client";
 import { inboxDismissalsApi } from "../api/inboxDismissals";
-import { approvalsApi } from "../api/approvals";
-import { authApi } from "../api/auth";
-import { dashboardApi } from "../api/dashboard";
-import { heartbeatsApi } from "../api/heartbeats";
-import { issuesApi } from "../api/issues";
+import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { queryKeys } from "../lib/queryKeys";
 import { invalidateAttention } from "../lib/invalidate-attention";
 import {
   buildInboxDismissedAtByKey,
-  computeInboxBadgeData,
-  getRecentTouchedIssues,
   loadDismissedInboxAlerts,
   saveDismissedInboxAlerts,
   loadReadInboxItems,
   saveReadInboxItems,
   READ_ITEMS_KEY,
 } from "../lib/inbox";
-
-const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
-const INBOX_BADGE_ISSUE_LIMIT = 500;
-const INBOX_BADGE_HEARTBEAT_RUN_LIMIT = 200;
+import type { InboxBadgeData } from "../lib/inbox";
 
 export function useDismissedInboxAlerts() {
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissedInboxAlerts);
@@ -139,75 +128,32 @@ export function useReadInboxItems() {
   return { readItems, markRead, markUnread };
 }
 
-export function useInboxBadge(companyId: string | null | undefined) {
-  const { dismissed: dismissedAlerts } = useDismissedInboxAlerts();
-  const { dismissedAtByKey } = useInboxDismissals(companyId);
-  const { data: session } = useQuery({
-    queryKey: queryKeys.auth.session,
-    queryFn: () => authApi.getSession(),
-  });
+/**
+ * The badge is a count of the attention queue, nothing else. It used to be
+ * its own sum over five separate queries - approvals, join requests, failed
+ * runs, unread issues, and two company-health alerts - which is why the
+ * number beside the Inbox and the number on the company avatar could differ
+ * from each other and from the list they both pointed at.
+ *
+ * Two things it deliberately no longer counts: issues you have not read
+ * (a read-state, not a decision anyone has to make) and health alerts
+ * (nothing to decide, and nothing to click).
+ */
+const EMPTY_BADGE: InboxBadgeData = { inbox: 0, approvals: 0, failedRuns: 0, joinRequests: 0 };
 
-  const { data: approvals = [] } = useQuery({
-    queryKey: queryKeys.approvals.list(companyId!),
-    queryFn: () => approvalsApi.list(companyId!),
+export function useInboxBadge(companyId: string | null | undefined): InboxBadgeData {
+  // The same endpoint and the same cache entry the company rail reads, so the
+  // number beside the Inbox and the number on the company avatar cannot drift
+  // apart - they are literally the same fetch. The server derives it by
+  // counting attention-queue rows, so it also matches the list it points at.
+  const { data } = useQuery({
+    queryKey: queryKeys.sidebarBadges(companyId!),
+    queryFn: () => sidebarBadgesApi.get(companyId!),
     enabled: !!companyId,
+    // Same cadence the rail uses, so the two never sit at different ages.
+    // On mobile the rail is not mounted at all and this is the only poll.
+    refetchInterval: 15_000,
   });
 
-  const { data: joinRequests = [] } = useQuery({
-    queryKey: queryKeys.access.joinRequests(companyId!),
-    queryFn: async () => {
-      try {
-        return await accessApi.listJoinRequests(companyId!, "pending_approval");
-      } catch (err) {
-        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          return [];
-        }
-        throw err;
-      }
-    },
-    enabled: !!companyId,
-    retry: false,
-  });
-
-  const { data: dashboard } = useQuery({
-    queryKey: queryKeys.dashboard(companyId!),
-    queryFn: () => dashboardApi.summary(companyId!),
-    enabled: !!companyId,
-  });
-
-  const { data: mineIssuesRaw = [] } = useQuery({
-    queryKey: queryKeys.issues.listMineByMe(companyId!),
-    queryFn: () =>
-      issuesApi.list(companyId!, {
-        touchedByUserId: "me",
-        inboxArchivedByUserId: "me",
-        status: INBOX_ISSUE_STATUSES,
-        limit: INBOX_BADGE_ISSUE_LIMIT,
-      }),
-    enabled: !!companyId,
-  });
-
-  const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
-  const currentUserId = session?.user.id ?? session?.session.userId ?? null;
-
-  const { data: heartbeatRuns = [] } = useQuery({
-    queryKey: [...queryKeys.heartbeats(companyId!), "limit", INBOX_BADGE_HEARTBEAT_RUN_LIMIT],
-    queryFn: () => heartbeatsApi.list(companyId!, undefined, INBOX_BADGE_HEARTBEAT_RUN_LIMIT),
-    enabled: !!companyId,
-  });
-
-  return useMemo(
-    () =>
-      computeInboxBadgeData({
-        approvals,
-        joinRequests,
-        dashboard,
-        heartbeatRuns,
-        mineIssues,
-        dismissedAlerts,
-        dismissedAtByKey,
-        currentUserId,
-      }),
-    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId],
-  );
+  return data ?? EMPTY_BADGE;
 }

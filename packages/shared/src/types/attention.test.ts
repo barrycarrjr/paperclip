@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attentionRowIssueId, type AttentionRow } from "./attention.js";
+import { attentionRowIssueId, attentionRowRunId, type AttentionRow } from "./attention.js";
 
 function row(overrides: Partial<AttentionRow> = {}): AttentionRow {
   return {
@@ -36,5 +36,21 @@ describe("attentionRowIssueId", () => {
   it("is silent on a malformed key rather than guessing", () => {
     expect(attentionRowIssueId(row({ key: "question" }))).toBeNull();
     expect(attentionRowIssueId(row({ key: "question:" }))).toBeNull();
+  });
+});
+
+describe("attentionRowRunId", () => {
+  it("reads the head run out of a run-failure key", () => {
+    expect(attentionRowRunId(row({ kind: "run_failure", key: "run:r-1" }))).toBe("r-1");
+  });
+
+  it("is silent for every other kind", () => {
+    expect(attentionRowRunId(row({ kind: "approval", key: "approval:a-1" }))).toBeNull();
+    expect(attentionRowRunId(row({ kind: "question", key: "question:i-1" }))).toBeNull();
+  });
+
+  it("is silent on a malformed key rather than guessing", () => {
+    expect(attentionRowRunId(row({ kind: "run_failure", key: "run" }))).toBeNull();
+    expect(attentionRowRunId(row({ kind: "run_failure", key: "run:" }))).toBeNull();
   });
 });

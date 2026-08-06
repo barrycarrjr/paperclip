@@ -21,7 +21,7 @@ import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AttentionRow } from "../components/AttentionRow";
 import { attentionApi } from "../api/attention";
-import { attentionRowIssueId } from "@paperclipai/shared";
+import { attentionRowIssueId, attentionRowRunId } from "@paperclipai/shared";
 import { invalidateAttention } from "../lib/invalidate-attention";
 import {
   applyIssueFilters,
@@ -116,7 +116,6 @@ import {
   getInboxKeyboardSelectionIndex,
   getInboxWorkItems,
   getInboxSearchSupplementIssues,
-  getLatestFailedRunsByAgent,
   matchesInboxIssueSearch,
   getRecentTouchedIssues,
   isInboxEntityDismissed,
@@ -143,7 +142,6 @@ import {
   type InboxIssueColumn,
   type InboxKeyboardNavEntry,
   saveLastInboxTab,
-  shouldShowCompanyAlerts,
   shouldShowInboxSection,
   type InboxGroupedSection,
   type InboxTab,
@@ -687,7 +685,6 @@ export function Inbox() {
   );
   const [groupBy, setGroupBy] = useState<InboxWorkItemGroupBy>(() => loadInboxWorkItemGroupBy());
   const [visibleIssueColumns, setVisibleIssueColumns] = useState<InboxIssueColumn[]>(loadInboxIssueColumns);
-  const { dismissed: dismissedAlerts, dismiss: dismissAlert } = useDismissedInboxAlerts();
   const { dismissedAtByKey, dismiss: dismissInboxItem } = useInboxDismissals(selectedCompanyId);
   const { readItems, markRead: markItemRead, markUnread: markItemUnread } = useReadInboxItems();
   const { allCategoryFilter, allApprovalFilter, issueFilters } = filterPreferences;
@@ -1024,13 +1021,22 @@ export function Inbox() {
     [availableIssueColumnSet, visibleIssueColumnSet],
   );
 
-  const failedRuns = useMemo(
-    () =>
-      getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter(
-        (r) => !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt),
-      ),
-    [heartbeatRuns, dismissedAtByKey],
-  );
+  // WHICH runs still need a person is the queue's call, not this page's. The
+  // queue groups failures by agent AND issue, ignores ones the system has
+  // already scheduled a retry for, and applies this person's dismissals. The
+  // page used to work it out itself by keeping each agent's newest run, which
+  // meant the badge and this list could disagree: an agent that failed on one
+  // issue and then succeeded on another showed a red badge over an empty list.
+  // The rich row below still does the rendering, because it can retry in place.
+  const failedRuns = useMemo(() => {
+    const runsById = new Map((heartbeatRuns ?? []).map((run) => [run.id, run]));
+    const wanted = (attention?.rows ?? [])
+      .map((row) => attentionRowRunId(row))
+      .filter((runId): runId is string => runId !== null);
+    return wanted
+      .map((runId) => runsById.get(runId))
+      .filter((run): run is NonNullable<typeof run> => run !== undefined);
+  }, [heartbeatRuns, attention]);
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
     if (tab === "mine") {
@@ -1048,7 +1054,6 @@ export function Inbox() {
     allCategoryFilter === "everything" || allCategoryFilter === "approvals";
   const showFailedRunsCategory =
     allCategoryFilter === "everything" || allCategoryFilter === "failed_runs";
-  const showAlertsCategory = allCategoryFilter === "everything" || allCategoryFilter === "alerts";
   // Questions, sign-offs and budget stops. "everything" only; there is no
   // category chip of their own yet, so a narrowed filter hides them.
   const showAttentionCategory = allCategoryFilter === "everything";
@@ -1654,18 +1659,14 @@ export function Inbox() {
   const handleArchiveNonIssue = useCallback((key: string) => {
     setArchivingNonIssueIds((prev) => new Set(prev).add(key));
     setTimeout(() => {
-      if (key.startsWith("alert:")) {
-        dismissAlert(key);
-      } else {
-        dismissInboxItem(key);
-      }
+      dismissInboxItem(key);
       setArchivingNonIssueIds((prev) => {
         const next = new Set(prev);
         next.delete(key);
         return next;
       });
     }, 200);
-  }, [dismissAlert, dismissInboxItem]);
+  }, [dismissInboxItem]);
 
   const nonIssueUnreadState = (key: string): NonIssueUnreadState => {
     if (!canArchiveFromTab) return null;
@@ -1915,40 +1916,22 @@ export function Inbox() {
     return <EmptyState icon={InboxIcon} message="Select a company to view inbox." />;
   }
 
-  const hasRunFailures = failedRuns.length > 0;
-  const showCompanyAlerts = shouldShowCompanyAlerts(tab) && showAlertsCategory;
-  const showAggregateAgentError =
-    showCompanyAlerts &&
-    !!dashboard &&
-    dashboard.agents.error > 0 &&
-    !hasRunFailures &&
-    !dismissedAlerts.has("alert:agent-errors");
-  const showBudgetAlert =
-    showCompanyAlerts &&
-    !!dashboard &&
-    dashboard.costs.monthBudgetCents > 0 &&
-    dashboard.costs.monthUtilizationPercent >= 80 &&
-    !dismissedAlerts.has("alert:budget");
-  const hasAlerts = showAggregateAgentError || showBudgetAlert;
+  // The Inbox lists decisions. "Some agent is in error" and "you are 80%
+  // through the month's budget" are neither: nothing to decide, and the row
+  // only ever linked away to a page that says the same thing. They inflated
+  // the badge while being the one thing in here nobody could action, so both
+  // the strip and their contribution to the count are gone. Agent errors that
+  // really do need a person still arrive as run_failure rows from the queue,
+  // and a budget that actually stopped work arrives as budget_stop.
   const showWorkItemsSection = totalVisibleWorkItems > 0;
-  const showAlertsSection = shouldShowInboxSection({
-    tab,
-    hasItems: hasAlerts,
-    showOnMine: false,
-    showOnRecent: false,
-    showOnUnread: false,
-    showOnAll: hasAlerts,
-  });
 
   const visibleSections = [
-    showAlertsSection ? "alerts" : null,
     showWorkItemsSection ? "work_items" : null,
   ].filter((key): key is SectionKey => key !== null);
 
   const allLoaded =
     !isJoinRequestsLoading &&
     !isApprovalsLoading &&
-    !isDashboardLoading &&
     !isIssuesLoading &&
     !isMineIssuesLoading &&
     !isTouchedIssuesLoading &&
@@ -2164,7 +2147,6 @@ export function Inbox() {
               <SelectItem value="join_requests">Join requests</SelectItem>
               <SelectItem value="approvals">Approvals</SelectItem>
               <SelectItem value="failed_runs">Failed runs</SelectItem>
-              <SelectItem value="alerts">Alerts</SelectItem>
             </SelectContent>
           </Select>
 
@@ -2613,63 +2595,6 @@ export function Inbox() {
         </>
       )}
 
-      {showAlertsSection && (
-        <>
-          {showSeparatorBefore("alerts") && <Separator />}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Alerts
-            </h3>
-            <div className="divide-y divide-border border border-border">
-              {showAggregateAgentError && (
-                <div className="group/alert relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
-                  <Link
-                    to="/agents"
-                    className="flex flex-1 cursor-pointer items-center gap-3 no-underline text-inherit"
-                  >
-                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
-                    <span className="text-sm">
-                      <span className="font-medium">{dashboard!.agents.error}</span>{" "}
-                      {dashboard!.agents.error === 1 ? "agent has" : "agents have"} errors
-                    </span>
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => dismissAlert("alert:agent-errors")}
-                    className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
-                    aria-label="Dismiss"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-              {showBudgetAlert && (
-                <div className="group/alert relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
-                  <Link
-                    to="/costs"
-                    className="flex flex-1 cursor-pointer items-center gap-3 no-underline text-inherit"
-                  >
-                    <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-400" />
-                    <span className="text-sm">
-                      Budget at{" "}
-                      <span className="font-medium">{dashboard!.costs.monthUtilizationPercent}%</span>{" "}
-                      utilization this month
-                    </span>
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => dismissAlert("alert:budget")}
-                    className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
-                    aria-label="Dismiss"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )}
 
     </div>
   );

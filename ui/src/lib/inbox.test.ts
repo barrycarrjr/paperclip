@@ -16,7 +16,6 @@ import {
   buildGroupedInboxSections,
   buildInboxKeyboardNavEntries,
   buildInboxDismissedAtByKey,
-  computeInboxBadgeData,
   filterInboxIssues,
   getArchivedInboxSearchIssues,
   getAvailableInboxIssueColumns,
@@ -47,7 +46,6 @@ import {
   saveInboxIssueColumns,
   saveInboxWorkItemGroupBy,
   saveLastInboxTab,
-  shouldShowCompanyAlerts,
   shouldResetInboxWorkspaceGrouping,
   shouldShowInboxSection,
   type InboxWorkItem,
@@ -331,74 +329,6 @@ describe("inbox helpers", () => {
     storage.clear();
   });
 
-  it("counts the same inbox sources the badge uses", () => {
-    const result = computeInboxBadgeData({
-      approvals: [
-        { ...makeApproval("pending"), requestedByUserId: "user-1" },
-        { ...makeApproval("approved"), requestedByUserId: "user-2" },
-      ],
-      joinRequests: [makeJoinRequest("join-1")],
-      dashboard,
-      heartbeatRuns: [
-        makeRun("run-old", "failed", "2026-03-11T00:00:00.000Z"),
-        makeRun("run-latest", "timed_out", "2026-03-11T01:00:00.000Z"),
-        makeRun("run-other-agent", "failed", "2026-03-11T02:00:00.000Z", "agent-2"),
-      ],
-      mineIssues: [makeIssue("1", true)],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey: new Map<string, number>(),
-      currentUserId: "user-1",
-    });
-
-    expect(result).toEqual({
-      inbox: 5,
-      approvals: 1,
-      failedRuns: 2,
-      joinRequests: 1,
-      mineIssues: 1,
-      alerts: 1,
-    });
-  });
-
-  it("drops dismissed runs and alerts from the computed badge", () => {
-    const result = computeInboxBadgeData({
-      approvals: [],
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [makeRun("run-1", "failed", "2026-03-11T00:00:00.000Z")],
-      mineIssues: [],
-      dismissedAlerts: new Set<string>(["alert:budget", "alert:agent-errors"]),
-      dismissedAtByKey: new Map<string, number>([["run:run-1", new Date("2026-03-11T00:00:00.000Z").getTime()]]),
-      currentUserId: "user-1",
-    });
-
-    expect(result).toEqual({
-      inbox: 0,
-      approvals: 0,
-      failedRuns: 0,
-      joinRequests: 0,
-      mineIssues: 0,
-      alerts: 0,
-    });
-  });
-
-  it("excludes read mine issues from the inbox badge count", () => {
-    const result = computeInboxBadgeData({
-      approvals: [],
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [],
-      mineIssues: [makeIssue("1", false), makeIssue("2", false), makeIssue("3", true)],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey: new Map(),
-      currentUserId: "user-1",
-    });
-
-    expect(result.mineIssues).toBe(1);
-    expect(result.inbox).toBe(1);
-    expect(result.alerts).toBe(2);
-  });
-
   it("resurfaces non-issue items when they change after dismissal", () => {
     const dismissedAtByKey = buildInboxDismissedAtByKey([
       {
@@ -468,110 +398,6 @@ describe("inbox helpers", () => {
     expect(getApprovalsForTab(approvals, "all", "resolved").map((approval) => approval.id)).toEqual([
       "approval-approved",
     ]);
-  });
-
-  it("surfaces agent-requested actionable approvals in mine and the badge", () => {
-    const approvals = [
-      {
-        ...makeApprovalWithTimestamps("approval-agent-requested", "pending", "2026-03-11T02:00:00.000Z"),
-        requestedByUserId: null,
-      },
-      {
-        ...makeApprovalWithTimestamps("approval-unrelated-resolved", "approved", "2026-03-11T03:00:00.000Z"),
-        requestedByUserId: "user-2",
-      },
-    ];
-
-    expect(getApprovalsForTab(approvals, "mine", "all", "user-1").map((approval) => approval.id)).toEqual([
-      "approval-agent-requested",
-    ]);
-
-    const result = computeInboxBadgeData({
-      approvals,
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [],
-      mineIssues: [],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey: new Map(),
-      currentUserId: "user-1",
-    });
-
-    expect(result.approvals).toBe(1);
-  });
-
-  it("does not count unread mineIssues that have been dismissed since their last activity", () => {
-    // The Pennsylvania-Annual-Report-Reminder bug: an unread issue (status=done,
-    // assigneeAgentId set) was dismissed by the operator from the Unified Inbox,
-    // but the badge kept counting it because computeInboxBadgeData wasn't
-    // checking the dismissals map for issues — only for approvals/runs/joins.
-    const issue = makeIssue("dismissed-and-unread", true);
-    // Dismissal is compared against issueLastActivityTimestamp, which reads the
-    // canonical lastActivityAt first. The server derives that as the max of
-    // updatedAt, latest comment, and latest log, so the two move together in
-    // real data and the fixture has to set both.
-    issue.updatedAt = new Date("2026-05-11T03:43:42.914Z");
-    issue.lastActivityAt = new Date("2026-05-11T03:43:42.914Z");
-
-    const dismissedAtByKey = new Map<string, number>([
-      [`issue:${issue.id}`, new Date("2026-05-11T14:36:11.539Z").getTime()],
-    ]);
-
-    const result = computeInboxBadgeData({
-      approvals: [],
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [],
-      mineIssues: [issue],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey,
-      currentUserId: "user-1",
-    });
-
-    expect(result.mineIssues).toBe(0);
-    expect(result.inbox).toBe(0);
-  });
-
-  it("re-counts a dismissed issue once newer activity occurs (timestamp-aware)", () => {
-    const issue = makeIssue("dismissed-but-touched-again", true);
-    // Dismissed 9am, then new activity at 10am — should count again. Both
-    // fields move because the server derives lastActivityAt as the max of
-    // updatedAt, latest comment, and latest log.
-    issue.updatedAt = new Date("2026-05-11T10:00:00.000Z");
-    issue.lastActivityAt = new Date("2026-05-11T10:00:00.000Z");
-    const dismissedAtByKey = new Map<string, number>([
-      [`issue:${issue.id}`, new Date("2026-05-11T09:00:00.000Z").getTime()],
-    ]);
-
-    const result = computeInboxBadgeData({
-      approvals: [],
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [],
-      mineIssues: [issue],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey,
-      currentUserId: "user-1",
-    });
-
-    expect(result.mineIssues).toBe(1);
-    expect(result.inbox).toBe(1);
-  });
-
-  it("does not count company-wide alerts in the personal inbox badge", () => {
-    const result = computeInboxBadgeData({
-      approvals: [],
-      joinRequests: [],
-      dashboard,
-      heartbeatRuns: [],
-      mineIssues: [],
-      dismissedAlerts: new Set<string>(),
-      dismissedAtByKey: new Map(),
-      currentUserId: "user-1",
-    });
-
-    expect(result.alerts).toBe(2);
-    expect(result.inbox).toBe(0);
   });
 
   it("floats a stopped agent above everything, however fresh the rest is", () => {
@@ -883,13 +709,6 @@ describe("inbox helpers", () => {
         showOnAll: false,
       }),
     ).toBe(false);
-  });
-
-  it("shows company alerts only on the all tab", () => {
-    expect(shouldShowCompanyAlerts("mine")).toBe(false);
-    expect(shouldShowCompanyAlerts("recent")).toBe(false);
-    expect(shouldShowCompanyAlerts("unread")).toBe(false);
-    expect(shouldShowCompanyAlerts("all")).toBe(true);
   });
 
   it("limits recent touched issues before unread badge counting", () => {

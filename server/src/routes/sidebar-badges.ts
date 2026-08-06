@@ -1,30 +1,33 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
 import { and, eq } from "drizzle-orm";
-import { inboxDismissals, joinRequests } from "@paperclipai/db";
-import { sidebarBadgeService } from "../services/sidebar-badges.js";
+import type { Db } from "@paperclipai/db";
+import { inboxDismissals } from "@paperclipai/db";
+import type { AttentionRow, SidebarBadges } from "@paperclipai/shared";
+import { attentionQueueService } from "../services/attention-queue.js";
 import { accessService } from "../services/access.js";
-import { dashboardService } from "../services/dashboard.js";
-import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-dedupe.js";
 import { assertCompanyAccess } from "./authz.js";
 
-function buildDismissedAtByKey(
-  dismissals: Array<{ itemKey: string; dismissedAt: Date | string }>,
-): Map<string, number> {
-  return new Map(
-    dismissals.map((dismissal) => [dismissal.itemKey, new Date(dismissal.dismissedAt).getTime()]),
-  );
-}
-
+/**
+ * The sidebar and company-rail counts. These are a projection of the
+ * attention queue, not a second opinion about it: the number on the Inbox
+ * is exactly how many rows the Inbox will show.
+ *
+ * It used to be its own formula, and it disagreed with everything else.
+ * It counted each agent's newest failed run (so twenty broken issues read as
+ * one, and any later success anywhere read as zero), added two company-health
+ * alerts that were not decisions and had nothing to click, and knew nothing
+ * about agents' questions or work waiting on a sign-off - the two most
+ * urgent things in the product.
+ */
 export function sidebarBadgeRoutes(db: Db) {
   const router = Router();
-  const svc = sidebarBadgeService(db);
+  const queue = attentionQueueService(db);
   const access = accessService(db);
-  const dashboard = dashboardService(db);
 
   router.get("/companies/:companyId/sidebar-badges", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+
     let canApproveJoins = false;
     if (req.actor.type === "board") {
       canApproveJoins =
@@ -35,49 +38,35 @@ export function sidebarBadgeRoutes(db: Db) {
       canApproveJoins = await access.hasPermission(companyId, "agent", req.actor.agentId, "joins:approve");
     }
 
-    const visibleJoinRequests = canApproveJoins
-      ? collapseDuplicatePendingHumanJoinRequests(
-        await db
-          .select({
-            id: joinRequests.id,
-            requestType: joinRequests.requestType,
-            status: joinRequests.status,
-            requestingUserId: joinRequests.requestingUserId,
-            requestEmailSnapshot: joinRequests.requestEmailSnapshot,
-            updatedAt: joinRequests.updatedAt,
-            createdAt: joinRequests.createdAt,
-          })
-          .from(joinRequests)
-          .where(and(eq(joinRequests.companyId, companyId), eq(joinRequests.status, "pending_approval")))
-      ).map(({ id, updatedAt, createdAt }) => ({
-        id,
-        updatedAt,
-        createdAt,
-      }))
-      : [];
+    const userId = req.actor.type === "board" ? req.actor.userId ?? null : null;
+    const dismissedAtByKey = userId
+      ? new Map(
+        (
+          await db
+            .select({ itemKey: inboxDismissals.itemKey, dismissedAt: inboxDismissals.dismissedAt })
+            .from(inboxDismissals)
+            .where(and(eq(inboxDismissals.companyId, companyId), eq(inboxDismissals.userId, userId)))
+        ).map((row) => [row.itemKey, new Date(row.dismissedAt).getTime()] as const),
+      )
+      : undefined;
 
-    const dismissedAtByKey =
-      req.actor.type === "board" && req.actor.userId
-        ? await db
-          .select({ itemKey: inboxDismissals.itemKey, dismissedAt: inboxDismissals.dismissedAt })
-          .from(inboxDismissals)
-          .where(and(eq(inboxDismissals.companyId, companyId), eq(inboxDismissals.userId, req.actor.userId)))
-          .then(buildDismissedAtByKey)
-        : new Map<string, number>();
-
-    const badges = await svc.get(companyId, {
-      dismissals: dismissedAtByKey,
-      joinRequests: visibleJoinRequests,
-    });
-    const summary = await dashboard.summary(companyId);
-    const hasFailedRuns = badges.failedRuns > 0;
-    const alertsCount =
-      (summary.agents.error > 0 && !hasFailedRuns ? 1 : 0) +
-      (summary.costs.monthBudgetCents > 0 && summary.costs.monthUtilizationPercent >= 80 ? 1 : 0);
-    badges.inbox = badges.failedRuns + alertsCount + badges.joinRequests + badges.approvals;
-
-    res.json(badges);
+    const rows = await queue.listForCompany(companyId, { userId, canApproveJoins, dismissedAtByKey });
+    res.json(summarizeAttentionForBadges(rows));
   });
 
   return router;
+}
+
+/**
+ * One row is one thing to deal with, so the headline number is the row
+ * count. Rows carry their own `count` for repeats ("failed 5 times"), which
+ * is detail for the row to show, not extra units of work for the badge.
+ */
+export function summarizeAttentionForBadges(rows: readonly AttentionRow[]): SidebarBadges {
+  return {
+    inbox: rows.length,
+    approvals: rows.filter((row) => row.kind === "approval").length,
+    failedRuns: rows.filter((row) => row.kind === "run_failure").length,
+    joinRequests: rows.filter((row) => row.kind === "join_request").length,
+  };
 }

@@ -28,7 +28,6 @@ import { isLiveRunStatus } from "../lib/liveIssueIds";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
-import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
@@ -69,11 +68,6 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   const activeAgentCount = (agents ?? []).filter(
     (a) => a.status !== "terminated",
   ).length;
-  const { data: sidebarBadges } = useQuery({
-    queryKey: queryKeys.sidebarBadges(company.id),
-    queryFn: () => sidebarBadgesApi.get(company.id),
-  });
-  const pendingApprovalCount = sidebarBadges?.approvals ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
     useEmailToolsPlugin(company.id);
@@ -276,8 +270,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           to="/approvals/pending"
           label="Approvals"
           icon={ShieldCheck}
-          badge={pendingApprovalCount > 0 ? pendingApprovalCount : undefined}
-          info="Actions agents drafted that will not run until you approve them. The number shows how many are waiting."
+          info="Actions agents drafted that will not run until you approve them. They are counted in the Inbox number above, so this one has no badge of its own."
         />
         <SidebarNavItem
           to="/receipts"

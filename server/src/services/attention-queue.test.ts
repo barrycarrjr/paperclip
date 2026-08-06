@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { AttentionRow } from "@paperclipai/shared";
 import {
   groupUnaddressedRunFailures,
+  isAttentionRowDismissed,
   sortAttentionRows,
   type RunFailureCandidate,
 } from "./attention-queue.js";
+import { summarizeAttentionForBadges } from "../routes/sidebar-badges.js";
 
 function row(overrides: Partial<AttentionRow> = {}): AttentionRow {
   return {
@@ -122,5 +124,60 @@ describe("groupUnaddressedRunFailures", () => {
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].failures).toBe(2);
+  });
+});
+
+describe("isAttentionRowDismissed", () => {
+  it("hides a row this person waved away", () => {
+    const dismissals = new Map([["approval:1", 5_000]]);
+    expect(isAttentionRowDismissed(row({ key: "approval:1", updatedAtMs: 1_000 }), dismissals)).toBe(true);
+  });
+
+  it("brings it back once the thing itself changes", () => {
+    // The operator dismissed the version they saw. Newer activity means this
+    // is not that version any more, so it is theirs to look at again.
+    const dismissals = new Map([["approval:1", 5_000]]);
+    expect(isAttentionRowDismissed(row({ key: "approval:1", updatedAtMs: 9_000 }), dismissals)).toBe(false);
+  });
+
+  it("leaves everything alone when nobody has dismissed anything", () => {
+    expect(isAttentionRowDismissed(row(), undefined)).toBe(false);
+    expect(isAttentionRowDismissed(row(), new Map())).toBe(false);
+  });
+
+  it("does not confuse one row's key for another's", () => {
+    const dismissals = new Map([["approval:1", 5_000]]);
+    expect(isAttentionRowDismissed(row({ key: "approval:2" }), dismissals)).toBe(false);
+  });
+});
+
+describe("summarizeAttentionForBadges", () => {
+  it("counts one row as one thing to deal with", () => {
+    const badges = summarizeAttentionForBadges([
+      row({ key: "approval:1", kind: "approval" }),
+      row({ key: "approval:2", kind: "approval" }),
+      row({ key: "question:i1", kind: "question" }),
+      row({ key: "sign_off:i2", kind: "sign_off" }),
+      row({ key: "run:r1", kind: "run_failure" }),
+      row({ key: "join:j1", kind: "join_request" }),
+      row({ key: "budget:b1", kind: "budget_stop" }),
+    ]);
+
+    expect(badges).toEqual({ inbox: 7, approvals: 2, failedRuns: 1, joinRequests: 1 });
+  });
+
+  it("does not multiply a repeated problem into several units of work", () => {
+    // "failed 5 times" is one thing to go and look at, not five.
+    const badges = summarizeAttentionForBadges([row({ key: "run:r1", kind: "run_failure", count: 5 })]);
+    expect(badges).toEqual({ inbox: 1, approvals: 0, failedRuns: 1, joinRequests: 0 });
+  });
+
+  it("is zero across the board on an empty queue", () => {
+    expect(summarizeAttentionForBadges([])).toEqual({
+      inbox: 0,
+      approvals: 0,
+      failedRuns: 0,
+      joinRequests: 0,
+    });
   });
 });
