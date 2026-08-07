@@ -16,6 +16,7 @@ import {
   inspectMigrations,
   applyPendingMigrations,
   createEmbeddedPostgresLogBuffer,
+  isStaleEmbeddedPostgresCluster,
   reconcilePendingMigrationHistory,
   formatDatabaseBackupResult,
   runDatabaseBackup,
@@ -38,6 +39,10 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
+import {
+  stopEmbeddedPostgresCompletely,
+  sweepStaleEmbeddedPostgres,
+} from "./services/embedded-postgres-processes.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
@@ -418,11 +423,48 @@ export async function startServer(): Promise<StartedServer> {
         try {
           await embeddedPostgres.start();
         } catch (err) {
-          logEmbeddedPostgresFailure("start", err);
-          throw formatEmbeddedPostgresError(err, {
-            fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
-            recentLogs: logBuffer.getRecentLogs(),
+          // A cluster whose last run left processes behind refuses to start:
+          // the leftovers still hold its shared memory. Clearing them and
+          // trying once more is the difference between paperclip coming back
+          // after a crash and an operator staring at a dead port. Any other
+          // failure is rethrown untouched - killing processes on a guess is
+          // not something to do twice.
+          if (!isStaleEmbeddedPostgresCluster(err, logBuffer.getRecentLogs())) {
+            logEmbeddedPostgresFailure("start", err);
+            throw formatEmbeddedPostgresError(err, {
+              fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
+              recentLogs: logBuffer.getRecentLogs(),
+            });
+          }
+
+          logger.warn(
+            "Embedded PostgreSQL could not start because the last run left processes behind; ending them and retrying",
+          );
+          const swept = await sweepStaleEmbeddedPostgres({
+            dataDir,
+            log: (message, detail) => logger.warn(detail ?? {}, message),
           });
+          if (swept.killedPids.length === 0) {
+            logEmbeddedPostgresFailure("start", err);
+            throw formatEmbeddedPostgresError(err, {
+              fallbackMessage:
+                `Failed to start embedded PostgreSQL on port ${port}. Its data directory is still held by ` +
+                "a previous run, but no leftover process could be found to end. Restarting the machine clears this.",
+              recentLogs: logBuffer.getRecentLogs(),
+            });
+          }
+
+          rmSync(postmasterPidFile, { force: true });
+          try {
+            await embeddedPostgres.start();
+          } catch (retryErr) {
+            logEmbeddedPostgresFailure("start", retryErr);
+            throw formatEmbeddedPostgresError(retryErr, {
+              fallbackMessage: `Failed to start embedded PostgreSQL on port ${port} after ending ${swept.killedPids.length} leftover process(es) from the previous run`,
+              recentLogs: logBuffer.getRecentLogs(),
+            });
+          }
+          logger.info("Embedded PostgreSQL started after clearing the previous run's leftovers");
         }
         embeddedPostgresStartedByThisProcess = true;
       }
@@ -1119,7 +1161,15 @@ export async function startServer(): Promise<StartedServer> {
       if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
         logger.info({ signal }, "Stopping embedded PostgreSQL");
         try {
-          await embeddedPostgres?.stop();
+          // Not just stop(): on Windows that is a force kill of the postmaster,
+          // and postgres's worker processes can outlive it. One survivor keeps
+          // the cluster's shared memory, and the next start - the second half
+          // of every restart - then fails. So the stop is followed through.
+          await stopEmbeddedPostgresCompletely({
+            dataDir: resolve(config.embeddedPostgresDataDir),
+            stop: () => embeddedPostgres!.stop(),
+            log: (message, detail) => logger.warn(detail ?? {}, message),
+          });
         } catch (err) {
           logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
         }

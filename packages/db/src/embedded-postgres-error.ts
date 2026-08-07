@@ -35,6 +35,33 @@ function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
   );
 }
 
+/**
+ * Phrases postgres uses when a previous cluster's processes are still holding
+ * this data directory's shared memory. Its own advice is "terminate any old
+ * server processes", which is precisely what the caller does before retrying.
+ */
+const STALE_CLUSTER_PHRASES = [
+  "pre-existing shared memory block is still in use",
+  "terminate any old server processes",
+] as const;
+
+/**
+ * Did this start fail because leftovers from the last run are still alive?
+ *
+ * Kept narrow on purpose. Killing processes is not something to do on a guess,
+ * so only the shared-memory conflict counts - not a port clash, not a corrupt
+ * cluster, not a permissions problem, all of which want a human rather than a
+ * retry.
+ */
+export function isStaleEmbeddedPostgresCluster(
+  error: unknown,
+  recentLogs: readonly string[] = [],
+): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const haystack = [message, ...recentLogs].join("\n").toLowerCase();
+  return STALE_CLUSTER_PHRASES.some((phrase) => haystack.includes(phrase));
+}
+
 export function createEmbeddedPostgresLogBuffer(limit = DEFAULT_RECENT_LOG_LIMIT): {
   append(message: unknown): void;
   getRecentLogs(): string[];
