@@ -51,7 +51,7 @@ describe("claude model discovery", () => {
     expect(await fetchLiveClaudeModels()).toBeNull();
   });
 
-  it("discovers models from the Anthropic API and does not merge the curated list (retired models drop off)", async () => {
+  it("merges live API results with the curated list so active models not in this subscription still appear", async () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-test-abc123";
     vi.stubGlobal(
       "fetch",
@@ -65,11 +65,13 @@ describe("claude model discovery", () => {
       ]),
     );
     const models = await refreshClaudeModelsWithDiscovery();
-    expect(models).toEqual([
-      { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
-      { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
-    ]);
-    // A curated id the API no longer returns is absent from the discovered list.
+    // API-returned models appear with API-supplied labels.
+    expect(models.some((m) => m.id === "claude-haiku-4-5" && m.label === "Claude Haiku 4.5")).toBe(true);
+    expect(models.some((m) => m.id === "claude-opus-4-8" && m.label === "Claude Opus 4.8")).toBe(true);
+    // Curated-only models are also present (active but not returned by this subscription's API key).
+    expect(models.map((m) => m.id)).toContain("claude-opus-4-5");
+    expect(models.map((m) => m.id)).toContain("claude-sonnet-4-5");
+    // fetchLiveClaudeModels still returns only the raw API results (no curated merge).
     const live = await fetchLiveClaudeModels();
     expect(live?.map((m) => m.id)).toEqual(["claude-haiku-4-5", "claude-opus-4-8"]);
   });

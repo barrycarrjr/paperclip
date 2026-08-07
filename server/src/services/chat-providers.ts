@@ -141,11 +141,16 @@ export interface ChatProvider {
 }
 
 const ANTHROPIC_MODELS = [
+  "claude-fable-5",
+  "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
 ];
 
 const OPENAI_MODELS = ["gpt-5", "gpt-4.1", "gpt-4o", "gpt-4o-mini", "o4-mini"];

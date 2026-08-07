@@ -139,8 +139,16 @@ async function loadClaudeModels(opts?: { forceRefresh?: boolean }): Promise<Adap
 
   const discovered = await fetchAnthropicModelsFromApi(apiKey);
   if (discovered !== null && discovered.length > 0) {
-    cached = { keyFingerprint, expiresAt: now + ANTHROPIC_MODELS_CACHE_TTL_MS, models: discovered };
-    return discovered;
+    // Merge live API results with the curated list so that active models the
+    // current subscription/key cannot discover still appear in the picker. The
+    // API-returned entry wins when both sources carry the same model id (dedup
+    // keeps the first occurrence, so API goes first).
+    const curated = await curatedModels();
+    const merged = dedupeModels([...discovered, ...curated]).sort((a, b) =>
+      a.id.localeCompare(b.id, "en", { numeric: true, sensitivity: "base" }),
+    );
+    cached = { keyFingerprint, expiresAt: now + ANTHROPIC_MODELS_CACHE_TTL_MS, models: merged };
+    return merged;
   }
   if (cached && cached.keyFingerprint === keyFingerprint && cached.models.length > 0) {
     return cached.models;
