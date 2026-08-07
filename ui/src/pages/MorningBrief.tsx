@@ -48,10 +48,8 @@ import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/comp
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import {
+  buildReviewSenderGroups,
   dismissReviewSender,
-  headerMatchesSender,
-  parseReviewQueue,
-  type ReviewQueueEntry,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
@@ -184,59 +182,69 @@ export function MorningBrief() {
     },
   });
 
-  const reviewQueue: ReviewQueueRow[] = useMemo(() => {
-    if (!rulesBundles) return [];
-    const rows: ReviewQueueRow[] = [];
+  // "Waiting" is computed live from the inbox plus the server-side rules per
+  // mailbox, NOT from the markdown `## Review queue` section. That section is
+  // written by an out-of-band triage routine and goes stale: it left this page
+  // saying "nothing waiting" while real unread mail sat unmatched in the
+  // mailbox. The Portfolio Brief and the Email page both compute it this way
+  // already; this page was the last one still reading the document, which is
+  // why the same company could show different senders in two places.
+  const uniqueReviewMailboxes = useMemo(() => {
+    if (!rulesBundles) return [] as { mailbox: string; issueId: string }[];
+    const seen = new Set<string>();
+    const out: { mailbox: string; issueId: string }[] = [];
     for (const bundle of rulesBundles) {
-      const entries = parseReviewQueue(bundle.body);
-      for (const e of entries) {
-        rows.push({
-          sender: e.sender,
-          count: e.count,
-          mailbox: bundle.mailbox,
-          rulesIssueId: bundle.issueId,
-        });
-      }
+      if (seen.has(bundle.mailbox)) continue;
+      seen.add(bundle.mailbox);
+      out.push({ mailbox: bundle.mailbox, issueId: bundle.issueId });
     }
-    return rows.sort((a, b) => b.count - a.count);
+    return out;
   }, [rulesBundles]);
 
-  const uniqueReviewMailboxes = useMemo(() => {
-    return Array.from(new Set(reviewQueue.map((r) => r.mailbox)));
-  }, [reviewQueue]);
-
-  const previewMessageQueries = useQueries({
-    queries: uniqueReviewMailboxes.map((mailbox) => ({
-      queryKey: [
-        "morningBrief",
-        "reviewQueuePreview",
-        selectedCompanyId,
-        emailPluginId,
-        mailbox,
-      ],
-      queryFn: () => emailApi!.listMessages(mailbox, { limit: 200 }),
+  const reviewMessagesQueries = useQueries({
+    queries: uniqueReviewMailboxes.map(({ mailbox }) => ({
+      queryKey: ["morningBrief", "reviewQueueMessages", selectedCompanyId, emailPluginId, mailbox],
+      queryFn: () => emailApi!.listMessages(mailbox, { limit: 200, unseen: true }),
       enabled: !!emailApi && !!selectedCompanyId,
       staleTime: 60_000,
     })),
   });
 
-  const { reviewPreviewLookup, reviewMatchedUidsLookup } = useMemo(() => {
+  const reviewRulesQueries = useQueries({
+    queries: uniqueReviewMailboxes.map(({ mailbox }) => ({
+      queryKey: ["morningBrief", "reviewQueueRules", selectedCompanyId, emailPluginId, mailbox],
+      queryFn: () => emailApi!.listRules(mailbox),
+      enabled: !!emailApi && !!selectedCompanyId,
+      staleTime: 60_000,
+    })),
+  });
+
+  const { reviewQueue, reviewPreviewLookup, reviewMatchedUidsLookup } = useMemo(() => {
+    const rows: ReviewQueueRow[] = [];
     const headerMap = new Map<string, MailHeader>();
     const uidsMap = new Map<string, number[]>();
-    uniqueReviewMailboxes.forEach((mailbox, idx) => {
-      const messages = previewMessageQueries[idx]?.data?.messages ?? [];
-      const rowsForMailbox = reviewQueue.filter((r) => r.mailbox === mailbox);
-      for (const row of rowsForMailbox) {
-        const matches = messages.filter((m) => headerMatchesSender(m, row.sender));
-        if (matches.length === 0) continue;
-        matches.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        const key = `${mailbox}::${row.sender}`;
-        headerMap.set(key, matches[0]);
-        uidsMap.set(key, matches.map((m) => m.uid));
+
+    uniqueReviewMailboxes.forEach(({ mailbox, issueId }, idx) => {
+      const messages = reviewMessagesQueries[idx]?.data?.messages ?? [];
+      if (messages.length === 0) return;
+
+      for (const group of buildReviewSenderGroups(
+        messages,
+        reviewRulesQueries[idx]?.data?.rules ?? [],
+      )) {
+        rows.push({ sender: group.sender, count: group.count, mailbox, rulesIssueId: issueId });
+        const key = `${mailbox}::${group.sender}`;
+        headerMap.set(key, group.messages[0]! as MailHeader);
+        uidsMap.set(key, group.messages.map((m) => m.uid));
       }
     });
-    return { reviewPreviewLookup: headerMap, reviewMatchedUidsLookup: uidsMap };
-  }, [uniqueReviewMailboxes, previewMessageQueries, reviewQueue]);
+
+    return {
+      reviewQueue: rows,
+      reviewPreviewLookup: headerMap,
+      reviewMatchedUidsLookup: uidsMap,
+    };
+  }, [uniqueReviewMailboxes, reviewMessagesQueries, reviewRulesQueries]);
 
   const [hoveredPreviewKey, setHoveredPreviewKey] = useState<string | null>(null);
   const hoveredHeader = hoveredPreviewKey ? reviewPreviewLookup.get(hoveredPreviewKey) ?? null : null;
@@ -317,6 +325,13 @@ export function MorningBrief() {
     },
     ...reviewMutationOptions,
   });
+  /** Mark every unread message this row stands for as read. */
+  async function markRowUidsRead(row: ReviewQueueRow) {
+    if (!emailApi) return;
+    const uids = reviewMatchedUidsLookup.get(`${row.mailbox}::${row.sender}`) ?? [];
+    await Promise.allSettled(uids.map((uid) => emailApi.markRead(row.mailbox, uid, "INBOX")));
+  }
+
   const keepReadMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       if (!emailApi) {
@@ -351,7 +366,17 @@ export function MorningBrief() {
     ...reviewMutationOptions,
   });
   const dismissMutation = useMutation({
-    mutationFn: (row: ReviewQueueRow) => applyReviewTransform(row, dismissReviewSender),
+    mutationFn: async (row: ReviewQueueRow) => {
+      // Dismiss means "I dealt with this without making a rule". The count is
+      // now unread-and-unmatched mail, so marking those messages read is what
+      // actually clears the row; editing the document alone would leave the
+      // row exactly where it was. Next time this sender writes, the new
+      // unread mail brings them back.
+      await markRowUidsRead(row);
+      // The markdown Review queue is no longer read here, but the triage
+      // routine still writes it, so keep it tidy for anything else reading it.
+      await applyReviewTransform(row, dismissReviewSender);
+    },
     ...reviewMutationOptions,
   });
   const lastReviewError =

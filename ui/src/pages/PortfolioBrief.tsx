@@ -45,8 +45,8 @@ import { cn, formatCents } from "../lib/utils";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import {
+  buildReviewSenderGroups,
   dismissReviewSender,
-  extractEmailAddress,
 } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
@@ -502,51 +502,23 @@ export function PortfolioBrief() {
       const messages = reviewMessagesQueries[idx]?.data?.messages ?? [];
       if (messages.length === 0) return;
 
-      const auto = new Set<string>();
-      const keep = new Set<string>();
-      const mute = new Set<string>();
-      for (const r of reviewRulesQueries[idx]?.data?.rules ?? []) {
-        const p = r.senderPattern.toLowerCase();
-        if (r.ruleType === "auto-triage") auto.add(p);
-        else if (r.ruleType === "keep-always") keep.add(p);
-        else if (r.ruleType === "mute") mute.add(p);
-      }
-      const isRuled = (addr: string): boolean => {
-        if (auto.has(addr) || keep.has(addr) || mute.has(addr)) return true;
-        const at = addr.indexOf("@");
-        if (at < 0) return false;
-        const domain = `@${addr.slice(at + 1)}`;
-        return auto.has(domain) || keep.has(domain) || mute.has(domain);
-      };
-
-      // Group unmatched unread messages by sender address. Senders with no
-      // extractable address fall back to the raw `from` so they aren't lost.
-      const groups = new Map<string, MailHeader[]>();
-      for (const msg of messages) {
-        const addr = extractEmailAddress(msg.from);
-        if (addr && isRuled(addr)) continue;
-        const key = addr ?? msg.from.trim().toLowerCase();
-        const list = groups.get(key);
-        if (list) list.push(msg);
-        else groups.set(key, [msg]);
-      }
-
-      for (const [sender, group] of groups) {
+      for (const group of buildReviewSenderGroups(
+        messages,
+        reviewRulesQueries[idx]?.data?.rules ?? [],
+      )) {
         rows.push({
-          sender,
-          count: group.length,
+          sender: group.sender,
+          count: group.count,
           mailbox,
           rulesIssueId: issueId,
           companyId,
         });
-        group.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        const previewKey = `${companyId}::${mailbox}::${sender}`;
-        headerMap.set(previewKey, group[0]!);
-        uidsMap.set(previewKey, group.map((m) => m.uid));
+        const previewKey = `${companyId}::${mailbox}::${group.sender}`;
+        headerMap.set(previewKey, group.messages[0]! as MailHeader);
+        uidsMap.set(previewKey, group.messages.map((m) => m.uid));
       }
     });
 
-    rows.sort((a, b) => b.count - a.count);
     return {
       reviewQueueRows: rows,
       reviewPreviewLookup: headerMap,
