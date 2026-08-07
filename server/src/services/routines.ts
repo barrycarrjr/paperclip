@@ -633,6 +633,62 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
   }
 
+  /**
+   * Retire earlier execution issues from this routine that have finished and
+   * that nobody is waiting on.
+   *
+   * An execution issue is only ever closed by the agent that owns it. When a
+   * run fails instead, the issue stays open and nothing ever looks at it again,
+   * while the next cron firing creates a fresh one beside it. The concurrency
+   * check above cannot help: "still going" there means a heartbeat run in
+   * flight, so a dead-but-open issue is invisible to it and gets stepped over
+   * rather than replaced.
+   *
+   * Measured on the instance this was written for: 1,944 execution issues, 119
+   * of them still open, and every single one blocked. Four mailbox routines
+   * accounted for 105 of those, going back 65 days. A routine that fires four
+   * times a day was leaving roughly 1,460 issues a year behind.
+   *
+   * So a firing now clears its own wreckage first. Deliberately narrow: only
+   * this routine's own bookkeeping (originKind routine_execution, originId this
+   * routine, matching fingerprint), only where no run is still in flight, and
+   * never where an agent has asked a question and is waiting on an answer -
+   * that is a real decision and closing it would throw the question away.
+   */
+  async function supersedeFinishedExecutionIssues(
+    routine: typeof routines.$inferSelect,
+    dispatchFingerprint: string | null | undefined,
+    executor: Db = db,
+  ): Promise<string[]> {
+    const fingerprintCondition = routineExecutionFingerprintCondition(dispatchFingerprint);
+    const stale = await executor
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, routine.companyId),
+          eq(issues.originKind, "routine_execution"),
+          eq(issues.originId, routine.id),
+          inArray(issues.status, OPEN_ISSUE_STATUSES),
+          isNull(issues.hiddenAt),
+          ...(fingerprintCondition ? [fingerprintCondition] : []),
+          // Nothing still running, by either route the liveness check uses.
+          sql`NOT EXISTS (SELECT 1 FROM heartbeat_runs r WHERE r.id = ${issues.executionRunId} AND r.status IN ('queued','running','scheduled_retry'))`,
+          sql`NOT EXISTS (SELECT 1 FROM heartbeat_runs r WHERE r.company_id = ${issues.companyId} AND r.status IN ('queued','running','scheduled_retry') AND r.context_snapshot ->> 'issueId' = CAST(${issues.id} AS text))`,
+          // Never close something an agent is holding for an answer.
+          sql`NOT EXISTS (SELECT 1 FROM issue_thread_interactions ti WHERE ti.issue_id = ${issues.id} AND ti.status = 'pending')`,
+        ),
+      );
+
+    if (stale.length === 0) return [];
+    const ids = stale.map((row) => row.id);
+    await executor
+      .update(issues)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(inArray(issues.id, ids));
+    return ids;
+  }
+
   async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
     return executor
       .update(routineRuns)
@@ -844,6 +900,19 @@ export function routineService(
             nextRunAt,
           }, txDb);
           return updated ?? createdRun;
+        }
+
+        // Clear this routine's finished leftovers before adding another.
+        const superseded = await supersedeFinishedExecutionIssues(
+          input.routine,
+          dispatchFingerprint,
+          txDb,
+        );
+        if (superseded.length > 0) {
+          logger.info(
+            { routineId: input.routine.id, superseded: superseded.length },
+            "closed finished execution issues from earlier firings of this routine",
+          );
         }
 
         try {
