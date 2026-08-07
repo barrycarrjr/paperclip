@@ -45,6 +45,7 @@ import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runt
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
+import { restoreHostClaudeTokenAtStartup } from "./adapters/registry.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { conflict } from "./errors.js";
@@ -912,6 +913,25 @@ export async function startServer(): Promise<StartedServer> {
     deploymentMode: config.deploymentMode,
     resolveSessionFromHeaders,
   });
+
+  // Before any agent runs. A server started from a Claude Code or desktop
+  // context inherits launch markers that stop an inherited Claude token
+  // reaching agents, and the desktop strips the real token on the way past, so
+  // the machine's saved sign-in is invisible until this puts it back.
+  // Awaited, not fired off: the heartbeat scheduler starts a few lines below,
+  // and an agent spawned before the token is back would fail to sign in and
+  // add another failure row for a problem already fixed. Costs a fraction of a
+  // second, and only on a machine that has a saved token to read.
+  try {
+    const claudeToken = await restoreHostClaudeTokenAtStartup();
+    if (claudeToken.action !== "none") {
+      logger.warn({ action: claudeToken.action }, claudeToken.reason);
+    } else {
+      logger.info(claudeToken.reason);
+    }
+  } catch (err) {
+    logger.error({ err }, "could not restore the machine's saved Claude token at startup");
+  }
 
   void reconcilePersistedRuntimeServicesOnStartup(db as any)
     .then((result) => {

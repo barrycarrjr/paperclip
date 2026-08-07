@@ -194,8 +194,18 @@ async function claudeGetAuthStatus(): Promise<AdapterAuthStatus | null> {
     : "Claude subscription";
 
   // A long-lived setup-token in the host env (the durable path the Adapters
-  // sign-in button applies) is authoritative when present.
+  // sign-in button applies) is authoritative when present - but only until its
+  // recorded expiry. Reporting a run-out token as signed in is how a whole
+  // fleet of agents fails for days with a green badge above them.
   if ((process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) {
+    const recordedExpiry = Date.parse(process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES ?? "");
+    if (Number.isFinite(recordedExpiry) && recordedExpiry <= Date.now()) {
+      return {
+        loggedIn: false,
+        method: `${subscriptionLabel} — token expired`,
+        detail: "The saved token has run out. Paste a new one on Instance Settings, Adapters.",
+      };
+    }
     return { loggedIn: true, method: subscriptionLabel, detail: status?.subscriptionType ?? "long-lived token" };
   }
 
@@ -231,7 +241,8 @@ const CLAUDE_NESTING_MARKERS = [
  * the user environment — the token is passed to the child through its env, never
  * on the command line. (Per-agent "Set up Claude auth" remains the restart-proof
  * path; this host env var can be re-stripped if the server is relaunched from a
- * Claude Code / desktop context.)
+ * Claude Code / desktop context — see restoreHostClaudeTokenAtStartup, which
+ * puts it back.)
  */
 async function persistHostClaudeToken(
   token: string,
@@ -293,6 +304,152 @@ export async function applyClaudeHostToken(
   const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
   await persistHostClaudeToken(token, expiresAt);
   return { ok: true, expiresAt };
+}
+
+/**
+ * Putting the machine's Claude sign-in back after a restart.
+ *
+ * Pasting a token on the Adapters page saves it in two places: the running
+ * server's own environment, and (on Windows) the user environment so it
+ * survives a restart. The saved copy was being lost on the way back in.
+ *
+ * Every agent that has not been given its own token runs on whatever the server
+ * inherited, and buildSpawnChildEnv refuses to pass an inherited token down to
+ * an agent when the environment also carries Claude Code's own launch markers
+ * (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT and friends) - correctly, because in that
+ * situation the inherited value is a short-lived desktop session token that a
+ * separate process cannot use. But a server started FROM a Claude Code or
+ * desktop context inherits those markers whether or not it also inherits a real
+ * long-lived token, and the desktop strips the real token out on the way past.
+ * So the machine ends up holding a perfectly good token, saved months ago and
+ * valid for another year, that no agent can see. Every agent without its own
+ * token fails to sign in, indefinitely, and nothing says why.
+ *
+ * That is exactly what happened here: a token valid until 2027 sat in the user
+ * environment while ten agents across several companies failed to sign in for
+ * three days, and the one agent that had been given its own token kept working.
+ *
+ * So at startup the saved token is read back and applied, and the launch markers
+ * are dropped, which is the same thing pasting a token does. Deliberately
+ * conservative: a token already in the environment is never overwritten, an
+ * expired saved token is left alone and reported rather than used, and on a
+ * platform where nothing is saved this does nothing at all.
+ */
+
+export interface HostClaudeTokenRestore {
+  action: "none" | "adopt-saved-token" | "unblock-inherited-token";
+  reason: string;
+}
+
+/**
+ * What startup should do about the machine's Claude token. Pure, so the
+ * interesting cases are decided here rather than against a real environment.
+ */
+export function decideHostClaudeTokenRestore(input: {
+  /** The token already in this process's environment, if any. */
+  currentToken: string | null | undefined;
+  /** The token saved to the host user environment, if any. */
+  savedToken: string | null | undefined;
+  /** The recorded expiry of the saved token, ISO, if any. */
+  savedExpiresAt: string | null | undefined;
+  /** Whether Claude Code's launch markers are in this process's environment. */
+  hasLaunchMarkers: boolean;
+  nowMs: number;
+}): HostClaudeTokenRestore {
+  const current = input.currentToken?.trim() ?? "";
+  const saved = input.savedToken?.trim() ?? "";
+
+  if (current.length > 0) {
+    // Whatever put it there wins; this is only ever a repair, never an
+    // override. The markers still have to go, or agents cannot see it.
+    return input.hasLaunchMarkers
+      ? {
+          action: "unblock-inherited-token",
+          reason:
+            "The machine's Claude token is present but was hidden from agents by Claude Code's launch markers.",
+        }
+      : { action: "none", reason: "The machine's Claude token is already usable." };
+  }
+
+  if (saved.length === 0) {
+    return { action: "none", reason: "No saved Claude token for this machine." };
+  }
+
+  const expiresAtMs = input.savedExpiresAt ? Date.parse(input.savedExpiresAt) : Number.NaN;
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= input.nowMs) {
+    // Using it would fail every run the same way, and quietly. Better to leave
+    // it and let the sign-in status say the login has run out.
+    return {
+      action: "none",
+      reason: `The saved Claude token for this machine ran out on ${input.savedExpiresAt}. Sign in again to replace it.`,
+    };
+  }
+
+  return {
+    action: "adopt-saved-token",
+    reason: input.savedExpiresAt
+      ? `Restored the machine's saved Claude token, good until ${input.savedExpiresAt}.`
+      : "Restored the machine's saved Claude token.",
+  };
+}
+
+/** Read a persisted user-environment variable. Windows only; null elsewhere. */
+async function readWindowsUserEnv(name: string): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `[Environment]::GetEnvironmentVariable('${name}','User')`,
+      ],
+      { windowsHide: true, timeout: 10_000 },
+    );
+    const value = stdout.trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Apply the decision above. Called once during startup; safe to call when there
+ * is nothing to do, which is the common case.
+ */
+export async function restoreHostClaudeTokenAtStartup(): Promise<HostClaudeTokenRestore> {
+  const hasLaunchMarkers = CLAUDE_NESTING_MARKERS.some(
+    (marker) => (process.env[marker] ?? "").trim().length > 0,
+  );
+  const currentToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null;
+
+  // Only pay for reading the saved copy when it could actually be used.
+  const needsSaved = (currentToken ?? "").trim().length === 0;
+  const savedToken = needsSaved ? await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN") : null;
+  const savedExpiresAt = needsSaved
+    ? (await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN_EXPIRES")) ??
+      process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES ??
+      null
+    : null;
+
+  const decision = decideHostClaudeTokenRestore({
+    currentToken,
+    savedToken,
+    savedExpiresAt,
+    hasLaunchMarkers,
+    nowMs: Date.now(),
+  });
+
+  if (decision.action === "adopt-saved-token" && savedToken) {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = savedToken.trim();
+    if (savedExpiresAt) process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = savedExpiresAt;
+  }
+  if (decision.action !== "none") {
+    for (const marker of CLAUDE_NESTING_MARKERS) delete process.env[marker];
+  }
+
+  return decision;
 }
 
 async function claudeAuthenticate(): Promise<AdapterAuthResult> {

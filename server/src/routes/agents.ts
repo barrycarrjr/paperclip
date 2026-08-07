@@ -5,6 +5,10 @@ import type { Db } from "@paperclipai/db";
 import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import {
+  agentHasOwnClaudeToken,
+  countClaudeSignedOutAgents,
+} from "../services/claude-sign-in-impact.js";
+import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -3000,6 +3004,26 @@ export function agentRoutes(
     });
 
     res.json({ ok: true, secretId, expiresAt, rotated });
+  });
+
+  // How much of the machine this failure covers. An agent that shares the
+  // machine's Claude sign-in is never broken alone, and the failure page had no
+  // way to know that: it could see one agent, and the fix it offered reached
+  // only that one. A bare number, because the count crosses companies.
+  router.get("/agents/:id/claude-sign-in-impact", async (req, res) => {
+    assertBoard(req);
+    const agent = await svc.getById(req.params.id as string);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId, "read");
+
+    const impact = await countClaudeSignedOutAgents(db, { excludeAgentId: agent.id });
+    res.json({
+      otherAgentsSignedOut: impact.signedOutAgents,
+      usesOwnToken: agentHasOwnClaudeToken(agent.adapterConfig),
+    });
   });
 
   router.post("/agents/:id/codex-login", async (req, res) => {

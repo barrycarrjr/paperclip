@@ -241,9 +241,23 @@ export const agentsApi = {
    */
   setupTokenForClaude: (id: string, token: string, companyId?: string) =>
     api.post<AdapterSetupTokenResult>(agentPath(id, companyId, "/claude-setup-token"), { token }),
+  /**
+   * How far this Claude sign-in failure reaches. Agents share the machine's
+   * sign-in unless they have their own saved token, so a failure here is
+   * usually not this agent's alone.
+   */
+  claudeSignInImpact: (id: string, companyId?: string) =>
+    api.get<ClaudeSignInImpact>(agentPath(id, companyId, "/claude-sign-in-impact")),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
 };
+
+export interface ClaudeSignInImpact {
+  /** Other agents on this machine whose latest run failed to sign in to Claude. */
+  otherAgentsSignedOut: number;
+  /** True when this agent has its own saved token rather than sharing the machine's. */
+  usesOwnToken: boolean;
+}
 
 export interface AvailableSkill {
   name: string;

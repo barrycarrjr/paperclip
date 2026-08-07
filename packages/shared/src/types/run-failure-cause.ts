@@ -26,8 +26,14 @@ export interface RunFailureCause {
   fixIsElsewhere: boolean;
 }
 
+/**
+ * Deliberately does not say "this agent". Agents normally share one sign-in per
+ * machine, so a signed-out failure is usually several agents' problem at once -
+ * and this sentence is rendered on the Brief, where an operator seeing it once
+ * per agent needs to understand it is one thing to fix, not several.
+ */
 const SIGNED_OUT_FIX =
-  "Sign in again and save the new token. Until then every run of this agent fails the same way.";
+  "Sign in again and save the new token. Every agent sharing that sign-in keeps failing the same way until you do.";
 
 function signedOut(product: string): RunFailureCause {
   return {

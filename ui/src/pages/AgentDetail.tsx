@@ -34,6 +34,7 @@ import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
+import { ClaudeSignInScope } from "../components/ClaudeSignInScope";
 import { RunFailureGuidance } from "../components/RunFailureGuidance";
 import { RunReportCard, runReportText } from "../components/RunReportCard";
 import { RunWorkProductsCard } from "../components/RunWorkProductsCard";
@@ -3351,6 +3352,18 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   // Save a long-lived token pasted from `claude setup-token` (run in a terminal,
   // where the browser sign-in reliably works). Synchronous — stores a secret +
   // binds this agent's env.
+  // How far this sign-in failure reaches. Only asked when the run actually
+  // failed to sign in, because it is a question about the whole machine and
+  // nobody needs it on a healthy run.
+  const claudeSignInImpact = useQuery({
+    queryKey: ["claude-sign-in-impact", run.agentId],
+    queryFn: () => agentsApi.claudeSignInImpact(run.agentId, run.companyId),
+    enabled: run.errorCode === "claude_auth_required" && adapterType === "claude_local",
+    staleTime: 30_000,
+  });
+  const otherAgentsSignedOut = claudeSignInImpact.data?.otherAgentsSignedOut ?? 0;
+  const agentHasOwnClaudeToken = claudeSignInImpact.data?.usesOwnToken ?? false;
+
   const submitClaudeToken = useMutation({
     mutationFn: () => agentsApi.setupTokenForClaude(run.agentId, setupTokenInput.trim(), run.companyId),
     onSuccess: () => {
@@ -3533,12 +3546,16 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             )}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">
+                <ClaudeSignInScope
+                  usesOwnToken={agentHasOwnClaudeToken}
+                  otherAgentsAffected={otherAgentsSignedOut}
+                />
                 <p className="text-xs text-muted-foreground">
-                  Claude Code on the host can't authenticate. In a terminal on the host run{" "}
+                  To give this agent its own token: in a terminal on the host run{" "}
                   <code className="font-mono">claude setup-token</code>, approve the sign-in in your
                   browser, then paste the token below (starts with{" "}
-                  <code className="font-mono">sk-ant-oat01-</code>). It's stored as a secret and bound
-                  to this agent — valid ~1 year, effective on the next run.
+                  <code className="font-mono">sk-ant-oat01-</code>). It is saved for this company and
+                  used by this agent only, for about a year, from its next run.
                 </p>
                 <textarea
                   value={setupTokenInput}
@@ -3557,13 +3574,24 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                   {submitClaudeToken.isPending ? "Saving…" : "Save token"}
                 </Button>
                 {setupTokenResult?.ok && (
-                  <p className="text-xs text-green-600 dark:text-green-400">
-                    ✓ Token stored and bound
-                    {setupTokenResult.expiresAt
-                      ? `; valid until ${new Date(setupTokenResult.expiresAt).toLocaleDateString()}`
-                      : ""}
-                    . Re-run the agent to pick it up.
-                  </p>
+                  <div className="space-y-1">
+                    <p className="text-xs text-green-600 dark:text-green-400">
+                      ✓ Saved for this agent
+                      {setupTokenResult.expiresAt
+                        ? `; good until ${new Date(setupTokenResult.expiresAt).toLocaleDateString()}`
+                        : ""}
+                      . Re-run the agent to pick it up.
+                    </p>
+                    {otherAgentsSignedOut > 0 && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        {otherAgentsSignedOut === 1
+                          ? "1 other agent still cannot sign in."
+                          : `${otherAgentsSignedOut} other agents still cannot sign in.`}{" "}
+                        They use this computer's sign-in, so pasting here does not reach them. Fix
+                        it once on Instance settings, Adapters.
+                      </p>
+                    )}
+                  </div>
                 )}
                 {setupTokenError && <p className="text-xs text-destructive">{setupTokenError}</p>}
                 <p className="text-xs text-muted-foreground">
