@@ -11,7 +11,8 @@ import { inboxDismissalService, logActivity } from "../services/index.js";
  * questions, sign-off gates and budget stops impossible to hide: the request
  * was rejected with a 400 the UI never surfaced.
  */
-const ITEM_KEY_RE = /^(approval|join|run|run-group|issue|question|sign_off|budget|email):.+$/;
+const ITEM_KEY_RE =
+  /^(approval|join|run|run-group|run-cause|issue|question|sign_off|budget|email):.+$/;
 
 const inboxDismissalSchema = z.object({
   itemKey: z.string().trim().min(1).regex(ITEM_KEY_RE, "Unsupported inbox item key"),

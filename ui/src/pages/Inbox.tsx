@@ -20,7 +20,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AttentionRow } from "../components/AttentionRow";
-import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
+import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import { attentionApi } from "../api/attention";
 import { attentionRowIssueId, attentionRowRunId } from "@paperclipai/shared";
 import { invalidateAttention } from "../lib/invalidate-attention";
@@ -1055,6 +1055,18 @@ export function Inbox() {
     return { hydrated, unhydrated };
   }, [heartbeatRuns, attention]);
   const failedRuns = failedRunsFromQueue.hydrated;
+  // The queue names a run failure after the PROBLEM, not the run: an agent that
+  // cannot sign in is one row however many runs it burns through. Dismissing
+  // has to be recorded against that name, or it lasts only until the next
+  // attempt mints a different one.
+  const attentionKeyByRunId = useMemo(() => {
+    const byRunId = new Map<string, string>();
+    for (const row of attention?.rows ?? []) {
+      const runId = attentionRowRunId(row);
+      if (runId) byRunId.set(runId, row.key);
+    }
+    return byRunId;
+  }, [attention]);
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
     if (tab === "mine") {
@@ -1090,7 +1102,7 @@ export function Inbox() {
     return joinRequests;
   }, [joinRequests, tab, showJoinRequestsCategory, dismissedAtByKey]);
 
-  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
+  const { snooze: snoozeAttentionRow, dismiss: dismissAttentionRow } = useAttentionRowActions();
   const attentionRowsForTab = useMemo(() => {
     // On the All tab every other kind is hidden when its category is
     // deselected; these rows follow the same rule rather than ignoring the
@@ -2456,7 +2468,8 @@ export function Inbox() {
                     }
 
                     if (item.kind === "failed_run") {
-                      const runKey = `run:${item.run.id}`;
+                      const runKey =
+                        attentionKeyByRunId.get(item.run.id) ?? `run:${item.run.id}`;
                       const isArchiving = archivingNonIssueIds.has(runKey);
                       const row = (
                         <FailedRunInboxRow
@@ -2542,6 +2555,7 @@ export function Inbox() {
                             row={item.row}
                             className={isSelected ? "bg-accent/40" : undefined}
                             onSnooze={snoozeAttentionRow}
+                            onDismiss={dismissAttentionRow}
                           />,
                         ),
                       );

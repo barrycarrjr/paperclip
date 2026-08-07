@@ -6,6 +6,11 @@ export {
   attentionSnoozeKey,
 } from "./types/attention.js";
 export {
+  describeRunFailureCause,
+  isSingleCauseFailure,
+  type RunFailureCause,
+} from "./types/run-failure-cause.js";
+export {
   APPROVAL_TYPE_LABEL,
   approvalLabel,
   approvalSubject,

@@ -30,7 +30,7 @@ import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsStrip } from "../components/ActiveAgentsPanel";
 import { agentsApi } from "../api/agents";
 import { AttentionRow } from "../components/AttentionRow";
-import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
+import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -410,7 +410,7 @@ export function PortfolioBrief() {
     return groupByCompany(overnight, companies);
   }, [activityData, companies, overnightCutoff]);
 
-  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
+  const { snooze: snoozeAttentionRow, dismiss: dismissAttentionRow } = useAttentionRowActions();
   const attentionBuckets: CompanyBucket<AttentionRowData>[] = useMemo(
     () => groupByCompany(attentionData?.rows ?? [], companies),
     [attentionData, companies],
@@ -891,6 +891,7 @@ export function PortfolioBrief() {
                         row={row}
                         hrefPrefix={`/${company.issuePrefix}`}
                         onSnooze={snoozeAttentionRow}
+                        onDismiss={dismissAttentionRow}
                       />
                     ))}
                     {total > ATTENTION_PER_COMPANY && (

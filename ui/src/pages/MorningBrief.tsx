@@ -35,7 +35,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { AttentionRow } from "../components/AttentionRow";
-import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
+import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import {
   ChartCard,
   RunActivityChart,
@@ -127,7 +127,7 @@ export function MorningBrief() {
     refetchInterval: 15_000,
   });
   const attentionRows = attention?.rows ?? [];
-  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
+  const { snooze: snoozeAttentionRow, dismiss: dismissAttentionRow } = useAttentionRowActions();
 
   const { data: issues } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
@@ -674,6 +674,7 @@ export function MorningBrief() {
                     row={row}
                     nowMs={now.getTime()}
                     onSnooze={snoozeAttentionRow}
+                    onDismiss={dismissAttentionRow}
                   />
                 ))}
                 {remainingAttention > 0 && (

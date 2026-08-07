@@ -53,6 +53,19 @@ export interface AttentionRow {
   blocking: AttentionBlocking;
   /** Epoch ms the wait began, for the "stopped 3h" readout. */
   blockedSinceMs: number | null;
+  /**
+   * When this exact problem started, for rows where the same thing happening
+   * again is not news.
+   *
+   * A dismissal normally lapses the moment anything about the row changes,
+   * which is right for a question someone has since edited. It is wrong for an
+   * agent that is failing every twenty minutes for the same reason: waving it
+   * away would last exactly until the next attempt. So a dismissal is measured
+   * against this instead, and only a genuinely different problem - a different
+   * cause, or the work starting to succeed - brings the row back. Null, the
+   * usual case, keeps the old behaviour.
+   */
+  sameProblemSinceMs?: number | null;
   /** How many occurrences this row stands for (>= 1). */
   count: number;
   /** What happens if this is ignored. Computed, never a canned phrase. */
@@ -69,6 +82,12 @@ export interface AttentionRow {
   deadlineOutcome: string | null;
   /** Company-relative path where the decision can actually be made. */
   href: string;
+  /**
+   * The newest failed run behind a run-failure row. Carried as a field rather
+   * than read out of `key`, because the key names the problem and a problem can
+   * outlive any one run of it.
+   */
+  runId?: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -95,14 +114,17 @@ export function attentionRowIssueId(row: AttentionRow): string | null {
 
 /**
  * The run whose failure this row stands for. A row can represent several
- * failures of the same work ("failed 5 times"); this is the newest one, and
- * the id any dismissal of the row is recorded against.
+ * failures ("failed 5 times"), and this is the newest of them - the one worth
+ * opening to see what went wrong.
+ *
+ * Older rows carried it inside `key` as `run:<id>`, which is still read here so
+ * a queue response from a server that predates the `runId` field keeps working.
  */
 export function attentionRowRunId(row: AttentionRow): string | null {
   if (row.kind !== "run_failure") return null;
-  const separator = row.key.indexOf(":");
-  if (separator < 0) return null;
-  const id = row.key.slice(separator + 1);
+  if (row.runId) return row.runId;
+  if (!row.key.startsWith("run:")) return null;
+  const id = row.key.slice("run:".length);
   return id.length > 0 ? id : null;
 }
 

@@ -11,6 +11,8 @@ import {
 import {
   approvalLabel,
   attentionSnoozeKey,
+  describeRunFailureCause,
+  isSingleCauseFailure,
   type AttentionKind,
   type AttentionRow,
 } from "@paperclipai/shared";
@@ -44,6 +46,14 @@ function ms(value: Date | string | null | undefined): number | null {
 function truncate(value: string, max = 120): string {
   const clean = value.replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
+}
+
+/** "3 pieces of work stalled, 41 attempts" - the size of one known problem. */
+function describeStalledWork(group: { failures: number; stalledWork: number }): string {
+  const work =
+    group.stalledWork > 1 ? `${group.stalledWork} pieces of work stalled` : "Work stalled";
+  const attempts = group.failures > 1 ? `${group.failures} attempts, all the same` : "1 attempt";
+  return `${work}, ${attempts}`;
 }
 
 export interface AttentionQueueActor {
@@ -82,6 +92,10 @@ export function isAttentionRowSnoozed(
  * A dismissal only holds until the item changes. Newer activity than the
  * dismissal means the thing the operator waved away is not the thing in
  * front of them now, so it comes back.
+ *
+ * What counts as "changed" is the row's business. Most rows say any activity
+ * at all; a failing agent says only a different problem, because otherwise
+ * dismissing something that breaks every twenty minutes buys twenty minutes.
  */
 export function isAttentionRowDismissed(
   row: AttentionRow,
@@ -90,7 +104,7 @@ export function isAttentionRowDismissed(
   if (!dismissedAtByKey?.size) return false;
   const dismissedAt = dismissedAtByKey.get(row.key);
   if (dismissedAt === undefined) return false;
-  return dismissedAt >= row.updatedAtMs;
+  return dismissedAt >= (row.sameProblemSinceMs ?? row.updatedAtMs);
 }
 
 export function attentionQueueService(db: Db) {
@@ -250,6 +264,7 @@ export function attentionQueueService(db: Db) {
         agentName: agents.name,
         status: heartbeatRuns.status,
         error: heartbeatRuns.error,
+        errorCode: heartbeatRuns.errorCode,
         scheduledRetryAt: heartbeatRuns.scheduledRetryAt,
         contextSnapshot: heartbeatRuns.contextSnapshot,
         createdAt: heartbeatRuns.createdAt,
@@ -261,38 +276,51 @@ export function attentionQueueService(db: Db) {
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(RUN_FAILURE_LOOKBACK);
 
-    return groupUnaddressedRunFailures(rows)
-      .map((group) => {
-        const row = group.head;
-        const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId;
-        return {
-          key: `run:${row.id}`,
-          // The key names the newest failed run, so it changes every time the
-          // same work fails again. A snooze has to outlive that, so it is
-          // recorded against the work instead: this agent, this issue.
-          snoozeKey: `run-group:${row.agentId}:${issueId ?? "no-issue"}`,
-          kind: "run_failure" as AttentionKind,
-          companyId,
-          title:
-            group.failures > 1
-              ? `${row.agentName} failed ${group.failures} times with no retry left`
-              : `${row.agentName} failed with no retry left`,
-          detail: row.error ? truncate(row.error, 90) : null,
-          askedBy: row.agentName,
-          blocking: "waiting" as const,
-          blockedSinceMs: ms(row.finishedAt) ?? ms(row.createdAt),
-          count: group.failures,
-          consequence: "Paperclip has given up on this work. It stays undone until you act.",
-          // Nothing in Paperclip decides this for you. It waits.
-          deadlineAtMs: null,
-          deadlineOutcome: null,
-          href: typeof issueId === "string"
-            ? `/agents/${row.agentId}/runs/${row.id}`
-            : `/agents/${row.agentId}/runs/${row.id}`,
-          createdAtMs: ms(row.createdAt) ?? 0,
-          updatedAtMs: ms(row.finishedAt) ?? ms(row.createdAt) ?? 0,
-        };
-      });
+    return mergeRunFailuresBySharedCause(groupUnaddressedRunFailures(rows)).map((group) => {
+      const row = group.head;
+      const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId;
+      const cause = describeRunFailureCause(row.errorCode);
+      const startedMs = group.oldestFailureMs ?? ms(row.finishedAt) ?? ms(row.createdAt);
+      return {
+        // Names the problem, not the run. `run:<id>` used to name the newest
+        // failed run, which meant the key changed every time the same thing
+        // failed again - so dismissing it bought only the time until the next
+        // attempt. These keys hold still while the problem does.
+        key: cause
+          ? `run-cause:${row.agentId}:${row.errorCode}`
+          : `run-group:${row.agentId}:${issueId ?? "no-issue"}`,
+        kind: "run_failure" as AttentionKind,
+        companyId,
+        title: cause
+          ? cause.summarize(row.agentName)
+          : group.failures > 1
+            ? `${row.agentName} failed ${group.failures} times with no retry left`
+            : `${row.agentName} failed with no retry left`,
+        detail: cause
+          ? describeStalledWork(group)
+          : row.error
+            ? truncate(row.error, 90)
+            : null,
+        askedBy: row.agentName,
+        blocking: "waiting" as const,
+        // How long it has actually been broken, not how long since the most
+        // recent attempt. An agent failing every twenty minutes for three days
+        // was reading as "waiting 12m".
+        blockedSinceMs: startedMs,
+        sameProblemSinceMs: startedMs,
+        count: group.failures,
+        consequence: cause
+          ? `${cause.fix} Nothing this agent is meant to do gets done meanwhile.`
+          : "Paperclip has given up on this work. It stays undone until you act.",
+        // Nothing in Paperclip decides this for you. It waits.
+        deadlineAtMs: null,
+        deadlineOutcome: null,
+        href: `/agents/${row.agentId}/runs/${row.id}`,
+        runId: row.id,
+        createdAtMs: ms(row.createdAt) ?? 0,
+        updatedAtMs: ms(row.finishedAt) ?? ms(row.createdAt) ?? 0,
+      };
+    });
   }
 
   /**
@@ -427,8 +455,21 @@ export interface RunFailureCandidate {
   id: string;
   agentId: string;
   status: string;
+  errorCode?: string | null;
   scheduledRetryAt: Date | string | null;
   contextSnapshot: unknown;
+  createdAt?: Date | string | null;
+  finishedAt?: Date | string | null;
+}
+
+/** One problem: its newest run, how often it has happened, and since when. */
+export interface RunFailureGroup<T extends RunFailureCandidate> {
+  head: T;
+  failures: number;
+  /** When this run of trouble began, which is what the row reports and what a dismissal is measured against. */
+  oldestFailureMs: number | null;
+  /** How many separate pieces of work this one problem is holding up. */
+  stalledWork: number;
 }
 
 /**
@@ -447,25 +488,95 @@ export interface RunFailureCandidate {
  */
 export function groupUnaddressedRunFailures<T extends RunFailureCandidate>(
   newestFirst: readonly T[],
-): Array<{ head: T; failures: number }> {
-  const groups = new Map<string, { head: T; failures: number; closed: boolean }>();
+): Array<RunFailureGroup<T>> {
+  const groups = new Map<
+    string,
+    { head: T; failures: number; closed: boolean; oldestFailureMs: number | null; stalledWork: number }
+  >();
   for (const row of newestFirst) {
     const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId ?? null;
     const groupKey = `${row.agentId}:${typeof issueId === "string" ? issueId : "no-issue"}`;
     const existing = groups.get(groupKey);
     const failed = FAILED_RUN_STATUSES.includes(row.status);
     if (!existing) {
-      groups.set(groupKey, { head: row, failures: failed ? 1 : 0, closed: !failed });
+      groups.set(groupKey, {
+        head: row,
+        failures: failed ? 1 : 0,
+        closed: !failed,
+        oldestFailureMs: failed ? runFailedAtMs(row) : null,
+        stalledWork: 1,
+      });
       continue;
     }
     if (existing.closed) continue;
-    if (failed) existing.failures += 1;
-    else existing.closed = true;
+    if (failed) {
+      existing.failures += 1;
+      // Input is newest-first, so every later match is older than the last.
+      existing.oldestFailureMs = runFailedAtMs(row) ?? existing.oldestFailureMs;
+    } else existing.closed = true;
   }
 
   return [...groups.values()]
     .filter((group) => !group.closed && group.failures > 0 && !group.head.scheduledRetryAt)
-    .map(({ head, failures }) => ({ head, failures }));
+    .map(({ head, failures, oldestFailureMs, stalledWork }) => ({
+      head,
+      failures,
+      oldestFailureMs,
+      stalledWork,
+    }));
+}
+
+/**
+ * Collapse an agent's groups that all failed for the same, single reason.
+ *
+ * One expired login is one problem, however many pieces of work it stalls.
+ * Left ungrouped it reads as four separate things to deal with, each with its
+ * own "failed 3 times" count, each pointing at a different run, none of them
+ * mentioning the login. Only causes where retrying cannot work are merged: two
+ * crashes with no error code can genuinely be two different bugs, so those stay
+ * as they are.
+ */
+export function mergeRunFailuresBySharedCause<T extends RunFailureCandidate>(
+  groups: readonly RunFailureGroup<T>[],
+): Array<RunFailureGroup<T>> {
+  const merged: Array<RunFailureGroup<T>> = [];
+  const byCause = new Map<string, RunFailureGroup<T>>();
+
+  for (const group of groups) {
+    const errorCode = group.head.errorCode ?? null;
+    if (!isSingleCauseFailure(errorCode)) {
+      merged.push(group);
+      continue;
+    }
+    const causeKey = `${group.head.agentId}:${errorCode}`;
+    const existing = byCause.get(causeKey);
+    if (!existing) {
+      byCause.set(causeKey, group);
+      continue;
+    }
+    // Groups arrive with the newest run at the head of each, so keep whichever
+    // head is newer and stretch the window back to the oldest failure of all.
+    const keepExistingHead =
+      (runFailedAtMs(existing.head) ?? 0) >= (runFailedAtMs(group.head) ?? 0);
+    byCause.set(causeKey, {
+      head: keepExistingHead ? existing.head : group.head,
+      failures: existing.failures + group.failures,
+      oldestFailureMs: oldestOf(existing.oldestFailureMs, group.oldestFailureMs),
+      stalledWork: existing.stalledWork + group.stalledWork,
+    });
+  }
+
+  return [...merged, ...byCause.values()];
+}
+
+function runFailedAtMs(row: RunFailureCandidate): number | null {
+  return ms(row.finishedAt) ?? ms(row.createdAt);
+}
+
+function oldestOf(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.min(a, b);
 }
 
 /** Stopped first, then longest-waiting first. */

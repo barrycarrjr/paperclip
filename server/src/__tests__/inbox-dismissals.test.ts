@@ -184,7 +184,15 @@ describeEmbeddedPostgres("inbox dismissals", () => {
     await dismissalsSvc.dismiss(companyId, userId, `approval:${hiddenApprovalId}`, new Date("2026-03-11T02:00:00.000Z"));
     await dismissalsSvc.dismiss(companyId, userId, `approval:${resurfacedApprovalId}`, new Date("2026-03-11T02:00:00.000Z"));
     await dismissalsSvc.dismiss(companyId, userId, `join:${hiddenJoinRequestId}`, new Date("2026-03-11T02:00:00.000Z"));
-    await dismissalsSvc.dismiss(companyId, userId, `run:${hiddenRunId}`, new Date("2026-03-11T02:00:00.000Z"));
+    // A run failure is dismissed against the PROBLEM, not the run: an agent
+    // that keeps failing mints a new run id every time, so the old `run:<id>`
+    // key meant a dismissal lasted only until the next attempt.
+    await dismissalsSvc.dismiss(
+      companyId,
+      userId,
+      `run-group:${primaryAgentId}:no-issue`,
+      new Date("2026-03-11T02:00:00.000Z"),
+    );
 
     const dismissedAtByKey = new Map(
       (await dismissalsSvc.list(companyId, userId)).map((dismissal) => [
@@ -211,8 +219,9 @@ describeEmbeddedPostgres("inbox dismissals", () => {
     // Dismissing now hides the row itself, not just the number, so the list
     // the operator opens matches the badge that sent them there.
     expect(rows.map((row) => row.key).sort()).toEqual(
-      [`approval:${resurfacedApprovalId}`, `run:${visibleRunId}`].sort(),
+      [`approval:${resurfacedApprovalId}`, `run-group:${secondaryAgentId}:no-issue`].sort(),
     );
+    expect(rows.find((row) => row.kind === "run_failure")?.runId).toBe(visibleRunId);
   });
 
   it("keeps a snooze and a dismissal on one row without either clearing the other", async () => {

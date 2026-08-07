@@ -4,6 +4,7 @@ import {
   groupUnaddressedRunFailures,
   isAttentionRowDismissed,
   isAttentionRowSnoozed,
+  mergeRunFailuresBySharedCause,
   sortAttentionRows,
   type RunFailureCandidate,
 } from "./attention-queue.js";
@@ -128,6 +129,106 @@ describe("groupUnaddressedRunFailures", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].failures).toBe(2);
   });
+
+  it("reports when the trouble started, not when it last happened", () => {
+    // The row says "waiting 3d" off this. Taking the newest failure instead
+    // made an agent that had been broken since Tuesday read as "waiting 12m".
+    const groups = groupUnaddressedRunFailures([
+      run({ id: "r2", finishedAt: new Date(9_000).toISOString() }),
+      run({ id: "r1", finishedAt: new Date(1_000).toISOString() }),
+    ]);
+    expect(groups[0].oldestFailureMs).toBe(1_000);
+  });
+});
+
+describe("mergeRunFailuresBySharedCause", () => {
+  function run(overrides: Partial<RunFailureCandidate> = {}): RunFailureCandidate {
+    return {
+      id: "run-1",
+      agentId: "agent-1",
+      status: "failed",
+      scheduledRetryAt: null,
+      contextSnapshot: { issueId: "issue-1" },
+      ...overrides,
+    };
+  }
+
+  function group(
+    head: RunFailureCandidate,
+    failures = 1,
+    oldestFailureMs: number | null = 1_000,
+  ) {
+    return { head, failures, oldestFailureMs, stalledWork: 1 };
+  }
+
+  it("makes one expired login into one row", () => {
+    // The operator's actual complaint: four rows, four counts, four "Open run"
+    // buttons, for a single thing that one pasted token fixes.
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "a", errorCode: "claude_auth_required" }), 3),
+      group(run({ id: "b", errorCode: "claude_auth_required" }), 2),
+      group(run({ id: "c", errorCode: "claude_auth_required" }), 2),
+      group(run({ id: "d", errorCode: "claude_auth_required" }), 3),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.failures).toBe(10);
+    expect(merged[0]!.stalledWork).toBe(4);
+  });
+
+  it("keeps the newest run as the one to open", () => {
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "old", errorCode: "claude_auth_required", finishedAt: new Date(1_000).toISOString() })),
+      group(run({ id: "new", errorCode: "claude_auth_required", finishedAt: new Date(9_000).toISOString() })),
+    ]);
+    expect(merged[0]!.head.id).toBe("new");
+  });
+
+  it("stretches the window back to the earliest failure of the lot", () => {
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "a", errorCode: "claude_auth_required" }), 1, 5_000),
+      group(run({ id: "b", errorCode: "claude_auth_required" }), 1, 500),
+    ]);
+    expect(merged[0]!.oldestFailureMs).toBe(500);
+  });
+
+  it("leaves two agents with the same problem as two rows", () => {
+    // One token fixes one agent, so these really are two things to do.
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "a", agentId: "agent-1", errorCode: "claude_auth_required" })),
+      group(run({ id: "b", agentId: "agent-2", errorCode: "claude_auth_required" })),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("does not merge plain crashes", () => {
+    // Two failures with no error code can be two different bugs. Collapsing
+    // them would hide one behind the other.
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "a", contextSnapshot: { issueId: "issue-1" } })),
+      group(run({ id: "b", contextSnapshot: { issueId: "issue-2" } })),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("does not merge failures whose fix is per-run", () => {
+    // A timeout has a known meaning but retrying is a reasonable answer to it,
+    // so each piece of work stays its own decision.
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "a", errorCode: "timeout" })),
+      group(run({ id: "b", errorCode: "timeout" })),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("keeps unmergeable rows alongside merged ones", () => {
+    const merged = mergeRunFailuresBySharedCause([
+      group(run({ id: "auth-1", errorCode: "claude_auth_required" })),
+      group(run({ id: "crash", errorCode: null })),
+      group(run({ id: "auth-2", errorCode: "claude_auth_required" })),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.map((g) => g.head.id).sort()).toEqual(["auth-1", "crash"]);
+  });
 });
 
 describe("isAttentionRowDismissed", () => {
@@ -146,6 +247,51 @@ describe("isAttentionRowDismissed", () => {
   it("leaves everything alone when nobody has dismissed anything", () => {
     expect(isAttentionRowDismissed(row(), undefined)).toBe(false);
     expect(isAttentionRowDismissed(row(), new Map())).toBe(false);
+  });
+
+  it("keeps a failing agent quiet when it fails the same way again", () => {
+    // The operator's Steward failed every twenty minutes for three days with
+    // an expired login. Comparing against the newest failure meant dismissing
+    // it bought twenty minutes, so it was never really dismissable at all.
+    const dismissed = row({
+      key: "run-cause:agent-1:claude_auth_required",
+      kind: "run_failure",
+      sameProblemSinceMs: 1_000,
+      updatedAtMs: 90_000,
+    });
+    expect(
+      isAttentionRowDismissed(dismissed, new Map([["run-cause:agent-1:claude_auth_required", 5_000]])),
+    ).toBe(true);
+  });
+
+  it("brings a failing agent back once the problem is a different one", () => {
+    // A different cause is a different key, which no dismissal covers.
+    const nowFailingDifferently = row({
+      key: "run-cause:agent-1:timeout",
+      kind: "run_failure",
+      sameProblemSinceMs: 1_000,
+      updatedAtMs: 90_000,
+    });
+    expect(
+      isAttentionRowDismissed(
+        nowFailingDifferently,
+        new Map([["run-cause:agent-1:claude_auth_required", 5_000]]),
+      ),
+    ).toBe(false);
+  });
+
+  it("brings it back if the trouble restarts after the dismissal", () => {
+    // Dismissed on Monday, the agent recovered, then broke again on Friday.
+    // That is a new run of trouble, so it is news again.
+    const brokeAgain = row({
+      key: "run-cause:agent-1:claude_auth_required",
+      kind: "run_failure",
+      sameProblemSinceMs: 9_000,
+      updatedAtMs: 9_500,
+    });
+    expect(
+      isAttentionRowDismissed(brokeAgain, new Map([["run-cause:agent-1:claude_auth_required", 5_000]])),
+    ).toBe(false);
   });
 
   it("does not confuse one row's key for another's", () => {

@@ -1,8 +1,8 @@
 import {
   ClipboardCheck,
-  Clock,
   HelpCircle,
   Mail,
+  MoreHorizontal,
   ShieldCheck,
   TriangleAlert,
   UserPlus,
@@ -13,6 +13,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -31,6 +33,23 @@ import { cn } from "../lib/utils";
  * PendingQuestionRow and ReviewGateRow: the whole point of the queue is
  * that a decision looks and reads the same wherever you meet it.
  */
+
+/**
+ * What dismissing means, said in the words of the thing being dismissed.
+ *
+ * "Dismiss" alone is ambiguous next to a failure: it could plausibly mean
+ * cancel the work, or stop the agent. It means neither - it takes the row off
+ * the list and leaves everything else exactly as it was.
+ */
+const DISMISS_LABEL: Record<AttentionKind, string> = {
+  approval: "Take off my list (nothing is approved)",
+  question: "Take off my list (the agent stays stuck)",
+  sign_off: "Take off my list (the work stays unsigned)",
+  run_failure: "Seen it, not retrying",
+  budget_stop: "Take off my list (work stays paused)",
+  join_request: "Take off my list (nobody is let in)",
+  email_sender: "Take off my list (nothing is sent)",
+};
 
 const KIND_PRESENTATION: Record<
   AttentionKind,
@@ -92,6 +111,7 @@ export function AttentionRow({
   nowMs = Date.now(),
   className,
   onSnooze,
+  onDismiss,
 }: {
   row: AttentionRowData;
   /** Portfolio surfaces pass "/{issuePrefix}" so links cross companies. */
@@ -103,11 +123,18 @@ export function AttentionRow({
    * display rows, so the control simply does not appear there.
    */
   onSnooze?: (row: AttentionRowData, until: Date) => void;
+  /**
+   * Take this row off the list. Separate from snoozing because they answer
+   * different questions: snoozing is "not during my morning", dismissing is
+   * "I have seen it and I am not acting on it".
+   */
+  onDismiss?: (row: AttentionRowData) => void;
 }) {
   const presentation = KIND_PRESENTATION[row.kind];
   const Icon = presentation.icon;
   const waited = formatWaited(row.blockedSinceMs, nowMs);
   const stopped = row.blocking === "stopped";
+  const hasMenu = Boolean(onSnooze || onDismiss);
 
   return (
     <Link
@@ -156,7 +183,7 @@ export function AttentionRow({
           {formatDeadline(row.deadlineAtMs, row.deadlineOutcome, nowMs)}
         </div>
       </div>
-      {onSnooze && (
+      {hasMenu && (
         // Inside a Link, so the menu has to swallow the navigation as well as
         // the bubble, or opening it would follow the row.
         <span
@@ -171,29 +198,42 @@ export function AttentionRow({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Snooze: ${row.title}`}
-                title="Not now"
-                className="opacity-0 transition-opacity group-hover/attention:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                aria-label={`Options: ${row.title}`}
+                title="Options"
+                // Dimmed rather than hidden. It used to be opacity-0 until the
+                // row was hovered, which meant it did not exist at all on a
+                // phone or in a screenshot, and an operator looking at a row he
+                // could not get rid of was looking at a row with no visible way
+                // to get rid of it.
+                className="opacity-60 transition-opacity group-hover/attention:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
               >
-                <Clock className="h-3.5 w-3.5" />
+                <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {SNOOZE_PRESETS.map((preset: SnoozePreset) => (
-                <DropdownMenuItem
-                  key={preset}
-                  // Resolved from the clock at the moment of the click, not
-                  // from nowMs. nowMs is the display clock the page passed in
-                  // at render, and React Query's structural sharing means a
-                  // list that keeps returning identical rows does not
-                  // re-render, so it can sit still for a long time. Resolving
-                  // "in an hour" against it could land in the past, which the
-                  // server rejects.
-                  onSelect={() => onSnooze(row, resolveSnoozePreset(preset, new Date()))}
-                >
-                  {SNOOZE_PRESET_LABELS[preset]}
+              {onDismiss && (
+                <DropdownMenuItem onSelect={() => onDismiss(row)}>
+                  {DISMISS_LABEL[row.kind]}
                 </DropdownMenuItem>
-              ))}
+              )}
+              {onDismiss && onSnooze && <DropdownMenuSeparator />}
+              {onSnooze && <DropdownMenuLabel>Not now</DropdownMenuLabel>}
+              {onSnooze &&
+                SNOOZE_PRESETS.map((preset: SnoozePreset) => (
+                  <DropdownMenuItem
+                    key={preset}
+                    // Resolved from the clock at the moment of the click, not
+                    // from nowMs. nowMs is the display clock the page passed in
+                    // at render, and React Query's structural sharing means a
+                    // list that keeps returning identical rows does not
+                    // re-render, so it can sit still for a long time. Resolving
+                    // "in an hour" against it could land in the past, which the
+                    // server rejects.
+                    onSelect={() => onSnooze(row, resolveSnoozePreset(preset, new Date()))}
+                  >
+                    {SNOOZE_PRESET_LABELS[preset]}
+                  </DropdownMenuItem>
+                ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </span>

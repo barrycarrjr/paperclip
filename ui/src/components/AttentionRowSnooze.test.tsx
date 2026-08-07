@@ -26,6 +26,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
   DropdownMenuItem: ({ children, onSelect }: { children: ReactNode; onSelect: () => void }) => (
     <button type="button" onClick={onSelect}>{children}</button>
   ),
@@ -133,5 +135,81 @@ describe("AttentionRow snooze control", () => {
     render(<AttentionRow row={row()} nowMs={NOW} onSnooze={() => {}} />);
     const link = container.querySelector("a");
     expect(link?.getAttribute("href")).toBe("/issues/PER-10");
+  });
+
+  it("keeps the control visible without hovering", () => {
+    // It used to be opacity-0 until the row was hovered, so on a phone, and in
+    // any screenshot, there was no visible way to put a row away at all.
+    render(<AttentionRow row={row()} nowMs={NOW} onSnooze={() => {}} />);
+    const trigger = container.querySelector("button");
+    expect(trigger?.className).not.toContain("opacity-0");
+  });
+});
+
+describe("AttentionRow dismiss control", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function render(node: ReactNode) {
+    act(() => root.render(node));
+  }
+
+  function buttonContaining(text: string): HTMLButtonElement {
+    const found = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes(text),
+    );
+    if (!found) throw new Error(`no button containing ${text}`);
+    return found;
+  }
+
+  const failedRun = row({
+    key: "run-cause:agent-1:claude_auth_required",
+    kind: "run_failure",
+    title: "Steward cannot sign in to Claude Code",
+    href: "/agents/agent-1/runs/run-9",
+  });
+
+  it("offers no dismiss where the surface cannot act on one", () => {
+    render(<AttentionRow row={failedRun} nowMs={NOW} onSnooze={() => {}} />);
+    expect(container.textContent).not.toContain("Seen it");
+  });
+
+  it("says what dismissing a failed run actually means", () => {
+    // Plain "Dismiss" next to a failure could be read as cancelling the work or
+    // stopping the agent. It does neither.
+    render(<AttentionRow row={failedRun} nowMs={NOW} onDismiss={() => {}} />);
+    expect(buttonContaining("Seen it, not retrying")).toBeTruthy();
+  });
+
+  it("hands the whole row back so the caller can key the dismissal correctly", () => {
+    const onDismiss = vi.fn();
+    render(<AttentionRow row={failedRun} nowMs={NOW} onDismiss={onDismiss} />);
+
+    act(() => buttonContaining("Seen it, not retrying").click());
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onDismiss.mock.calls[0]![0].key).toBe("run-cause:agent-1:claude_auth_required");
+  });
+
+  it("carries both actions in one menu", () => {
+    render(<AttentionRow row={failedRun} nowMs={NOW} onSnooze={() => {}} onDismiss={() => {}} />);
+    expect(buttonContaining("Seen it, not retrying")).toBeTruthy();
+    expect(buttonContaining("For an hour")).toBeTruthy();
+  });
+
+  it("still follows the row's link rather than dismissing on a plain tap", () => {
+    render(<AttentionRow row={failedRun} nowMs={NOW} onDismiss={() => {}} />);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/agents/agent-1/runs/run-9");
   });
 });

@@ -34,6 +34,7 @@ import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
+import { RunFailureGuidance } from "../components/RunFailureGuidance";
 import { RunReportCard, runReportText } from "../components/RunReportCard";
 import { RunWorkProductsCard } from "../components/RunWorkProductsCard";
 import { RunDocumentsCard } from "../components/RunDocumentsCard";
@@ -108,6 +109,7 @@ import {
   type AgentRuntimeState,
   type LiveEvent,
   type WorkspaceOperation,
+  describeRunFailureCause,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -3282,6 +3284,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     if (taskKey) payload.taskKey = taskKey;
     return payload;
   }, [run.contextSnapshot]);
+  // Stopping the agent is offered next to the failure, not only from the page
+  // header. An agent failing on a timer for a reason retrying cannot fix will
+  // otherwise keep failing while the operator works out what to do.
+  const pauseAgent = useMutation({
+    mutationFn: () => agentsApi.pause(run.agentId, run.companyId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(run.agentId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
+    },
+  });
+
   const retryRun = useMutation({
     mutationFn: async () => {
       const result = await agentsApi.wakeup(run.agentId, {
@@ -3496,6 +3509,22 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 )}
               </div>
             )}
+            {(() => {
+              // Named causes get an explanation and a way out. Anything else
+              // still shows the raw error below, because inventing advice for a
+              // failure nobody has characterised would be worse than silence.
+              const cause = describeRunFailureCause(run.errorCode);
+              if (!cause) return null;
+              return (
+                <RunFailureGuidance
+                  cause={cause}
+                  pauseState={
+                    pauseAgent.isSuccess ? "paused" : pauseAgent.isPending ? "pending" : "available"
+                  }
+                  onPause={() => pauseAgent.mutate()}
+                />
+              );
+            })()}
             {run.error && (
               <div className="text-xs">
                 <span className="text-red-600 dark:text-red-400">{run.error}</span>
