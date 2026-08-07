@@ -38,6 +38,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 
 /** One running process, in the only detail this module needs. */
 export interface OsProcess {
@@ -361,4 +362,60 @@ export async function sweepStaleEmbeddedPostgres(input: {
     await tools.kill(pid);
   }
   return { killedPids };
+}
+
+/** Long enough for Windows to release the handles of a process it just ended. */
+const HANDLE_RELEASE_WAIT_MS = 500;
+
+/**
+ * Delete a throwaway cluster's directory, even when its processes are clinging
+ * to it.
+ *
+ * Windows will not remove a directory a running process has files open in, and
+ * a stopped cluster can still have workers alive - the same leak the module
+ * exists for. The test suite starts a cluster per file, so a leftover here does
+ * not just waste a process: it makes the delete fail, which used to abort the
+ * whole test file with EPERM before a single test ran.
+ *
+ * The delete is tried first and processes are only hunted when it fails, so the
+ * normal case costs nothing. A directory that still will not go is reported
+ * rather than thrown: a leftover temp directory is untidy, whereas failing here
+ * loses the test run.
+ */
+export async function removeEmbeddedPostgresDataDir(input: {
+  dataDir: string;
+  tools?: ProcessTools;
+  log?: LogFn;
+  /** Swapped out in tests: a directory a process is holding cannot be staged. */
+  remove?: (dataDir: string) => void;
+}): Promise<{ removed: boolean; killedPids: number[] }> {
+  const log = input.log ?? noopLog;
+  const remove = input.remove ?? ((dir: string) => rmSync(dir, { recursive: true, force: true }));
+  try {
+    remove(input.dataDir);
+    return { removed: true, killedPids: [] };
+  } catch {
+    // Something still has it open. Below.
+  }
+
+  const swept = await sweepStaleEmbeddedPostgres({
+    dataDir: input.dataDir,
+    tools: input.tools,
+    log,
+  });
+  await new Promise((done) => {
+    const timer = setTimeout(done, HANDLE_RELEASE_WAIT_MS);
+    timer.unref?.();
+  });
+
+  try {
+    remove(input.dataDir);
+    return { removed: true, killedPids: swept.killedPids };
+  } catch (err) {
+    log("Could not delete a temporary PostgreSQL directory; leaving it behind", {
+      dataDir: input.dataDir,
+      err,
+    });
+    return { removed: false, killedPids: swept.killedPids };
+  }
 }

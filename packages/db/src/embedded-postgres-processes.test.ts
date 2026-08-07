@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   commandLineUsesDataDir,
@@ -10,6 +13,7 @@ import {
   sweepStaleEmbeddedPostgres,
   type OsProcess,
   type ProcessTools,
+  removeEmbeddedPostgresDataDir,
 } from "./embedded-postgres-processes.js";
 
 /**
@@ -351,5 +355,67 @@ describe("sweepStaleEmbeddedPostgres", () => {
       killedPids: [],
     });
     expect(t.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("removeEmbeddedPostgresDataDir", () => {
+  function tempCluster(): string {
+    const dir = mkdtempSync(join(tmpdir(), "paperclip-pg-processes-test-"));
+    writeFileSync(join(dir, "PG_VERSION"), "18\n");
+    return dir;
+  }
+
+  it("deletes the directory without going near the process list", async () => {
+    // The everyday case. Listing processes costs most of a second on Windows,
+    // and a suite that starts a cluster per test file would pay it every time.
+    const dir = tempCluster();
+    const t = tools();
+    const result = await removeEmbeddedPostgresDataDir({ dataDir: dir, tools: t });
+
+    expect(result).toEqual({ removed: true, killedPids: [] });
+    expect(existsSync(dir)).toBe(false);
+    expect(t.list).not.toHaveBeenCalled();
+  });
+
+  it("treats an already-deleted directory as done", async () => {
+    const result = await removeEmbeddedPostgresDataDir({
+      dataDir: join(tmpdir(), "paperclip-pg-processes-test-never-existed"),
+      tools: tools(),
+    });
+    expect(result.removed).toBe(true);
+  });
+
+  it("clears the leftovers and gets the directory the second time", async () => {
+    // Windows refuses to delete a directory a live process has files open in,
+    // which is exactly what a surviving worker does. The delete is faked here
+    // because a real one cannot be staged without a real stuck postgres.
+    const t = tools({ list: async () => [worker(63832, "io_worker")] });
+    let attempts = 0;
+    const remove = vi.fn(() => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+
+    const result = await removeEmbeddedPostgresDataDir({
+      dataDir: "C:\\Temp\\paperclip-probe-abc",
+      tools: t,
+      remove,
+    });
+
+    expect(t.kill).toHaveBeenCalledWith(63832);
+    expect(result).toEqual({ removed: true, killedPids: [63832] });
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the directory up rather than failing the caller", async () => {
+    // Losing a whole test run over an undeletable temp directory is worse than
+    // leaving the directory behind.
+    const remove = vi.fn(() => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+
+    await expect(
+      removeEmbeddedPostgresDataDir({ dataDir: "C:\\Temp\\stuck", tools: tools(), remove }),
+    ).resolves.toEqual({ removed: false, killedPids: [] });
   });
 });

@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { applyPendingMigrations, ensurePostgresDatabase } from "./client.js";
+import { removeEmbeddedPostgresDataDir } from "./embedded-postgres-processes.js";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -100,8 +101,22 @@ async function createEmbeddedPostgresTestInstance(tempDirPrefix: string) {
   return { dataDir, port, instance };
 }
 
-function cleanupEmbeddedPostgresTestDirs(dataDir: string) {
-  fs.rmSync(dataDir, { recursive: true, force: true });
+/**
+ * Shut a throwaway cluster down and delete it.
+ *
+ * embedded-postgres's stop leaves worker processes behind on Windows, and in a
+ * suite that starts a cluster per test file those pile up by the dozen. Each
+ * survivor keeps its data directory undeletable, which used to abort whole test
+ * files with EPERM before a single test ran. removeEmbeddedPostgresDataDir only
+ * goes looking for them when the delete actually fails, so the ordinary run
+ * pays nothing for this.
+ */
+async function stopAndRemoveTestCluster(
+  instance: EmbeddedPostgresInstance,
+  dataDir: string,
+): Promise<void> {
+  await instance.stop().catch(() => {});
+  await removeEmbeddedPostgresDataDir({ dataDir });
 }
 
 function formatEmbeddedPostgresError(error: unknown): string {
@@ -125,8 +140,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
       reason: formatEmbeddedPostgresError(error),
     };
   } finally {
-    await instance.stop().catch(() => {});
-    cleanupEmbeddedPostgresTestDirs(dataDir);
+    await stopAndRemoveTestCluster(instance, dataDir);
   }
 }
 
@@ -154,13 +168,11 @@ export async function startEmbeddedPostgresTestDatabase(
     return {
       connectionString,
       cleanup: async () => {
-        await instance.stop().catch(() => {});
-        cleanupEmbeddedPostgresTestDirs(dataDir);
+        await stopAndRemoveTestCluster(instance, dataDir);
       },
     };
   } catch (error) {
-    await instance.stop().catch(() => {});
-    cleanupEmbeddedPostgresTestDirs(dataDir);
+    await stopAndRemoveTestCluster(instance, dataDir);
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,
     );

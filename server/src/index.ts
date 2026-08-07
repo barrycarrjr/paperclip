@@ -17,6 +17,8 @@ import {
   applyPendingMigrations,
   createEmbeddedPostgresLogBuffer,
   isStaleEmbeddedPostgresCluster,
+  stopEmbeddedPostgresCompletely,
+  sweepStaleEmbeddedPostgres,
   reconcilePendingMigrationHistory,
   formatDatabaseBackupResult,
   runDatabaseBackup,
@@ -39,10 +41,6 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
-import {
-  stopEmbeddedPostgresCompletely,
-  sweepStaleEmbeddedPostgres,
-} from "./services/embedded-postgres-processes.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
