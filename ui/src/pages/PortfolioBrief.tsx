@@ -30,6 +30,7 @@ import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsStrip } from "../components/ActiveAgentsPanel";
 import { agentsApi } from "../api/agents";
 import { AttentionRow } from "../components/AttentionRow";
+import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -156,6 +157,8 @@ export function PortfolioBrief() {
     queryKey: queryKeys.portfolioAttention(selectedCompanyId!),
     queryFn: () => attentionApi.listPortfolio(selectedCompanyId!),
     enabled: !!selectedCompanyId && isPortfolioRoot,
+    // A snooze lapsing is not broadcast, so a page left open needs to ask.
+    refetchInterval: 15_000,
   });
 
   const { data: issuesData } = useQuery({
@@ -407,6 +410,7 @@ export function PortfolioBrief() {
     return groupByCompany(overnight, companies);
   }, [activityData, companies, overnightCutoff]);
 
+  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
   const attentionBuckets: CompanyBucket<AttentionRowData>[] = useMemo(
     () => groupByCompany(attentionData?.rows ?? [], companies),
     [attentionData, companies],
@@ -886,6 +890,7 @@ export function PortfolioBrief() {
                         key={row.key}
                         row={row}
                         hrefPrefix={`/${company.issuePrefix}`}
+                        onSnooze={snoozeAttentionRow}
                       />
                     ))}
                     {total > ATTENTION_PER_COMPANY && (

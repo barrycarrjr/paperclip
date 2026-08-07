@@ -1,11 +1,10 @@
 import { Router } from "express";
-import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { inboxDismissals } from "@paperclipai/db";
 import type { AttentionRow } from "@paperclipai/shared";
 import { attentionQueueService, sortAttentionRows } from "../services/attention-queue.js";
 import { accessService } from "../services/access.js";
 import { companyService } from "../services/companies.js";
+import { inboxDismissalService } from "../services/inbox-dismissals.js";
 import { assertCompanyAccess } from "./authz.js";
 
 /**
@@ -18,6 +17,7 @@ export function attentionRoutes(db: Db) {
   const queue = attentionQueueService(db);
   const access = accessService(db);
   const companies = companyService(db);
+  const dismissals = inboxDismissalService(db);
 
   async function resolveActor(req: Parameters<typeof assertCompanyAccess>[0], companyId: string) {
     // Join requests only belong in the queue for someone who can decide
@@ -36,20 +36,16 @@ export function attentionRoutes(db: Db) {
         "joins:approve",
       );
     }
-    // Dismissals are per person, so only a signed-in board user has any.
+    // Hiding is per person, so only a signed-in board user has any.
     const userId = req.actor.type === "board" ? req.actor.userId ?? null : null;
-    const dismissedAtByKey = userId
-      ? new Map(
-        (
-          await db
-            .select({ itemKey: inboxDismissals.itemKey, dismissedAt: inboxDismissals.dismissedAt })
-            .from(inboxDismissals)
-            .where(and(eq(inboxDismissals.companyId, companyId), eq(inboxDismissals.userId, userId)))
-        ).map((row) => [row.itemKey, new Date(row.dismissedAt).getTime()] as const),
-      )
-      : undefined;
+    const hidden = userId ? await dismissals.loadHiddenByKey(companyId, userId) : null;
 
-    return { userId, canApproveJoins, dismissedAtByKey };
+    return {
+      userId,
+      canApproveJoins,
+      dismissedAtByKey: hidden?.dismissedAtByKey,
+      snoozedUntilByKey: hidden?.snoozedUntilByKey,
+    };
   }
 
   router.get("/companies/:companyId/attention", async (req, res) => {

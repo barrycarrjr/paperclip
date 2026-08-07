@@ -1,10 +1,9 @@
 import { Router } from "express";
-import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { inboxDismissals } from "@paperclipai/db";
 import type { AttentionRow, SidebarBadges } from "@paperclipai/shared";
 import { attentionQueueService } from "../services/attention-queue.js";
 import { accessService } from "../services/access.js";
+import { inboxDismissalService } from "../services/inbox-dismissals.js";
 import { assertCompanyAccess } from "./authz.js";
 
 /**
@@ -23,6 +22,7 @@ export function sidebarBadgeRoutes(db: Db) {
   const router = Router();
   const queue = attentionQueueService(db);
   const access = accessService(db);
+  const dismissals = inboxDismissalService(db);
 
   router.get("/companies/:companyId/sidebar-badges", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -39,18 +39,14 @@ export function sidebarBadgeRoutes(db: Db) {
     }
 
     const userId = req.actor.type === "board" ? req.actor.userId ?? null : null;
-    const dismissedAtByKey = userId
-      ? new Map(
-        (
-          await db
-            .select({ itemKey: inboxDismissals.itemKey, dismissedAt: inboxDismissals.dismissedAt })
-            .from(inboxDismissals)
-            .where(and(eq(inboxDismissals.companyId, companyId), eq(inboxDismissals.userId, userId)))
-        ).map((row) => [row.itemKey, new Date(row.dismissedAt).getTime()] as const),
-      )
-      : undefined;
+    const hidden = userId ? await dismissals.loadHiddenByKey(companyId, userId) : null;
 
-    const rows = await queue.listForCompany(companyId, { userId, canApproveJoins, dismissedAtByKey });
+    const rows = await queue.listForCompany(companyId, {
+      userId,
+      canApproveJoins,
+      dismissedAtByKey: hidden?.dismissedAtByKey,
+      snoozedUntilByKey: hidden?.snoozedUntilByKey,
+    });
     res.json(summarizeAttentionForBadges(rows));
   });
 

@@ -8,7 +8,12 @@ import {
   issues,
   joinRequests,
 } from "@paperclipai/db";
-import { approvalLabel, type AttentionKind, type AttentionRow } from "@paperclipai/shared";
+import {
+  approvalLabel,
+  attentionSnoozeKey,
+  type AttentionKind,
+  type AttentionRow,
+} from "@paperclipai/shared";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { issueService } from "./issues.js";
 import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-dedupe.js";
@@ -53,6 +58,24 @@ export interface AttentionQueueActor {
    * lowering a badge while the item stays on the Brief.
    */
   dismissedAtByKey?: ReadonlyMap<string, number>;
+  /** Keys this person has put away, valued by when they come back. */
+  snoozedUntilByKey?: ReadonlyMap<string, number>;
+}
+
+/**
+ * A snooze holds until its time is up, whatever happens to the item in the
+ * meantime. That is the difference from a dismissal, and it is deliberate:
+ * "not until tomorrow" is a decision about the operator's day, not about the
+ * item, so an edit to a field must not drag it straight back.
+ */
+export function isAttentionRowSnoozed(
+  row: AttentionRow,
+  snoozedUntilByKey: ReadonlyMap<string, number> | undefined,
+  nowMs: number,
+): boolean {
+  if (!snoozedUntilByKey?.size) return false;
+  const until = snoozedUntilByKey.get(attentionSnoozeKey(row));
+  return until !== undefined && until > nowMs;
 }
 
 /**
@@ -228,6 +251,10 @@ export function attentionQueueService(db: Db) {
         const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId;
         return {
           key: `run:${row.id}`,
+          // The key names the newest failed run, so it changes every time the
+          // same work fails again. A snooze has to outlive that, so it is
+          // recorded against the work instead: this agent, this issue.
+          snoozeKey: `run-group:${row.agentId}:${issueId ?? "no-issue"}`,
           kind: "run_failure" as AttentionKind,
           companyId,
           title:
@@ -358,8 +385,13 @@ export function attentionQueueService(db: Db) {
         ...budgetStops,
         ...joins,
       ];
+      const nowMs = Date.now();
       return sortAttentionRows(
-        all.filter((row) => !isAttentionRowDismissed(row, actor.dismissedAtByKey)),
+        all.filter(
+          (row) =>
+            !isAttentionRowDismissed(row, actor.dismissedAtByKey)
+            && !isAttentionRowSnoozed(row, actor.snoozedUntilByKey, nowMs),
+        ),
       );
     },
   };

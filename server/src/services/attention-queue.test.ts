@@ -3,6 +3,7 @@ import type { AttentionRow } from "@paperclipai/shared";
 import {
   groupUnaddressedRunFailures,
   isAttentionRowDismissed,
+  isAttentionRowSnoozed,
   sortAttentionRows,
   type RunFailureCandidate,
 } from "./attention-queue.js";
@@ -179,5 +180,70 @@ describe("summarizeAttentionForBadges", () => {
       failedRuns: 0,
       joinRequests: 0,
     });
+  });
+});
+
+describe("isAttentionRowSnoozed", () => {
+  const NOW = 1_000_000;
+
+  it("hides a row until its time is up", () => {
+    const snoozes = new Map([["approval:1", NOW + 60_000]]);
+    expect(isAttentionRowSnoozed(row({ key: "approval:1" }), snoozes, NOW)).toBe(true);
+  });
+
+  it("brings it back the moment the time passes", () => {
+    const snoozes = new Map([["approval:1", NOW - 1]]);
+    expect(isAttentionRowSnoozed(row({ key: "approval:1" }), snoozes, NOW)).toBe(false);
+  });
+
+  it("holds even when the item changes underneath it", () => {
+    // This is the whole difference from a dismissal. "Not until tomorrow" is a
+    // decision about the operator's day, so an edit must not drag it back.
+    const snoozes = new Map([["approval:1", NOW + 60_000]]);
+    const edited = row({ key: "approval:1", updatedAtMs: NOW + 30_000 });
+    expect(isAttentionRowSnoozed(edited, snoozes, NOW)).toBe(true);
+    // Contrast: the same edit lifts a dismissal.
+    expect(isAttentionRowDismissed(edited, new Map([["approval:1", NOW]]))).toBe(false);
+  });
+
+  it("leaves everything alone when nothing is snoozed", () => {
+    expect(isAttentionRowSnoozed(row(), undefined, NOW)).toBe(false);
+    expect(isAttentionRowSnoozed(row(), new Map(), NOW)).toBe(false);
+  });
+
+  it("does not confuse one row's key for another's", () => {
+    const snoozes = new Map([["approval:1", NOW + 60_000]]);
+    expect(isAttentionRowSnoozed(row({ key: "approval:2" }), snoozes, NOW)).toBe(false);
+  });
+
+  it("survives a run failing again, which renames the row", () => {
+    // A run-failure row is keyed by the newest failed run, so the key changes
+    // every time the same work fails. Snoozing a noisy agent is the main
+    // reason to snooze anything, so it has to be recorded against the work.
+    const snoozes = new Map([["run-group:agent-1:iss-1", NOW + 60_000]]);
+    const before = row({
+      key: "run:run-a",
+      kind: "run_failure",
+      snoozeKey: "run-group:agent-1:iss-1",
+    });
+    const afterAnotherFailure = row({
+      key: "run:run-b",
+      kind: "run_failure",
+      snoozeKey: "run-group:agent-1:iss-1",
+    });
+
+    expect(isAttentionRowSnoozed(before, snoozes, NOW)).toBe(true);
+    expect(isAttentionRowSnoozed(afterAnotherFailure, snoozes, NOW)).toBe(true);
+  });
+
+  it("keeps a snooze for one agent's work off another's", () => {
+    const snoozes = new Map([["run-group:agent-1:iss-1", NOW + 60_000]]);
+    expect(
+      isAttentionRowSnoozed(
+        row({ key: "run:run-c", kind: "run_failure", snoozeKey: "run-group:agent-2:iss-1" }),
+        snoozes,
+        NOW,
+      ),
+    ).toBe(false);
   });
 });

@@ -31,6 +31,14 @@ export interface AttentionRow {
    * dismissals recorded before the queue existed still apply.
    */
   key: string;
+  /**
+   * What a snooze is recorded against. Defaults to `key`, and differs only
+   * where `key` is not stable across repeats: a run-failure row is keyed by
+   * the newest failed run, so its id changes every time the same work fails
+   * again. Snoozing has to survive that, or the one row an operator most
+   * wants quiet is the one that will not stay quiet.
+   */
+  snoozeKey?: string;
   kind: AttentionKind;
   companyId: string;
   /** Present on portfolio responses so rows can be grouped and linked. */
@@ -86,4 +94,9 @@ export function attentionRowRunId(row: AttentionRow): string | null {
   if (separator < 0) return null;
   const id = row.key.slice(separator + 1);
   return id.length > 0 ? id : null;
+}
+
+/** What a snooze for this row is stored against. */
+export function attentionSnoozeKey(row: Pick<AttentionRow, "key" | "snoozeKey">): string {
+  return row.snoozeKey ?? row.key;
 }

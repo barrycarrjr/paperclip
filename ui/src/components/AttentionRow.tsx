@@ -1,5 +1,6 @@
 import {
   ClipboardCheck,
+  Clock,
   HelpCircle,
   Mail,
   ShieldCheck,
@@ -7,6 +8,19 @@ import {
   UserPlus,
   Wallet,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  SNOOZE_PRESETS,
+  SNOOZE_PRESET_LABELS,
+  resolveSnoozePreset,
+  type SnoozePreset,
+} from "../lib/snooze-presets";
 import type { AttentionKind, AttentionRow as AttentionRowData } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { cn } from "../lib/utils";
@@ -49,12 +63,18 @@ export function AttentionRow({
   hrefPrefix = "",
   nowMs = Date.now(),
   className,
+  onSnooze,
 }: {
   row: AttentionRowData;
   /** Portfolio surfaces pass "/{issuePrefix}" so links cross companies. */
   hrefPrefix?: string;
   nowMs?: number;
   className?: string;
+  /**
+   * Put this row away until the given moment. Omitted on surfaces that only
+   * display rows, so the control simply does not appear there.
+   */
+  onSnooze?: (row: AttentionRowData, until: Date) => void;
 }) {
   const presentation = KIND_PRESENTATION[row.kind];
   const Icon = presentation.icon;
@@ -65,7 +85,7 @@ export function AttentionRow({
     <Link
       to={`${hrefPrefix}${row.href}`}
       className={cn(
-        "flex items-start gap-3 px-4 py-2.5 text-sm no-underline hover:bg-accent/40",
+        "group/attention flex items-start gap-3 px-4 py-2.5 text-sm no-underline hover:bg-accent/40",
         className,
       )}
     >
@@ -98,6 +118,48 @@ export function AttentionRow({
           </div>
         )}
       </div>
+      {onSnooze && (
+        // Inside a Link, so the menu has to swallow the navigation as well as
+        // the bubble, or opening it would follow the row.
+        <span
+          className="shrink-0 self-center"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Snooze: ${row.title}`}
+                title="Not now"
+                className="opacity-0 transition-opacity group-hover/attention:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              >
+                <Clock className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {SNOOZE_PRESETS.map((preset: SnoozePreset) => (
+                <DropdownMenuItem
+                  key={preset}
+                  // Resolved from the clock at the moment of the click, not
+                  // from nowMs. nowMs is the display clock the page passed in
+                  // at render, and React Query's structural sharing means a
+                  // list that keeps returning identical rows does not
+                  // re-render, so it can sit still for a long time. Resolving
+                  // "in an hour" against it could land in the past, which the
+                  // server rejects.
+                  onSelect={() => onSnooze(row, resolveSnoozePreset(preset, new Date()))}
+                >
+                  {SNOOZE_PRESET_LABELS[preset]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      )}
       <span className="shrink-0 self-center rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-foreground">
         {presentation.cta}
       </span>

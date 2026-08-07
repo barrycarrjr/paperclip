@@ -35,6 +35,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { AttentionRow } from "../components/AttentionRow";
+import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
 import {
   ChartCard,
   RunActivityChart,
@@ -120,8 +121,13 @@ export function MorningBrief() {
     queryKey: queryKeys.attention(selectedCompanyId!),
     queryFn: () => attentionApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+    // A snooze lapsing is not an event anything broadcasts, so without this a
+    // row put away for an hour would not reappear on a page left open. Same
+    // cadence as the badge, so the two do not sit at different ages.
+    refetchInterval: 15_000,
   });
   const attentionRows = attention?.rows ?? [];
+  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
 
   const { data: issues } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
@@ -663,7 +669,12 @@ export function MorningBrief() {
             {attentionRows.length > 0 && (
               <div className="border border-border bg-card divide-y divide-border">
                 {attentionToShow.map((row) => (
-                  <AttentionRow key={row.key} row={row} nowMs={now.getTime()} />
+                  <AttentionRow
+                    key={row.key}
+                    row={row}
+                    nowMs={now.getTime()}
+                    onSnooze={snoozeAttentionRow}
+                  />
                 ))}
                 {remainingAttention > 0 && (
                   <button

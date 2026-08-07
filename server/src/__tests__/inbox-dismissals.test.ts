@@ -214,4 +214,94 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       [`approval:${resurfacedApprovalId}`, `run:${visibleRunId}`].sort(),
     );
   });
+
+  it("keeps a snooze and a dismissal on one row without either clearing the other", async () => {
+    // They share a row and both write through ON CONFLICT, so the set clauses
+    // have to be disjoint. Nothing but a real upsert can prove that.
+    const companyId = randomUUID();
+    const userId = "board-user";
+    const itemKey = `approval:${randomUUID()}`;
+    const dismissedAt = new Date("2026-03-11T01:00:00.000Z");
+    const snoozedUntil = new Date("2026-03-12T09:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await dismissalsSvc.dismiss(companyId, userId, itemKey, dismissedAt);
+    const afterSnooze = await dismissalsSvc.snooze(companyId, userId, itemKey, snoozedUntil);
+
+    // Snoozing must not wipe the dismissal.
+    expect(afterSnooze.dismissedAt.toISOString()).toBe(dismissedAt.toISOString());
+    expect(afterSnooze.snoozedUntil?.toISOString()).toBe(snoozedUntil.toISOString());
+
+    const laterDismissal = new Date("2026-03-11T05:00:00.000Z");
+    const afterDismiss = await dismissalsSvc.dismiss(companyId, userId, itemKey, laterDismissal);
+
+    // And dismissing again must not wipe the snooze.
+    expect(afterDismiss.dismissedAt.toISOString()).toBe(laterDismissal.toISOString());
+    expect(afterDismiss.snoozedUntil?.toISOString()).toBe(snoozedUntil.toISOString());
+
+    const rows = await dismissalsSvc.list(companyId, userId);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("leaves the dismissal inert when a row exists only because of a snooze", async () => {
+    // A snooze-first row has to store something in the NOT NULL dismissedAt.
+    // Whatever it stores must never read as a real dismissal, or snoozing
+    // something would silently dismiss it too.
+    const companyId = randomUUID();
+    const userId = "board-user";
+    const itemKey = `question:${randomUUID()}`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const row = await dismissalsSvc.snooze(
+      companyId,
+      userId,
+      itemKey,
+      new Date("2026-03-12T09:00:00.000Z"),
+    );
+
+    const hidden = await dismissalsSvc.loadHiddenByKey(companyId, userId);
+    const dismissedAtMs = hidden.dismissedAtByKey.get(itemKey)!;
+    // The dismissal rule is "dismissed at or after the item last changed", and
+    // nothing in the product is older than the epoch.
+    expect(dismissedAtMs).toBeLessThan(new Date("2000-01-01").getTime());
+    expect(hidden.snoozedUntilByKey.get(itemKey)).toBe(row.snoozedUntil!.getTime());
+  });
+
+  it("lifts a snooze without disturbing the dismissal", async () => {
+    const companyId = randomUUID();
+    const userId = "board-user";
+    const itemKey = `approval:${randomUUID()}`;
+    const dismissedAt = new Date("2026-03-11T01:00:00.000Z");
+
+        await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await dismissalsSvc.dismiss(companyId, userId, itemKey, dismissedAt);
+    await dismissalsSvc.snooze(companyId, userId, itemKey, new Date("2026-03-12T09:00:00.000Z"));
+    const lifted = await dismissalsSvc.snooze(companyId, userId, itemKey, null);
+
+    expect(lifted.snoozedUntil).toBeNull();
+    expect(lifted.dismissedAt.toISOString()).toBe(dismissedAt.toISOString());
+
+    const hidden = await dismissalsSvc.loadHiddenByKey(companyId, userId);
+    expect(hidden.snoozedUntilByKey.has(itemKey)).toBe(false);
+    expect(hidden.dismissedAtByKey.get(itemKey)).toBe(dismissedAt.getTime());
+  });
+
 });

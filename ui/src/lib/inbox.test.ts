@@ -337,6 +337,7 @@ describe("inbox helpers", () => {
         userId: "user-1",
         itemKey: "approval:approval-1",
         dismissedAt: new Date("2026-03-11T01:00:00.000Z"),
+        snoozedUntil: null,
         createdAt: new Date("2026-03-11T01:00:00.000Z"),
         updatedAt: new Date("2026-03-11T01:00:00.000Z"),
       },

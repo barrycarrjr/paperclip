@@ -20,6 +20,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AttentionRow } from "../components/AttentionRow";
+import { useSnoozeAttentionRow } from "../hooks/useSnoozeAttentionRow";
 import { attentionApi } from "../api/attention";
 import { attentionRowIssueId, attentionRowRunId } from "@paperclipai/shared";
 import { invalidateAttention } from "../lib/invalidate-attention";
@@ -735,6 +736,8 @@ export function Inbox() {
     queryKey: queryKeys.attention(selectedCompanyId!),
     queryFn: () => attentionApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+    // A snooze lapsing is not broadcast, so a page left open needs to ask.
+    refetchInterval: 15_000,
   });
   const { data: labels } = useQuery({
     queryKey: queryKeys.issues.labels(selectedCompanyId!),
@@ -1087,6 +1090,7 @@ export function Inbox() {
     return joinRequests;
   }, [joinRequests, tab, showJoinRequestsCategory, dismissedAtByKey]);
 
+  const { snooze: snoozeAttentionRow } = useSnoozeAttentionRow();
   const attentionRowsForTab = useMemo(() => {
     // On the All tab every other kind is hidden when its category is
     // deselected; these rows follow the same rule rather than ignoring the
@@ -2537,6 +2541,7 @@ export function Inbox() {
                             key={attentionKey}
                             row={item.row}
                             className={isSelected ? "bg-accent/40" : undefined}
+                            onSnooze={snoozeAttentionRow}
                           />,
                         ),
                       );
