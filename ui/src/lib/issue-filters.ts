@@ -31,7 +31,13 @@ export const defaultIssueFilterState: IssueFilterState = {
   projects: [],
   workspaces: [],
   liveOnly: false,
-  hideRoutineExecutions: false,
+  // On by default. A routine that fires four times a day leaves an execution
+  // issue behind every time, and those are the routine's own bookkeeping rather
+  // than work anyone chose to do: 119 of this instance's 362 open issues were
+  // six routines repeating. Listing them beside real work buries the real work.
+  // The filter has always existed; only its default has changed, and unticking
+  // it brings them straight back.
+  hideRoutineExecutions: true,
 };
 
 export const issueStatusOrder = ["in_progress", "todo", "backlog", "in_review", "blocked", "done", "cancelled"];
@@ -72,7 +78,10 @@ export function normalizeIssueFilterState(value: unknown): IssueFilterState {
     projects: normalizeIssueFilterValueArray(candidate.projects),
     workspaces: normalizeIssueFilterValueArray(candidate.workspaces),
     liveOnly: candidate.liveOnly === true,
-    hideRoutineExecutions: candidate.hideRoutineExecutions === true,
+    // Absent means "use the default", not "off". Anyone with a saved view from
+    // before this was the default would otherwise never see the change, which
+    // is the whole audience for it. Only an explicit false opts back in.
+    hideRoutineExecutions: candidate.hideRoutineExecutions !== false,
   };
 }
 
@@ -182,6 +191,15 @@ export function countActiveIssueFilters(
   if (state.projects.length > 0) count += 1;
   if (state.workspaces.length > 0) count += 1;
   if (state.liveOnly) count += 1;
-  if (enableRoutineVisibilityFilter && state.hideRoutineExecutions) count += 1;
+  // Counted only when it DIFFERS from the default. Hiding a routine's own
+  // bookkeeping is now the default, and counting the default as an active
+  // filter would leave a permanent badge on the button that no amount of
+  // clearing could shift - a filter nobody set, that cannot be unset.
+  if (
+    enableRoutineVisibilityFilter &&
+    state.hideRoutineExecutions !== defaultIssueFilterState.hideRoutineExecutions
+  ) {
+    count += 1;
+  }
   return count;
 }

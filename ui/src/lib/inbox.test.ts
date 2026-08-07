@@ -1020,9 +1020,28 @@ describe("inbox helpers", () => {
         projects: ["project-1"],
         workspaces: ["workspace-1"],
         liveOnly: false,
-        hideRoutineExecutions: false,
+        // Hiding a routine's own bookkeeping is the default now, and garbage
+        // falls back to the default rather than to off.
+        hideRoutineExecutions: true,
       },
     });
+  });
+
+  it("only an explicit false opts back into seeing routine bookkeeping", () => {
+    // A saved view from before this was the default has no such key at all.
+    // Treating that as "off" would hide the change from everyone who already
+    // had a view saved, which is the entire audience for it.
+    localStorage.setItem(
+      "paperclip:inbox:filters:company-2",
+      JSON.stringify({ issueFilters: { statuses: [] } }),
+    );
+    expect(loadInboxFilterPreferences("company-2").issueFilters.hideRoutineExecutions).toBe(true);
+
+    localStorage.setItem(
+      "paperclip:inbox:filters:company-3",
+      JSON.stringify({ issueFilters: { hideRoutineExecutions: false } }),
+    );
+    expect(loadInboxFilterPreferences("company-3").issueFilters.hideRoutineExecutions).toBe(false);
   });
 
   it("keeps nesting enabled on desktop when the saved preference is on", () => {

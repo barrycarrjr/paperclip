@@ -1117,7 +1117,7 @@ describe("IssuesList", () => {
     });
   });
 
-  it("shows routine-backed issues by default and hides them when the routine filter is toggled off", async () => {
+  it("hides a routine's own bookkeeping by default, and shows it when asked", async () => {
     const manualIssue = createIssue({
       id: "issue-manual",
       identifier: "PAP-10",
@@ -1143,9 +1143,13 @@ describe("IssuesList", () => {
       container,
     );
 
+    // A routine firing four times a day leaves an execution issue behind every
+    // time. Listing those beside work someone chose to do is what buried the
+    // real work: 119 of this instance's 362 open issues were six routines
+    // repeating.
     await waitForAssertion(() => {
       expect(container.textContent).toContain("Manual issue");
-      expect(container.textContent).toContain("Routine issue");
+      expect(container.textContent).not.toContain("Routine issue");
     });
 
     await act(async () => {
@@ -1171,8 +1175,9 @@ describe("IssuesList", () => {
       await Promise.resolve();
     });
 
+    // Hidden, never gone: unticking brings them straight back.
     await waitForAssertion(() => {
-      expect(container.textContent).not.toContain("Routine issue");
+      expect(container.textContent).toContain("Routine issue");
     });
 
     act(() => {
