@@ -13,6 +13,8 @@ function row(overrides: Partial<AttentionRow> = {}): AttentionRow {
     blockedSinceMs: 0,
     count: 1,
     consequence: null,
+    deadlineAtMs: null,
+    deadlineOutcome: null,
     href: "/issues/PAP-1",
     createdAtMs: 0,
     updatedAtMs: 0,

@@ -317,6 +317,8 @@ function makeAttentionRow(overrides: Partial<AttentionRow> = {}): AttentionRow {
     blockedSinceMs: at,
     count: 1,
     consequence: null,
+    deadlineAtMs: null,
+    deadlineOutcome: null,
     href: "/issues/PAP-1",
     createdAtMs: at,
     updatedAtMs: at,

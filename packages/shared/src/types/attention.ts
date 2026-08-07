@@ -57,6 +57,16 @@ export interface AttentionRow {
   count: number;
   /** What happens if this is ignored. Computed, never a canned phrase. */
   consequence: string | null;
+  /**
+   * When something happens on its own, and what. Almost nothing in Paperclip
+   * has one: an unapproved draft simply waits, forever, costing nothing. The
+   * exception is a Clippy permission prompt, which the server really does
+   * deny after five minutes. Null means nothing happens until you decide, and
+   * that is worth saying out loud rather than leaving the operator to guess.
+   */
+  deadlineAtMs: number | null;
+  /** What happens at the deadline, in plain words. */
+  deadlineOutcome: string | null;
   /** Company-relative path where the decision can actually be made. */
   href: string;
   createdAtMs: number;

@@ -21,6 +21,8 @@ function row(overrides: Partial<AttentionRow> = {}): AttentionRow {
     blockedSinceMs: 1_000,
     count: 1,
     consequence: null,
+    deadlineAtMs: null,
+    deadlineOutcome: null,
     href: "/approvals/1",
     createdAtMs: 1_000,
     updatedAtMs: 1_000,

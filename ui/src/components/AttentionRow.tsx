@@ -45,6 +45,34 @@ const KIND_PRESENTATION: Record<
   email_sender: { icon: Mail, cta: "Set a rule", tint: "text-sky-600 dark:text-sky-400" },
 };
 
+/**
+ * What happens if this is left alone. Almost everything in Paperclip simply
+ * waits, and saying so is the point: an operator who does not know whether a
+ * draft will send itself has to check, which is the opposite of restful.
+ */
+export function formatDeadline(
+  deadlineAtMs: number | null,
+  deadlineOutcome: string | null,
+  nowMs: number,
+): string {
+  // Some rows lapse on their own without a clock: a confirmation request goes
+  // stale when the document it points at moves on. An outcome with no time is
+  // that case, and claiming "nothing happens" there would be a lie.
+  if (deadlineAtMs === null) {
+    return deadlineOutcome ?? "Nothing happens until you decide.";
+  }
+  const seconds = Math.max(0, Math.round((deadlineAtMs - nowMs) / 1000));
+  const outcome = deadlineOutcome ?? "Decided automatically.";
+  if (seconds <= 0) return outcome;
+  const clock =
+    seconds < 60
+      ? `${seconds}s`
+      : seconds < 3600
+        ? `${Math.floor(seconds / 60)}m`
+        : `${Math.floor(seconds / 3600)}h`;
+  return `In ${clock}: ${outcome}`;
+}
+
 /** "3h", "2d", "just now" - how long this has been waiting. */
 export function formatWaited(sinceMs: number | null, nowMs: number): string | null {
   if (sinceMs == null) return null;
@@ -117,6 +145,16 @@ export function AttentionRow({
             {row.consequence}
           </div>
         )}
+        <div
+          className={cn(
+            "mt-0.5 text-[11px]",
+            row.deadlineAtMs !== null
+              ? "font-medium text-amber-700 dark:text-amber-400"
+              : "text-muted-foreground/70",
+          )}
+        >
+          {formatDeadline(row.deadlineAtMs, row.deadlineOutcome, nowMs)}
+        </div>
       </div>
       {onSnooze && (
         // Inside a Link, so the menu has to swallow the navigation as well as

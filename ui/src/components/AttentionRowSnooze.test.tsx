@@ -48,6 +48,8 @@ function row(overrides: Partial<AttentionRowData> = {}): AttentionRowData {
     blockedSinceMs: NOW,
     count: 1,
     consequence: null,
+    deadlineAtMs: null,
+    deadlineOutcome: null,
     href: "/issues/PER-10",
     createdAtMs: NOW,
     updatedAtMs: NOW,

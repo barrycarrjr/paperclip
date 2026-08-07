@@ -131,6 +131,9 @@ export function attentionQueueService(db: Db) {
       blockedSinceMs: ms(row.createdAt),
       count: 1,
       consequence: "Nothing is sent or changed until you decide.",
+      // Nothing in Paperclip decides this for you. It waits.
+      deadlineAtMs: null,
+      deadlineOutcome: null,
       href: `/approvals/${row.id}`,
       createdAtMs: ms(row.createdAt) ?? 0,
       updatedAtMs: ms(row.updatedAt) ?? ms(row.createdAt) ?? 0,
@@ -158,6 +161,11 @@ export function attentionQueueService(db: Db) {
       // other policies mean it carried on.
       const stopped = group.some((entry) => entry.continuationPolicy !== "none");
       const headline = first.title?.trim() || first.summary?.trim() || null;
+      // A confirmation request lapses by itself when the thing it points at
+      // moves on: the document gets a new revision, or a later comment
+      // supersedes it. There is no clock, so no countdown, but saying
+      // "nothing happens until you decide" here would simply be untrue.
+      const canLapse = group.some((entry) => entry.kind === "request_confirmation");
       return {
         // Keyed by ISSUE, not interaction: several questions on one issue
         // are one row that says "3 questions".
@@ -178,6 +186,11 @@ export function attentionQueueService(db: Db) {
         consequence: stopped
           ? "The agent is paused on this issue until you answer. Waiting costs nothing."
           : "The agent carried on; your answer steers what it does next.",
+        // No clock, but not "nothing happens" either: see canLapse above.
+        deadlineAtMs: null,
+        deadlineOutcome: canLapse
+          ? "Lapses on its own if the work it refers to changes."
+          : null,
         href: `/issues/${first.issueIdentifier ?? first.issueId}#interaction-${first.id}`,
         createdAtMs: ms(first.createdAt) ?? 0,
         updatedAtMs: ms(first.updatedAt) ?? ms(first.createdAt) ?? 0,
@@ -214,6 +227,9 @@ export function attentionQueueService(db: Db) {
       blockedSinceMs: ms(gate.pendingSinceAt),
       count: 1,
       consequence: "The issue stays open until you sign it off.",
+      // Nothing in Paperclip decides this for you. It waits.
+      deadlineAtMs: null,
+      deadlineOutcome: null,
       href: `/issues/${gate.identifier ?? gate.issueId}`,
       createdAtMs: ms(gate.updatedAt) ?? 0,
       updatedAtMs: ms(gate.updatedAt) ?? 0,
@@ -267,6 +283,9 @@ export function attentionQueueService(db: Db) {
           blockedSinceMs: ms(row.finishedAt) ?? ms(row.createdAt),
           count: group.failures,
           consequence: "Paperclip has given up on this work. It stays undone until you act.",
+          // Nothing in Paperclip decides this for you. It waits.
+          deadlineAtMs: null,
+          deadlineOutcome: null,
           href: typeof issueId === "string"
             ? `/agents/${row.agentId}/runs/${row.id}`
             : `/agents/${row.agentId}/runs/${row.id}`,
@@ -314,6 +333,9 @@ export function attentionQueueService(db: Db) {
       blockedSinceMs: ms(row.createdAt),
       count: 1,
       consequence: "Work stays paused until you raise the cap or accept the stop.",
+      // Nothing in Paperclip decides this for you. It waits.
+      deadlineAtMs: null,
+      deadlineOutcome: null,
       href: `/costs`,
       createdAtMs: ms(row.createdAt) ?? 0,
       updatedAtMs: ms(row.updatedAt) ?? ms(row.createdAt) ?? 0,
@@ -352,6 +374,9 @@ export function attentionQueueService(db: Db) {
       blockedSinceMs: ms(row.createdAt),
       count: 1,
       consequence: "They cannot see anything in this company until you decide.",
+      // Nothing in Paperclip decides this for you. It waits.
+      deadlineAtMs: null,
+      deadlineOutcome: null,
       href: `/inbox`,
       createdAtMs: ms(row.createdAt) ?? 0,
       updatedAtMs: ms(row.updatedAt) ?? ms(row.createdAt) ?? 0,
