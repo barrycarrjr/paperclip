@@ -5,6 +5,8 @@ import postgres from "postgres";
 import {
   applyPendingMigrations,
   inspectMigrations,
+  reconcilePendingMigrationHistory,
+  splitMigrationStatements,
 } from "./client.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -27,6 +29,31 @@ async function migrationHash(migrationFile: string): Promise<string> {
     "utf8",
   );
   return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * Which arm of applyPendingMigrations handled a pending migration.
+ *
+ * There are two, and they are easy to confuse because both end with the history
+ * row restored and the state reporting upToDate:
+ *
+ *  - REPAIRED. reconcilePendingMigrationHistory recognised every statement in
+ *    the file and found each target object already present, so it just
+ *    re-recorded the history row. No SQL ran.
+ *  - REPLAYED. It could not vouch for at least one statement, so the whole file
+ *    was executed again by the manual applier.
+ *
+ * Six tests in this file are named "replays migration NNNN safely", and two of
+ * them were REPAIRED, not replayed: their SQL never ran, so removing an
+ * IF NOT EXISTS guard left them green. Every replay test now states which arm
+ * it expects, because that is the assertion that catches this. It also protects
+ * the ones that do replay: they only escape the reconciler because they happen
+ * to contain a statement shape it cannot parse (a DO $$ block, an ALTER COLUMN,
+ * a bulk UPDATE), so teaching it one more shape would silently gut them.
+ */
+async function migrationsRepairedWithoutReplay(connectionString: string): Promise<string[]> {
+  const result = await reconcilePendingMigrationHistory(connectionString);
+  return result.repairedMigrations;
 }
 
 afterEach(async () => {
@@ -68,6 +95,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         pendingMigrations: ["0030_rich_magneto.sql"],
         reason: "pending-migrations",
       });
+
+      // Replayed: the test dropped company_logos, so the reconciler cannot say 0030 is already applied.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        [],
+      );
 
       await applyPendingMigrations(connectionString);
 
@@ -132,6 +164,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         reason: "pending-migrations",
       });
 
+      // Replayed: 0044 contains DO $$ blocks and a DROP INDEX, which the reconciler cannot read.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        [],
+      );
+
       await applyPendingMigrations(connectionString);
 
       const finalState = await inspectMigrations(connectionString);
@@ -140,8 +177,15 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     20_000,
   );
 
+  /**
+   * Not about 0044, despite where it sits and what it used to be called. 0044
+   * creates this index, but 0045_workable_shockwave drops it and recreates it
+   * as UNIQUE, so at head the uniqueness is 0045's. Measured: making 0044's
+   * index non-unique leaves this test green. It is a plain forward-run check on
+   * the schema, and it never replays anything.
+   */
   it(
-    "enforces a unique board_api_keys.key_hash after migration 0044",
+    "enforces a unique board_api_keys.key_hash once every migration has run",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -206,6 +250,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         pendingMigrations: ["0046_smooth_sentinels.sql"],
         reason: "pending-migrations",
       });
+
+      // Replayed: 0046 contains ALTER COLUMN and a bulk UPDATE, which the reconciler cannot read.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        [],
+      );
 
       await applyPendingMigrations(connectionString);
 
@@ -335,6 +384,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         reason: "pending-migrations",
       });
 
+      // Replayed: 0091 removed some of 0047's objects, and 0047 also contains DO $$ blocks.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        [],
+      );
+
       await applyPendingMigrations(connectionString);
 
       const finalState = await inspectMigrations(connectionString);
@@ -416,8 +470,15 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     20_000,
   );
 
+  /**
+   * NOT a replay. 0048 is a single ALTER TABLE ADD COLUMN, which the reconciler
+   * recognises, so it re-records the history row and the SQL never runs. This
+   * test was called "replays migration 0048 safely" and proved no such thing:
+   * with the IF NOT EXISTS removed from 0048 it still passed. The guard itself
+   * is covered by the replay-safety test at the end of this file.
+   */
   it(
-    "replays migration 0048 safely when routines.variables already exists",
+    "records 0048 as applied without re-running it, because routines.variables is already there",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -452,6 +513,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         reason: "pending-migrations",
       });
 
+      // Repaired, NOT replayed: one recognised ADD COLUMN whose column is present.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        ["0048_flashy_marrow.sql"],
+      );
+
       await applyPendingMigrations(connectionString);
 
       const finalState = await inspectMigrations(connectionString);
@@ -482,8 +548,13 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     20_000,
   );
 
+  /**
+   * Same shape as 0048 above, and same correction: repaired from schema state,
+   * never replayed. Removing 0050's IF NOT EXISTS left this green, which is how
+   * the whole class was found.
+   */
   it(
-    "replays migration 0050 safely when projects.env already exists",
+    "records 0050 as applied without re-running it, because projects.env is already there",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -517,6 +588,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         pendingMigrations: ["0050_stiff_luckman.sql"],
         reason: "pending-migrations",
       });
+
+      // Repaired, NOT replayed: one recognised ADD COLUMN whose column is present.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        ["0050_stiff_luckman.sql"],
+      );
 
       await applyPendingMigrations(connectionString);
 
@@ -589,6 +665,11 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
         reason: "pending-migrations",
       });
 
+      // Replayed: 0059's two DO $$ foreign-key blocks are unreadable to the reconciler.
+      expect(await migrationsRepairedWithoutReplay(connectionString)).toEqual(
+        [],
+      );
+
       await applyPendingMigrations(connectionString);
 
       const finalState = await inspectMigrations(connectionString);
@@ -622,3 +703,91 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     20_000,
   );
 });
+
+/**
+ * The guards themselves, tested where they actually bite.
+ *
+ * A migration file that has been EDITED after shipping reappears as pending on
+ * every database that already applied the old text, because which migrations
+ * count as applied is decided by hashing the current file contents. So its SQL
+ * can be run again against a database that already has its objects, and every
+ * `IF NOT EXISTS` in these files exists to survive exactly that.
+ *
+ * The tests above cannot check this, and it took a while to see why. Going
+ * through applyPendingMigrations, the reconciler steps in first: if it can read
+ * every statement and finds the objects present, it re-records the history row
+ * and the SQL never runs, so a missing guard is invisible. Dropping the object
+ * first does not help either - it was measured, and an unguarded ADD COLUMN
+ * passes just as happily once the column is gone, because dropping it destroys
+ * the very condition the guard exists to survive.
+ *
+ * What does work is running the statements against a database that still has
+ * everything, which is precisely what a real replay does. Measured both ways:
+ * green with the guards, and red with 42701 "column already exists" when one is
+ * removed.
+ *
+ * The list is explicit and short because replay-safety is not a property of all
+ * 94 migrations and cannot be. Migration 0003 alone would fail on its first
+ * statement, and 55 of the 94 carry no guards at all. These are the files
+ * someone has had to go back and make re-runnable, each after it actually broke.
+ */
+const REPLAY_SAFE_MIGRATIONS = [
+  // Made idempotent in 01b6b7e6 after a rebase left it half-applied.
+  "0044_illegal_toad.sql",
+  // Made replay-safe in 90889c12, same day it merged.
+  "0046_smooth_sentinels.sql",
+  // Made replay-safe in 29d0e82d, "after rebase".
+  "0047_overjoyed_groot.sql",
+  // Guarded from the start; nothing else can reach these two, because the
+  // reconciler always vouches for them and their SQL never replays today.
+  "0048_flashy_marrow.sql",
+  "0050_stiff_luckman.sql",
+  "0059_plugin_database_namespaces.sql",
+] as const;
+
+describeEmbeddedPostgres("migration replay safety", () => {
+  it(
+    "re-runs every migration that claims to be replay-safe against a database that already has its objects",
+    async () => {
+      const connectionString = await createTempDatabase();
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      const failures: string[] = [];
+      try {
+        for (const migration of REPLAY_SAFE_MIGRATIONS) {
+          const content = await fs.promises.readFile(
+            new URL(`./migrations/${migration}`, import.meta.url),
+            "utf8",
+          );
+          // Rolled back so each file is judged against head rather than
+          // against whatever the previous one in the list left behind. Some of
+          // these really do change things on replay: 0044 drops and recreates
+          // an index, 0046 re-runs a bulk UPDATE.
+          try {
+            await sql.begin(async (tx) => {
+              for (const statement of splitMigrationStatements(content)) {
+                await tx.unsafe(statement);
+              }
+              throw new RollbackAfterReplay();
+            });
+          } catch (error) {
+            if (error instanceof RollbackAfterReplay) continue;
+            failures.push(
+              `${migration}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      } finally {
+        await sql.end();
+      }
+
+      // Reported together: one missing guard should not hide the next.
+      expect(failures).toEqual([]);
+    },
+    60_000,
+  );
+});
+
+/** Thrown to unwind a replay that succeeded, since the point is only that it did. */
+class RollbackAfterReplay extends Error {}

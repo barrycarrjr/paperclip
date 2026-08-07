@@ -27,7 +27,11 @@ function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function splitMigrationStatements(content: string): string[] {
+/**
+ * Exported so a test can re-run a migration's statements exactly the way the
+ * replay does, rather than copying this rule and drifting from it silently.
+ */
+export function splitMigrationStatements(content: string): string[] {
   return content
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
