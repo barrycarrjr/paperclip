@@ -21,7 +21,11 @@ import { agents as agentsTable, heartbeatRuns, type Db } from "@paperclipai/db";
 const CLAUDE_AUTH_ERROR_CODE = "claude_auth_required";
 
 export interface ClaudeSignInImpact {
-  /** Agents whose most recent run failed because Claude could not sign in. */
+  /**
+   * Agents whose most recent run failed to sign in AND which share the
+   * machine's sign-in, so fixing that one thing fixes all of them. Agents
+   * holding their own token are excluded: they are broken for their own reason.
+   */
   signedOutAgents: number;
 }
 
@@ -48,7 +52,7 @@ export async function countClaudeSignedOutAgents(
     .as("latest_run");
 
   const rows = await db
-    .select({ agentId: agentsTable.id })
+    .select({ agentId: agentsTable.id, adapterConfig: agentsTable.adapterConfig })
     .from(agentsTable)
     .innerJoin(latestRun, eq(latestRun.agentId, agentsTable.id))
     .where(
@@ -61,7 +65,14 @@ export async function countClaudeSignedOutAgents(
     );
 
   const excluded = options.excludeAgentId ?? null;
-  const signedOutAgents = rows.filter((row) => row.agentId !== excluded).length;
+  const signedOutAgents = rows.filter(
+    (row) =>
+      row.agentId !== excluded &&
+      // Only agents a machine-wide fix would actually reach. An agent holding
+      // its own token is broken for its own reason, and counting it would make
+      // the page promise that fixing the machine covers it.
+      !agentHasOwnClaudeToken(row.adapterConfig),
+  ).length;
   return { signedOutAgents };
 }
 

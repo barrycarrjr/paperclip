@@ -342,6 +342,21 @@ export interface HostClaudeTokenRestore {
 }
 
 /**
+ * A long-lived token from `claude setup-token`, as opposed to the short-lived
+ * one Claude Desktop injects into its own children.
+ *
+ * The difference decides whether the launch markers may be dropped. Those
+ * markers are how the spawn code recognises a desktop session token, which an
+ * out-of-process agent cannot use - it comes back 401 - so removing them while
+ * such a token is present would hand every agent a dead credential AND hide the
+ * working fallback to the machine's own stored login behind it. That is the
+ * outage this whole change exists to end, so it must not be recreated by it.
+ */
+export function isLongLivedClaudeToken(token: string | null | undefined): boolean {
+  return /^sk-ant-oat01-[A-Za-z0-9_-]{20,}$/.test((token ?? "").trim());
+}
+
+/**
  * What startup should do about the machine's Claude token. Pure, so the
  * interesting cases are decided here rather than against a real environment.
  */
@@ -359,9 +374,10 @@ export function decideHostClaudeTokenRestore(input: {
   const current = input.currentToken?.trim() ?? "";
   const saved = input.savedToken?.trim() ?? "";
 
-  if (current.length > 0) {
-    // Whatever put it there wins; this is only ever a repair, never an
-    // override. The markers still have to go, or agents cannot see it.
+  if (current.length > 0 && isLongLivedClaudeToken(current)) {
+    // A good token is already here. Whatever put it there wins; this is only
+    // ever a repair, never an override. The markers still have to go, or agents
+    // cannot see it.
     return input.hasLaunchMarkers
       ? {
           action: "unblock-inherited-token",
@@ -371,8 +387,27 @@ export function decideHostClaudeTokenRestore(input: {
       : { action: "none", reason: "The machine's Claude token is already usable." };
   }
 
+  // Anything else in the environment is Claude Desktop's own session token,
+  // which agents cannot use. It is deliberately NOT unblocked: leaving the
+  // markers in place is what makes the spawn code drop it and fall back to the
+  // machine's stored login. A saved long-lived token may still replace it.
+
   if (saved.length === 0) {
-    return { action: "none", reason: "No saved Claude token for this machine." };
+    return {
+      action: "none",
+      reason:
+        current.length > 0
+          ? "The only Claude token here belongs to the Claude Code session and agents cannot use it, and there is no saved one to use instead."
+          : "No saved Claude token for this machine.",
+    };
+  }
+
+  if (!isLongLivedClaudeToken(saved)) {
+    // Never swap a usable environment for an unusable one.
+    return {
+      action: "none",
+      reason: "The saved Claude token for this machine is not a `claude setup-token` token, so it was left alone.",
+    };
   }
 
   const expiresAtMs = input.savedExpiresAt ? Date.parse(input.savedExpiresAt) : Number.NaN;
@@ -393,9 +428,22 @@ export function decideHostClaudeTokenRestore(input: {
   };
 }
 
-/** Read a persisted user-environment variable. Windows only; null elsewhere. */
-async function readWindowsUserEnv(name: string): Promise<string | null> {
-  if (process.platform !== "win32") return null;
+/**
+ * Read a persisted user-environment variable.
+ *
+ * Reports "could not look" separately from "nothing is there". Collapsing them
+ * would make startup announce "no saved Claude token for this machine" on a
+ * machine whose token is sitting right there and merely unreadable - the same
+ * kind of confident wrong answer this change is meant to stop giving.
+ */
+type UserEnvRead =
+  | { ok: true; value: string | null }
+  | { ok: false; error: string };
+
+async function readWindowsUserEnv(name: "CLAUDE_CODE_OAUTH_TOKEN" | "CLAUDE_CODE_OAUTH_TOKEN_EXPIRES"): Promise<UserEnvRead> {
+  // The name is a closed set rather than a string so nothing can ever be
+  // interpolated into the PowerShell below.
+  if (process.platform !== "win32") return { ok: true, value: null };
   try {
     const { stdout } = await execFileAsync(
       "powershell.exe",
@@ -408,9 +456,9 @@ async function readWindowsUserEnv(name: string): Promise<string | null> {
       { windowsHide: true, timeout: 10_000 },
     );
     const value = stdout.trim();
-    return value.length > 0 ? value : null;
-  } catch {
-    return null;
+    return { ok: true, value: value.length > 0 ? value : null };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -424,14 +472,27 @@ export async function restoreHostClaudeTokenAtStartup(): Promise<HostClaudeToken
   );
   const currentToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null;
 
-  // Only pay for reading the saved copy when it could actually be used.
-  const needsSaved = (currentToken ?? "").trim().length === 0;
-  const savedToken = needsSaved ? await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN") : null;
-  const savedExpiresAt = needsSaved
-    ? (await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN_EXPIRES")) ??
-      process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES ??
-      null
-    : null;
+  // Read the saved copy unless what is already here is usable. A Claude Desktop
+  // session token counts as not usable, so a saved long-lived token can replace
+  // it - which is the whole point on a machine started from the desktop app.
+  const needsSaved = !isLongLivedClaudeToken(currentToken);
+  const savedRead = needsSaved
+    ? await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN")
+    : ({ ok: true, value: null } as UserEnvRead);
+  if (!savedRead.ok) {
+    return {
+      action: "none",
+      reason: `Could not read this machine's saved Claude token: ${savedRead.error}. If agents cannot sign in, the saved token may be fine and merely unreadable.`,
+    };
+  }
+  const savedToken = savedRead.value;
+  // Only ever the expiry recorded ALONGSIDE the saved token. Falling back to
+  // whatever the process environment happens to carry would let an unrelated
+  // date condemn a perfectly good saved token.
+  const savedExpiryRead = savedToken
+    ? await readWindowsUserEnv("CLAUDE_CODE_OAUTH_TOKEN_EXPIRES")
+    : ({ ok: true, value: null } as UserEnvRead);
+  const savedExpiresAt = savedExpiryRead.ok ? savedExpiryRead.value : null;
 
   const decision = decideHostClaudeTokenRestore({
     currentToken,
@@ -444,7 +505,11 @@ export async function restoreHostClaudeTokenAtStartup(): Promise<HostClaudeToken
   if (decision.action === "adopt-saved-token" && savedToken) {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = savedToken.trim();
     if (savedExpiresAt) process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES = savedExpiresAt;
+    else delete process.env.CLAUDE_CODE_OAUTH_TOKEN_EXPIRES;
   }
+  // Only once a usable long-lived token is in place. Dropping the markers while
+  // a desktop session token is present would hand that dead token to every
+  // agent and hide the working fallback behind it.
   if (decision.action !== "none") {
     for (const marker of CLAUDE_NESTING_MARKERS) delete process.env[marker];
   }

@@ -3546,16 +3546,19 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             )}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">
-                <ClaudeSignInScope
-                  usesOwnToken={agentHasOwnClaudeToken}
-                  otherAgentsAffected={otherAgentsSignedOut}
-                />
+                {claudeSignInImpact.data && (
+                  <ClaudeSignInScope
+                    usesOwnToken={agentHasOwnClaudeToken}
+                    otherAgentsAffected={otherAgentsSignedOut}
+                  />
+                )}
                 <p className="text-xs text-muted-foreground">
                   To give this agent its own token: in a terminal on the host run{" "}
                   <code className="font-mono">claude setup-token</code>, approve the sign-in in your
                   browser, then paste the token below (starts with{" "}
-                  <code className="font-mono">sk-ant-oat01-</code>). It is saved for this company and
-                  used by this agent only, for about a year, from its next run.
+                  <code className="font-mono">sk-ant-oat01-</code>). It takes effect on this agent's
+                  next run. The token is saved once per company, so any other agent here that was
+                  given its own token starts using this one too.
                 </p>
                 <textarea
                   value={setupTokenInput}
