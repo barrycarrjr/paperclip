@@ -31,6 +31,7 @@ import { AgentRunCard, DASHBOARD_AGENT_RUN_CONFIG, isRunActive, SleepingAgentsSt
 import { agentsApi } from "../api/agents";
 import { AttentionRow } from "../components/AttentionRow";
 import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
+import { SetAsideNotice } from "../components/SetAsideNotice";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -153,9 +154,12 @@ export function PortfolioBrief() {
   // Everything blocked on a human across the portfolio, in one server-side
   // list. This replaces the three separate feeds (approvals, questions,
   // sign-off gates) the page used to reconcile by hand.
+  // Held-back rows are a portfolio-wide fact, so the toggle sits with the
+  // section rather than inside any one company's block.
+  const [showSetAside, setShowSetAside] = useState(false);
   const { data: attentionData } = useQuery({
-    queryKey: queryKeys.portfolioAttention(selectedCompanyId!),
-    queryFn: () => attentionApi.listPortfolio(selectedCompanyId!),
+    queryKey: [...queryKeys.portfolioAttention(selectedCompanyId!), showSetAside],
+    queryFn: () => attentionApi.listPortfolio(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId && isPortfolioRoot,
     // A snooze lapsing is not broadcast, so a page left open needs to ask.
     refetchInterval: 15_000,
@@ -909,6 +913,11 @@ export function PortfolioBrief() {
                     )}
                   </CompanyBlock>
                 ))}
+                <SetAsideNotice
+                  count={attentionData?.setAside ?? 0}
+                  showing={showSetAside}
+                  onToggle={() => setShowSetAside((v) => !v)}
+                />
               </div>
             )}
 

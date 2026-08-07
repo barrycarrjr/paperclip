@@ -41,7 +41,9 @@ export function sidebarBadgeRoutes(db: Db) {
     const userId = req.actor.type === "board" ? req.actor.userId ?? null : null;
     const hidden = userId ? await dismissals.loadHiddenByKey(companyId, userId) : null;
 
-    const rows = await queue.listForCompany(companyId, {
+    // Badges count only live rows. A failure that has gone quiet must not keep
+    // a number on the sidebar for months.
+    const { rows } = await queue.listForCompany(companyId, {
       userId,
       canApproveJoins,
       dismissedAtByKey: hidden?.dismissedAtByKey,

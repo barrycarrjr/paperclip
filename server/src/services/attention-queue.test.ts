@@ -3,8 +3,10 @@ import type { AttentionRow } from "@paperclipai/shared";
 import {
   groupUnaddressedRunFailures,
   isAttentionRowDismissed,
+  isAttentionRowSetAside,
   isAttentionRowSnoozed,
   mergeRunFailuresBySharedCause,
+  RUN_FAILURE_GOES_QUIET_AFTER_MS,
   sortAttentionRows,
   type RunFailureCandidate,
 } from "./attention-queue.js";
@@ -393,5 +395,64 @@ describe("isAttentionRowSnoozed", () => {
         NOW,
       ),
     ).toBe(false);
+  });
+});
+
+describe("isAttentionRowSetAside", () => {
+  const NOW = Date.parse("2026-08-07T16:00:00.000Z");
+  const A_FORTNIGHT = RUN_FAILURE_GOES_QUIET_AFTER_MS;
+
+  function failure(overrides: Partial<AttentionRow> = {}): AttentionRow {
+    return row({
+      key: "run-cause:agent-1:claude_auth_required",
+      kind: "run_failure",
+      updatedAtMs: NOW,
+      ...overrides,
+    });
+  }
+
+  it("sets aside a failure that stopped happening months ago", () => {
+    // The live case: two rows sat in "Awaiting your tap" since the 31st of May,
+    // describing work nothing had attempted since. Not decisions - sediment.
+    const stale = failure({ updatedAtMs: Date.parse("2026-05-31T12:00:00.000Z") });
+    expect(isAttentionRowSetAside(stale, NOW)).toBe(true);
+  });
+
+  it("keeps a failure that is still happening", () => {
+    // The row next to those two: the same agent, failing all week.
+    expect(isAttentionRowSetAside(failure({ updatedAtMs: NOW - 60_000 }), NOW)).toBe(false);
+  });
+
+  it("keeps a failure right up to the fortnight", () => {
+    expect(isAttentionRowSetAside(failure({ updatedAtMs: NOW - A_FORTNIGHT }), NOW)).toBe(false);
+    expect(isAttentionRowSetAside(failure({ updatedAtMs: NOW - A_FORTNIGHT - 1 }), NOW)).toBe(true);
+  });
+
+  it("never sets aside anything that is still true right now", () => {
+    // Age makes these MORE pressing, not less. An approval nobody has answered
+    // for a year is still unapproved; an agent stuck on a question is still
+    // stuck. Only a run failure describes an event that already finished.
+    const ancient = { updatedAtMs: Date.parse("2025-01-01T00:00:00.000Z") };
+    for (const kind of [
+      "approval",
+      "question",
+      "sign_off",
+      "budget_stop",
+      "join_request",
+      "email_sender",
+    ] as const) {
+      expect(isAttentionRowSetAside(row({ kind, ...ancient }), NOW)).toBe(false);
+    }
+  });
+
+  it("measures from the last time it happened, not from when it started", () => {
+    // A problem that began in May but failed again this morning is live. Using
+    // the start date would bury exactly the outage worth showing.
+    const longRunning = failure({
+      sameProblemSinceMs: Date.parse("2026-05-31T12:00:00.000Z"),
+      blockedSinceMs: Date.parse("2026-05-31T12:00:00.000Z"),
+      updatedAtMs: NOW - 60_000,
+    });
+    expect(isAttentionRowSetAside(longRunning, NOW)).toBe(false);
   });
 });

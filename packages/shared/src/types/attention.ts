@@ -96,6 +96,14 @@ export interface AttentionQueueResponse {
   rows: AttentionRow[];
   /** Total open rows, which is also the one number every badge shows. */
   count: number;
+  /**
+   * Rows held back because they have gone quiet - a failure that has not
+   * happened again in a fortnight is history, not a decision.
+   *
+   * Reported rather than silently dropped, so a surface can say how many it is
+   * not showing. Ask for them with `?setAside=1`.
+   */
+  setAside?: number;
 }
 
 /**

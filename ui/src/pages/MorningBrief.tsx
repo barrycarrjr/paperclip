@@ -36,6 +36,7 @@ import { MetricCard } from "../components/MetricCard";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { AttentionRow } from "../components/AttentionRow";
 import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
+import { SetAsideNotice } from "../components/SetAsideNotice";
 import {
   ChartCard,
   RunActivityChart,
@@ -117,9 +118,12 @@ export function MorningBrief() {
   // Everything blocked on a human, in one server-side list. The Brief used to
   // work this out four separate ways (approvals, questions, sign-off gates)
   // and could disagree with the badge and the Inbox about the same company.
+  // Rows that have gone quiet are held back until asked for, so months-old
+  // sediment does not sit next to a live outage.
+  const [showSetAside, setShowSetAside] = useState(false);
   const { data: attention } = useQuery({
-    queryKey: queryKeys.attention(selectedCompanyId!),
-    queryFn: () => attentionApi.list(selectedCompanyId!),
+    queryKey: [...queryKeys.attention(selectedCompanyId!), showSetAside],
+    queryFn: () => attentionApi.list(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId,
     // A snooze lapsing is not an event anything broadcasts, so without this a
     // row put away for an hour would not reappear on a page left open. Same
@@ -686,6 +690,11 @@ export function MorningBrief() {
                     + {remainingAttention} more — show all
                   </button>
                 )}
+                <SetAsideNotice
+                  count={attention?.setAside ?? 0}
+                  showing={showSetAside}
+                  onToggle={() => setShowSetAside((v) => !v)}
+                />
                 {attentionExpanded && attentionRows.length > ATTENTION_SHOWN && (
                   <button
                     type="button"

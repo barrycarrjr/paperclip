@@ -160,6 +160,11 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       updatedAt: new Date("2026-03-11T01:00:00.000Z"),
     });
 
+    // Recent, deliberately. A failure that has not happened again in a
+    // fortnight is set aside as history, so fixed dates in the past would make
+    // this test about staleness instead of about dismissals.
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     await db.insert(heartbeatRuns).values([
       {
         id: hiddenRunId,
@@ -167,8 +172,8 @@ describeEmbeddedPostgres("inbox dismissals", () => {
         agentId: primaryAgentId,
         invocationSource: "assignment",
         status: "failed",
-        createdAt: new Date("2026-03-11T01:00:00.000Z"),
-        updatedAt: new Date("2026-03-11T01:00:00.000Z"),
+        createdAt: threeHoursAgo,
+        updatedAt: threeHoursAgo,
       },
       {
         id: visibleRunId,
@@ -176,8 +181,8 @@ describeEmbeddedPostgres("inbox dismissals", () => {
         agentId: secondaryAgentId,
         invocationSource: "assignment",
         status: "timed_out",
-        createdAt: new Date("2026-03-11T04:00:00.000Z"),
-        updatedAt: new Date("2026-03-11T04:00:00.000Z"),
+        createdAt: anHourAgo,
+        updatedAt: anHourAgo,
       },
     ]);
 
@@ -191,7 +196,7 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       companyId,
       userId,
       `run-group:${primaryAgentId}:no-issue`,
-      new Date("2026-03-11T02:00:00.000Z"),
+      new Date(Date.now() - 2 * 60 * 60 * 1000),
     );
 
     const dismissedAtByKey = new Map(
@@ -201,7 +206,7 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       ]),
     );
 
-    const rows = await queueSvc.listForCompany(companyId, {
+    const { rows } = await queueSvc.listForCompany(companyId, {
       userId,
       canApproveJoins: true,
       dismissedAtByKey,
@@ -222,6 +227,87 @@ describeEmbeddedPostgres("inbox dismissals", () => {
       [`approval:${resurfacedApprovalId}`, `run-group:${secondaryAgentId}:no-issue`].sort(),
     );
     expect(rows.find((row) => row.kind === "run_failure")?.runId).toBe(visibleRunId);
+  });
+
+  it("sets aside a failure that stopped happening, and says how many", async () => {
+    // The live case this came from: two rows had sat in "Awaiting your tap"
+    // since the 31st of May, describing work nothing had attempted since, right
+    // next to a row about the same agent failing forty-three times that week.
+    const companyId = randomUUID();
+    const userId = "board-user";
+    const quietAgentId = randomUUID();
+    const busyAgentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values([
+      {
+        id: quietAgentId,
+        companyId,
+        name: "Gone quiet",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: busyAgentId,
+        companyId,
+        name: "Still failing",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    const justNow = new Date(Date.now() - 5 * 60 * 1000);
+    await db.insert(heartbeatRuns).values([
+      {
+        id: randomUUID(),
+        companyId,
+        agentId: quietAgentId,
+        invocationSource: "assignment",
+        status: "failed",
+        createdAt: longAgo,
+        updatedAt: longAgo,
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        agentId: busyAgentId,
+        invocationSource: "assignment",
+        status: "failed",
+        createdAt: justNow,
+        updatedAt: justNow,
+      },
+    ]);
+
+    const actor = { userId, canApproveJoins: true };
+    const listed = await queueSvc.listForCompany(companyId, actor);
+    expect(listed.rows.map((row) => row.title)).toEqual([
+      "Still failing failed with no retry left",
+    ]);
+    expect(listed.setAside).toBe(1);
+
+    // Set aside, never deleted. Asking brings it back.
+    const withOlder = await queueSvc.listForCompany(companyId, actor, { includeSetAside: true });
+    expect(withOlder.rows).toHaveLength(2);
+    expect(withOlder.setAside).toBe(1);
+
+    // And the badge counts only what is live, so a months-old failure cannot
+    // keep a number on the sidebar forever.
+    expect(summarizeAttentionForBadges(listed.rows).failedRuns).toBe(1);
   });
 
   it("keeps a snooze and a dismissal on one row without either clearing the other", async () => {

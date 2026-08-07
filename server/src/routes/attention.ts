@@ -51,8 +51,15 @@ export function attentionRoutes(db: Db) {
   router.get("/companies/:companyId/attention", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId, "read");
-    const rows = await queue.listForCompany(companyId, await resolveActor(req, companyId));
-    res.json({ rows, count: rows.length });
+    // `setAside=1` asks for the rows that have gone quiet as well, so a surface
+    // can show what it is normally holding back rather than only counting it.
+    const includeSetAside = req.query.setAside === "1";
+    const result = await queue.listForCompany(
+      companyId,
+      await resolveActor(req, companyId),
+      { includeSetAside },
+    );
+    res.json({ rows: result.rows, count: result.rows.length, setAside: result.setAside });
   });
 
   // Portfolio roll-up, HQ only. Guard mirrors the sibling portfolio feeds.
@@ -78,23 +85,32 @@ export function attentionRoutes(db: Db) {
       return;
     }
 
+    const includeSetAside = req.query.setAside === "1";
     const allCompanies = await companies.list();
     const targets = allCompanies.filter((company) => company.status !== "archived");
     const perCompany = await Promise.all(
       targets.map(async (company) => {
-        const rows = await queue.listForCompany(company.id, await resolveActor(req, company.id));
+        const result = await queue.listForCompany(
+          company.id,
+          await resolveActor(req, company.id),
+          { includeSetAside },
+        );
         // Stamp company identity so portfolio rows can be grouped and linked
         // without a second lookup on the client.
-        return rows.map((row): AttentionRow => ({
-          ...row,
-          companyName: company.name,
-          companyIssuePrefix: company.issuePrefix ?? null,
-        }));
+        return {
+          setAside: result.setAside,
+          rows: result.rows.map((row): AttentionRow => ({
+            ...row,
+            companyName: company.name,
+            companyIssuePrefix: company.issuePrefix ?? null,
+          })),
+        };
       }),
     );
 
-    const rows = sortAttentionRows(perCompany.flat());
-    res.json({ rows, count: rows.length, companies: targets });
+    const rows = sortAttentionRows(perCompany.flatMap((entry) => entry.rows));
+    const setAside = perCompany.reduce((total, entry) => total + entry.setAside, 0);
+    res.json({ rows, count: rows.length, setAside, companies: targets });
   });
 
   return router;

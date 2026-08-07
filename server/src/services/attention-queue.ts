@@ -88,6 +88,45 @@ export function isAttentionRowSnoozed(
   return until !== undefined && until > nowMs;
 }
 
+/** What one company's queue came back with, and what it held back. */
+export interface AttentionQueueResult {
+  rows: AttentionRow[];
+  /** Rows that have gone quiet and are no longer shown by default. */
+  setAside: number;
+}
+
+/**
+ * How long a failure can go without happening again before it stops counting
+ * as something waiting on you.
+ *
+ * Two weeks. Agents here run at least daily, so a problem that has not
+ * recurred in a fortnight is not a problem anyone is still hitting.
+ */
+export const RUN_FAILURE_GOES_QUIET_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Has this row stopped being a decision and become history?
+ *
+ * Only run failures can. Every other kind describes something that is STILL
+ * TRUE right now - an approval really is still unapproved, an agent really is
+ * still stuck on its question, a budget really is still capped - and age makes
+ * those more pressing, not less. A run failure is different: it describes an
+ * event that already finished. If the same work has not failed again in a
+ * fortnight, nothing is retrying it and nobody is going to.
+ *
+ * On the instance this was written for, two rows had been sitting in "Awaiting
+ * your tap" since the 31st of May, describing work that stopped being attempted
+ * the same day. They were not decisions. They were sediment, and they sat next
+ * to a live row about the same agent failing forty-three times this week.
+ *
+ * Set aside, never deleted: the count travels with the response and the rows
+ * come back on request.
+ */
+export function isAttentionRowSetAside(row: AttentionRow, nowMs: number): boolean {
+  if (row.kind !== "run_failure") return false;
+  return nowMs - row.updatedAtMs > RUN_FAILURE_GOES_QUIET_AFTER_MS;
+}
+
 /**
  * A dismissal only holds until the item changes. Newer activity than the
  * dismissal means the thing the operator waved away is not the thing in
@@ -419,7 +458,8 @@ export function attentionQueueService(db: Db) {
     listForCompany: async (
       companyId: string,
       actor: AttentionQueueActor,
-    ): Promise<AttentionRow[]> => {
+      options: { includeSetAside?: boolean } = {},
+    ): Promise<AttentionQueueResult> => {
       const [approvalsList, questions, signOffs, runFailures, budgetStops, joins] =
         await Promise.all([
           approvalRows(companyId),
@@ -439,13 +479,25 @@ export function attentionQueueService(db: Db) {
         ...joins,
       ];
       const nowMs = Date.now();
-      return sortAttentionRows(
-        all.filter(
-          (row) =>
-            !isAttentionRowDismissed(row, actor.dismissedAtByKey)
-            && !isAttentionRowSnoozed(row, actor.snoozedUntilByKey, nowMs),
-        ),
+      const visible = all.filter(
+        (row) =>
+          !isAttentionRowDismissed(row, actor.dismissedAtByKey)
+          && !isAttentionRowSnoozed(row, actor.snoozedUntilByKey, nowMs),
       );
+
+      // Split rather than drop. A row that has gone quiet is still findable,
+      // and the count travels with the response so a surface can say how many
+      // it is not showing instead of quietly showing fewer.
+      const live: AttentionRow[] = [];
+      const setAside: AttentionRow[] = [];
+      for (const row of visible) {
+        (isAttentionRowSetAside(row, nowMs) ? setAside : live).push(row);
+      }
+
+      return {
+        rows: sortAttentionRows(options.includeSetAside ? visible : live),
+        setAside: setAside.length,
+      };
     },
   };
 }
