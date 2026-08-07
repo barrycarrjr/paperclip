@@ -242,8 +242,46 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     20_000,
   );
 
+  /**
+   * 0047 is the one replay case whose subject was later half-deleted.
+   *
+   * It shipped two unrelated things: a feedback subsystem, and a
+   * created_by_run_id column on document revisions and issue comments. Forty-
+   * four migrations later 0091_drop_feedback removed the feedback half, and
+   * nobody came back to this test. It went on asserting that the feedback
+   * tables were present after a full migration run, so it failed on a
+   * precondition that had stopped being true - before ever reaching the replay
+   * behaviour it exists to guard.
+   *
+   * The run columns survive at head, so the replay is still worth testing, and
+   * this covers both of the things that replay now does.
+   *
+   * FIRST, the replay-safety it was always for. Which migrations are
+   * outstanding is worked out as a set difference, so removing 0047's history
+   * row makes exactly that one migration pending. Its objects still being
+   * present is what its IF NOT EXISTS guards have to survive; strip one and
+   * this test goes red on the thrown error rather than on an assertion.
+   *
+   * SECOND, and less comfortable: replaying a migration that a LATER migration
+   * deliberately reversed puts back what the later one removed. 0091 is still
+   * recorded as applied so it does not run again to clean up, and the migration
+   * state then reports itself up to date with a deleted subsystem back in the
+   * database. Recorded here rather than left to be discovered.
+   *
+   * That resurrection is untidy rather than harmful today: no application code
+   * reads or writes those tables - outside the two migration files and this
+   * test, the only mentions are drizzle's own meta snapshots - the TypeScript
+   * schema does not define them, and they come back empty. The consequence
+   * that does last is that a backup dumps whatever tables actually exist, so
+   * the orphans would ride along into every later backup and restore.
+   *
+   * The resurrection assertions are a characterisation, NOT a property worth
+   * having. If someone teaches the runner to skip a migration that a later
+   * applied one reversed, they will fail; that is an improvement, and the right
+   * response is to invert them, not to delete them.
+   */
   it(
-    "replays migration 0047 safely when feedback tables and run columns already exist",
+    "replays migration 0047 when its columns already exist, and puts back what 0091 dropped",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -257,39 +295,35 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
           `DELETE FROM "drizzle"."__drizzle_migrations" WHERE hash = '${overjoyedGrootHash}'`,
         );
 
-        const tables = await sql.unsafe<{ table_name: string }[]>(
+        // The half of 0047 still standing: both columns are already in place,
+        // which is the "already exists" state the replay has to survive.
+        const columns = await sql.unsafe<{ table_name: string }[]>(
+          `
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND column_name = 'created_by_run_id'
+              AND table_name IN ('document_revisions', 'issue_comments')
+            ORDER BY table_name
+          `,
+        );
+        expect(columns.map((row) => row.table_name)).toEqual([
+          "document_revisions",
+          "issue_comments",
+        ]);
+
+        // The half 0091 took away, checked before the replay rather than
+        // assumed. Without this the resurrection assertions further down would
+        // pass whether or not anything was resurrected.
+        const feedbackTables = await sql.unsafe<{ table_name: string }[]>(
           `
             SELECT table_name
             FROM information_schema.tables
             WHERE table_schema = 'public'
               AND table_name IN ('feedback_exports', 'feedback_votes')
-            ORDER BY table_name
           `,
         );
-        expect(tables.map((row) => row.table_name)).toEqual([
-          "feedback_exports",
-          "feedback_votes",
-        ]);
-
-        const columns = await sql.unsafe<{ table_name: string; column_name: string }[]>(
-          `
-            SELECT table_name, column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND (
-                (table_name = 'companies' AND column_name IN (
-                  'feedback_data_sharing_enabled',
-                  'feedback_data_sharing_consent_at',
-                  'feedback_data_sharing_consent_by_user_id',
-                  'feedback_data_sharing_terms_version'
-                ))
-                OR (table_name = 'document_revisions' AND column_name = 'created_by_run_id')
-                OR (table_name = 'issue_comments' AND column_name = 'created_by_run_id')
-              )
-            ORDER BY table_name, column_name
-          `,
-        );
-        expect(columns).toHaveLength(6);
+        expect(feedbackTables.map((row) => row.table_name)).toEqual([]);
       } finally {
         await sql.end();
       }
@@ -313,21 +347,67 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
             SELECT conname
             FROM pg_constraint
             WHERE conname IN (
-              'feedback_exports_company_id_companies_id_fk',
-              'feedback_exports_feedback_vote_id_feedback_votes_id_fk',
-              'feedback_exports_issue_id_issues_id_fk',
-              'feedback_votes_company_id_companies_id_fk',
-              'feedback_votes_issue_id_issues_id_fk'
+              'document_revisions_created_by_run_id_heartbeat_runs_id_fk',
+              'issue_comments_created_by_run_id_heartbeat_runs_id_fk'
             )
             ORDER BY conname
           `,
         );
         expect(constraints.map((row) => row.conname)).toEqual([
-          "feedback_exports_company_id_companies_id_fk",
-          "feedback_exports_feedback_vote_id_feedback_votes_id_fk",
-          "feedback_exports_issue_id_issues_id_fk",
-          "feedback_votes_company_id_companies_id_fk",
-          "feedback_votes_issue_id_issues_id_fk",
+          "document_revisions_created_by_run_id_heartbeat_runs_id_fk",
+          "issue_comments_created_by_run_id_heartbeat_runs_id_fk",
+        ]);
+
+        const columns = await verifySql.unsafe<{ table_name: string; data_type: string }[]>(
+          `
+            SELECT table_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND column_name = 'created_by_run_id'
+              AND table_name IN ('document_revisions', 'issue_comments')
+            ORDER BY table_name
+          `,
+        );
+        expect(columns).toEqual([
+          expect.objectContaining({ table_name: "document_revisions", data_type: "uuid" }),
+          expect.objectContaining({ table_name: "issue_comments", data_type: "uuid" }),
+        ]);
+
+        // The characterisation. See the note above before "fixing" these.
+        const revivedTables = await verifySql.unsafe<{ table_name: string }[]>(
+          `
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('feedback_exports', 'feedback_votes')
+            ORDER BY table_name
+          `,
+        );
+        expect(revivedTables.map((row) => row.table_name)).toEqual([
+          "feedback_exports",
+          "feedback_votes",
+        ]);
+
+        const revivedColumns = await verifySql.unsafe<{ column_name: string }[]>(
+          `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'companies'
+              AND column_name IN (
+                'feedback_data_sharing_enabled',
+                'feedback_data_sharing_consent_at',
+                'feedback_data_sharing_consent_by_user_id',
+                'feedback_data_sharing_terms_version'
+              )
+            ORDER BY column_name
+          `,
+        );
+        expect(revivedColumns.map((row) => row.column_name)).toEqual([
+          "feedback_data_sharing_consent_at",
+          "feedback_data_sharing_consent_by_user_id",
+          "feedback_data_sharing_enabled",
+          "feedback_data_sharing_terms_version",
         ]);
       } finally {
         await verifySql.end();
