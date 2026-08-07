@@ -78,6 +78,7 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
+import { chooseHomeRoute } from "./lib/home-route";
 
 function boardRoutes() {
   return (
@@ -246,6 +247,10 @@ function CompanyRootRedirect() {
     return <NoCompaniesStartPage />;
   }
 
+  // With several companies, one company's Brief is the wrong front door: a
+  // problem in any of the others cannot be seen from it.
+  const home = chooseHomeRoute({ companies, selectedCompany });
+  if (home) return <Navigate to={home} replace />;
   return <Navigate to={`/${targetCompany.issuePrefix}/brief`} replace />;
 }
 
