@@ -5,6 +5,7 @@ import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from "lucide-rea
 import type { CalendarEvent, CalendarOccurrence, Company } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { useCurrentUserId } from "../hooks/useCurrentUserId";
@@ -168,7 +169,9 @@ export function PortfolioCalendar() {
   }, [eventsData?.companies, monthData?.companies]);
 
   const companyById = useMemo(() => new Map(companies.map((c) => [c.id, c])), [companies]);
-  const companyOptions = useMemo(() => companies.map((c) => ({ value: c.id, label: c.name })), [companies]);
+  // Sourced outside the filtered response, or picking one company would leave
+  // it as the only option in its own menu.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const occurrences = useMemo<CalendarOccurrence[]>(() => {
     let list = monthData?.occurrences ?? [];

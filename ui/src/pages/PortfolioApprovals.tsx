@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, ClipboardCheck } from "lucide-react";
 import type { Approval, Company } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { FilterPopover } from "../components/FilterPopover";
@@ -154,7 +155,9 @@ export function PortfolioApprovals() {
     return [...raw].sort((a, b) => (b.isPortfolioRoot ? 1 : 0) - (a.isPortfolioRoot ? 1 : 0));
   }, [data?.companies]);
 
-  const companyOptions = useMemo(() => companies.map((c) => ({ value: c.id, label: c.name })), [companies]);
+  // Sourced outside the filtered response, or picking one company would leave
+  // it as the only option in its own menu.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const approvalsByCompany = useMemo(() => {
     const map = new Map<string, Approval[]>();

@@ -6,6 +6,7 @@ import { activityApi } from "../api/activity";
 import { agentsApi } from "../api/agents";
 import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { ActivityRow } from "../components/ActivityRow";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -47,7 +48,9 @@ export function PortfolioActivity() {
     () => new Map<string, Company>(companies.map((c) => [c.id, c])),
     [companies],
   );
-  const companyOptions = useMemo(() => companies.map((c) => ({ value: c.id, label: c.name })), [companies]);
+  // Sourced outside the filtered response, or picking one company would leave
+  // it as the only option in its own menu.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();

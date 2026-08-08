@@ -6,6 +6,7 @@ import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/sha
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { LiveRunIndicator } from "../components/LiveRunIndicator";
@@ -381,10 +382,10 @@ export function PortfolioAgents() {
     return [...raw].sort((a, b) => (b.isPortfolioRoot ? 1 : 0) - (a.isPortfolioRoot ? 1 : 0));
   }, [data?.companies]);
 
-  const companyOptions = useMemo(
-    () => companies.map((c) => ({ value: c.id, label: c.name })),
-    [companies],
-  );
+  // Not `companies`: that list is what came back through the company filter,
+  // so sourcing the filter's own options from it collapses the menu to the one
+  // company already picked.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const agentsByCompany = useMemo(() => {
     const map = new Map<string, Agent[]>();

@@ -6,6 +6,7 @@ import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialog } from "../context/DialogContext";
 import { AssigneePicker } from "../components/AssigneePicker";
@@ -575,10 +576,9 @@ export function PortfolioIssues() {
     return [...raw].sort((a, b) => (b.isPortfolioRoot ? 1 : 0) - (a.isPortfolioRoot ? 1 : 0));
   }, [data?.companies]);
 
-  const companyOptions = useMemo(
-    () => companies.map((c) => ({ value: c.id, label: c.name })),
-    [companies],
-  );
+  // Sourced outside the filtered response, or picking one company would leave
+  // it as the only option in its own menu.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const issuesByCompany = useMemo(() => {
     const map = new Map<string, Issue[]>();

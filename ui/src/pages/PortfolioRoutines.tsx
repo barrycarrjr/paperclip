@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Loader2, MoreHorizontal, Pause, Play, Plus, 
 import type { Company, RoutineListItem } from "@paperclipai/shared";
 import { routinesApi } from "../api/routines";
 import { useCompany } from "../context/CompanyContext";
+import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -321,7 +322,9 @@ export function PortfolioRoutines() {
     return [...raw].sort((a, b) => (b.isPortfolioRoot ? 1 : 0) - (a.isPortfolioRoot ? 1 : 0));
   }, [data?.companies]);
 
-  const companyOptions = useMemo(() => companies.map((c) => ({ value: c.id, label: c.name })), [companies]);
+  // Sourced outside the filtered response, or picking one company would leave
+  // it as the only option in its own menu.
+  const companyOptions = usePortfolioCompanyOptions();
 
   const routinesByCompany = useMemo(() => {
     const map = new Map<string, RoutineListItem[]>();
