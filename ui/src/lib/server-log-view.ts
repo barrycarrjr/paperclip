@@ -14,6 +14,7 @@ export function buildServerLogQueryString(query: ServerLogQuery): string {
   const search = query.search?.trim();
   if (search) params.set("search", search);
   if (query.afterTimeMs !== undefined) params.set("afterTimeMs", String(query.afterTimeMs));
+  if (query.deep) params.set("deep", "1");
   const encoded = params.toString();
   return encoded ? `?${encoded}` : "";
 }

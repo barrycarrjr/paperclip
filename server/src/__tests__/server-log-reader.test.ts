@@ -335,16 +335,62 @@ describe("readServerLogTail", () => {
     expect(page.bytesScanned).toBeLessThan(1024 * 1024);
   });
 
-  it("widens the window when a filter matches nothing nearby", async () => {
-    // The opposite case: scanning far IS the point of a search, so a filter
-    // that finds nothing recent must keep walking back rather than give up at
-    // the first small window.
+  it("widens the window on a deep search, when a filter matches nothing nearby", async () => {
+    // Scanning far IS the point of an explicit search, so a filter that finds
+    // nothing recent must keep walking back rather than give up at the first
+    // small window.
+    const filler = line({ time: 1, msg: "x".repeat(400) }).repeat(5_000);
+    await writeLog("server.log", line({ time: 1, msg: "the-needle" }) + filler);
+
+    const page = await readServerLogTail(logDir, { limit: 10, search: "the-needle", deep: true });
+    expect(page.entries.map((e) => e.msg)).toEqual(["the-needle"]);
+    expect(page.bytesScanned).toBeGreaterThan(1024 * 1024);
+  });
+
+  it("does NOT widen for an ordinary filtered request", async () => {
+    // The bug this pins: a filtered request repeats on a two second refresh, so
+    // widening it to the ceiling meant tens of megabytes read and hundreds of
+    // thousands of lines parsed every couple of seconds, forever. Only an
+    // explicit deep search may pay that.
     const filler = line({ time: 1, msg: "x".repeat(400) }).repeat(5_000);
     await writeLog("server.log", line({ time: 1, msg: "the-needle" }) + filler);
 
     const page = await readServerLogTail(logDir, { limit: 10, search: "the-needle" });
-    expect(page.entries.map((e) => e.msg)).toEqual(["the-needle"]);
-    expect(page.bytesScanned).toBeGreaterThan(1024 * 1024);
+
+    expect(page.entries).toEqual([]);
+    expect(page.truncated).toBe(true);
+    expect(page.bytesScanned).toBeLessThan(1024 * 1024);
+  });
+
+  it("counts every read against the budget, including superseded retries", async () => {
+    // A wider retry covers the same bytes, but the narrower read still happened
+    // and was still decoded and parsed. Counting only the final read let a
+    // nominal 32 MB ceiling actually read 55 MB.
+    const chunk = line({ time: 1, msg: "x".repeat(500) }).repeat(4_000);
+    await writeLog("server.1.log", chunk, 1_000_000_000_000);
+    await writeLog("server.2.log", chunk, 2_000_000_000_000);
+
+    const deepPage = await readServerLogTail(logDir, {
+      limit: 1000,
+      search: "no-such-text",
+      deep: true,
+    });
+    const shallowPage = await readServerLogTail(logDir, { limit: 1000, search: "no-such-text" });
+
+    expect(deepPage.bytesScanned).toBeLessThanOrEqual(MAX_BYTES_SCANNED);
+    // The retries are real work and must show up in the reported figure, so a
+    // deep scan reports strictly more than the single-window one.
+    expect(deepPage.bytesScanned).toBeGreaterThan(shallowPage.bytesScanned);
+  });
+
+  it("still fills an unfiltered page from a single cheap read", async () => {
+    // Not widening must not break the ordinary case the page opens on.
+    const contents = Array.from({ length: 500 }, (_, i) => line({ time: i + 1, msg: `m${i + 1}` })).join("");
+    await writeLog("server.log", contents);
+
+    const page = await readServerLogTail(logDir, { limit: 200 });
+    expect(page.entries).toHaveLength(200);
+    expect(page.entries[page.entries.length - 1]?.msg).toBe("m500");
   });
 
   it("stays inside its byte budget across files", async () => {

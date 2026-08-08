@@ -78,6 +78,17 @@ export interface ServerLogQuery {
   minLevel?: ServerLogLevel;
   /** Case-insensitive substring match over the message and the detail. */
   search?: string;
-  /** Only entries strictly newer than this, for cheap polling. */
+  /** Only entries strictly newer than this. */
   afterTimeMs?: number;
+  /**
+   * Search further back than the tail, at real cost.
+   *
+   * Off by default, and deliberately not something the auto-refresh may set. A
+   * filter that finds fewer matches than it wants keeps widening its read, so
+   * on a repeating poll one ordinary search (an issue id, thirty hits) turns
+   * into tens of megabytes read and hundreds of thousands of lines parsed every
+   * couple of seconds, for as long as the page is open. Deep searching is a
+   * thing the operator asks for once, not something a timer does.
+   */
+  deep?: boolean;
 }

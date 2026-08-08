@@ -37,7 +37,10 @@ export function instanceLogsRoutes() {
    * - `limit`: entries to return, 1 to 1000 (default 200)
    * - `level`: lowest level to include; `warn` returns warn, error and fatal
    * - `search`: case-insensitive substring over message, service and detail
-   * - `afterTimeMs`: only entries strictly newer, so polling stays cheap
+   * - `afterTimeMs`: only entries strictly newer than this
+   * - `deep`: search further back than the tail, at real cost. Never set by
+   *   the auto-refresh: a widening scan on a repeating timer is what turns one
+   *   ordinary search into tens of megabytes read every couple of seconds.
    *
    * Entries come back oldest first, so the newest line is the last one.
    */
@@ -50,6 +53,7 @@ export function instanceLogsRoutes() {
       minLevel: parseLevel(req.query.level),
       search,
       afterTimeMs: parsePositiveInt(req.query.afterTimeMs),
+      deep: req.query.deep === "1" || req.query.deep === "true",
     });
 
     res.json(page);

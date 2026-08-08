@@ -98,6 +98,13 @@ export function InstanceLogs() {
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(200);
+  /**
+   * A deep search reads far further back and costs real time on the server, so
+   * it is a thing the operator asks for once. It can never be combined with
+   * the auto-refresh: a widening scan on a two-second timer is what turned one
+   * ordinary search into tens of megabytes read, over and over, indefinitely.
+   */
+  const [deep, setDeep] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Whether the operator is parked at the bottom watching new lines arrive, or
@@ -114,15 +121,24 @@ export function InstanceLogs() {
     return () => clearTimeout(timer);
   }, [searchDraft]);
 
+  // Changing what is being looked for drops back to the cheap tail. Otherwise
+  // one deep search would make every subsequent filter expensive.
+  useEffect(() => {
+    setDeep(false);
+  }, [minLevel, search]);
+
   const query = useQuery({
-    queryKey: queryKeys.instance.logs({ limit, level: minLevel, search }),
+    queryKey: queryKeys.instance.logs({ limit, level: minLevel, search, deep }),
     queryFn: () =>
       instanceLogsApi.get({
         limit,
         minLevel: minLevel === "all" ? undefined : minLevel,
         search: search || undefined,
+        deep: deep || undefined,
       }),
-    refetchInterval: live ? POLL_MS : false,
+    // Belt and braces with the click handler: even if some future change lets
+    // both be set, a deep scan must never land on a repeating timer.
+    refetchInterval: live && !deep ? POLL_MS : false,
     // Without this the list blanks out on every filter change, which reads as
     // a broken page when the operator is only narrowing a search.
     placeholderData: (previous) => previous,
@@ -262,11 +278,28 @@ export function InstanceLogs() {
           {query.data?.files.length ? ` from ${query.data.files.join(", ")}` : ""}
           {query.data?.truncated ? " (there is more history than this)" : ""}
         </span>
-        {limit < 1000 ? (
-          <Button variant="outline" size="sm" onClick={() => setLimit((value) => Math.min(value * 2, 1000))}>
-            Show more
-          </Button>
-        ) : null}
+        <span className="flex items-center gap-2">
+          {query.data?.truncated && !deep ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // Pausing is not cosmetic. This is the expensive read, and
+                // leaving the refresh on would repeat it every two seconds.
+                setLive(false);
+                setDeep(true);
+              }}
+              title="Reads much further back through the rolled log files. Pauses live updates."
+            >
+              Search further back
+            </Button>
+          ) : null}
+          {limit < 1000 ? (
+            <Button variant="outline" size="sm" onClick={() => setLimit((value) => Math.min(value * 2, 1000))}>
+              Show more
+            </Button>
+          ) : null}
+        </span>
       </div>
     </div>
   );

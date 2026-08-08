@@ -110,7 +110,7 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
  * line behind, so "this line is not JSON" is an expected condition here, not
  * an error worth reporting.
  */
-export function parseServerLogLine(line: string, seq: number): ServerLogEntry | null {
+export function parseServerLogRecord(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (!trimmed || !trimmed.startsWith("{")) return null;
 
@@ -121,10 +121,29 @@ export function parseServerLogLine(line: string, seq: number): ServerLogEntry | 
     return null;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return parsed as Record<string, unknown>;
+}
 
-  const record = parsed as Record<string, unknown>;
-  const levelValue = typeof record.level === "number" ? record.level : SERVER_LOG_LEVEL_VALUES.info;
-  const timeMs = typeof record.time === "number" ? record.time : 0;
+export function serverLogLevelValueOf(record: Record<string, unknown>): number {
+  return typeof record.level === "number" ? record.level : SERVER_LOG_LEVEL_VALUES.info;
+}
+
+export function serverLogTimeMsOf(record: Record<string, unknown>): number {
+  return typeof record.time === "number" ? record.time : 0;
+}
+
+/**
+ * Build the entry the client sees. This is where redaction happens, so it is
+ * by far the most expensive step per line: a recursive walk plus seven global
+ * regexes over every string. Callers that are going to reject a line on level
+ * or time should do that first and never call this.
+ */
+export function buildServerLogEntry(
+  record: Record<string, unknown>,
+  seq: number,
+): ServerLogEntry {
+  const levelValue = serverLogLevelValueOf(record);
+  const timeMs = serverLogTimeMsOf(record);
   const rawService = record.service ?? record.name;
 
   const detail: Record<string, unknown> = {};
@@ -142,6 +161,12 @@ export function parseServerLogLine(line: string, seq: number): ServerLogEntry | 
     service: typeof rawService === "string" ? rawService : null,
     detail,
   };
+}
+
+/** Parse and build in one step. Convenience for callers with no filtering. */
+export function parseServerLogLine(line: string, seq: number): ServerLogEntry | null {
+  const record = parseServerLogRecord(line);
+  return record ? buildServerLogEntry(record, seq) : null;
 }
 
 /**
@@ -261,6 +286,7 @@ export async function readServerLogTail(
   const minLevelValue = query.minLevel ? SERVER_LOG_LEVEL_VALUES[query.minLevel] : 0;
   const needle = query.search?.trim().toLowerCase() ?? "";
   const afterTimeMs = query.afterTimeMs;
+  const deep = query.deep === true;
 
   const files = await listServerLogFiles(logDir);
   const collected: ServerLogEntry[] = [];
@@ -270,56 +296,89 @@ export async function readServerLogTail(
 
   for (const file of files.slice(0, MAX_FILES)) {
     if (collected.length >= limit) break;
-    const fileBudget = MAX_BYTES_SCANNED - bytesScanned;
-    if (fileBudget <= 0) {
+    if (bytesScanned >= MAX_BYTES_SCANNED) {
       truncated = true;
       break;
     }
 
-    // Start with a window sized to what `limit` plausibly needs and widen only
-    // when it comes up short, rather than handing each file the whole budget.
-    // Handing over the whole budget made an unfiltered 200-line page read 8 MB,
-    // which at a two-second poll is megabytes a second of disk traffic to show
-    // a screenful of text. A filter that matches nothing still walks out to the
-    // budget, because that is the case where scanning far is the entire point.
+    // Start with a window sized to what `limit` plausibly needs, and widen only
+    // on an explicit deep search. Widening on every request was the original
+    // bug in two directions: unfiltered it read the whole budget for a
+    // screenful, and filtered it kept widening to the ceiling whenever the
+    // matches were sparse. The second one is worse, because a filtered request
+    // repeats on the two-second refresh, so an ordinary search turns into tens
+    // of megabytes read and hundreds of thousands of lines parsed every couple
+    // of seconds indefinitely. Searching far is a thing the operator asks for,
+    // not something a timer does.
     const needed = (limit - collected.length) * APPROX_BYTES_PER_LINE;
-    let window = Math.min(Math.max(needed, MIN_READ_WINDOW), fileBudget);
+    let window = Math.max(needed, MIN_READ_WINDOW);
     let read: Awaited<ReturnType<typeof readTailLines>> | null = null;
     let matches: ServerLogEntry[] = [];
+    let scannedThisFile = false;
 
     while (true) {
+      const remaining = MAX_BYTES_SCANNED - bytesScanned;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+
+      const attempt = Math.min(window, remaining);
       try {
-        read = await readTailLines(file.path, window);
+        read = await readTailLines(file.path, attempt);
       } catch {
         // A file can vanish under rotation mid-request.
         read = null;
         break;
       }
 
+      // Every read counts, including one superseded by a wider retry. The wider
+      // read covers the same bytes, but the narrower one was still read,
+      // decoded and parsed, and the budget exists to bound work done rather
+      // than ground covered. Counting only the last read let a nominal 32 MB
+      // ceiling actually read 55 MB.
+      bytesScanned += read.bytesRead;
+      scannedThisFile = true;
+
       // Newest line last in the file, so walk backwards: `limit` should be the
       // newest matches, not the oldest ones that happen to be in the window.
       matches = [];
       for (let i = read.lines.length - 1; i >= 0 && collected.length + matches.length < limit; i--) {
-        const entry = parseServerLogLine(read.lines[i]!, 0);
-        if (!entry) continue;
-        if (entry.levelValue < minLevelValue) continue;
-        if (afterTimeMs !== undefined && entry.timeMs <= afterTimeMs) continue;
+        const raw = read.lines[i]!;
+        // Cheapest rejection first. A needle absent from the raw line cannot be
+        // in the built entry, which only ever removes information, so this
+        // skips the parse and the redaction walk entirely. The one divergence
+        // is searching for the redaction marker itself, which is not a thing
+        // worth paying for on every line.
+        if (needle && !raw.toLowerCase().includes(needle)) continue;
+
+        const record = parseServerLogRecord(raw);
+        if (!record) continue;
+        // Level and time before building, so a level filter does not pay the
+        // redaction cost for every line it is about to discard.
+        if (serverLogLevelValueOf(record) < minLevelValue) continue;
+        const timeMs = serverLogTimeMsOf(record);
+        if (afterTimeMs !== undefined && timeMs <= afterTimeMs) continue;
+
+        const entry = buildServerLogEntry(record, 0);
         if (needle && !matchesSearch(entry, needle)) continue;
         matches.push(entry);
       }
 
       const enough = collected.length + matches.length >= limit;
-      if (enough || read.reachedStart || window >= fileBudget) break;
+      if (enough || read.reachedStart || !deep) break;
+      if (attempt >= remaining) {
+        truncated = true;
+        break;
+      }
       // Re-reads the tail rather than stitching chunks, so there is still only
-      // one read and one UTF-8 decode per attempt and no boundary to split a
-      // multi-byte character on. The wider read covers the narrower one, so
-      // only the final window counts towards the budget.
-      window = Math.min(window * WINDOW_GROWTH, fileBudget);
+      // one read and one UTF-8 decode per attempt and no chunk boundary that
+      // could split a multi-byte character.
+      window *= WINDOW_GROWTH;
     }
 
-    if (!read) continue;
+    if (!read || !scannedThisFile) continue;
 
-    bytesScanned += read.bytesRead;
     filesRead.push(file.name);
     if (!read.reachedStart) truncated = true;
     collected.push(...matches);
