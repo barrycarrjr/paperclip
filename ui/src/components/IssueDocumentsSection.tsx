@@ -14,6 +14,7 @@ import { deriveDocumentRevisionState } from "../lib/document-revisions";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
 import { FoldCurtain } from "./FoldCurtain";
+import { PageSection } from "./PageSection";
 import { MarkdownBody } from "./MarkdownBody";
 import { MarkdownEditor, type MentionOption } from "./MarkdownEditor";
 import { Button } from "@/components/ui/button";
@@ -662,28 +663,26 @@ export function IssueDocumentsSection({
     );
   };
 
+  // Nothing to frame yet: an empty section with a border and a title would be
+  // chrome around a void, so the empty state stays a bare action row.
+  const showAsSection = !isEmpty || Boolean(draft?.isNew);
+
+  const documentActions = (
+    <>
+      {extraActions}
+      <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
+        <Plus className="mr-1.5 h-3.5 w-3.5" />
+        <span className="hidden sm:inline">New document</span>
+        <span className="sm:hidden">New</span>
+      </Button>
+    </>
+  );
+
   return (
-    <div className="space-y-3">
-      {isEmpty && !draft?.isNew ? (
+    <DocumentsFrame asSection={showAsSection} actions={documentActions}>
+      {!showAsSection && (
         <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
-          {extraActions}
-          <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New document</span>
-            <span className="sm:hidden">New</span>
-          </Button>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h3 className="w-full text-sm font-medium text-muted-foreground shrink-0 sm:w-auto">Documents</h3>
-          <div className="flex flex-wrap items-center gap-2 min-w-0 sm:ml-auto">
-            {extraActions}
-            <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              <span className="hidden sm:inline">New document</span>
-              <span className="sm:hidden">New</span>
-            </Button>
-          </div>
+          {documentActions}
         </div>
       )}
 
@@ -1164,6 +1163,23 @@ export function IssueDocumentsSection({
           />
         );
       })()}
-    </div>
+    </DocumentsFrame>
+  );
+}
+
+function DocumentsFrame({
+  asSection,
+  actions,
+  children,
+}: {
+  asSection: boolean;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  if (!asSection) return <div className="space-y-3">{children}</div>;
+  return (
+    <PageSection title="Documents" actions={actions} bodyClassName="space-y-3">
+      {children}
+    </PageSection>
   );
 }

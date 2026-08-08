@@ -19,6 +19,7 @@ import {
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { Identity } from "./Identity";
+import { HorizontalScroller } from "./HorizontalScroller";
 import type { Issue } from "@paperclipai/shared";
 import { DEFAULT_KANBAN_CARD_FIELDS, type KanbanCardField } from "../lib/inbox";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
@@ -384,19 +385,25 @@ export function KanbanBoard({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="flex gap-3 overflow-x-auto pb-4 -mx-2 px-2">
-        {boardStatuses.map((status) => (
-          <KanbanColumn
-            key={status}
-            status={status}
-            issues={columnIssues[status] ?? []}
-            agents={agents}
-            projects={projects}
-            liveIssueIds={liveIssueIds}
-            visibleFields={fields}
-          />
-        ))}
-      </div>
+      <HorizontalScroller
+        label="Issue board columns"
+        className="-mx-2"
+        contentClassName="px-2 pb-3"
+      >
+        <div className="flex gap-3">
+          {boardStatuses.map((status) => (
+            <KanbanColumn
+              key={status}
+              status={status}
+              issues={columnIssues[status] ?? []}
+              agents={agents}
+              projects={projects}
+              liveIssueIds={liveIssueIds}
+              visibleFields={fields}
+            />
+          ))}
+        </div>
+      </HorizontalScroller>
       <DragOverlay>
         {activeIssue ? (
           <KanbanCard

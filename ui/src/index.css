@@ -228,6 +228,36 @@
   background: oklch(0.5 0 0) !important;
 }
 
+/* Always-visible scrollbar: the opposite of .scrollbar-auto-hide, for strips
+   whose overflow is the only sign that more content exists sideways. */
+.scrollbar-visible {
+  scrollbar-width: thin;
+}
+.scrollbar-visible::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scrollbar-visible::-webkit-scrollbar-track {
+  background: oklch(0.93 0 0);
+  border-radius: 9999px;
+}
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  background: oklch(0.72 0 0);
+  border-radius: 9999px;
+}
+.scrollbar-visible::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.6 0 0);
+}
+.dark .scrollbar-visible::-webkit-scrollbar-track {
+  background: oklch(0.25 0 0);
+}
+.dark .scrollbar-visible::-webkit-scrollbar-thumb {
+  background: oklch(0.47 0 0);
+}
+.dark .scrollbar-visible::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.58 0 0);
+}
+
 /* Expandable dialog transition for max-width changes */
 [data-slot="dialog-content"] {
   transition: max-width 200ms cubic-bezier(0.16, 1, 0.3, 1);

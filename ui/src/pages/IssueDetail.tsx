@@ -67,6 +67,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
+import { PageSection } from "../components/PageSection";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { IssueReferenceActivitySummary } from "../components/IssueReferenceActivitySummary";
@@ -83,7 +84,6 @@ import { PriorityIcon } from "../components/PriorityIcon";
 import { Identity } from "../components/Identity";
 import { PluginSlotMount, PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
-import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -167,6 +167,15 @@ const TREE_CONTROL_MODE_HELP_TEXT: Record<IssueTreeControlMode, string> = {
   cancel: "Cancel non-terminal issues in this subtree and stop queued/running work where possible.",
   restore: "Restore issues cancelled by this subtree operation so work can resume.",
 };
+
+/**
+ * The page fills the space it is given instead of sitting in a fixed narrow
+ * column. Structural areas - the sub-issue board, document lists, attachment
+ * grids - need the width; the cap only stops the page sprawling on an ultrawide
+ * display. When the Properties panel opens it takes 320px from the same flex
+ * row, so this reflows rather than leaving a gutter beside it.
+ */
+const ISSUE_PAGE_SHELL = "w-full max-w-[1600px]";
 
 function treeControlPreviewErrorCopy(error: unknown): string {
   if (error instanceof ApiError) {
@@ -321,7 +330,7 @@ function IssueDetailLoadingState({
   const identifier = headerSeed?.identifier ?? headerSeed?.id.slice(0, 8) ?? null;
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className={cn(ISSUE_PAGE_SHELL, "space-y-6")}>
       <div className="space-y-3">
         <Skeleton className="h-3 w-40" />
 
@@ -2620,7 +2629,7 @@ export function IssueDetail() {
   );
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className={cn(ISSUE_PAGE_SHELL, "space-y-6")}>
       {/* Parent chain breadcrumb */}
       {ancestors.length > 0 && (
         <nav className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
@@ -3034,10 +3043,7 @@ export function IssueDetail() {
       />
 
       {showRichSubIssuesSection ? (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-medium text-muted-foreground">Sub-issues</h3>
-          </div>
+        <PageSection title="Sub-issues">
           <IssuesList
             issues={childIssues}
             isLoading={childIssuesLoading}
@@ -3057,7 +3063,7 @@ export function IssueDetail() {
             showProgressSummary
             onUpdateIssue={handleChildIssueUpdate}
           />
-        </div>
+        </PageSection>
       ) : (
         <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           <Button variant="outline" size="sm" onClick={openNewSubIssue} className="shrink-0 shadow-none">
@@ -3081,10 +3087,13 @@ export function IssueDetail() {
       {attachmentsInitialLoading ? (
         <IssueSectionSkeleton titleWidth="w-24" rows={2} />
       ) : hasAttachments ? (
+        <PageSection
+          title="Attachments"
+          actions={attachmentUploadButton}
+          className={cn("transition-colors", attachmentDragActive && "border-primary bg-primary/5")}
+          bodyClassName="space-y-3"
+        >
         <div
-        className={cn(
-          "space-y-3 rounded-lg transition-colors",
-        )}
         onDragEnter={(evt) => {
           evt.preventDefault();
           setAttachmentDragActive(true);
@@ -3098,18 +3107,14 @@ export function IssueDetail() {
           setAttachmentDragActive(false);
         }}
         onDrop={(evt) => void handleAttachmentDrop(evt)}
+        className="space-y-3"
       >
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-medium text-muted-foreground">Attachments</h3>
-          {attachmentUploadButton}
-        </div>
-
         {attachmentError && (
           <p className="text-xs text-destructive">{attachmentError}</p>
         )}
 
         {imageAttachments.length > 0 && (
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-4 gap-2 lg:grid-cols-6 2xl:grid-cols-8">
             {imageAttachments.map((attachment) => (
               <div
                 key={attachment.id}
@@ -3208,6 +3213,7 @@ export function IssueDetail() {
           </div>
         )}
         </div>
+        </PageSection>
       ) : null}
 
       <ImageGalleryModal
@@ -3223,10 +3229,11 @@ export function IssueDetail() {
         onUpdate={(data) => updateIssue.mutate(data)}
       />
 
-      <Separator />
-
-      <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1">
+      <PageSection flush>
+      {/* The tab strip is full-bleed so its underline reads as the section's
+          own header band; the padding lives on the panels instead. */}
+      <Tabs value={detailTab} onValueChange={setDetailTab}>
+        <TabsList variant="line" className="w-full justify-start gap-1 px-4">
           <TabsTrigger value="chat" className="gap-1.5">
             <MessageSquare className="h-3.5 w-3.5" />
             Chat
@@ -3246,7 +3253,7 @@ export function IssueDetail() {
           ))}
         </TabsList>
 
-        <TabsContent value="chat">
+        <TabsContent value="chat" className="p-4">
           {detailTab === "chat" ? (
             <IssueDetailChatTab
               issueId={issue.id}
@@ -3289,7 +3296,7 @@ export function IssueDetail() {
           ) : null}
         </TabsContent>
 
-        <TabsContent value="activity">
+        <TabsContent value="activity" className="p-4">
           {detailTab === "activity" ? (
             <IssueDetailActivityTab
               issueId={issue.id}
@@ -3309,12 +3316,12 @@ export function IssueDetail() {
           ) : null}
         </TabsContent>
 
-        <TabsContent value="related-work">
+        <TabsContent value="related-work" className="p-4">
           <IssueRelatedWorkPanel relatedWork={issue.relatedWork} />
         </TabsContent>
 
         {activePluginTab && (
-          <TabsContent value={activePluginTab.value}>
+          <TabsContent value={activePluginTab.value} className="p-4">
             <PluginSlotMount
               slot={activePluginTab.slot}
               context={{
@@ -3328,6 +3335,7 @@ export function IssueDetail() {
           </TabsContent>
         )}
       </Tabs>
+      </PageSection>
 
       <Dialog open={treeControlOpen} onOpenChange={setTreeControlOpen}>
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
