@@ -77,8 +77,10 @@ describe("readTailLines", () => {
     const read = await readTailLines(filePath, 8);
 
     expect(read.reachedStart).toBe(false);
-    expect(read.lines).not.toContain("bbbb");
-    expect(read.lines).toContain("cccc");
+    // Assert on the fragment itself. Asserting `not.toContain("bbbb")` passed
+    // even with the drop deleted, because the fragment is "bb", not "bbbb".
+    expect(read.lines).not.toContain("bb");
+    expect(read.lines.filter((l) => l.length > 0)).toEqual(["cccc"]);
   });
 
   it("keeps the first line when the window happens to start on a line boundary", async () => {
@@ -214,9 +216,53 @@ describe("redaction", () => {
   });
 
   it("stops at a depth limit rather than recursing without bound", () => {
-    let nested: Record<string, unknown> = { value: "leaf" };
+    // `not.toThrow()` passed with or without the limit, so it proved nothing.
+    // Assert the marker actually appears at depth instead.
+    let nested: Record<string, unknown> = { leaf: "bottom" };
     for (let i = 0; i < 40; i++) nested = { nested };
-    expect(() => redactSecrets(nested)).not.toThrow();
+
+    let cursor: unknown = redactSecrets(nested);
+    let depth = 0;
+    while (cursor && typeof cursor === "object" && "nested" in (cursor as Record<string, unknown>)) {
+      cursor = (cursor as Record<string, unknown>).nested;
+      depth++;
+    }
+
+    expect(cursor).toBe("[redacted]");
+    expect(depth).toBeLessThan(40);
+  });
+
+  it("masks a stored secret's plaintext, which travels as `value`", () => {
+    // server/src/routes/secrets.ts puts the plaintext credential in
+    // `body.value`, and a 400 on that route writes the whole body to the line.
+    const entry = parseServerLogLine(
+      line({ msg: "POST /companies/x/secrets 400", reqBody: { name: "SMTP_PASS", value: "hunter2" } }),
+      0,
+    );
+    expect((entry?.detail.reqBody as any).value).toBe("[redacted]");
+    expect((entry?.detail.reqBody as any).name).toBe("SMTP_PASS");
+  });
+
+  it("leaves an ordinary `value` alone outside a request payload", () => {
+    // `value` is far too common to blanket-redact; only payloads get the
+    // stricter list.
+    const entry = parseServerLogLine(line({ setting: { value: 42 } }), 0);
+    expect((entry?.detail.setting as any).value).toBe(42);
+  });
+
+  it("masks an OpenAI project key, which the narrower pattern let through", () => {
+    // `sk-[A-Za-z0-9]{20,}` stopped at the second hyphen of `sk-proj-...`.
+    expect(redactSecretsInText("key sk-proj-AAAABBBBCCCCDDDDEEEEFFFF here")).toBe(
+      "key [redacted] here",
+    );
+  });
+
+  it("masks a credential carried in a URL, keeping the parameter name", () => {
+    // The HTTP log puts the path in `msg`, a plain string, so key-name
+    // redaction cannot reach it.
+    expect(redactSecretsInText("GET /api/access/cli?challenge=SUPERSECRETVALUE 200")).toBe(
+      "GET /api/access/cli?challenge=[redacted] 200",
+    );
   });
 
   it("leaves ordinary values alone", () => {

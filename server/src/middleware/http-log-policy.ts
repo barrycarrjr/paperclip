@@ -9,6 +9,10 @@ const SILENCED_SUCCESS_API_PATHS = [
   /^\/api\/companies\/[^/]+\/live-runs(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/sidebar-badges(?:\/|$)/,
   /^\/api\/heartbeat-runs\/[^/]+\/log(?:\/|$)/,
+  // The Logs page polls this every couple of seconds. Left unsilenced, reading
+  // the log writes to the log, so the newest thing on screen is always the act
+  // of looking at it, pushing out whatever the operator opened the page to see.
+  /^\/api\/instance\/logs(?:\/|$)/,
 ];
 
 const SILENCED_SUCCESS_STATIC_PREFIXES = [

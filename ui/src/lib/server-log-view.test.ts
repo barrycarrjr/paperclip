@@ -6,6 +6,7 @@ import {
   levelBadgeClass,
   levelToneClass,
   logDayKey,
+  logEntryKey,
 } from "./server-log-view";
 
 describe("describeLevelFilter", () => {
@@ -47,6 +48,28 @@ describe("buildServerLogQueryString", () => {
 
   it("keeps afterTimeMs of zero rather than treating it as unset", () => {
     expect(buildServerLogQueryString({ afterTimeMs: 0 })).toBe("?afterTimeMs=0");
+  });
+});
+
+describe("logEntryKey", () => {
+  const entry = { timeMs: 1700, level: "info", msg: "job completed", service: "routines" };
+
+  it("identifies a line by content, so it survives the window sliding", () => {
+    // seq is a screen position and slides on every poll. Keying rows on it made
+    // React hand an open detail panel to a different log line.
+    expect(logEntryKey(entry)).toBe(logEntryKey({ ...entry }));
+  });
+
+  it("tells two different lines apart", () => {
+    expect(logEntryKey(entry)).not.toBe(logEntryKey({ ...entry, msg: "job failed" }));
+    expect(logEntryKey(entry)).not.toBe(logEntryKey({ ...entry, timeMs: 1701 }));
+    expect(logEntryKey(entry)).not.toBe(logEntryKey({ ...entry, level: "error" }));
+    expect(logEntryKey(entry)).not.toBe(logEntryKey({ ...entry, service: "heartbeat" }));
+  });
+
+  it("handles a line with no service", () => {
+    expect(() => logEntryKey({ ...entry, service: null })).not.toThrow();
+    expect(logEntryKey({ ...entry, service: null })).not.toBe(logEntryKey(entry));
   });
 });
 

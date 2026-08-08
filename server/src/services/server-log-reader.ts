@@ -60,44 +60,80 @@ const SECRET_KEY_PATTERN =
   /(token|secret|password|passwd|api[-_]?key|authorization|credential|private[-_]?key|cookie|session[-_]?id|refresh)/i;
 
 /**
+ * Extra key names that are secret specifically inside a logged request.
+ *
+ * `value` is the one that matters: the secrets API carries the plaintext
+ * credential as `body.value` (server/src/routes/secrets.ts), and a 4xx on that
+ * route puts the whole body on the log line. `value` is far too common a name
+ * to blanket-redact everywhere, so it is treated as secret only where a
+ * credential actually travels under it.
+ */
+const REQUEST_SECRET_KEY_PATTERN = new RegExp(
+  `${SECRET_KEY_PATTERN.source}|^(value|plaintext|content)$`,
+  "i",
+);
+
+/** Log fields that carry a caller-supplied request payload. */
+const REQUEST_PAYLOAD_FIELDS = new Set(["reqBody", "reqQuery", "reqParams", "body", "query"]);
+
+/**
  * Shapes that are a credential wherever they appear, including inside a message
  * or a field with an innocent name. Request bodies are logged on 4xx and 5xx
  * responses, so a mistyped token pasted into a form reaches the log by a route
  * no key-name rule would catch.
  */
-const SECRET_VALUE_PATTERNS: RegExp[] = [
-  /sk-ant-[A-Za-z0-9_-]{10,}/g,
-  /sk-[A-Za-z0-9]{20,}/g,
-  /gh[pousr]_[A-Za-z0-9]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /xox[baprse]-[A-Za-z0-9-]{10,}/g,
-  /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/gi,
+const REDACTED = "[redacted]";
+
+/**
+ * Each entry is a pattern and what to put in its place. Most collapse to the
+ * marker; the query-string one keeps the parameter name so the line still says
+ * WHICH credential was present, which is the whole diagnostic value.
+ */
+const SECRET_VALUE_PATTERNS: [RegExp, string][] = [
+  [/sk-ant-[A-Za-z0-9_-]{10,}/g, REDACTED],
+  // Hyphen and underscore included: without them `sk-proj-...` project keys
+  // stop matching at the second hyphen and the rest prints in cleartext.
+  [/sk-[A-Za-z0-9_-]{20,}/g, REDACTED],
+  // A credential carried in a URL query string. The HTTP log puts the request
+  // path in `msg`, which is a plain string, so key-name redaction cannot reach
+  // it: the same secret would be masked in reqQuery and printed in full in the
+  // message on the very same line.
+  [
+    /([?&](?:token|secret|challenge|code|key|api[-_]?key|password|sig|signature|access[-_]?token)=)[^&\s"']+/gi,
+    `$1${REDACTED}`,
+  ],
+  [/gh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED],
+  [/github_pat_[A-Za-z0-9_]{20,}/g, REDACTED],
+  [/xox[baprse]-[A-Za-z0-9-]{10,}/g, REDACTED],
+  [/Bearer\s+[A-Za-z0-9._~+/=-]{20,}/gi, REDACTED],
   // JSON Web Tokens: three base64url segments. Session cookies and OAuth
   // access tokens both show up in this shape.
-  /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED],
 ];
-
-const REDACTED = "[redacted]";
 /** Guards against a pathologically nested object costing unbounded work. */
 const MAX_REDACT_DEPTH = 12;
 
 export function redactSecretsInText(value: string): string {
   let out = value;
-  for (const pattern of SECRET_VALUE_PATTERNS) {
-    out = out.replace(pattern, REDACTED);
+  for (const [pattern, replacement] of SECRET_VALUE_PATTERNS) {
+    out = out.replace(pattern, replacement);
   }
   return out;
 }
 
-export function redactSecrets(value: unknown, depth = 0): unknown {
+export function redactSecrets(
+  value: unknown,
+  depth = 0,
+  keyPattern: RegExp = SECRET_KEY_PATTERN,
+): unknown {
   if (typeof value === "string") return redactSecretsInText(value);
   if (value === null || typeof value !== "object") return value;
   if (depth >= MAX_REDACT_DEPTH) return REDACTED;
-  if (Array.isArray(value)) return value.map((item) => redactSecrets(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => redactSecrets(item, depth + 1, keyPattern));
 
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = SECRET_KEY_PATTERN.test(key) ? REDACTED : redactSecrets(item, depth + 1);
+    out[key] = keyPattern.test(key) ? REDACTED : redactSecrets(item, depth + 1, keyPattern);
   }
   return out;
 }
@@ -149,7 +185,12 @@ export function buildServerLogEntry(
   const detail: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
     if (STRUCTURAL_FIELDS.has(key)) continue;
-    detail[key] = SECRET_KEY_PATTERN.test(key) ? REDACTED : redactSecrets(value, 1);
+    // A caller-supplied payload gets the stricter key list, which is where
+    // `value` counts as a credential.
+    const keyPattern = REQUEST_PAYLOAD_FIELDS.has(key)
+      ? REQUEST_SECRET_KEY_PATTERN
+      : SECRET_KEY_PATTERN;
+    detail[key] = keyPattern.test(key) ? REDACTED : redactSecrets(value, 1, keyPattern);
   }
 
   return {

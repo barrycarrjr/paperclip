@@ -43,6 +43,24 @@ export function describeLevelFilter(minLevel: ServerLogLevel | "all"): string {
   }
 }
 
+/**
+ * A key that identifies a log line by what it IS, not where it sits.
+ *
+ * `seq` is a position in one response, so it slides every time the poll returns
+ * a window shifted by one line. Keying rows on it makes React reuse a row
+ * component for a different log line, which carries that row's expanded state
+ * onto whatever text lands in its place: a detail panel the operator opened
+ * silently starts describing something else.
+ */
+export function logEntryKey(entry: {
+  timeMs: number;
+  level: string;
+  msg: string;
+  service: string | null;
+}): string {
+  return `${entry.timeMs}|${entry.level}|${entry.service ?? ""}|${entry.msg}`;
+}
+
 /** Clock time for a log row. The date is on the day divider, not every line. */
 export function formatLogTime(timeMs: number): string {
   if (!Number.isFinite(timeMs) || timeMs <= 0) return "--:--:--";

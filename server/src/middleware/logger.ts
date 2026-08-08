@@ -20,7 +20,22 @@ export const logger = pino({
   // file in plaintext on any failed request. Anything that can read the log
   // directory can then sign in as that user. `set-cookie` covers the response
   // side, which is how a freshly issued session would otherwise leak.
-  redact: ["req.headers.authorization", "req.headers.cookie", "res.headers['set-cookie']"],
+  // `reqBody.value` is the one that is easy to miss: the secrets API carries
+  // the plaintext credential as `body.value`, and a 400 on that route writes
+  // the whole body to the line. The viewer masks these too, but keeping them
+  // out of the file is the real fix, since the file outlives the viewer and
+  // gets copied around.
+  redact: [
+    "req.headers.authorization",
+    "req.headers.cookie",
+    "res.headers['set-cookie']",
+    "reqBody.value",
+    "reqBody.token",
+    "reqBody.secret",
+    "reqBody.password",
+    "reqBody.apiKey",
+    "errorContext.reqBody.value",
+  ],
   // The explicit generic keeps TS from unifying every target's options into
   // one exact shape (pretty's options and pino-roll's options share nothing).
 }, pino.transport<Record<string, unknown>>({

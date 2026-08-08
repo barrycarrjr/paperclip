@@ -14,6 +14,7 @@ import {
   levelBadgeClass,
   levelToneClass,
   logDayKey,
+  logEntryKey,
 } from "../lib/server-log-view";
 
 /** How often the page asks for new lines while it is live. */
@@ -35,8 +36,18 @@ const LEVEL_CHOICES: { label: string; value: ServerLogLevel | "all"; hint: strin
   { label: "Errors", value: "error", hint: "Errors only" },
 ];
 
-function LogRow({ entry }: { entry: ServerLogEntry }) {
-  const [expanded, setExpanded] = useState(false);
+function LogRow({
+  entry,
+  expanded,
+  onToggle,
+}: {
+  entry: ServerLogEntry;
+  // Held by the page and keyed on the line's own identity, not on this row's
+  // position, so an open detail panel stays attached to the line it describes
+  // when the poll shifts the window.
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const detailKeys = Object.keys(entry.detail);
   const hasDetail = detailKeys.length > 0;
 
@@ -46,7 +57,7 @@ function LogRow({ entry }: { entry: ServerLogEntry }) {
         className={`flex items-start gap-3 px-3 py-1.5 font-mono text-xs leading-relaxed ${
           hasDetail ? "cursor-pointer hover:bg-muted/40" : ""
         }`}
-        onClick={hasDetail ? () => setExpanded((open) => !open) : undefined}
+        onClick={hasDetail ? onToggle : undefined}
         role={hasDetail ? "button" : undefined}
         tabIndex={hasDetail ? 0 : undefined}
         onKeyDown={
@@ -54,7 +65,7 @@ function LogRow({ entry }: { entry: ServerLogEntry }) {
             ? (event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  setExpanded((open) => !open);
+                  onToggle();
                 }
               }
             : undefined
@@ -105,6 +116,12 @@ export function InstanceLogs() {
    * ordinary search into tens of megabytes read, over and over, indefinitely.
    */
   const [deep, setDeep] = useState(false);
+  /**
+   * Which detail panels are open, keyed on each line's own identity. Held here
+   * rather than inside the row so that a poll shifting the window by a line
+   * cannot hand an open panel to different text.
+   */
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Whether the operator is parked at the bottom watching new lines arrive, or
@@ -146,12 +163,28 @@ export function InstanceLogs() {
 
   const entries = useMemo(() => query.data?.entries ?? [], [query.data]);
 
+  // Height of the list at the previous render, so a poll that drops old lines
+  // off the top can be compensated for.
+  const previousScrollHeight = useRef(0);
+
   // Layout effect so the scroll lands before the browser paints; in an effect
   // the page visibly jumps.
   useLayoutEffect(() => {
     const node = scrollRef.current;
-    if (!node || !stickToBottom.current) return;
-    node.scrollTop = node.scrollHeight;
+    if (!node) return;
+
+    if (stickToBottom.current) {
+      node.scrollTop = node.scrollHeight;
+    } else if (previousScrollHeight.current > 0) {
+      // Scrolled up and reading. The window slides as new lines arrive, so the
+      // list gets taller or shorter above the viewport and the text under the
+      // cursor drifts. Shifting by the height change keeps whatever is being
+      // read exactly where it was.
+      const delta = node.scrollHeight - previousScrollHeight.current;
+      if (delta !== 0) node.scrollTop += delta;
+    }
+
+    previousScrollHeight.current = node.scrollHeight;
   }, [entries]);
 
   function onScroll() {
@@ -257,14 +290,26 @@ export function InstanceLogs() {
           entries.map((entry, index) => {
             const previous = index > 0 ? entries[index - 1] : undefined;
             const startsNewDay = !previous || logDayKey(previous.timeMs) !== logDayKey(entry.timeMs);
+            const key = logEntryKey(entry);
             return (
-              <div key={entry.seq}>
+              <div key={`${key}#${index}`}>
                 {startsNewDay ? (
                   <div className="sticky top-0 z-10 border-b border-border bg-muted/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur">
                     {formatLogDay(entry.timeMs)}
                   </div>
                 ) : null}
-                <LogRow entry={entry} />
+                <LogRow
+                  entry={entry}
+                  expanded={expandedKeys.has(key)}
+                  onToggle={() =>
+                    setExpandedKeys((open) => {
+                      const next = new Set(open);
+                      if (next.has(key)) next.delete(key);
+                      else next.add(key);
+                      return next;
+                    })
+                  }
+                />
               </div>
             );
           })
