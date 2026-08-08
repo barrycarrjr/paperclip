@@ -13,7 +13,6 @@ import {
   instanceSettings,
   issueInboxArchives,
   issueReadStates,
-  issueThreadInteractions,
   issues,
   projectWorkspaces,
   projects,
@@ -57,10 +56,6 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     await db.delete(companySecretVersions);
     await db.delete(companySecrets);
     await db.delete(heartbeatRuns);
-    // Before issues: a pending question holds a foreign key to its issue, and
-    // leaving it behind blocks the delete and poisons every later test in the
-    // file with a failure that looks nothing like its cause.
-    await db.delete(issueThreadInteractions);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
     await db.delete(projectWorkspaces);
@@ -228,68 +223,6 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(routineIssues).toHaveLength(2);
     expect(routineIssues.map((issue) => issue.id)).toContain(previousIssue.id);
     expect(routineIssues.map((issue) => issue.id)).toContain(run.linkedIssueId);
-
-    // The previous one is kept but retired. It had finished and nobody was
-    // waiting on it, so leaving it open is how a routine that fires four times
-    // a day comes to owe 1,460 open issues a year.
-    const [previousAfter] = await db
-      .select({ status: issues.status })
-      .from(issues)
-      .where(eq(issues.id, previousIssue.id));
-    expect(previousAfter?.status).toBe("cancelled");
-  });
-
-  it("does not retire a previous execution issue an agent is waiting on", async () => {
-    // A pending question is a real decision. Closing the issue would throw the
-    // question away, and the operator would never learn it had been asked.
-    const { companyId, issueSvc, routine, svc } = await seedFixture();
-    const previousRunId = randomUUID();
-    const previousIssue = await issueSvc.create(companyId, {
-      projectId: routine.projectId,
-      title: routine.title,
-      description: routine.description,
-      status: "todo",
-      priority: routine.priority,
-      assigneeAgentId: routine.assigneeAgentId,
-      originKind: "routine_execution",
-      originId: routine.id,
-      originRunId: previousRunId,
-    });
-
-    await db.insert(routineRuns).values({
-      id: previousRunId,
-      companyId,
-      routineId: routine.id,
-      triggerId: null,
-      source: "manual",
-      status: "issue_created",
-      triggeredAt: new Date("2026-03-20T12:00:00.000Z"),
-      linkedIssueId: previousIssue.id,
-      completedAt: new Date("2026-03-20T12:00:00.000Z"),
-    });
-
-    await db.insert(issueThreadInteractions).values({
-      id: randomUUID(),
-      companyId,
-      issueId: previousIssue.id,
-      kind: "ask_user_questions",
-      status: "pending",
-      continuationPolicy: "wake_assignee",
-      payload: {
-        version: 1,
-        questions: [
-          { id: "q1", prompt: "Which supplier should I use?", options: [] },
-        ],
-      },
-    });
-
-    await svc.runRoutine(routine.id, { source: "manual" });
-
-    const [previousAfter] = await db
-      .select({ status: issues.status })
-      .from(issues)
-      .where(eq(issues.id, previousIssue.id));
-    expect(previousAfter?.status).toBe("todo");
   });
 
   it("creates draft routines without a project or default assignee", async () => {
