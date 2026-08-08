@@ -66,11 +66,37 @@ function Get-OrphanedEmbeddedPostgres {
     })
 }
 
-# Recursive descendants of a given PID
+# Is $Child genuinely a child of $Parent, or is the link an artefact?
+#
+# Windows does NOT clear ParentProcessId when a parent exits, and it reuses
+# PIDs aggressively. So a long-running process whose real parent died hours ago
+# keeps pointing at that dead PID, and the moment something new is given that
+# PID the orphan appears to be its child. Walking children blindly therefore
+# reaches arbitrary unrelated processes.
+#
+# This is not hypothetical: a stop run on 2026-08-07 killed two AdobeCollabSync
+# processes this way, and a snapshot of the same machine showed a bash.exe
+# claiming a node.exe parent that had been created two and a half hours AFTER
+# it. A real child is always created at or after its parent, so comparing
+# creation times rejects the reused-PID pairs and keeps the genuine ones.
+function Test-RealParent {
+    param($Parent, $Child)
+    if (-not $Parent -or -not $Child) { return $false }
+    if (-not $Parent.CreationDate -or -not $Child.CreationDate) { return $false }
+    return $Child.CreationDate -ge $Parent.CreationDate
+}
+
+# Recursive descendants of a given PID, skipping reused-PID impostors.
 function Get-AllDescendants {
     param([int]$ParentPid)
+    $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$ParentPid"
+    if (-not $parent) { return }
     $kids = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $ParentPid }
     foreach ($k in $kids) {
+        if (-not (Test-RealParent -Parent $parent -Child $k)) {
+            Write-Host "  skipping PID $($k.ProcessId) ($($k.Name)): older than the PID $ParentPid that claims it"
+            continue
+        }
         [void]$script:victims.Add([int]$k.ProcessId)
         Get-AllDescendants -ParentPid $k.ProcessId
     }
@@ -89,6 +115,7 @@ function Get-LaunchChainAncestors {
     while ($current -and $current.ParentProcessId -gt 4) {
         $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)"
         if (-not $parent -or -not $parent.CommandLine) { break }
+        if (-not (Test-RealParent -Parent $parent -Child $current)) { break }
         if ($parent.CommandLine.ToLower().IndexOf('tsx') -lt 0) { break }
         [void]$script:victims.Add([int]$parent.ProcessId)
         $current = $parent
@@ -160,6 +187,7 @@ if ($serverConn) {
     while ($cur -and $cur.ParentProcessId -gt 4) {
         $par = Get-CimInstance Win32_Process -Filter "ProcessId=$($cur.ParentProcessId)"
         if (-not $par -or -not $par.CommandLine) { break }
+        if (-not (Test-RealParent -Parent $par -Child $cur)) { break }
         if ($par.CommandLine.ToLower().IndexOf('tsx') -lt 0) { break }
         if ($victims.Contains([int]$par.ProcessId)) {
             [void]$ancestorPids.Add([int]$par.ProcessId)
