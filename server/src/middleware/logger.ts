@@ -15,7 +15,12 @@ const sharedOpts = {
 
 export const logger = pino({
   level: "debug",
-  redact: ["req.headers.authorization"],
+  // Every 4xx and 5xx line carries the full request headers (see customProps
+  // below), so without `cookie` here a live session token is written to the log
+  // file in plaintext on any failed request. Anything that can read the log
+  // directory can then sign in as that user. `set-cookie` covers the response
+  // side, which is how a freshly issued session would otherwise leak.
+  redact: ["req.headers.authorization", "req.headers.cookie", "res.headers['set-cookie']"],
   // The explicit generic keeps TS from unifying every target's options into
   // one exact shape (pretty's options and pino-roll's options share nothing).
 }, pino.transport<Record<string, unknown>>({

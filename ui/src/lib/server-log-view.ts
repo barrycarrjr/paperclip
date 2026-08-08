@@ -18,6 +18,30 @@ export function buildServerLogQueryString(query: ServerLogQuery): string {
   return encoded ? `?${encoded}` : "";
 }
 
+/**
+ * Plain statement of what a level filter includes, shown on the page.
+ *
+ * The filter is a threshold, not an exact match: picking warnings also shows
+ * errors, because a filter that hid errors while claiming to show problems
+ * would be actively dangerous. That is the right behaviour but it is not
+ * guessable from a button labelled with a single level, so the page says it
+ * outright rather than leaving it to be discovered.
+ */
+export function describeLevelFilter(minLevel: ServerLogLevel | "all"): string {
+  switch (minLevel) {
+    case "all":
+      return "Showing every line, including debug detail.";
+    case "info":
+      return "Showing info, warnings and errors. Debug detail is hidden.";
+    case "warn":
+      return "Showing warnings and errors.";
+    case "error":
+      return "Showing errors only.";
+    default:
+      return `Showing ${minLevel} and above.`;
+  }
+}
+
 /** Clock time for a log row. The date is on the day divider, not every line. */
 export function formatLogTime(timeMs: number): string {
   if (!Number.isFinite(timeMs) || timeMs <= 0) return "--:--:--";

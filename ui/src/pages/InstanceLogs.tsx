@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import {
+  describeLevelFilter,
   formatLogDay,
   formatLogTime,
   levelBadgeClass,
@@ -22,10 +23,15 @@ const SEARCH_DEBOUNCE_MS = 300;
 /** Treated as "the operator is watching the bottom" for auto-scroll. */
 const STICK_TO_BOTTOM_SLACK_PX = 120;
 
+/**
+ * Each option is a floor, not an exact level, so the label has to say so.
+ * Labelled with the bare level name, "Info" looked like a promise to show only
+ * info lines and the warnings mixed in read as a bug.
+ */
 const LEVEL_CHOICES: { label: string; value: ServerLogLevel | "all"; hint: string }[] = [
-  { label: "Everything", value: "all", hint: "Every line, including debug" },
-  { label: "Info", value: "info", hint: "Info and above" },
-  { label: "Warnings", value: "warn", hint: "Warnings and errors only" },
+  { label: "Everything", value: "all", hint: "Every line, including debug detail" },
+  { label: "Info and up", value: "info", hint: "Info, warnings and errors. Hides debug detail." },
+  { label: "Warnings and up", value: "warn", hint: "Warnings and errors" },
   { label: "Errors", value: "error", hint: "Errors only" },
 ];
 
@@ -251,7 +257,8 @@ export function InstanceLogs() {
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
-          {entries.length} {entries.length === 1 ? "line" : "lines"}
+          {describeLevelFilter(minLevel)} {entries.length}{" "}
+          {entries.length === 1 ? "line" : "lines"}
           {query.data?.files.length ? ` from ${query.data.files.join(", ")}` : ""}
           {query.data?.truncated ? " (there is more history than this)" : ""}
         </span>

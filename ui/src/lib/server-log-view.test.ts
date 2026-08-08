@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
   buildServerLogQueryString,
+  describeLevelFilter,
   formatLogTime,
   levelBadgeClass,
   levelToneClass,
   logDayKey,
 } from "./server-log-view";
+
+describe("describeLevelFilter", () => {
+  it("says outright that a level filter is a floor, not an exact match", () => {
+    // Picking "Info" and seeing warnings read as a bug until the page said so.
+    expect(describeLevelFilter("info")).toContain("warnings");
+    expect(describeLevelFilter("info")).toContain("errors");
+    expect(describeLevelFilter("warn")).toContain("errors");
+  });
+
+  it("says what is being hidden, not only what is shown", () => {
+    expect(describeLevelFilter("info").toLowerCase()).toContain("debug");
+    expect(describeLevelFilter("all").toLowerCase()).toContain("debug");
+  });
+
+  it("does not promise more than errors when filtering to errors", () => {
+    expect(describeLevelFilter("error")).toBe("Showing errors only.");
+  });
+});
 
 describe("buildServerLogQueryString", () => {
   it("leaves out everything unset", () => {
