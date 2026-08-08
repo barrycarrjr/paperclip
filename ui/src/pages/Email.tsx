@@ -27,6 +27,7 @@ import {
   Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
+  Maximize2,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -58,6 +59,10 @@ import {
   type HelpScoutMailboxRef,
 } from "../lib/mailboxKind";
 import { HelpScoutEmailView } from "../components/HelpScoutEmailView";
+import {
+  EmailPopoutDialog,
+  type EmailPopoutRequest,
+} from "../components/email/EmailPopoutDialog";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
@@ -423,6 +428,8 @@ export function Email() {
     }
     setShowAllMessages(v);
   };
+  // The message shown at full size on top of the three-pane layout.
+  const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
@@ -2318,6 +2325,36 @@ export function Email() {
                     </TooltipTrigger>
                     <TooltipContent>Reply</TooltipContent>
                   </Tooltip>
+
+                  {/* Same full-size view the portfolio list opens, so "open
+                      this email" means one thing wherever it is used. Here it
+                      buys the width back from the mailbox and list columns. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        className="ml-auto"
+                        onClick={() => {
+                          if (!pluginId || !selectedCompanyId || !selectedMailbox
+                            || selectedUid == null) return;
+                          setPopout({
+                            pluginId,
+                            companyId: selectedCompanyId,
+                            mailbox: selectedMailbox,
+                            mailboxName: selectedMailboxInfo?.name,
+                            folder: selectedFolder,
+                            uid: selectedUid,
+                            header: selectedMsg ?? undefined,
+                          });
+                        }}
+                        aria-label="Open full size"
+                      >
+                        <Maximize2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Open full size</TooltipContent>
+                  </Tooltip>
                 </div>
 
                 {/* Message header */}
@@ -2691,6 +2728,17 @@ export function Email() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <EmailPopoutDialog
+        request={popout}
+        onClose={() => setPopout(null)}
+        actionHooks={{
+          onOptimistic: (uid, kind) => noteOverride(uid, kind),
+          onRevert: (uid) => clearOverride(uid),
+          onSettled: () => invalidateMessageLists(),
+          onToast: (text, issueId) => showToast(text, issueId),
+        }}
+      />
     </div>
   );
 }

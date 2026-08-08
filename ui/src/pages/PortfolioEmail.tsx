@@ -38,6 +38,10 @@ import {
   type MailHeader,
 } from "../api/emailTools";
 import { HELP_SCOUT_PLUGIN_KEY, makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
+import {
+  EmailPopoutDialog,
+  type EmailPopoutRequest,
+} from "../components/email/EmailPopoutDialog";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { issuesApi } from "../api/issues";
 import { ApiError } from "../api/client";
@@ -124,13 +128,20 @@ interface PortfolioSearchRow {
   /** Which mailbox and folder this came from. */
   where: string;
   company: Company | null;
+  /** Navigate to the company's Email page with this message selected. */
   onOpen: () => void;
+  /**
+   * Show the message full size in place. Absent for Help Scout hits, which
+   * have no overlay yet and so still have to travel to the company page.
+   */
+  onPopout?: () => void;
 }
 
 export function PortfolioEmail() {
   const { selectedCompanyId, selectedCompany, companies, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Portfolio Email" }]);
@@ -347,6 +358,17 @@ export function PortfolioEmail() {
           // Pass the hit's own folder, not the mailbox's polled folder, or the
           // Email page opens the wrong folder and reports "message not found".
           onOpen: () => openInCompany(hit.mailbox, hit.uid, mb.primaryCompanyId, hit.folder),
+          onPopout: () =>
+            setPopout({
+              pluginId: pluginId!,
+              companyId: mb.primaryCompanyId,
+              companyName: mb.primaryCompany?.name,
+              mailbox: hit.mailbox,
+              mailboxName: mb.name || mb.key,
+              folder: hit.folder,
+              uid: hit.uid,
+              header: hit,
+            }),
         });
       }
       for (const failure of q?.data?.errors ?? []) {
@@ -392,6 +414,11 @@ export function PortfolioEmail() {
     setSearchInput("");
     setSearchQuery("");
   }
+
+  // The email the operator asked to see at full size. Opening one here must not
+  // move them off the portfolio view, so this is an overlay rather than the
+  // company-switching navigation that `openInCompany` performs.
+  const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
 
   const [showAll, setShowAll] = useState(() => {
     try {
@@ -597,7 +624,7 @@ export function PortfolioEmail() {
               {searchRows.map((row) => (
                 <div
                   key={row.id}
-                  onClick={row.onOpen}
+                  onClick={row.onPopout ?? row.onOpen}
                   className="flex items-center gap-3 px-6 py-3 hover:bg-accent/50 transition-colors cursor-pointer"
                 >
                   <span
@@ -649,6 +676,17 @@ export function PortfolioEmail() {
                 onOpenMessage={(uid, action) =>
                   openInCompany(mb.key, uid, mb.primaryCompanyId, mb.pollFolder, action)
                 }
+                onPopoutMessage={(msg) =>
+                  setPopout({
+                    pluginId: pluginId!,
+                    companyId: mb.primaryCompanyId,
+                    companyName: companyById.get(mb.primaryCompanyId)?.name,
+                    mailbox: mb.key,
+                    mailboxName: mb.name,
+                    folder: mb.pollFolder,
+                    uid: msg.uid,
+                    header: msg,
+                  })}
                 onOpenMailbox={() =>
                   openInCompany(mb.key, null, mb.primaryCompanyId, mb.pollFolder)
                 }
@@ -669,6 +707,19 @@ export function PortfolioEmail() {
         </div>
       </ScrollArea>
       )}
+
+      <EmailPopoutDialog
+        request={popout}
+        onClose={() => setPopout(null)}
+        actionHooks={{
+          // The row the operator just acted on has to disappear from this list
+          // too, not just from the mailbox it came from.
+          onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: ["portfolio-email"] });
+            void queryClient.invalidateQueries({ queryKey: ["email"] });
+          },
+        }}
+      />
     </div>
   );
 }
@@ -679,6 +730,8 @@ interface MailboxPanelProps {
   showAll: boolean;
   groupBySender: boolean;
   onOpenMessage: (uid: number, action?: "reply" | "forward" | "handoff") => void;
+  /** Show this message full size in place, without leaving the portfolio view. */
+  onPopoutMessage: (msg: MailHeader) => void;
   onOpenMailbox: () => void;
 }
 
@@ -688,6 +741,7 @@ function MailboxPanel({
   showAll,
   groupBySender,
   onOpenMessage,
+  onPopoutMessage,
   onOpenMailbox,
 }: MailboxPanelProps) {
   const queryClient = useQueryClient();
@@ -1012,6 +1066,7 @@ function MailboxPanel({
           deleteMutation.isPending ? deleteMutation.variables?.uid ?? null : null
         }
         onOpenMessage={onOpenMessage}
+        onPopoutMessage={onPopoutMessage}
       />
     </div>
   );
@@ -1037,6 +1092,7 @@ interface MessageListBodyProps {
   deleteMsg: (msg: MailHeader) => void;
   deletePendingUid: number | null;
   onOpenMessage: (uid: number, action?: "reply" | "forward" | "handoff") => void;
+  onPopoutMessage: (msg: MailHeader) => void;
 }
 
 function MessageListBody(props: MessageListBodyProps) {
@@ -1252,6 +1308,7 @@ function MessageRow({
   deleteMsg,
   deletePendingUid,
   onOpenMessage,
+  onPopoutMessage,
 }: { msg: MailHeader } & MessageListBodyProps) {
   const isMarkReadPending = markReadPendingUid === msg.uid;
   const isMarkUnreadPending = markUnreadPendingUid === msg.uid;
@@ -1264,7 +1321,9 @@ function MessageRow({
   return (
     <div
       className="group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer"
-      onClick={() => onOpenMessage(msg.uid)}
+      // Clicking the email reads the email. Going to the company is the rarer
+      // intent and has its own button, so it no longer hijacks the common one.
+      onClick={() => onPopoutMessage(msg)}
     >
       <span
         className={cn(
@@ -1344,6 +1403,15 @@ function MessageRow({
         <Button
           variant="ghost"
           size="icon-sm"
+          onClick={() => onOpenMessage(msg.uid, "forward")}
+          title="Forward"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Forward className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           disabled={isKeepPending}
           onClick={() => keepAlways(msg)}
           title={hasKeepAlwaysRule ? "Keep always (rule active)" : "Keep always"}
@@ -1406,13 +1474,16 @@ function MessageRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => onOpenMessage(msg.uid, "forward")}>
-              <Forward className="h-3.5 w-3.5 mr-2" />
-              Forward
-            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onOpenMessage(msg.uid, "handoff")}>
               <Bot className="h-3.5 w-3.5 mr-2" />
               Hand off to agent
+            </DropdownMenuItem>
+            {/* Last: reading the email is the common intent and now belongs to
+                the row click, so travelling to the company is the rarest thing
+                here. */}
+            <DropdownMenuItem onSelect={() => onOpenMessage(msg.uid)}>
+              <ExternalLink className="h-3.5 w-3.5 mr-2" />
+              Open in company view
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
