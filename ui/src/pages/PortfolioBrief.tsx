@@ -1180,7 +1180,9 @@ export function PortfolioBrief() {
                       <span className="text-[11px] font-mono text-muted-foreground tabular-nums shrink-0">
                         {issue.identifier ?? issue.id.slice(0, 8)}
                       </span>
-                      <span className="flex-1 min-w-0 truncate">{issue.title}</span>
+                      <span className="flex-1 min-w-0 truncate" title={issue.title}>
+                        {issue.title}
+                      </span>
                       <span className="text-[11px] text-muted-foreground shrink-0">
                         {timeAgo(issue.updatedAt)}
                       </span>
