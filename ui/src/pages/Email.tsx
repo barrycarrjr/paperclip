@@ -41,7 +41,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { useHelpScoutPlugin } from "../hooks/useHelpScoutPlugin";
@@ -269,7 +269,13 @@ interface RulesBundle {
 }
 
 export function Email() {
-  const { selectedCompanyId } = useCompany();
+  // The URL, not the context selection. A mailbox belongs to exactly one
+  // company, so this page is one of the few where getting the company wrong for
+  // a single render is not cosmetic: the plugin rejects the request outright.
+  // Layout syncs the selection from the route in an effect, which lands one
+  // render too late, so every cross-company visit here used to fire its first
+  // requests as the PREVIOUS company and fail. See useActiveCompanyId.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
