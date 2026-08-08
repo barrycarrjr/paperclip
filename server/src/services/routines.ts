@@ -40,6 +40,7 @@ import {
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { issueService } from "./issues.js";
+import { issueTreeControlService } from "./issue-tree-control.js";
 import { secretService } from "./secrets.js";
 import { assertTimeZone, nextCronTickInTimeZone, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
@@ -633,6 +634,126 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
   }
 
+  /**
+   * Retire earlier execution issues of this routine that have died, and the
+   * recovery issues opened to rescue them.
+   *
+   * An execution issue is only ever closed by the agent that owns it. When a
+   * run fails instead, the issue stays open and nothing ever looks at it again,
+   * while the next firing creates a fresh one beside it. The concurrency check
+   * cannot help: "still going" there means a heartbeat run in flight, so a
+   * dead-but-open issue is invisible to it and gets stepped over rather than
+   * replaced. Measured on one instance: 1,944 execution issues, 119 still open
+   * and every one blocked, the oldest 65 days, plus 90 orphaned recovery issues.
+   *
+   * Runs AFTER the dispatch has succeeded and outside its transaction, which is
+   * the whole reason this is a separate step rather than part of the dispatch.
+   * An earlier version ran inside the transaction before the new issue was
+   * created, and because the dispatch's catch handles failure by tidying up and
+   * returning normally rather than rethrowing, a failed dispatch still committed
+   * the cancellations - retiring every open issue and creating no replacement.
+   * Out here the worst case is that nothing is retired and the next firing tries
+   * again. Safe to place after creation: the unique index that guards open
+   * executions only covers rows with a non-null execution_run_id, and a dead
+   * issue has long since had that cleared.
+   *
+   * Deliberately narrow. Only this routine's own bookkeeping, only `blocked`
+   * (in_progress and in_review mean something or someone is on it, and
+   * in_review is where a sign-off gate parks), and never where anything is owed
+   * to a person: an unanswered question, an ANSWERED one whose answer may never
+   * have been consumed, a comment written by a human, a human assignee, or an
+   * active pause hold on the issue or any of its ancestors. That last one
+   * matters most because a pause hold guarantees the other guards pass - it is
+   * precisely what stops runs happening.
+   */
+  async function retireDeadExecutionIssues(input: {
+    routine: typeof routines.$inferSelect;
+    dispatchFingerprint: string | null | undefined;
+    keepIssueId: string | null;
+  }): Promise<{ executions: string[]; recoveries: string[] }> {
+    const fingerprintCondition = routineExecutionFingerprintCondition(input.dispatchFingerprint);
+    const nothingOwedToAPerson = [
+      sql`NOT EXISTS (SELECT 1 FROM heartbeat_runs r WHERE r.id = ${issues.executionRunId} AND r.status IN ('queued','running','scheduled_retry'))`,
+      sql`NOT EXISTS (SELECT 1 FROM heartbeat_runs r WHERE r.company_id = ${issues.companyId} AND r.status IN ('queued','running','scheduled_retry') AND r.context_snapshot ->> 'issueId' = CAST(${issues.id} AS text))`,
+      // "answered" counts: the continuation that consumes an answer is queued
+      // without being awaited, so a failed one leaves a real human answer
+      // sitting on an open issue that nothing will ever read.
+      sql`NOT EXISTS (SELECT 1 FROM issue_thread_interactions ti WHERE ti.issue_id = ${issues.id} AND ti.status IN ('pending','answered'))`,
+      sql`NOT EXISTS (SELECT 1 FROM issue_comments ic WHERE ic.issue_id = ${issues.id} AND ic.author_user_id IS NOT NULL)`,
+    ];
+
+    const candidates = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, input.routine.companyId),
+          eq(issues.originKind, "routine_execution"),
+          eq(issues.originId, input.routine.id),
+          eq(issues.status, "blocked"),
+          isNull(issues.hiddenAt),
+          isNull(issues.assigneeUserId),
+          ...(input.keepIssueId ? [ne(issues.id, input.keepIssueId)] : []),
+          ...(fingerprintCondition ? [fingerprintCondition] : []),
+          ...nothingOwedToAPerson,
+        ),
+      );
+    if (candidates.length === 0) return { executions: [], recoveries: [] };
+
+    // Pause holds are checked through the service that owns the idea, so this
+    // walks ancestors the same way every other pause-hold gate in the product
+    // does. One cheap query up front when no hold exists at all.
+    const treeControl = issueTreeControlService(db);
+    const executions: string[] = [];
+    for (const candidate of candidates) {
+      const held = await treeControl.getActivePauseHoldGate(input.routine.companyId, candidate.id);
+      if (!held) executions.push(candidate.id);
+    }
+    if (executions.length === 0) return { executions: [], recoveries: [] };
+
+    // A recovery issue exists only to get its execution going again, so once
+    // the execution is retired there is nothing left to recover. Same guards,
+    // and scoped by company like everything else here.
+    const recoveryRows = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, input.routine.companyId),
+          eq(issues.originKind, "stranded_issue_recovery"),
+          inArray(issues.originId, executions),
+          inArray(issues.status, ["todo", "blocked"]),
+          isNull(issues.hiddenAt),
+          isNull(issues.assigneeUserId),
+          ...nothingOwedToAPerson,
+        ),
+      );
+    const recoveries: string[] = [];
+    for (const row of recoveryRows) {
+      const held = await treeControl.getActivePauseHoldGate(input.routine.companyId, row.id);
+      if (!held) recoveries.push(row.id);
+    }
+
+    // Through the service, not a raw UPDATE: it stamps cancelledAt and clears
+    // the execution-lock columns, without which a retired issue keeps pointing
+    // at a dead run and there is no way to query what was closed.
+    for (const id of [...executions, ...recoveries]) {
+      await issueSvc.update(id, { status: "cancelled" });
+    }
+
+    await logActivity(db, {
+      companyId: input.routine.companyId,
+      actorType: "system",
+      actorId: "routine-scheduler",
+      action: "routine.retired_dead_execution_issues",
+      entityType: "routine",
+      entityId: input.routine.id,
+      details: { executionIssueIds: executions, recoveryIssueIds: recoveries },
+    });
+
+    return { executions, recoveries };
+  }
+
   async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
     return executor
       .update(routineRuns)
@@ -949,6 +1070,34 @@ export function routineService(
         return failed ?? createdRun;
       }
     });
+
+    // Only after a dispatch that actually produced an issue, and never allowed
+    // to affect the dispatch's own outcome.
+    if (run.status === "issue_created" && run.linkedIssueId) {
+      try {
+        const retired = await retireDeadExecutionIssues({
+          routine: input.routine,
+          dispatchFingerprint,
+          keepIssueId: run.linkedIssueId,
+        });
+        if (retired.executions.length > 0 || retired.recoveries.length > 0) {
+          logger.info(
+            {
+              routineId: input.routine.id,
+              executions: retired.executions.length,
+              recoveries: retired.recoveries.length,
+            },
+            "retired dead execution issues from earlier firings of this routine",
+          );
+        }
+      } catch (err) {
+        // Nothing is lost by not retiring; the next firing tries again.
+        logger.warn(
+          { err, routineId: input.routine.id },
+          "could not retire dead execution issues for this routine",
+        );
+      }
+    }
 
     if (input.source === "schedule" || input.source === "webhook") {
       const actorId = input.source === "schedule" ? "routine-scheduler" : "routine-webhook";

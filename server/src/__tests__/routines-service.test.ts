@@ -12,7 +12,10 @@ import {
   heartbeatRuns,
   instanceSettings,
   issueInboxArchives,
+  issueComments,
   issueReadStates,
+  issueThreadInteractions,
+  issueTreeHolds,
   issues,
   projectWorkspaces,
   projects,
@@ -56,6 +59,12 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     await db.delete(companySecretVersions);
     await db.delete(companySecrets);
     await db.delete(heartbeatRuns);
+    // Before issues: a pause hold and a pending question each hold a foreign
+    // key to their issue, and leaving either behind blocks the delete and fails
+    // every later test in the file with an error that looks nothing like it.
+    await db.delete(issueComments);
+    await db.delete(issueThreadInteractions);
+    await db.delete(issueTreeHolds);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
     await db.delete(projectWorkspaces);
@@ -223,6 +232,201 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(routineIssues).toHaveLength(2);
     expect(routineIssues.map((issue) => issue.id)).toContain(previousIssue.id);
     expect(routineIssues.map((issue) => issue.id)).toContain(run.linkedIssueId);
+  });
+
+  /**
+   * Retiring dead execution issues. The first version of this shipped and had
+   * to be reverted: it ran inside the dispatch transaction, and because a
+   * failed dispatch is handled by tidying up and returning normally rather than
+   * rethrowing, the cancellations committed anyway - every open issue retired
+   * and no replacement created. These pin the guards that were missing.
+   */
+  async function seedDeadExecution(
+    companyId: string,
+    routine: { id: string; projectId: string | null; priority: string; assigneeAgentId: string | null },
+    issueSvc: ReturnType<typeof issueService>,
+    overrides: Record<string, unknown> = {},
+  ) {
+    const runId = randomUUID();
+    const issue = await issueSvc.create(companyId, {
+      projectId: routine.projectId,
+      title: "An execution that died",
+      status: "blocked",
+      priority: routine.priority,
+      assigneeAgentId: routine.assigneeAgentId,
+      originKind: "routine_execution",
+      originId: routine.id,
+      originRunId: runId,
+      ...overrides,
+    });
+    await db.insert(routineRuns).values({
+      id: runId,
+      companyId,
+      routineId: routine.id,
+      triggerId: null,
+      source: "manual",
+      status: "issue_created",
+      triggeredAt: new Date("2026-03-20T12:00:00.000Z"),
+      linkedIssueId: issue.id,
+      completedAt: new Date("2026-03-20T12:00:00.000Z"),
+    });
+    return issue;
+  }
+
+  async function statusOf(issueId: string) {
+    const [row] = await db.select({ status: issues.status, cancelledAt: issues.cancelledAt })
+      .from(issues).where(eq(issues.id, issueId));
+    return row;
+  }
+
+  it("retires a dead execution issue, and stamps it so it can be found later", async () => {
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    const after = await statusOf(dead.id);
+    expect(after?.status).toBe("cancelled");
+    // Without this there is no way to query what an unattended run closed.
+    expect(after?.cancelledAt).not.toBeNull();
+  });
+
+  it("retires the recovery issue opened to rescue that execution", async () => {
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+    const recovery = await issueSvc.create(companyId, {
+      projectId: routine.projectId,
+      title: `Recover stalled issue ${dead.identifier ?? dead.id}`,
+      status: "blocked",
+      priority: routine.priority,
+      assigneeAgentId: routine.assigneeAgentId,
+      originKind: "stranded_issue_recovery",
+      originId: dead.id,
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(recovery.id))?.status).toBe("cancelled");
+  });
+
+  it("leaves everything alone when the dispatch fails", async () => {
+    // The bug that forced the revert. A dispatch can fail after the point where
+    // retiring used to happen, and the failure path returns normally, so the
+    // cancellations committed with no replacement issue to show for them.
+    const { companyId, issueSvc, routine, svc } = await seedFixture({
+      wakeup: async () => {
+        throw new Error("the agent is gone");
+      },
+    });
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect(run.status).toBe("failed");
+    expect((await statusOf(dead.id))?.status).toBe("blocked");
+  });
+
+  it("will not retire an issue under an active pause hold", async () => {
+    // A pause hold is the operator's "stop touching this". It also guarantees
+    // every other guard passes, because freezing the subtree is exactly what
+    // stops runs happening.
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+    await db.insert(issueTreeHolds).values({
+      id: randomUUID(),
+      companyId,
+      rootIssueId: dead.id,
+      mode: "pause",
+      status: "active",
+      reason: "operator froze this",
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(dead.id))?.status).toBe("blocked");
+  });
+
+  it("will not retire an issue holding an answer nobody consumed", async () => {
+    // The continuation that consumes an answer is queued without being awaited,
+    // so a failed one leaves a real human answer on an open issue.
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+    await db.insert(issueThreadInteractions).values({
+      id: randomUUID(),
+      companyId,
+      issueId: dead.id,
+      kind: "ask_user_questions",
+      status: "answered",
+      continuationPolicy: "wake_assignee",
+      payload: { version: 1, questions: [{ id: "q1", prompt: "Which one?", options: [] }] },
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(dead.id))?.status).toBe("blocked");
+  });
+
+  it("will not retire an issue a person has written on", async () => {
+    // A human comment is the clearest evidence that one of these stopped being
+    // bookkeeping and became something somebody cared about.
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const touched = await seedDeadExecution(companyId, routine, issueSvc);
+    await db.insert(issueComments).values({
+      id: randomUUID(),
+      companyId,
+      issueId: touched.id,
+      authorUserId: "board-user",
+      body: "Leave this one, I am looking into it.",
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(touched.id))?.status).toBe("blocked");
+  });
+
+  it("retires one an AGENT commented on, which is just its own report", async () => {
+    // Agents narrate every run. Treating that as human interest would mean
+    // nothing was ever retired.
+    const { companyId, issueSvc, routine, svc, agentId } = await seedFixture();
+    const dead = await seedDeadExecution(companyId, routine, issueSvc);
+    await db.insert(issueComments).values({
+      id: randomUUID(),
+      companyId,
+      issueId: dead.id,
+      authorAgentId: agentId,
+      body: "Run failed: could not sign in.",
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(dead.id))?.status).toBe("cancelled");
+  });
+
+  it("will not retire an execution that is still being worked", async () => {
+    // in_review is where a sign-off gate parks, waiting on a person.
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const inReview = await seedDeadExecution(companyId, routine, issueSvc, { status: "in_review" });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(inReview.id))?.status).toBe("in_review");
+  });
+
+  it("will not retire another routine's execution issues", async () => {
+    const { companyId, issueSvc, routine, svc } = await seedFixture();
+    const otherRoutineId = randomUUID();
+    const stranger = await issueSvc.create(companyId, {
+      projectId: routine.projectId,
+      title: "A different routine's execution",
+      status: "blocked",
+      priority: routine.priority,
+      originKind: "routine_execution",
+      originId: otherRoutineId,
+    });
+
+    await svc.runRoutine(routine.id, { source: "manual" });
+
+    expect((await statusOf(stranger.id))?.status).toBe("blocked");
   });
 
   it("creates draft routines without a project or default assignee", async () => {
