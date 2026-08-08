@@ -218,6 +218,13 @@ export function InstanceLogs() {
       >
         {query.isLoading ? (
           <div className="px-3 py-6 text-sm text-muted-foreground">Reading the log...</div>
+        ) : query.error && entries.length === 0 ? (
+          // Never claim an empty result when the request itself failed: the
+          // banner above says what went wrong, and "nothing matches" alongside
+          // it reads as an answer rather than a failure.
+          <div className="px-3 py-6 text-sm text-muted-foreground">
+            Could not read the log, so there is nothing to show.
+          </div>
         ) : entries.length === 0 ? (
           <div className="px-3 py-6 text-sm text-muted-foreground">
             {search || minLevel !== "all"
