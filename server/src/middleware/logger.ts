@@ -1,20 +1,8 @@
 import fs from "node:fs";
 import pino from "pino";
 import { pinoHttp } from "pino-http";
-import { readConfigFile } from "../config-file.js";
-import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
-import { buildFileLogTarget } from "./log-file-target.js";
+import { buildFileLogTarget, resolveServerLogDir } from "./log-file-target.js";
 import { shouldSilenceHttpSuccessLog } from "./http-log-policy.js";
-
-function resolveServerLogDir(): string {
-  const envOverride = process.env.PAPERCLIP_LOG_DIR?.trim();
-  if (envOverride) return resolveHomeAwarePath(envOverride);
-
-  const fileLogDir = readConfigFile()?.logging.logDir?.trim();
-  if (fileLogDir) return resolveHomeAwarePath(fileLogDir);
-
-  return resolveDefaultLogsDir();
-}
 
 const logDir = resolveServerLogDir();
 fs.mkdirSync(logDir, { recursive: true });

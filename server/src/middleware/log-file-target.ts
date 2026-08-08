@@ -1,4 +1,6 @@
 import path from "node:path";
+import { readConfigFile } from "../config-file.js";
+import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
 
 /**
  * Rolling file target for the server log.
@@ -11,6 +13,39 @@ import path from "node:path";
  * pretty stream still goes to stdout via the other transport target in
  * logger.ts, which the tray launcher captures to its dated files.
  */
+/**
+ * Base name pino-roll writes, without the numeric suffix or extension. Shared
+ * with the reader behind the Logs page so the two cannot drift apart: the
+ * reader matches `server.<n>.log` and nothing else, which also keeps it from
+ * picking up the launcher's `paperclip-<date>.log` files if the two streams
+ * are ever pointed at the same directory.
+ */
+export const SERVER_LOG_BASENAME = "server";
+export const SERVER_LOG_EXTENSION = ".log";
+
+/** Matches `server.log` and `server.1.log`, `server.2.log`, ... */
+export const SERVER_LOG_FILE_PATTERN = new RegExp(
+  `^${SERVER_LOG_BASENAME}(\\.\\d+)?\\${SERVER_LOG_EXTENSION}$`,
+);
+
+/**
+ * Where the rolling log is written, honouring the same overrides the rest of
+ * the instance uses.
+ *
+ * Lives here rather than in logger.ts so the Logs route can ask where the log
+ * is without importing logger.ts, which builds the pino transport as a side
+ * effect of being imported.
+ */
+export function resolveServerLogDir(): string {
+  const envOverride = process.env.PAPERCLIP_LOG_DIR?.trim();
+  if (envOverride) return resolveHomeAwarePath(envOverride);
+
+  const fileLogDir = readConfigFile()?.logging.logDir?.trim();
+  if (fileLogDir) return resolveHomeAwarePath(fileLogDir);
+
+  return resolveDefaultLogsDir();
+}
+
 export function buildFileLogTarget(logDir: string): {
   target: string;
   level: string;
@@ -29,8 +64,8 @@ export function buildFileLogTarget(logDir: string): {
     target: "pino-roll",
     level: "debug",
     options: {
-      file: path.join(logDir, "server"),
-      extension: ".log",
+      file: path.join(logDir, SERVER_LOG_BASENAME),
+      extension: SERVER_LOG_EXTENSION,
       size: "25m",
       limit: { count: 4 },
       mkdir: true,

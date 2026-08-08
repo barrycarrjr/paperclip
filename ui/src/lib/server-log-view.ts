@@ -1,0 +1,71 @@
+import type { ServerLogLevel, ServerLogQuery } from "@paperclipai/shared";
+
+/**
+ * Turns a log query into a query string, leaving out anything unset.
+ *
+ * Sending `level=` or `search=` when the operator has cleared the box would
+ * filter on an empty string rather than not filtering, so empty values are
+ * dropped here rather than being handled at the other end.
+ */
+export function buildServerLogQueryString(query: ServerLogQuery): string {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.minLevel) params.set("level", query.minLevel);
+  const search = query.search?.trim();
+  if (search) params.set("search", search);
+  if (query.afterTimeMs !== undefined) params.set("afterTimeMs", String(query.afterTimeMs));
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
+}
+
+/** Clock time for a log row. The date is on the day divider, not every line. */
+export function formatLogTime(timeMs: number): string {
+  if (!Number.isFinite(timeMs) || timeMs <= 0) return "--:--:--";
+  return new Date(timeMs).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+/** Day heading, so a page spanning midnight or a restart stays readable. */
+export function formatLogDay(timeMs: number): string {
+  if (!Number.isFinite(timeMs) || timeMs <= 0) return "Unknown date";
+  return new Date(timeMs).toLocaleDateString([], {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+export function logDayKey(timeMs: number): string {
+  if (!Number.isFinite(timeMs) || timeMs <= 0) return "unknown";
+  return new Date(timeMs).toDateString();
+}
+
+const LEVEL_TONE: Record<ServerLogLevel, string> = {
+  trace: "text-muted-foreground",
+  debug: "text-muted-foreground",
+  info: "text-foreground",
+  warn: "text-amber-600 dark:text-amber-500",
+  error: "text-destructive",
+  fatal: "text-destructive",
+};
+
+export function levelToneClass(level: ServerLogLevel): string {
+  return LEVEL_TONE[level] ?? "text-foreground";
+}
+
+const LEVEL_BADGE: Record<ServerLogLevel, string> = {
+  trace: "bg-muted text-muted-foreground",
+  debug: "bg-muted text-muted-foreground",
+  info: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  warn: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  error: "bg-destructive/10 text-destructive",
+  fatal: "bg-destructive/20 text-destructive",
+};
+
+export function levelBadgeClass(level: ServerLogLevel): string {
+  return LEVEL_BADGE[level] ?? LEVEL_BADGE.info;
+}

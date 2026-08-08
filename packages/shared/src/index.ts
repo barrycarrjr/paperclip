@@ -11,6 +11,15 @@ export {
   type RunFailureCause,
 } from "./types/run-failure-cause.js";
 export {
+  SERVER_LOG_LEVEL_VALUES,
+  SERVER_LOG_LEVELS,
+  serverLogLevelFromValue,
+  type ServerLogEntry,
+  type ServerLogLevel,
+  type ServerLogPage,
+  type ServerLogQuery,
+} from "./types/server-log.js";
+export {
   APPROVAL_TYPE_LABEL,
   approvalLabel,
   approvalSubject,

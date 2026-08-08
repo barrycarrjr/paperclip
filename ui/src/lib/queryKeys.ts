@@ -134,6 +134,8 @@ export const queryKeys = {
     schedulerHeartbeats: ["instance", "scheduler-heartbeats"] as const,
     experimentalSettings: ["instance", "experimental-settings"] as const,
     agentDefaults: ["instance", "agent-defaults"] as const,
+    logs: (query: { limit: number; level: string; search: string }) =>
+      ["instance", "logs", query] as const,
   },
   health: ["health"] as const,
   system: {

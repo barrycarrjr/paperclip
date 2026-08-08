@@ -58,11 +58,23 @@ describe("logger translateTime respects TZ environment variable", () => {
 
     expect(mockTransport).toHaveBeenCalledOnce();
     const { targets } = mockTransport.mock.calls[0][0] as {
-      targets: Array<{ options: Record<string, unknown> }>;
+      targets: Array<{ target: string; options: Record<string, unknown> }>;
     };
-    for (const target of targets) {
+
+    // Only the pretty stream formats timestamps, so only it can carry this
+    // setting. Asserting it over every target is what left this test failing
+    // from 2026-07-21, when the size-capped pino-roll target was added
+    // alongside the pretty one: pino-roll writes raw NDJSON with no time
+    // format of its own, so the loop always hit an undefined and threw.
+    const prettyTargets = targets.filter((target) => target.target === "pino-pretty");
+    expect(prettyTargets).toHaveLength(1);
+    for (const target of prettyTargets) {
       expect(target.options.translateTime).toBe("SYS:HH:MM:ss");
     }
+
+    // Pinned so that dropping the rolling file target turns this test red
+    // rather than quietly leaving the assertion above with nothing to check.
+    expect(targets.map((target) => target.target).sort()).toEqual(["pino-pretty", "pino-roll"]);
   });
 
   it("SYS: prefix produces timezone-sensitive output: UTC epoch formats differently under UTC vs UTC+8", () => {

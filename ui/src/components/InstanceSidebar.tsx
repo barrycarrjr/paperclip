@@ -1,4 +1,4 @@
-import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, Settings, Shield, SlidersHorizontal, Sparkles, UserRoundPen } from "lucide-react";
+import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, ScrollText, Settings, Shield, SlidersHorizontal, Sparkles, UserRoundPen } from "lucide-react";
 import { SidebarNavItem } from "./SidebarNavItem";
 
 export function InstanceSidebar() {
@@ -23,6 +23,7 @@ export function InstanceSidebar() {
           <SidebarNavItem to="/instance/settings/agent-defaults" label="Agent defaults" icon={Bot} />
           <SidebarNavItem to="/instance/settings/external-mcp" label="MCP servers" icon={Network} />
           <SidebarNavItem to="/instance/settings/experimental" label="Experimental" icon={FlaskConical} />
+          <SidebarNavItem to="/instance/settings/logs" label="Logs" icon={ScrollText} end />
         </div>
       </nav>
     </aside>

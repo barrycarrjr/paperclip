@@ -36,6 +36,7 @@ import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { attentionRoutes } from "./routes/attention.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
+import { instanceLogsRoutes } from "./routes/instance-logs.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import { systemRoutes } from "./routes/system.js";
 import {
@@ -266,6 +267,7 @@ export async function createApp(
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
+  api.use(instanceLogsRoutes());
   api.use(systemRoutes());
   api.use(emailDraftRoutes());
   if (opts.databaseBackupService) {
