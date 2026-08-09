@@ -30,8 +30,8 @@ interface EventDetailDialogProps {
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 py-1.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-right text-sm">{children}</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className="min-w-0 text-right text-sm break-words">{children}</span>
     </div>
   );
 }
@@ -136,7 +136,7 @@ export function EventDetailDialog({
             {event.body ? (
               <div className="py-2">
                 <p className="mb-1 text-xs text-muted-foreground">Notes</p>
-                <p className="whitespace-pre-wrap text-sm">{event.body}</p>
+                <p className="text-sm whitespace-pre-wrap wrap-anywhere">{event.body}</p>
               </div>
             ) : null}
           </div>
