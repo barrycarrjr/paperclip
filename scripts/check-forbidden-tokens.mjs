@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * check-forbidden-tokens.mjs
  *
@@ -9,6 +8,12 @@
  * Token list: .git/hooks/forbidden-tokens.txt (one per line, # comments ok).
  * If the file is missing, the check still uses the active local username when
  * available. If username detection fails, the check degrades gracefully.
+ *
+ * No shebang line here on purpose: vitest imports this module
+ * (server/src/__tests__/forbidden-tokens.test.ts) and vite-node inlines it
+ * into a function wrapper without stripping shebangs, so "#!" becomes a
+ * syntax error. The script is always invoked as `node scripts/...`, never
+ * executed directly, so the shebang bought nothing.
  */
 
 import { execSync } from "node:child_process";
@@ -57,7 +62,7 @@ export function runForbiddenTokenCheck({
   error = console.error,
 }) {
   if (tokens.length === 0) {
-    log("  ℹ  Forbidden tokens list is empty — skipping check.");
+    log("  i   Forbidden tokens list is empty - skipping check.");
     return 0;
   }
 
@@ -80,7 +85,7 @@ export function runForbiddenTokenCheck({
         }
       }
     } catch {
-      // git grep returns exit code 1 when no matches — that's fine
+      // git grep returns exit code 1 when no matches - that's fine
     }
   }
 
@@ -89,7 +94,7 @@ export function runForbiddenTokenCheck({
     return 1;
   }
 
-  log("  ✓  No forbidden tokens found.");
+  log("  OK  No forbidden tokens found.");
   return 0;
 }
 
