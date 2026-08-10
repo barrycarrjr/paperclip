@@ -314,11 +314,17 @@ export function App() {
         <Route element={<CloudAccessGate />}>
           {/* Popup window for the pop-out drawer: bare layout, no Sidebar / CompanyRail / floating button.
               Needs an explicit viewport-height wrapper because we don't sit inside Layout, which is what
-              normally provides the height context the Clippy page assumes. */}
+              normally provides the height context the Clippy page assumes.
+
+              h-dvh, not h-screen: 100vh on a phone is the height the page would
+              have with the browser's own bars hidden, which is taller than what
+              you can actually see. The composer sits at the bottom of this
+              column, so with 100vh its send buttons were pushed below the fold
+              and could not be reached at all. */}
           <Route
             path="clippy-popup"
             element={
-              <div className="h-screen min-h-0 bg-background">
+              <div className="h-dvh min-h-0 bg-background">
                 <Clippy />
               </div>
             }

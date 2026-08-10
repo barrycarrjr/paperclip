@@ -154,6 +154,8 @@ export function Clippy() {
     return params.get("session");
   }, []);
   const [activeId, setActiveId] = useState<string | null>(initialSessionFromUrl);
+  /** Only meaningful below md, where the chat list slides over the conversation. */
+  const [sessionListOpen, setSessionListOpen] = useState(false);
 
   useEffect(() => {
     if (activeId) return;
@@ -222,8 +224,24 @@ export function Clippy() {
   const filtersDiffer = JSON.stringify(filters) !== JSON.stringify(DEFAULT_FILTERS);
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-background">
+    <div className="relative flex h-full min-h-0">
+      {/* On a phone the chat list would otherwise take a third of the screen
+          for good, so below md it slides over the conversation instead. */}
+      {sessionListOpen ? (
+        <button
+          type="button"
+          aria-label="Close the chat list"
+          onClick={() => setSessionListOpen(false)}
+          className="absolute inset-0 z-20 bg-black/50 md:hidden"
+        />
+      ) : null}
+      <aside
+        className={cn(
+          "w-64 shrink-0 flex-col border-r border-border bg-background",
+          "absolute inset-y-0 left-0 z-30 md:static md:z-auto md:flex",
+          sessionListOpen ? "flex" : "hidden",
+        )}
+      >
         <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
           <div className="flex items-center gap-1.5 text-sm font-semibold">
             <MessageSquare className="h-4 w-4" />
@@ -271,7 +289,12 @@ export function Clippy() {
                       key={s.id}
                       session={s}
                       active={s.id === activeId}
-                      onClick={() => setActiveId(s.id)}
+                      onClick={() => {
+                        setActiveId(s.id);
+                        // Picking a chat on a phone should show it, not leave
+                        // the list sitting over the top of it.
+                        setSessionListOpen(false);
+                      }}
                       onRename={(title) => renameMutation.mutate({ id: s.id, title })}
                       onArchiveToggle={() =>
                         archiveMutation.mutate({ id: s.id, archived: !s.archivedAt })
@@ -286,7 +309,10 @@ export function Clippy() {
         </div>
       </aside>
       <main className="min-w-0 flex-1">
-        <ClippyConversation sessionId={activeId} />
+        <ClippyConversation
+          sessionId={activeId}
+          onOpenSessionList={() => setSessionListOpen(true)}
+        />
       </main>
     </div>
   );
