@@ -114,7 +114,20 @@ function CompanyBadge({ company }: { company: Company | undefined }) {
 }
 
 export function PortfolioCalendar() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, companies: allCompanies } = useCompany();
+  /**
+   * Prefix lookup for building links out to a company's own pages.
+   *
+   * Deliberately NOT the `companies` list further down: that one comes off
+   * whichever calendar response answered last, which only carries the
+   * companies that had something to show. A routine on a company with no
+   * reminders would find no prefix there and its link would silently do
+   * nothing.
+   */
+  const companyPrefixById = useMemo(
+    () => new Map(allCompanies.map((company) => [company.id, company.issuePrefix])),
+    [allCompanies],
+  );
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
@@ -404,7 +417,7 @@ export function PortfolioCalendar() {
                   // the reminder dialog cannot edit or delete one, so send the
                   // operator to the routine on its own company.
                   if (isRoutineOccurrence(occ.source)) {
-                    const prefix = companyById.get(occ.companyId)?.issuePrefix;
+                    const prefix = companyPrefixById.get(occ.companyId);
                     if (prefix) navigate(`/${prefix}/routines/${occ.eventId}`);
                     return;
                   }

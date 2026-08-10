@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { calendarEvents, routines, routineTriggers } from "@paperclipai/db";
 import type { CalendarOccurrence } from "@paperclipai/shared";
 import { type CalendarScheduleInput, expandOccurrences } from "./calendar-schedule.js";
+import { getZonedMinuteParts } from "./cron.js";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -92,6 +93,39 @@ export function paperclipCalendarSource(db: Db): CalendarSource {
 }
 
 /**
+ * Reduce a schedule's firings to one entry per day, keeping the first time and
+ * how many there were.
+ *
+ * A routine that runs four times a day is four entries a day on a month grid,
+ * and a handful of those bury every reminder behind "+20 more". At month scale
+ * the useful fact is "this runs today, this often", not each individual time.
+ * The count rides along so the entry can say so.
+ *
+ * Days are cut in the schedule's own timezone, because that is the day the
+ * operator means when they say a routine runs "daily".
+ */
+export function collapseToOneEntryPerDay(
+  instants: Date[],
+  timezone: string,
+): Map<string, { first: Date; count: number }> {
+  const byDay = new Map<string, { first: Date; count: number }>();
+
+  for (const instant of instants) {
+    const parts = getZonedMinuteParts(instant, timezone);
+    const key = `${parts.year}-${parts.month}-${parts.day}`;
+    const existing = byDay.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (instant < existing.first) existing.first = instant;
+    } else {
+      byDay.set(key, { first: instant, count: 1 });
+    }
+  }
+
+  return byDay;
+}
+
+/**
  * Scheduled agent work, shown alongside reminders so the calendar answers
  * "what is happening this month" rather than only "what am I being reminded
  * about".
@@ -144,6 +178,11 @@ export function routineCalendarSource(db: Db): CalendarSource {
       for (const row of rows) {
         if (!row.cronExpression) continue;
 
+        // A trigger may leave the timezone unset; the scheduler treats that as
+        // UTC, so the drawing has to agree or the calendar would show a
+        // different time than the one that actually fires.
+        const timezone = row.timezone ?? "UTC";
+
         const { occurrences: instants } = expandOccurrences(
           {
             scheduleKind: "cron",
@@ -152,10 +191,7 @@ export function routineCalendarSource(db: Db): CalendarSource {
             intervalCount: null,
             timeOfDay: null,
             cronExpression: row.cronExpression,
-            // A trigger may leave the timezone unset; the scheduler treats
-            // that as UTC, so the drawing has to agree or the calendar would
-            // show a different time than the one that actually fires.
-            timezone: row.timezone ?? "UTC",
+            timezone,
             endAt: null,
             maxOccurrences: null,
             leadTimeMinutes: 0,
@@ -164,15 +200,19 @@ export function routineCalendarSource(db: Db): CalendarSource {
           to,
         );
 
-        for (const instant of instants) {
+        for (const [, day] of collapseToOneEntryPerDay(instants, timezone)) {
+          const baseTitle = row.triggerLabel?.trim()
+            ? `${row.title} (${row.triggerLabel.trim()})`
+            : row.title;
+
           occurrences.push({
             eventId: row.routineId,
             companyId: row.companyId,
             source: "routine",
             kind: ROUTINE_OCCURRENCE_KIND,
-            title: row.triggerLabel?.trim() ? `${row.title} (${row.triggerLabel.trim()})` : row.title,
+            title: day.count > 1 ? `${baseTitle} ×${day.count}` : baseTitle,
             body: row.description,
-            start: instant.toISOString(),
+            start: day.first.toISOString(),
             end: null,
             allDay: false,
             // Routines are owned by the company, not a board user. Using the

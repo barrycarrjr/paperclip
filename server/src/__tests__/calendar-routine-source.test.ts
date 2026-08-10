@@ -164,6 +164,47 @@ describeEmbeddedPostgres("routine calendar source", () => {
     expect(occurrences).toHaveLength(0);
   });
 
+  // A handful of 4x-daily routines put 40 entries on every day of the month
+  // and buried every reminder behind "+20 more". At month scale the useful
+  // fact is that the routine runs today, and how often.
+  it("collapses a routine that fires several times a day into one entry", async () => {
+    await seedRoutine({}, { cronExpression: "0 9,12,15,18 * * *" });
+
+    const occurrences = await list();
+
+    expect(occurrences).toHaveLength(1);
+    expect(occurrences[0].title).toBe("Weekly invoice sweep ×4");
+    // Kept at the first firing of the day, so it sorts where the work starts.
+    expect(occurrences[0].start).toBe("2026-08-10T09:00:00.000Z");
+  });
+
+  it("leaves a once-a-day routine's title alone", async () => {
+    await seedRoutine();
+
+    expect((await list())[0].title).toBe("Weekly invoice sweep");
+  });
+
+  it("counts a day in the schedule's own timezone, not UTC", async () => {
+    // 23:00 and 01:00 New York are the same NY day but two different UTC days.
+    await seedRoutine({}, { cronExpression: "0 23,1 * * *", timezone: "America/New_York" });
+
+    const occurrences = await routineCalendarSource(db).listOccurrences(
+      companyId,
+      new Date("2026-08-10T00:00:00.000Z"),
+      new Date("2026-08-12T23:59:59.999Z"),
+    );
+
+    // New York's Aug 10 runs 01:00 (05:00 UTC on the 10th) and 23:00 (03:00
+    // UTC on the 11th). Cut by UTC those are two separate days and would never
+    // combine, so a single ×2 entry starting at the earlier one proves the day
+    // boundary follows the schedule's timezone.
+    const interiorDay = occurrences.find((occ) => occ.start === "2026-08-10T05:00:00.000Z");
+    expect(interiorDay?.title).toBe("Weekly invoice sweep ×2");
+
+    // Days clipped by the window edge honestly report only what falls inside.
+    expect(occurrences.every((occ) => /×2$/.test(occ.title) || !/×/.test(occ.title))).toBe(true);
+  });
+
   it("does not leak another company's routines", async () => {
     await seedRoutine();
     const otherCompany = randomUUID();
