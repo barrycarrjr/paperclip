@@ -146,3 +146,219 @@ describe("tool draft gate — synthetic agent id handling", () => {
     expect((createArgs.payload as Record<string, unknown>).chatSessionId).toBeNull();
   });
 });
+
+interface SelfNotifyOverrides {
+  skipApproval?: boolean;
+  slackUserIds?: string[];
+  emails?: string[];
+  phoneNumbers?: string[];
+}
+
+function generalSettings(selfNotify: SelfNotifyOverrides = {}, outboundToolDraftMode = true) {
+  return {
+    outboundToolDraftMode,
+    selfNotify: {
+      skipApproval: true,
+      slackUserIds: [],
+      emails: [],
+      phoneNumbers: [],
+      ...selfNotify,
+    },
+  };
+}
+
+describe("tool draft gate — self-notification bypass", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApprovalService.create.mockResolvedValue({ id: "approval-1" });
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(generalSettings());
+  });
+
+  it("a Slack DM with no explicit recipient (default DM target = operator) sends without approval", async () => {
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { text: "Steward sweep: 0 secrets found." },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(false);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("a Slack DM to one of the operator's IDs sends without approval (case-insensitive)", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ slackUserIds: ["u0aaa111"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U0AAA111", text: "hi" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(false);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("a Slack DM to someone else's ID is still held for approval", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ slackUserIds: ["U0AAA111"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U0BBB222", text: "hi" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("turning skipApproval off restores the hold even for recipient-less DMs", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ skipApproval: false }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { text: "hello" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("channel posts are never treated as self-addressed", async () => {
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_channel",
+      { text: "hello ops" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("an email whose every recipient is the operator sends without approval", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ emails: ["Barry@Example.com"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "email-tools:email_send",
+      {
+        mailbox: "personal",
+        to: 'Barry Carr <barry@example.com>',
+        cc: ["barry@example.com"],
+        subject: "note to self",
+        body: "x",
+      },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(false);
+  });
+
+  it("an email that copies anyone else stays held", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ emails: ["barry@example.com"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "email-tools:email_send",
+      {
+        mailbox: "personal",
+        to: "barry@example.com, customer@other.com",
+        subject: "s",
+        body: "x",
+      },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("an email with no configured self addresses stays held", async () => {
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "email-tools:email_send",
+      { mailbox: "personal", to: "barry@example.com", subject: "s", body: "x" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("email replies are always held (recipient is implicit in the thread)", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ emails: ["barry@example.com"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "email-tools:email_reply",
+      { mailbox: "personal", uid: 42, body: "reply" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("an unreadable recipient shape stays held", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ emails: ["barry@example.com"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "email-tools:email_send",
+      { mailbox: "personal", to: [{ address: "barry@example.com" }], subject: "s", body: "x" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("a phone call to the operator's own number skips approval regardless of formatting", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ phoneNumbers: ["+1 (555) 123-4567"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "phone-tools:phone_call_make",
+      { to: "+15551234567", assistant: "reminder" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(false);
+  });
+
+  it("a phone call to any other number stays held", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ phoneNumbers: ["+15551234567"] }),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "phone-tools:phone_call_make",
+      { to: "+15559876543" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("outboundToolDraftMode=false disables the gate entirely", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ skipApproval: false }, false),
+    );
+    const gate = await loadDraftGate();
+    const result = await gate.intercept(
+      "slack-tools:slack_send_channel",
+      { text: "hello" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(false);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+});

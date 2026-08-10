@@ -280,6 +280,54 @@ describe("instance settings routes", () => {
     expect(mockLogActivity).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts the outbound draft-mode flag and selfNotify block on general settings", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const patchRes = await request(app)
+      .patch("/api/instance/settings/general")
+      .send({
+        outboundToolDraftMode: true,
+        selfNotify: {
+          skipApproval: true,
+          slackUserIds: ["U0AAA111"],
+          emails: ["barry@example.com"],
+          phoneNumbers: ["+15551234567"],
+        },
+      });
+
+    expect(patchRes.status).toBe(200);
+    expect(mockInstanceSettingsService.updateGeneral).toHaveBeenCalledWith({
+      outboundToolDraftMode: true,
+      selfNotify: {
+        skipApproval: true,
+        slackUserIds: ["U0AAA111"],
+        emails: ["barry@example.com"],
+        phoneNumbers: ["+15551234567"],
+      },
+    });
+  });
+
+  it("rejects unknown keys inside selfNotify (400 validation error)", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings/general")
+      .send({ selfNotify: { bogusKey: true } });
+
+    expect(res.status).toBe(400);
+    expect(mockInstanceSettingsService.updateGeneral).not.toHaveBeenCalled();
+  });
+
   it("allows non-admin board users to read general settings", async () => {
     const app = await createApp({
       type: "board",

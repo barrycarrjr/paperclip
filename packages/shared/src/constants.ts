@@ -333,6 +333,51 @@ export const OUTBOUND_TOOL_DRAFT_GATE = [
 ] as const;
 export type OutboundToolDraftGate = (typeof OUTBOUND_TOOL_DRAFT_GATE)[number];
 
+export type SelfRecipientKind = "slack" | "email" | "phone";
+
+export interface SelfRecipientRule {
+  kind: SelfRecipientKind;
+  /** Call parameters that carry recipient addresses (string or string[]). */
+  recipientParams: string[];
+  /**
+   * Whether omitting every recipient parameter means "deliver to the
+   * operator". True only for slack_send_dm, whose plugin contract defaults
+   * the recipient to the workspace's defaultDmTarget — defined in the
+   * slack-tools config as the operator's own Slack user ID.
+   */
+  omittedRecipientIsSelf: boolean;
+}
+
+/**
+ * How to find the recipient of each gated outbound tool, for the
+ * self-notification bypass: when every recipient of a gated call is the
+ * operator themselves (per InstanceGeneralSettings.selfNotify), the call is
+ * a notification, not an outward message, and skips the approval queue.
+ *
+ * Tools absent from this map (channel posts, help-desk replies, email
+ * replies whose recipient is implicit in the thread, click-to-call) can
+ * never be verified as self-addressed and always stay gated.
+ */
+export const OUTBOUND_SELF_RECIPIENT_RULES: Partial<
+  Record<OutboundToolDraftGate, SelfRecipientRule>
+> = {
+  "slack-tools:slack_send_dm": {
+    kind: "slack",
+    recipientParams: ["userId"],
+    omittedRecipientIsSelf: true,
+  },
+  "email-tools:email_send": {
+    kind: "email",
+    recipientParams: ["to", "cc", "bcc"],
+    omittedRecipientIsSelf: false,
+  },
+  "phone-tools:phone_call_make": {
+    kind: "phone",
+    recipientParams: ["to"],
+    omittedRecipientIsSelf: false,
+  },
+};
+
 export const APPROVAL_STATUSES = [
   "pending",
   "revision_requested",

@@ -16,13 +16,24 @@
  * Scope:
  *   - Hardcoded gate list (see OUTBOUND_TOOL_DRAFT_GATE in @paperclipai/shared).
  *   - Single instance setting (`outboundToolDraftMode`) to enable/disable.
+ *   - Self-notification bypass: a gated call whose every recipient is the
+ *     operator themselves (per `general.selfNotify`) is a notification, not
+ *     an outward message, and executes immediately (see
+ *     OUTBOUND_SELF_RECIPIENT_RULES in @paperclipai/shared).
  *   - Re-execution of approved drafts goes through the same dispatcher path
  *     the agent would have taken, so manifest validation, capability checks,
  *     and worker routing are all unchanged.
  */
 
 import type { Db } from "@paperclipai/db";
-import { OUTBOUND_TOOL_DRAFT_GATE } from "@paperclipai/shared";
+import {
+  DEFAULT_SELF_NOTIFY_SETTINGS,
+  OUTBOUND_SELF_RECIPIENT_RULES,
+  OUTBOUND_TOOL_DRAFT_GATE,
+  type SelfNotifySettings,
+  type SelfRecipientKind,
+  type SelfRecipientRule,
+} from "@paperclipai/shared";
 import type { ToolRunContext, ToolResult } from "@paperclipai/plugin-sdk";
 import { approvalService } from "./approvals.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -137,6 +148,109 @@ function resolveRunActor(runContext: ToolRunContext): ResolvedRunActor {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Self-notification detection
+// ---------------------------------------------------------------------------
+
+/** Slack user IDs are compared case-insensitively after trimming. */
+function normalizeSlackId(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+/**
+ * Emails are compared lowercased, with RFC 5322 display-name forms reduced to
+ * the address inside the angle brackets ("Barry <a@b.com>" -> "a@b.com").
+ */
+function normalizeEmail(value: string): string {
+  const angled = /<([^<>]+)>/.exec(value);
+  return (angled?.[1] ?? value).trim().toLowerCase();
+}
+
+/** Phone numbers are compared digits-only, so formatting never matters. */
+function normalizePhone(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+const RECIPIENT_NORMALIZERS: Record<SelfRecipientKind, (value: string) => string> = {
+  slack: normalizeSlackId,
+  email: normalizeEmail,
+  phone: normalizePhone,
+};
+
+function selfAddressList(selfNotify: SelfNotifySettings, kind: SelfRecipientKind): string[] {
+  switch (kind) {
+    case "slack":
+      return selfNotify.slackUserIds;
+    case "email":
+      return selfNotify.emails;
+    case "phone":
+      return selfNotify.phoneNumbers;
+  }
+}
+
+/**
+ * All recipient addresses present on the call, or `null` when a recipient
+ * field exists but cannot be read as address strings — unverifiable calls
+ * must stay gated.
+ */
+function collectRecipients(
+  params: Record<string, unknown>,
+  rule: SelfRecipientRule,
+): string[] | null {
+  const recipients: string[] = [];
+  for (const key of rule.recipientParams) {
+    const value = params[key];
+    if (value == null) continue;
+    const entries: unknown[] = Array.isArray(value) ? value : [value];
+    for (const entry of entries) {
+      if (typeof entry !== "string") return null;
+      // Email fields accept comma-separated lists in a single string.
+      const parts = rule.kind === "email" ? entry.split(",") : [entry];
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed) recipients.push(trimmed);
+      }
+    }
+  }
+  return recipients;
+}
+
+/**
+ * True when every recipient of the call is positively the operator. A call
+ * with no recipient parameters counts only for tools whose omitted recipient
+ * is the operator by plugin contract (slack_send_dm's defaultDmTarget).
+ * Anything ambiguous returns false and the call stays in the approval queue.
+ */
+function isSelfAddressed(
+  namespacedName: string,
+  parameters: unknown,
+  selfNotify: SelfNotifySettings,
+): boolean {
+  if (!selfNotify.skipApproval) return false;
+  const rule = (OUTBOUND_SELF_RECIPIENT_RULES as Record<string, SelfRecipientRule | undefined>)[
+    namespacedName
+  ];
+  if (!rule) return false;
+
+  const params =
+    parameters && typeof parameters === "object" ? (parameters as Record<string, unknown>) : {};
+  const recipients = collectRecipients(params, rule);
+  if (recipients == null) return false;
+  if (recipients.length === 0) return rule.omittedRecipientIsSelf;
+
+  const normalize = RECIPIENT_NORMALIZERS[rule.kind];
+  const selfSet = new Set(
+    selfAddressList(selfNotify, rule.kind)
+      .map(normalize)
+      .filter((value) => value.length > 0),
+  );
+  if (selfSet.size === 0) return false;
+  return recipients.every((recipient) => {
+    const normalized = normalize(recipient);
+    return normalized.length > 0 && selfSet.has(normalized);
+  });
+}
+
 /**
  * Generate a short human-readable summary from the call parameters, used as
  * the approval payload `summary` so it renders without requiring the user
@@ -181,19 +295,28 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
   const settings = instanceSettingsService(db);
   const approvals = approvalService(db);
 
-  async function isEnabled(): Promise<boolean> {
+  async function readGateSettings(): Promise<{
+    enabled: boolean;
+    selfNotify: SelfNotifySettings;
+  }> {
     try {
       const general = await settings.getGeneral();
-      // The setting is read off the record by name without widening the
-      // generic type because adding it to InstanceGeneralSettings is a
-      // separate, schema-level change. Until then we treat the absence of
-      // the flag as "fall through to the default".
-      const flag = (general as unknown as Record<string, unknown>).outboundToolDraftMode;
-      if (typeof flag === "boolean") return flag;
+      // Defensive reads: a mocked or legacy settings source may not carry the
+      // typed fields, in which case fall through to the defaults.
+      return {
+        enabled:
+          typeof general.outboundToolDraftMode === "boolean"
+            ? general.outboundToolDraftMode
+            : opts.defaultEnabled ?? true,
+        selfNotify: general.selfNotify ?? DEFAULT_SELF_NOTIFY_SETTINGS,
+      };
     } catch (err) {
-      log.warn({ err }, "failed to read outboundToolDraftMode flag; assuming default");
+      log.warn({ err }, "failed to read outbound draft settings; assuming defaults");
+      return {
+        enabled: opts.defaultEnabled ?? true,
+        selfNotify: DEFAULT_SELF_NOTIFY_SETTINGS,
+      };
     }
-    return opts.defaultEnabled ?? true;
   }
 
   return {
@@ -209,7 +332,22 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       if (!GATED_TOOLS.has(namespacedName)) {
         return { intercepted: false };
       }
-      if (!(await isEnabled())) {
+      const { enabled, selfNotify } = await readGateSettings();
+      if (!enabled) {
+        return { intercepted: false };
+      }
+      // Self-notifications (every recipient is the operator) are the agent
+      // talking TO its user, not acting outward on their behalf — approving
+      // your own incoming message defeats the purpose of the notification.
+      if (isSelfAddressed(namespacedName, parameters, selfNotify)) {
+        log.info(
+          {
+            tool: namespacedName,
+            agentId: runContext.agentId,
+            companyId: runContext.companyId,
+          },
+          "outbound call addressed to the operator; sending without approval",
+        );
         return { intercepted: false };
       }
       // The gate is meaningless without a company to scope the approval to.

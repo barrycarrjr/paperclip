@@ -5,6 +5,7 @@ import {
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  DEFAULT_SELF_NOTIFY_SETTINGS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "../types/instance.js";
@@ -22,10 +23,19 @@ export const backupRetentionPolicySchema = z.object({
   monthlyMonths: presetSchema(MONTHLY_RETENTION_PRESETS, "monthlyMonths").default(DEFAULT_BACKUP_RETENTION.monthlyMonths),
 });
 
+export const selfNotifySettingsSchema = z.object({
+  skipApproval: z.boolean().default(true),
+  slackUserIds: z.array(z.string().trim().min(1)).default([]),
+  emails: z.array(z.string().trim().min(1)).default([]),
+  phoneNumbers: z.array(z.string().trim().min(1)).default([]),
+}).strict();
+
 export const instanceGeneralSettingsSchema = z.object({
   censorUsernameInLogs: z.boolean().default(false),
   keyboardShortcuts: z.boolean().default(false),
   backupRetention: backupRetentionPolicySchema.default(DEFAULT_BACKUP_RETENTION),
+  outboundToolDraftMode: z.boolean().default(true),
+  selfNotify: selfNotifySettingsSchema.default(DEFAULT_SELF_NOTIFY_SETTINGS),
 }).strict();
 
 export const patchInstanceGeneralSettingsSchema = instanceGeneralSettingsSchema.partial();

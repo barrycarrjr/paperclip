@@ -17,10 +17,44 @@ export const DEFAULT_BACKUP_RETENTION: BackupRetentionPolicy = {
   monthlyMonths: 1,
 };
 
+/**
+ * Addresses that identify the operator themselves across outbound channels.
+ * The tool draft gate treats a gated outbound call whose every recipient is
+ * one of these addresses as a self-notification and lets it send without an
+ * approval (when `skipApproval` is on). Matching is conservative: any
+ * recipient that cannot be positively identified as the operator keeps the
+ * call in the approval queue.
+ */
+export interface SelfNotifySettings {
+  /** Master switch for the self-notification bypass. Default true. */
+  skipApproval: boolean;
+  /** U-prefixed Slack user IDs that are the operator (case-insensitive match). */
+  slackUserIds: string[];
+  /** The operator's email addresses (case-insensitive; display-name forms accepted). */
+  emails: string[];
+  /** The operator's phone numbers (compared digits-only, so formatting doesn't matter). */
+  phoneNumbers: string[];
+}
+
+export const DEFAULT_SELF_NOTIFY_SETTINGS: SelfNotifySettings = {
+  skipApproval: true,
+  slackUserIds: [],
+  emails: [],
+  phoneNumbers: [],
+};
+
 export interface InstanceGeneralSettings {
   censorUsernameInLogs: boolean;
   keyboardShortcuts: boolean;
   backupRetention: BackupRetentionPolicy;
+  /**
+   * When true (the default), agent calls to outbound messaging tools listed in
+   * OUTBOUND_TOOL_DRAFT_GATE are held as pending approvals instead of sending
+   * immediately. Turning this off disables the review step for ALL outbound
+   * messages, including ones addressed to other people.
+   */
+  outboundToolDraftMode: boolean;
+  selfNotify: SelfNotifySettings;
 }
 
 export interface InstanceExperimentalSettings {

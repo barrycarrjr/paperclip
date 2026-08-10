@@ -3,6 +3,7 @@ import { companies, instanceSettings } from "@paperclipai/db";
 import {
   DEFAULT_BACKUP_RETENTION,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  DEFAULT_SELF_NOTIFY_SETTINGS,
   instanceAgentDefaultsSchema,
   instanceGeneralSettingsSchema,
   type InstanceAgentDefaults,
@@ -25,12 +26,16 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       censorUsernameInLogs: parsed.data.censorUsernameInLogs ?? false,
       keyboardShortcuts: parsed.data.keyboardShortcuts ?? false,
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
+      outboundToolDraftMode: parsed.data.outboundToolDraftMode ?? true,
+      selfNotify: parsed.data.selfNotify ?? DEFAULT_SELF_NOTIFY_SETTINGS,
     };
   }
   return {
     censorUsernameInLogs: false,
     keyboardShortcuts: false,
     backupRetention: DEFAULT_BACKUP_RETENTION,
+    outboundToolDraftMode: true,
+    selfNotify: DEFAULT_SELF_NOTIFY_SETTINGS,
   };
 }
 
