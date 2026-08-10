@@ -90,6 +90,14 @@ export interface CalendarOccurrence {
   status: string;
   notify: boolean;
   channels: string[];
+  /**
+   * How many times this fires on the day it is drawn on, when several firings
+   * were folded into one entry. Absent or 1 means it fires once.
+   *
+   * Kept out of `title` on purpose: a day cell truncates the title, so a count
+   * spelled into it would be the first thing lost.
+   */
+  repeatsInDay?: number;
 }
 
 export interface CalendarEventListItem extends CalendarEvent {

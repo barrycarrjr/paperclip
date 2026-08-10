@@ -200,17 +200,18 @@ export function routineCalendarSource(db: Db): CalendarSource {
           to,
         );
 
-        for (const [, day] of collapseToOneEntryPerDay(instants, timezone)) {
-          const baseTitle = row.triggerLabel?.trim()
-            ? `${row.title} (${row.triggerLabel.trim()})`
-            : row.title;
+        const title = row.triggerLabel?.trim()
+          ? `${row.title} (${row.triggerLabel.trim()})`
+          : row.title;
 
+        for (const [, day] of collapseToOneEntryPerDay(instants, timezone)) {
           occurrences.push({
             eventId: row.routineId,
             companyId: row.companyId,
             source: "routine",
             kind: ROUTINE_OCCURRENCE_KIND,
-            title: day.count > 1 ? `${baseTitle} ×${day.count}` : baseTitle,
+            title,
+            repeatsInDay: day.count,
             body: row.description,
             start: day.first.toISOString(),
             end: null,

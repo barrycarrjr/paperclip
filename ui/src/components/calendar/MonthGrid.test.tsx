@@ -106,6 +106,47 @@ describe("MonthGrid", () => {
     expect((onAddOnDay.mock.calls[0][0] as Date).getDate()).toBe(12);
   });
 
+  // The count used to live at the end of the title, where a narrow day cell
+  // truncated it away: "Triage industry-bureau Help Scout (..." with no sign
+  // that it runs four times.
+  it("keeps a repeat count visible when the title is cut short", async () => {
+    await act(async () => {
+      root.render(
+        <MonthGrid
+          viewMonth={VIEW_MONTH}
+          occurrences={[
+            occurrence({
+              title: "Triage industry-bureau Help Scout (4x daily, throughout work hours)",
+              repeatsInDay: 4,
+            }),
+          ]}
+          hiddenSources={new Set()}
+          onSelectOccurrence={vi.fn()}
+        />,
+      );
+    });
+
+    const pill = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Triage"),
+    );
+    expect(pill?.textContent).toContain("×4");
+
+    // The count must not be inside the element that truncates.
+    const truncating = pill?.querySelector(".truncate");
+    expect(truncating?.textContent).not.toContain("×4");
+
+    expect(pill?.getAttribute("title")).toContain("runs 4 times today");
+  });
+
+  it("shows no count for something that happens once", async () => {
+    await render();
+
+    const pill = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("IB Payroll"),
+    );
+    expect(pill?.textContent).not.toContain("×");
+  });
+
   // Without the guard, opening an existing reminder would also open the new
   // reminder form behind it, because the pill's click bubbles to the cell.
   it("does not start a reminder when an existing one is clicked", async () => {

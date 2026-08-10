@@ -173,15 +173,20 @@ describeEmbeddedPostgres("routine calendar source", () => {
     const occurrences = await list();
 
     expect(occurrences).toHaveLength(1);
-    expect(occurrences[0].title).toBe("Weekly invoice sweep ×4");
+    // The count is its own field, not spelled into the title: a day cell
+    // truncates the title, so a count living there was the first thing lost.
+    expect(occurrences[0].title).toBe("Weekly invoice sweep");
+    expect(occurrences[0].repeatsInDay).toBe(4);
     // Kept at the first firing of the day, so it sorts where the work starts.
     expect(occurrences[0].start).toBe("2026-08-10T09:00:00.000Z");
   });
 
-  it("leaves a once-a-day routine's title alone", async () => {
+  it("reports a once-a-day routine as firing once", async () => {
     await seedRoutine();
 
-    expect((await list())[0].title).toBe("Weekly invoice sweep");
+    const occurrence = (await list())[0];
+    expect(occurrence.title).toBe("Weekly invoice sweep");
+    expect(occurrence.repeatsInDay).toBe(1);
   });
 
   it("counts a day in the schedule's own timezone, not UTC", async () => {
@@ -199,10 +204,10 @@ describeEmbeddedPostgres("routine calendar source", () => {
     // combine, so a single ×2 entry starting at the earlier one proves the day
     // boundary follows the schedule's timezone.
     const interiorDay = occurrences.find((occ) => occ.start === "2026-08-10T05:00:00.000Z");
-    expect(interiorDay?.title).toBe("Weekly invoice sweep ×2");
+    expect(interiorDay?.repeatsInDay).toBe(2);
 
     // Days clipped by the window edge honestly report only what falls inside.
-    expect(occurrences.every((occ) => /×2$/.test(occ.title) || !/×/.test(occ.title))).toBe(true);
+    expect(occurrences.every((occ) => (occ.repeatsInDay ?? 1) <= 2)).toBe(true);
   });
 
   it("does not leak another company's routines", async () => {

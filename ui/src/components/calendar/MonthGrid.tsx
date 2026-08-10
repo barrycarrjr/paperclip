@@ -26,6 +26,15 @@ function occurrenceTime(occ: CalendarOccurrence): string {
   return new Date(occ.start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Tooltip text: says plainly what a repeat count means. */
+function occurrenceTooltip(occ: CalendarOccurrence): string {
+  const when = occurrenceTime(occ);
+  const repeats = occ.repeatsInDay ?? 1;
+  return repeats > 1
+    ? `${occ.title} · runs ${repeats} times today, first at ${when}`
+    : `${occ.title} · ${when}`;
+}
+
 function OccurrencePill({
   occ,
   onSelect,
@@ -34,6 +43,7 @@ function OccurrencePill({
   onSelect: (occurrence: CalendarOccurrence) => void;
 }) {
   const meta = sourceMeta(occ.source);
+  const repeats = occ.repeatsInDay ?? 1;
   return (
     <button
       type="button"
@@ -42,10 +52,16 @@ function OccurrencePill({
         "flex w-full items-center gap-1 rounded-sm border px-1.5 py-0.5 text-left text-[11px] leading-tight transition-[filter] hover:brightness-110",
         meta.pill,
       )}
-      title={`${occ.title} · ${occurrenceTime(occ)}`}
+      title={occurrenceTooltip(occ)}
     >
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", meta.dot)} />
       <span className="truncate">{occ.title}</span>
+      {repeats > 1 ? (
+        // shrink-0 so the count survives when the title is cut short. It is the
+        // difference between "runs today" and "runs four times today", which
+        // was being truncated away when it lived in the title string.
+        <span className="ml-auto shrink-0 font-medium tabular-nums opacity-80">×{repeats}</span>
+      ) : null}
     </button>
   );
 }
