@@ -15,6 +15,7 @@ import { cn } from "../lib/utils";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmptyState } from "../components/EmptyState";
 import { PageTabBar } from "../components/PageTabBar";
+import { CalendarConnectorStatus } from "../components/calendar/CalendarConnectorStatus";
 import { EventDialog } from "../components/calendar/EventDialog";
 import { EventDetailDialog } from "../components/calendar/EventDetailDialog";
 import { EventListRow } from "../components/calendar/EventListRow";
@@ -245,11 +246,14 @@ export function PortfolioCalendar() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Portfolio Calendar</h1>
-        <p className="text-sm text-muted-foreground">
-          Reminders and scheduled events across every company in the portfolio.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Portfolio Calendar</h1>
+          <p className="text-sm text-muted-foreground">
+            Reminders and scheduled events across every company in the portfolio.
+          </p>
+        </div>
+        <CalendarConnectorStatus />
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>

@@ -45,10 +45,12 @@ import type {
   PluginLauncherRenderContextSnapshot,
 } from "@paperclipai/shared";
 import {
+  PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_STATUSES,
   upgradePluginSchema,
 } from "@paperclipai/shared";
 import { pluginRegistryService } from "../services/plugin-registry.js";
+import { pluginConnectorService } from "../services/plugin-connectors.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import {
   getPluginUiContributionMetadata,
@@ -340,6 +342,7 @@ interface PluginToolExecuteRequest {
  * |--------|------|-------------|
  * | GET | /plugins | List all plugins (optional ?status= filter) |
  * | GET | /plugins/ui-contributions | Get UI slots from ready plugins |
+ * | GET | /plugins/connectors?surface=... | Per-company connector status for a board surface |
  * | GET | /plugins/:pluginId | Get single plugin by ID or key |
  * | POST | /plugins/install | Install from npm or local path |
  * | DELETE | /plugins/:pluginId | Uninstall (optional ?purge=true) |
@@ -385,6 +388,7 @@ export function pluginRoutes(
 ) {
   const router = Router();
   const registry = pluginRegistryService(db);
+  const connectors = pluginConnectorService(db);
   const lifecycle = pluginLifecycleManager(db, {
     loader,
     workerManager: bridgeDeps?.workerManager ?? webhookDeps?.workerManager,
@@ -733,6 +737,33 @@ export function pluginRoutes(
       })
       .filter((item): item is PluginUiContribution => item !== null);
     res.json(contributions);
+  });
+
+  /**
+   * GET /api/plugins/connectors?surface=calendar
+   *
+   * Report, per company, whether each plugin-declared connector for that
+   * surface is actually hooked up. Board pages use this to show a status
+   * control and point the operator at the plugin that needs attention.
+   *
+   * An empty array means no installed plugin declares a connector for the
+   * surface, and the calling page should render nothing at all.
+   *
+   * Response: PluginConnectorStatus[]
+   */
+  router.get("/plugins/connectors", async (req, res) => {
+    assertBoardOrgAccess(req);
+
+    const requested = typeof req.query.surface === "string" ? req.query.surface : "";
+    const surface = PLUGIN_CONNECTOR_SURFACES.find((candidate) => candidate === requested);
+    if (!surface) {
+      res.status(400).json({
+        error: `Unknown connector surface '${requested}'. Expected one of: ${PLUGIN_CONNECTOR_SURFACES.join(", ")}.`,
+      });
+      return;
+    }
+
+    res.json(await connectors.listForSurface(surface));
   });
 
   // ===========================================================================

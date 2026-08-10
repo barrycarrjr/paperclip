@@ -659,6 +659,15 @@ export const PLUGIN_CAPABILITIES = [
 ] as const;
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 
+/**
+ * Board surfaces that can show whether a plugin's outside account is hooked up
+ * for a company. A plugin names one of these in a `connectors` entry and the
+ * matching page grows a status control, so a new connector (Apple Calendar,
+ * say) appears without the board learning anything about that plugin.
+ */
+export const PLUGIN_CONNECTOR_SURFACES = ["calendar"] as const;
+export type PluginConnectorSurface = (typeof PLUGIN_CONNECTOR_SURFACES)[number];
+
 export const PLUGIN_DATABASE_NAMESPACE_MODES = ["schema"] as const;
 export type PluginDatabaseNamespaceMode = (typeof PLUGIN_DATABASE_NAMESPACE_MODES)[number];
 

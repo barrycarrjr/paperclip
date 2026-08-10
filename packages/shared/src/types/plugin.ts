@@ -12,6 +12,7 @@ import type {
   PluginApiRouteAuthMode,
   PluginApiRouteCheckoutPolicy,
   PluginApiRouteMethod,
+  PluginConnectorSurface,
   PluginDatabaseCoreReadTable,
   PluginDatabaseMigrationStatus,
   PluginDatabaseNamespaceMode,
@@ -278,6 +279,88 @@ export interface PluginApiRouteDeclaration {
 }
 
 // ---------------------------------------------------------------------------
+// Plugin Connectors
+// ---------------------------------------------------------------------------
+
+/**
+ * Tells the board where a plugin keeps its list of connected outside accounts,
+ * so a page can say "this company is connected" without knowing anything about
+ * the plugin itself.
+ *
+ * Every Paperclip plugin already stores its accounts the same way: an array in
+ * instance config, each entry naming the companies it serves in a
+ * `format: "company-id"` field. A connector entry just points at that array.
+ *
+ * @example
+ * // google-workspace keeps one entry per Google account under `accounts`,
+ * // and each entry lists the companies allowed to use it.
+ * connectors: [{
+ *   id: "google-calendar",
+ *   surface: "calendar",
+ *   displayName: "Google Calendar",
+ *   connectionsKey: "accounts",
+ *   companiesField: "allowedCompanies",
+ *   labelField: "userEmail",
+ *   requiredFields: ["refreshTokenRef"],
+ * }]
+ */
+export interface PluginConnectorDeclaration {
+  /** Stable id, unique within the plugin. */
+  id: string;
+  /** Board surface that should show this connector's status. */
+  surface: PluginConnectorSurface;
+  /** Name an operator would recognise, e.g. `"Google Calendar"`. */
+  displayName: string;
+  /**
+   * Key in the plugin's instance config holding the array of connected
+   * accounts. Top-level key only, matching how every current plugin stores it.
+   */
+  connectionsKey: string;
+  /**
+   * Field on each account listing the company ids it serves. `"*"` in that
+   * list means every company. An empty list means the account is unusable,
+   * which matches the fail-safe deny every plugin already applies.
+   */
+  companiesField: string;
+  /** Field used to label an account in the board, e.g. `"userEmail"`. */
+  labelField?: string;
+  /**
+   * Fields that must be filled in before the account counts as set up. Use for
+   * the credential references a half-finished account leaves blank.
+   */
+  requiredFields?: string[];
+}
+
+/** One company's standing with a connector. */
+export interface PluginConnectorCompanyStatus {
+  companyId: string;
+  companyName: string;
+  connected: boolean;
+  /**
+   * Label of the account serving this company, when there is one. Falls back to
+   * the account's identifier if the connector named no `labelField`.
+   */
+  accountLabel: string | null;
+  /** True when the account serving this company covers the whole portfolio. */
+  viaPortfolioWide: boolean;
+}
+
+/** A connector a plugin declares, resolved against its saved config. */
+export interface PluginConnectorStatus {
+  pluginId: string;
+  pluginKey: string;
+  pluginDisplayName: string;
+  connectorId: string;
+  displayName: string;
+  surface: PluginConnectorSurface;
+  /** False when the plugin is installed but switched off. */
+  pluginEnabled: boolean;
+  /** Accounts that exist but are not finished, keyed for the operator to fix. */
+  unfinishedAccounts: string[];
+  companies: PluginConnectorCompanyStatus[];
+}
+
+// ---------------------------------------------------------------------------
 // Plugin Manifest V1
 // ---------------------------------------------------------------------------
 
@@ -329,6 +412,13 @@ export interface PaperclipPluginManifestV1 {
   tools?: PluginToolDeclaration[];
   /** Restricted plugin-owned database namespace declaration. */
   database?: PluginDatabaseDeclaration;
+  /**
+   * Outside accounts this plugin can hook a company up to, so board pages can
+   * show whether the company is actually connected. Read-only: declaring a
+   * connector grants nothing, it only tells the board where in
+   * `instanceConfigSchema` the per-company account list lives.
+   */
+  connectors?: PluginConnectorDeclaration[];
   /** Scoped JSON API routes mounted under `/api/plugins/:pluginId/api/*`. */
   apiRoutes?: PluginApiRouteDeclaration[];
   /** Environment drivers this plugin contributes. Requires `environment.drivers.register` capability. */

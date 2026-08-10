@@ -11,6 +11,7 @@ import { useCurrentUserId } from "../hooks/useCurrentUserId";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageTabBar } from "../components/PageTabBar";
+import { CalendarConnectorStatus } from "../components/calendar/CalendarConnectorStatus";
 import { EventDialog } from "../components/calendar/EventDialog";
 import { EventDetailDialog } from "../components/calendar/EventDetailDialog";
 import { EventListRow } from "../components/calendar/EventListRow";
@@ -149,10 +150,13 @@ export function Calendar() {
             Reminders and scheduled events for this company. A reminder is an event with notifications on.
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="mr-2 h-4 w-4" />
-          New reminder
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <CalendarConnectorStatus companyId={selectedCompanyId} />
+          <Button onClick={openCreate}>
+            <Plus className="mr-2 h-4 w-4" />
+            New reminder
+          </Button>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>

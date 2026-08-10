@@ -16,6 +16,8 @@ import type {
   PluginUiSlotDeclaration,
   PluginRecord,
   PluginConfig,
+  PluginConnectorStatus,
+  PluginConnectorSurface,
   PluginStatus,
 } from "@paperclipai/shared";
 import { api, ApiError } from "./client";
@@ -437,6 +439,18 @@ export const pluginsApi = {
    */
   listUiContributions: () =>
     api.get<PluginUiContribution[]>("/plugins/ui-contributions"),
+
+  /**
+   * Per-company connection status for every plugin connector declared for a
+   * board surface (today: `"calendar"`).
+   *
+   * An empty array means no installed plugin offers a connector there, which
+   * is the signal for the page to render no status control at all.
+   */
+  listConnectors: (surface: PluginConnectorSurface) =>
+    api.get<PluginConnectorStatus[]>(
+      `/plugins/connectors?surface=${encodeURIComponent(surface)}`,
+    ),
 
   // ===========================================================================
   // Plugin configuration endpoints

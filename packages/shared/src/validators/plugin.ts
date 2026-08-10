@@ -15,6 +15,7 @@ import {
   PLUGIN_API_ROUTE_AUTH_MODES,
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_API_ROUTE_METHODS,
+  PLUGIN_CONNECTOR_SURFACES,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -369,6 +370,26 @@ export const pluginDatabaseDeclarationSchema = z.object({
 
 export type PluginDatabaseDeclarationInput = z.infer<typeof pluginDatabaseDeclarationSchema>;
 
+/**
+ * Points the board at the array in instance config that holds a plugin's
+ * connected outside accounts. Grants nothing on its own, so the only rules are
+ * that the field names are usable as plain object keys.
+ */
+export const pluginConnectorDeclarationSchema = z.object({
+  id: z.string().min(1).max(64).regex(
+    /^[a-z0-9][a-z0-9-]*$/,
+    "Connector id must be lowercase alphanumeric with hyphens",
+  ),
+  surface: z.enum(PLUGIN_CONNECTOR_SURFACES),
+  displayName: z.string().min(1).max(100),
+  connectionsKey: z.string().min(1).max(64),
+  companiesField: z.string().min(1).max(64),
+  labelField: z.string().min(1).max(64).optional(),
+  requiredFields: z.array(z.string().min(1).max(64)).optional(),
+});
+
+export type PluginConnectorDeclarationInput = z.infer<typeof pluginConnectorDeclarationSchema>;
+
 export const pluginApiRouteDeclarationSchema = z.object({
   routeKey: z.string().min(1).max(100).regex(/^[a-z0-9][a-z0-9._:-]*$/, {
     message: "routeKey must be lowercase letters, digits, dots, colons, underscores, or hyphens",
@@ -470,6 +491,7 @@ export const pluginManifestV1Schema = z.object({
   webhooks: z.array(pluginWebhookDeclarationSchema).optional(),
   tools: z.array(pluginToolDeclarationSchema).optional(),
   database: pluginDatabaseDeclarationSchema.optional(),
+  connectors: z.array(pluginConnectorDeclarationSchema).optional(),
   apiRoutes: z.array(pluginApiRouteDeclarationSchema).optional(),
   environmentDrivers: z.array(pluginEnvironmentDriverDeclarationSchema).optional(),
   launchers: z.array(pluginLauncherDeclarationSchema).optional(),
@@ -504,6 +526,39 @@ export const pluginManifestV1Schema = z.object({
       code: z.ZodIssueCode.custom,
       message: "minimumHostVersion and minimumPaperclipVersion must match when both are declared",
       path: ["minimumHostVersion"],
+    });
+  }
+
+  // ── Connectors ─────────────────────────────────────────────────────────
+  // A connector only points at instance config, so it needs no capability.
+  // What it does need is to point somewhere real: a typo in `connectionsKey`
+  // would silently report every company as not connected.
+  if (manifest.connectors && manifest.connectors.length > 0) {
+    const seenConnectorIds = new Set<string>();
+    const configProperties =
+      manifest.instanceConfigSchema
+      && typeof manifest.instanceConfigSchema.properties === "object"
+      && manifest.instanceConfigSchema.properties !== null
+        ? (manifest.instanceConfigSchema.properties as Record<string, unknown>)
+        : null;
+
+    manifest.connectors.forEach((connector, index) => {
+      if (seenConnectorIds.has(connector.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate connector id '${connector.id}'`,
+          path: ["connectors", index, "id"],
+        });
+      }
+      seenConnectorIds.add(connector.id);
+
+      if (configProperties && !(connector.connectionsKey in configProperties)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `connectionsKey '${connector.connectionsKey}' is not a property of instanceConfigSchema`,
+          path: ["connectors", index, "connectionsKey"],
+        });
+      }
     });
   }
 

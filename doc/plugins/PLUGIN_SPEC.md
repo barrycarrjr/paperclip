@@ -327,6 +327,7 @@ export interface PaperclipPluginManifestV1 {
     ui?: string;
   };
   instanceConfigSchema?: JsonSchema;
+  connectors?: PluginConnectorDeclaration[];
   jobs?: PluginJobDeclaration[];
   webhooks?: PluginWebhookDeclaration[];
   tools?: Array<{
@@ -358,6 +359,46 @@ Rules:
 - config schema must be JSON Schema compatible
 - `entrypoints.ui` points to the directory containing the built UI bundle
 - `ui.slots` declares which extension slots the plugin fills, so the host knows what to mount without loading the bundle eagerly; each slot references an `exportName` from the UI bundle
+
+### 10.2 Connectors
+
+A plugin that hooks a company up to an outside account can say so, and the
+matching board page will show whether each company is actually connected and
+offer a link back to the plugin's settings. Declaring a connector grants no
+capability: it only points at the account list already in `instanceConfigSchema`.
+
+```ts
+export interface PluginConnectorDeclaration {
+  /** Stable id, unique within the plugin. */
+  id: string;
+  /** Board surface that shows the status. Today: "calendar". */
+  surface: "calendar";
+  /** Name an operator would recognise, e.g. "Google Calendar". */
+  displayName: string;
+  /** Instance-config key holding the array of connected accounts. */
+  connectionsKey: string;
+  /** Field on each account listing the company ids it serves ("*" = all). */
+  companiesField: string;
+  /** Field used to label an account in the board, e.g. "userEmail". */
+  labelField?: string;
+  /** Fields that must be filled in before the account counts as set up. */
+  requiredFields?: string[];
+}
+```
+
+Rules:
+
+- `connectionsKey` must name a property of `instanceConfigSchema`; the manifest
+  validator rejects a value that does not, because a typo would silently report
+  every company as not connected
+- connector `id` must be unique within the plugin
+- an account only counts as connected when every `requiredFields` entry is
+  filled in AND its `companiesField` covers the company, so a half-finished
+  account reads as not connected rather than quietly passing
+- an empty `companiesField` list means unusable, matching the fail-safe deny
+  plugins already apply to `allowedCompanies`
+
+Read back via `GET /api/plugins/connectors?surface=<surface>`.
 
 ## 11. Agent Tools
 
