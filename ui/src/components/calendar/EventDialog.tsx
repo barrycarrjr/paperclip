@@ -90,6 +90,7 @@ const INTERVAL_UNITS: { value: CalendarIntervalUnit; label: string }[] = [
   { value: "day", label: "day" },
   { value: "week", label: "week" },
   { value: "month", label: "month" },
+  { value: "year", label: "year" },
 ];
 
 const COMMON_TIMEZONES = [

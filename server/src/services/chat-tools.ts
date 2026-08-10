@@ -670,7 +670,7 @@ interface CreateReminderInput {
   cadence: {
     kind: "once" | "interval" | "cron";
     every?: number;
-    unit?: "day" | "week" | "month";
+    unit?: "day" | "week" | "month" | "year";
     at?: string;
     expression?: string;
   };
@@ -692,7 +692,7 @@ const createReminderTool: ChatToolDefinition<CreateReminderInput> = {
     cadence: z.object({
       kind: z.enum(["once", "interval", "cron"]),
       every: z.number().int().min(1).optional(),
-      unit: z.enum(["day", "week", "month"]).optional(),
+      unit: z.enum(["day", "week", "month", "year"]).optional(),
       at: z.string().optional(),
       expression: z.string().optional(),
     }),
@@ -722,8 +722,9 @@ const createReminderTool: ChatToolDefinition<CreateReminderInput> = {
             },
             unit: {
               type: "string",
-              enum: ["day", "week", "month"],
-              description: "Interval unit. Required for kind=interval.",
+              enum: ["day", "week", "month", "year"],
+              description:
+                "Interval unit. Required for kind=interval. Use 'year' for annual reminders ('every year' -> {kind:'interval', every:1, unit:'year'}).",
             },
             at: {
               type: "string",

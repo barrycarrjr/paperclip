@@ -25,7 +25,7 @@ import { civilToUtc, getZonedMinuteParts, nextCronTickInTimeZone } from "./cron.
 export interface CalendarScheduleInput {
   scheduleKind: "once" | "interval" | "cron";
   anchorAt: Date | string | null;
-  intervalUnit: "day" | "week" | "month" | null;
+  intervalUnit: "day" | "week" | "month" | "year" | null;
   intervalCount: number | null;
   timeOfDay: string | null; // 'HH:MM'
   cronExpression: string | null;
@@ -66,7 +66,7 @@ interface NormalizedInterval {
   base: CivilDate; // civil date of the anchor, in `tz`
   hour: number; // local clock hour for every occurrence
   minute: number; // local clock minute for every occurrence
-  unit: "day" | "week" | "month";
+  unit: "day" | "week" | "month" | "year";
   count: number; // >= 1
   tz: string;
 }
@@ -153,10 +153,18 @@ function normalizeInterval(input: CalendarScheduleInput): NormalizedInterval | n
   };
 }
 
+/**
+ * Months per step for month-based cadences (a year is 12 calendar months, so
+ * Feb 29 anchors clamp to Feb 28 in non-leap years just like month cadences).
+ */
+function monthsPerStep(norm: NormalizedInterval): number {
+  return norm.unit === "year" ? norm.count * 12 : norm.count;
+}
+
 /** The civil date of the k-th occurrence (k >= 0), by cadence. */
 function occurrenceCivil(norm: NormalizedInterval, k: number): CivilDate {
-  if (norm.unit === "month") {
-    return addCivilMonths(norm.base, k * norm.count);
+  if (norm.unit === "month" || norm.unit === "year") {
+    return addCivilMonths(norm.base, k * monthsPerStep(norm));
   }
   const stepDays = norm.unit === "week" ? norm.count * 7 : norm.count;
   return addCivilDays(norm.base, k * stepDays);
@@ -176,9 +184,9 @@ function occurrenceAt(norm: NormalizedInterval, k: number): Date {
 function seekStartIndex(norm: NormalizedInterval, seekRef: Date): number {
   const refParts = getZonedMinuteParts(seekRef, norm.tz);
   const refDate: CivilDate = { year: refParts.year, month: refParts.month, day: refParts.day };
-  if (norm.unit === "month") {
+  if (norm.unit === "month" || norm.unit === "year") {
     const months = civilMonthsBetween(norm.base, refDate);
-    return Math.max(0, Math.floor(months / norm.count) - 2);
+    return Math.max(0, Math.floor(months / monthsPerStep(norm)) - 2);
   }
   const stepDays = norm.unit === "week" ? norm.count * 7 : norm.count;
   const days = civilDaysBetween(norm.base, refDate);

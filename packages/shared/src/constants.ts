@@ -283,7 +283,7 @@ export const CALENDAR_DELIVERY_CHANNELS = ["desktop", "slack", "in_app"] as cons
 
 export const CALENDAR_SCHEDULE_KINDS = ["once", "interval", "cron"] as const;
 
-export const CALENDAR_INTERVAL_UNITS = ["day", "week", "month"] as const;
+export const CALENDAR_INTERVAL_UNITS = ["day", "week", "month", "year"] as const;
 
 export const CALENDAR_SOURCES = ["paperclip", "routine", "google", "outlook"] as const;
 

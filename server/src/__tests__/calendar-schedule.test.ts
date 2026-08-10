@@ -149,6 +149,96 @@ describe("calendar-schedule: monthly clamp", () => {
   });
 });
 
+describe("calendar-schedule: yearly interval", () => {
+  it("an annual reminder lands on the same civil date at 09:00 local, year after year", () => {
+    // Registration-renewal shape: every year on Oct 31 at 09:00 America/New_York.
+    // 2026-10-31 is EDT (UTC-4), so 09:00 local === 13:00Z.
+    const input = makeInput({
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 1,
+      timezone: NY,
+      anchorAt: new Date("2026-10-31T13:00:00Z"),
+      timeOfDay: "09:00",
+    });
+    const { occurrences } = expandOccurrences(
+      input,
+      new Date("2026-01-01T00:00:00Z"),
+      new Date("2029-01-01T00:00:00Z"),
+    );
+    expect(occurrences).toHaveLength(3);
+    for (const occ of occurrences) {
+      const p = getZonedMinuteParts(occ, NY);
+      expect(p.month).toBe(10);
+      expect(p.day).toBe(31);
+      expect(p.hour).toBe(9);
+      expect(p.minute).toBe(0);
+    }
+    expect(occurrences.map((o) => getZonedMinuteParts(o, NY).year)).toEqual([2026, 2027, 2028]);
+  });
+
+  it("computeNextRun mid-year returns the next anniversary", () => {
+    const input = makeInput({
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 1,
+      timezone: NY,
+      anchorAt: new Date("2026-10-31T13:00:00Z"),
+      timeOfDay: "09:00",
+    });
+    // Asked in August 2027 -> next fire is Oct 31 2027, 09:00 EDT (13:00Z).
+    const next = computeNextRun(input, new Date("2027-08-10T00:00:00Z"));
+    expect(next?.toISOString()).toBe("2027-10-31T13:00:00.000Z");
+  });
+
+  it("a Feb 29 anchor clamps to Feb 28 in non-leap years and returns to Feb 29 in leap years", () => {
+    const input = makeInput({
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 1,
+      timezone: "UTC",
+      anchorAt: new Date("2024-02-29T12:00:00Z"),
+    });
+    const { occurrences } = expandOccurrences(
+      input,
+      new Date("2024-01-01T00:00:00Z"),
+      new Date("2028-12-31T00:00:00Z"),
+    );
+    const days = occurrences.map((o) => getZonedMinuteParts(o, "UTC").day);
+    const years = occurrences.map((o) => getZonedMinuteParts(o, "UTC").year);
+    expect(years).toEqual([2024, 2025, 2026, 2027, 2028]);
+    expect(days).toEqual([29, 28, 28, 28, 29]);
+  });
+
+  it("every 2 years skips the intervening year", () => {
+    const input = makeInput({
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 2,
+      timezone: "UTC",
+      anchorAt: new Date("2026-06-15T09:00:00Z"),
+    });
+    const { occurrences } = expandOccurrences(
+      input,
+      new Date("2026-01-01T00:00:00Z"),
+      new Date("2031-01-01T00:00:00Z"),
+    );
+    expect(occurrences.map((o) => getZonedMinuteParts(o, "UTC").year)).toEqual([2026, 2028, 2030]);
+  });
+
+  it("computeNextRun seeks correctly from an anchor many years in the past", () => {
+    const input = makeInput({
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 1,
+      timezone: "UTC",
+      anchorAt: new Date("2020-06-15T09:00:00Z"),
+    });
+    const next = computeNextRun(input, new Date("2036-01-01T00:00:00Z"));
+    expect(next?.toISOString()).toBe("2036-06-15T09:00:00.000Z");
+  });
+});
+
 describe("calendar-schedule: once", () => {
   const after = new Date("2026-07-15T12:00:00Z");
 

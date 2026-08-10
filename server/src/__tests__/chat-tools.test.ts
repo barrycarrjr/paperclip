@@ -300,6 +300,32 @@ describe("chat-tools registry", () => {
     expect(captured.values!.nextRunAt).toBeInstanceOf(Date);
   });
 
+  it("create_reminder maps 'every year' onto a yearly interval payload", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const result = await executeChatTool(
+      "create_reminder",
+      {
+        title: "BMW 750 registration renewal",
+        cadence: { kind: "interval", every: 1, unit: "year" },
+        timezone: "UTC",
+      },
+      {
+        db: createCapturingDb(captured),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: "11111111-1111-1111-1111-111111111111",
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(captured.values).toMatchObject({
+      kind: "reminder",
+      scheduleKind: "interval",
+      intervalUnit: "year",
+      intervalCount: 1,
+    });
+    // computeNextRun handled the yearly unit and produced a concrete next fire.
+    expect(captured.values!.nextRunAt).toBeInstanceOf(Date);
+  });
+
   it("create_reminder rejects an interval cadence missing its unit", async () => {
     const result = await executeChatTool(
       "create_reminder",
