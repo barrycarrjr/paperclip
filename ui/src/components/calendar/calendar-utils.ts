@@ -21,6 +21,14 @@ const SOURCE_META: Record<string, SourceMeta> = {
     dot: "bg-indigo-500",
     pill: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/25",
   },
+  routine: {
+    // Warm on purpose. Every other source is a cool colour, and violet sat so
+    // close to Paperclip's indigo that the two were not tellable apart at pill
+    // size, which is the only size that matters in the month grid.
+    label: "Routines",
+    dot: "bg-amber-500",
+    pill: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25",
+  },
   google: {
     label: "Google",
     dot: "bg-emerald-500",
@@ -44,7 +52,18 @@ export function sourceMeta(source: string): SourceMeta {
 }
 
 /** The set of sources currently known to the surface (for the legend). */
-export const KNOWN_SOURCES = ["paperclip"] as const;
+export const KNOWN_SOURCES = ["paperclip", "routine"] as const;
+
+/**
+ * Source whose entries are scheduled agent work rather than a reminder. These
+ * are read-only on the calendar: clicking one opens the routine instead of the
+ * reminder editor, which cannot edit or delete it.
+ */
+export const ROUTINE_SOURCE = "routine";
+
+export function isRoutineOccurrence(source: string): boolean {
+  return source === ROUTINE_SOURCE;
+}
 
 export const CHANNEL_LABELS: Record<string, string> = {
   desktop: "Desktop",

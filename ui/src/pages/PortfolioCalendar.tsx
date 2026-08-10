@@ -24,6 +24,7 @@ import { SourceLegend } from "../components/calendar/SourceLegend";
 import {
   addMonths,
   formatMonthTitle,
+  isRoutineOccurrence,
   KNOWN_SOURCES,
   monthRange,
 } from "../components/calendar/calendar-utils";
@@ -399,6 +400,14 @@ export function PortfolioCalendar() {
                 occurrences={occurrences}
                 hiddenSources={hiddenSources}
                 onSelectOccurrence={(occ) => {
+                  // A routine entry is scheduled agent work, not a reminder:
+                  // the reminder dialog cannot edit or delete one, so send the
+                  // operator to the routine on its own company.
+                  if (isRoutineOccurrence(occ.source)) {
+                    const prefix = companyById.get(occ.companyId)?.issuePrefix;
+                    if (prefix) navigate(`/${prefix}/routines/${occ.eventId}`);
+                    return;
+                  }
                   setDetailEventId(occ.eventId);
                   setDetailOpen(true);
                 }}

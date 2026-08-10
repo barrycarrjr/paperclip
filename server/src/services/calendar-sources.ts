@@ -1,10 +1,13 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { calendarEvents } from "@paperclipai/db";
+import { calendarEvents, routines, routineTriggers } from "@paperclipai/db";
 import type { CalendarOccurrence } from "@paperclipai/shared";
 import { type CalendarScheduleInput, expandOccurrences } from "./calendar-schedule.js";
 
 const MS_PER_MINUTE = 60_000;
+
+/** Kind reported for a scheduled routine, distinct from the reminder kinds. */
+const ROUTINE_OCCURRENCE_KIND = "routine";
 
 /**
  * A calendar source expands stored schedules into concrete occurrences for a
@@ -12,7 +15,7 @@ const MS_PER_MINUTE = 60_000;
  * `outlook` are seams for future external-calendar integrations.
  */
 export interface CalendarSource {
-  id: "paperclip" | "google" | "outlook";
+  id: "paperclip" | "routine" | "google" | "outlook";
   listOccurrences(
     companyId: string,
     from: Date,
@@ -89,11 +92,110 @@ export function paperclipCalendarSource(db: Db): CalendarSource {
 }
 
 /**
- * The ordered list of calendar sources to aggregate for a company. Today only
- * the Paperclip source is wired; Google/Outlook sources will be appended here.
+ * Scheduled agent work, shown alongside reminders so the calendar answers
+ * "what is happening this month" rather than only "what am I being reminded
+ * about".
+ *
+ * Only `schedule` triggers can land on a calendar: a webhook or api trigger
+ * fires when something outside calls in, so it has no future date to draw.
+ * A trigger is skipped unless it is switched on AND its routine is active,
+ * because a paused routine will not run however good its cron looks.
+ *
+ * `eventId` carries the ROUTINE id, not the trigger id, so the board can send
+ * a click straight to the routine. Two triggers on one routine therefore share
+ * an eventId; the calendar keys its entries on eventId plus start, and two
+ * schedules firing at the same instant on the same routine are the same thing
+ * happening once as far as a reader is concerned.
+ */
+export function routineCalendarSource(db: Db): CalendarSource {
+  return {
+    id: "routine",
+    async listOccurrences(companyId, from, to, opts) {
+      // `kinds` filters reminder kinds (reminder/appointment/deadline). A
+      // caller narrowing to those is asking for reminders, so routines stay
+      // out rather than ignoring the filter.
+      const kinds = opts?.kinds?.filter((kind) => kind.trim().length > 0) ?? [];
+      if (kinds.length > 0 && !kinds.includes(ROUTINE_OCCURRENCE_KIND)) return [];
+
+      const rows = await db
+        .select({
+          routineId: routines.id,
+          companyId: routines.companyId,
+          title: routines.title,
+          description: routines.description,
+          assigneeAgentId: routines.assigneeAgentId,
+          triggerLabel: routineTriggers.label,
+          cronExpression: routineTriggers.cronExpression,
+          timezone: routineTriggers.timezone,
+        })
+        .from(routineTriggers)
+        .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+        .where(
+          and(
+            eq(routineTriggers.companyId, companyId),
+            eq(routineTriggers.kind, "schedule"),
+            eq(routineTriggers.enabled, true),
+            eq(routines.status, "active"),
+            isNotNull(routineTriggers.cronExpression),
+          ),
+        );
+
+      const occurrences: CalendarOccurrence[] = [];
+      for (const row of rows) {
+        if (!row.cronExpression) continue;
+
+        const { occurrences: instants } = expandOccurrences(
+          {
+            scheduleKind: "cron",
+            anchorAt: null,
+            intervalUnit: null,
+            intervalCount: null,
+            timeOfDay: null,
+            cronExpression: row.cronExpression,
+            // A trigger may leave the timezone unset; the scheduler treats
+            // that as UTC, so the drawing has to agree or the calendar would
+            // show a different time than the one that actually fires.
+            timezone: row.timezone ?? "UTC",
+            endAt: null,
+            maxOccurrences: null,
+            leadTimeMinutes: 0,
+          },
+          from,
+          to,
+        );
+
+        for (const instant of instants) {
+          occurrences.push({
+            eventId: row.routineId,
+            companyId: row.companyId,
+            source: "routine",
+            kind: ROUTINE_OCCURRENCE_KIND,
+            title: row.triggerLabel?.trim() ? `${row.title} (${row.triggerLabel.trim()})` : row.title,
+            body: row.description,
+            start: instant.toISOString(),
+            end: null,
+            allDay: false,
+            // Routines are owned by the company, not a board user. Using the
+            // assignee keeps the field meaningful where there is one, and the
+            // UI never offers edit or delete on a routine entry either way.
+            ownerUserId: row.assigneeAgentId ?? "",
+            status: "active",
+            notify: false,
+            channels: [],
+          });
+        }
+      }
+      return occurrences;
+    },
+  };
+}
+
+/**
+ * The ordered list of calendar sources to aggregate for a company. Google and
+ * Outlook sources will be appended here.
  */
 export function getCalendarSources(db: Db): CalendarSource[] {
-  return [paperclipCalendarSource(db)];
+  return [paperclipCalendarSource(db), routineCalendarSource(db)];
 }
 
 /**

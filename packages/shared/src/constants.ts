@@ -285,7 +285,7 @@ export const CALENDAR_SCHEDULE_KINDS = ["once", "interval", "cron"] as const;
 
 export const CALENDAR_INTERVAL_UNITS = ["day", "week", "month"] as const;
 
-export const CALENDAR_SOURCES = ["paperclip", "google", "outlook"] as const;
+export const CALENDAR_SOURCES = ["paperclip", "routine", "google", "outlook"] as const;
 
 export const PAUSE_REASONS = ["manual", "budget", "system"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];

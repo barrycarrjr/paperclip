@@ -2,7 +2,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import type { CalendarEvent } from "@paperclipai/shared";
+import type { CalendarEvent, CalendarOccurrence } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -17,7 +17,13 @@ import { EventDetailDialog } from "../components/calendar/EventDetailDialog";
 import { EventListRow } from "../components/calendar/EventListRow";
 import { MonthGrid } from "../components/calendar/MonthGrid";
 import { SourceLegend } from "../components/calendar/SourceLegend";
-import { addMonths, formatMonthTitle, KNOWN_SOURCES, monthRange } from "../components/calendar/calendar-utils";
+import {
+  addMonths,
+  formatMonthTitle,
+  isRoutineOccurrence,
+  KNOWN_SOURCES,
+  monthRange,
+} from "../components/calendar/calendar-utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -29,7 +35,7 @@ function startOfMonth(date: Date): Date {
 }
 
 export function Calendar() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
@@ -129,6 +135,18 @@ export function Calendar() {
     setEditingEvent(null);
     setCreateOnDay(day);
     setDialogOpen(true);
+  }
+
+  /**
+   * A routine entry is scheduled agent work, not a reminder. The reminder
+   * dialog cannot edit or delete one, so send the operator to the routine.
+   */
+  function openOccurrence(occ: CalendarOccurrence) {
+    if (isRoutineOccurrence(occ.source)) {
+      navigate(`/${selectedCompany?.issuePrefix ?? ""}/routines/${occ.eventId}`);
+      return;
+    }
+    openDetail(occ.eventId);
   }
 
   function openDetail(eventId: string) {
@@ -267,7 +285,7 @@ export function Calendar() {
                 viewMonth={viewMonth}
                 occurrences={occurrences}
                 hiddenSources={hiddenSources}
-                onSelectOccurrence={(occ) => openDetail(occ.eventId)}
+                onSelectOccurrence={openOccurrence}
                 onAddOnDay={(day) => openCreate(day)}
               />
             </div>
