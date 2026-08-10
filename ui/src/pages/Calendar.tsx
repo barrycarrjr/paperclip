@@ -43,6 +43,8 @@ export function Calendar() {
   const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  /** Day the operator picked on the grid, seeded into a new reminder. */
+  const [createOnDay, setCreateOnDay] = useState<Date | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailEventId, setDetailEventId] = useState<string | null>(null);
   const [pending, setPending] = useState<{ id: string; kind: "fire" | "delete" } | null>(null);
@@ -123,8 +125,9 @@ export function Calendar() {
     });
   }
 
-  function openCreate() {
+  function openCreate(day: Date | null = null) {
     setEditingEvent(null);
+    setCreateOnDay(day);
     setDialogOpen(true);
   }
 
@@ -152,7 +155,7 @@ export function Calendar() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CalendarConnectorStatus companyId={selectedCompanyId} />
-          <Button onClick={openCreate}>
+          <Button onClick={() => openCreate()}>
             <Plus className="mr-2 h-4 w-4" />
             New reminder
           </Button>
@@ -184,7 +187,7 @@ export function Calendar() {
               icon={CalendarDays}
               message="No reminders yet. Create one to get notified on your schedule."
               action="New reminder"
-              onAction={openCreate}
+              onAction={() => openCreate()}
             />
           ) : (
             <div className="rounded-lg border border-border">
@@ -265,6 +268,7 @@ export function Calendar() {
                 occurrences={occurrences}
                 hiddenSources={hiddenSources}
                 onSelectOccurrence={(occ) => openDetail(occ.eventId)}
+                onAddOnDay={(day) => openCreate(day)}
               />
             </div>
           )}
@@ -276,6 +280,7 @@ export function Calendar() {
         onOpenChange={setDialogOpen}
         companyId={selectedCompanyId}
         event={editingEvent}
+        startOn={createOnDay}
       />
 
       <EventDetailDialog

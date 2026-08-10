@@ -35,12 +35,29 @@ import { toDateInputValue, toDateTimeLocalValue } from "./calendar-utils";
 
 type EditableEvent = CalendarEvent | CalendarEventDetail;
 
+/** A company a new reminder can be filed against. */
+export interface EventCompanyChoice {
+  value: string;
+  label: string;
+}
+
 interface EventDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyId: string;
   /** When provided the dialog edits this event; otherwise it creates one. */
   event?: EditableEvent | null;
+  /**
+   * Companies a new reminder may be filed against. Pass this from the
+   * portfolio calendar, where no single company is in view, and the form
+   * grows a picker. Leave unset where the company is already fixed.
+   */
+  companyChoices?: EventCompanyChoice[];
+  /**
+   * Day the operator picked on the calendar grid, used to seed the schedule.
+   * Ignored when editing.
+   */
+  startOn?: Date | null;
 }
 
 interface EventDraft {
@@ -105,21 +122,31 @@ function localTimezone(): string {
   }
 }
 
-function defaultOnceAt(): string {
+/** Hour the day gets when a reminder is started by picking a date. */
+const DEFAULT_HOUR_FOR_PICKED_DAY = 9;
+
+function defaultOnceAt(startOn?: Date | null): string {
+  // Picking a day on the calendar means "something happens THAT day", so
+  // anchor to 9am on it rather than an hour from now on today's date.
+  if (startOn) {
+    const picked = new Date(startOn);
+    picked.setHours(DEFAULT_HOUR_FOR_PICKED_DAY, 0, 0, 0);
+    return toDateTimeLocalValue(picked);
+  }
   const now = new Date();
   now.setMinutes(0, 0, 0);
   now.setHours(now.getHours() + 1);
   return toDateTimeLocalValue(now);
 }
 
-function createDefaultDraft(): EventDraft {
-  const now = new Date();
+function createDefaultDraft(startOn?: Date | null): EventDraft {
+  const now = startOn ?? new Date();
   return {
     title: "",
     body: "",
     kind: "reminder",
     scheduleKind: "once",
-    onceAt: defaultOnceAt(),
+    onceAt: defaultOnceAt(startOn),
     intervalCount: 1,
     intervalUnit: "week",
     intervalStartDate: toDateInputValue(now),
@@ -208,16 +235,30 @@ function isDraftComplete(draft: EventDraft): boolean {
   return !!draft.cronExpression.trim();
 }
 
-export function EventDialog({ open, onOpenChange, companyId, event }: EventDialogProps) {
+export function EventDialog({
+  open,
+  onOpenChange,
+  companyId,
+  event,
+  companyChoices,
+  startOn,
+}: EventDialogProps) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
   const isEdit = !!event;
   const [draft, setDraft] = useState<EventDraft>(createDefaultDraft);
 
+  // Only ask which company when creating and the caller has not fixed one.
+  const needsCompanyChoice = !isEdit && (companyChoices?.length ?? 0) > 0;
+  // Deliberately starts empty rather than defaulting to the first company: a
+  // reminder filed against the wrong company is quiet and annoying to find.
+  const [targetCompanyId, setTargetCompanyId] = useState("");
+
   useEffect(() => {
     if (!open) return;
-    setDraft(event ? draftFromEvent(event) : createDefaultDraft());
-  }, [open, event]);
+    setDraft(event ? draftFromEvent(event) : createDefaultDraft(startOn));
+    setTargetCompanyId("");
+  }, [open, event, startOn]);
 
   const timezoneOptions = useMemo(() => {
     const set = new Set<string>([localTimezone(), ...COMMON_TIMEZONES]);
@@ -232,7 +273,7 @@ export function EventDialog({ open, onOpenChange, companyId, event }: EventDialo
       const body = buildBody(draft);
       return event
         ? calendarApi.updateEvent(event.id, body)
-        : calendarApi.createEvent(companyId, body);
+        : calendarApi.createEvent(needsCompanyChoice ? targetCompanyId : companyId, body);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["calendar"] });
@@ -264,6 +305,27 @@ export function EventDialog({ open, onOpenChange, companyId, event }: EventDialo
         </DialogHeader>
 
         <div className="max-h-[65vh] space-y-5 overflow-y-auto px-5 py-4">
+          {needsCompanyChoice ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="calendar-event-company">Company</Label>
+              <Select value={targetCompanyId} onValueChange={setTargetCompanyId}>
+                <SelectTrigger id="calendar-event-company" className="w-full">
+                  <SelectValue placeholder="Choose a company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companyChoices?.map((choice) => (
+                    <SelectItem key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Which company this reminder belongs to. It shows on that company's calendar too.
+              </p>
+            </div>
+          ) : null}
+
           <div className="space-y-1.5">
             <Label htmlFor="calendar-event-title">Title</Label>
             <Input
@@ -501,6 +563,7 @@ export function EventDialog({ open, onOpenChange, companyId, event }: EventDialo
             disabled={
               mutation.isPending ||
               !isDraftComplete(draft) ||
+              (needsCompanyChoice && !targetCompanyId) ||
               (draft.notify && draft.slack && !draft.slackTarget.trim())
             }
           >

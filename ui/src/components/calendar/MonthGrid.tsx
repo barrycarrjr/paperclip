@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Plus } from "lucide-react";
 import type { CalendarOccurrence } from "@paperclipai/shared";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -12,6 +13,12 @@ interface MonthGridProps {
   occurrences: CalendarOccurrence[];
   hiddenSources: Set<string>;
   onSelectOccurrence: (occurrence: CalendarOccurrence) => void;
+  /**
+   * Start a new reminder on a day. When given, empty space in a day cell
+   * becomes clickable and each cell grows an add button on hover or focus.
+   * Leave unset to keep the grid read-only.
+   */
+  onAddOnDay?: (day: Date) => void;
 }
 
 function occurrenceTime(occ: CalendarOccurrence): string {
@@ -43,7 +50,13 @@ function OccurrencePill({
   );
 }
 
-export function MonthGrid({ viewMonth, occurrences, hiddenSources, onSelectOccurrence }: MonthGridProps) {
+export function MonthGrid({
+  viewMonth,
+  occurrences,
+  hiddenSources,
+  onSelectOccurrence,
+  onAddOnDay,
+}: MonthGridProps) {
   const cells = useMemo(() => buildMonthGrid(viewMonth), [viewMonth]);
   const byDay = useMemo(
     () => bucketOccurrencesByDay(occurrences, hiddenSources),
@@ -71,9 +84,22 @@ export function MonthGrid({ viewMonth, occurrences, hiddenSources, onSelectOccur
           return (
             <div
               key={cell.key}
+              // Clicking blank space in the cell starts a reminder on that day.
+              // The guard keeps the pills and the "+N more" popover working:
+              // without it, opening an existing event would also open the new
+              // reminder form behind it.
+              onClick={
+                onAddOnDay
+                  ? (clickEvent) => {
+                      if ((clickEvent.target as HTMLElement).closest("button")) return;
+                      onAddOnDay(cell.date);
+                    }
+                  : undefined
+              }
               className={cn(
-                "flex min-h-[96px] flex-col gap-1 border-b border-r border-border p-1.5 last:border-r-0 [&:nth-child(7n)]:border-r-0",
+                "group/day flex min-h-[96px] flex-col gap-1 border-b border-r border-border p-1.5 last:border-r-0 [&:nth-child(7n)]:border-r-0",
                 !cell.inMonth && "bg-muted/20",
+                onAddOnDay && "cursor-pointer transition-colors hover:bg-accent/30",
               )}
             >
               <div className="flex items-center justify-between">
@@ -86,6 +112,22 @@ export function MonthGrid({ viewMonth, occurrences, hiddenSources, onSelectOccur
                 >
                   {cell.date.getDate()}
                 </span>
+                {onAddOnDay ? (
+                  <button
+                    type="button"
+                    onClick={() => onAddOnDay(cell.date)}
+                    aria-label={`Add a reminder on ${cell.date.toLocaleDateString("en-US", {
+                      weekday: "long",
+                      month: "long",
+                      day: "numeric",
+                    })}`}
+                    // Hidden until the day is hovered so the grid stays calm,
+                    // but always reachable by keyboard via focus-visible.
+                    className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/day:opacity-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
               </div>
               <div className="flex min-h-0 flex-col gap-0.5">
                 {visible.map((occ) => (

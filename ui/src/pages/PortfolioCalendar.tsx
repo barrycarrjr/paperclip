@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import type { CalendarEvent, CalendarOccurrence, Company } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
 import { useCompany } from "../context/CompanyContext";
@@ -132,6 +132,14 @@ export function PortfolioCalendar() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailEventId, setDetailEventId] = useState<string | null>(null);
   const [pending, setPending] = useState<{ id: string; kind: "fire" | "delete" } | null>(null);
+  /** Day the operator picked on the grid, seeded into a new reminder. */
+  const [createOnDay, setCreateOnDay] = useState<Date | null>(null);
+
+  function openCreate(day: Date | null = null) {
+    setEditingEvent(null);
+    setCreateOnDay(day);
+    setDialogOpen(true);
+  }
 
   useEffect(() => setBreadcrumbs([{ label: "Portfolio Calendar" }]), [setBreadcrumbs]);
   useEffect(() => writeLsFilter(LS_STATUS_KEY, statusFilter), [statusFilter]);
@@ -253,7 +261,13 @@ export function PortfolioCalendar() {
             Reminders and scheduled events across every company in the portfolio.
           </p>
         </div>
-        <CalendarConnectorStatus />
+        <div className="flex flex-wrap items-center gap-2">
+          <CalendarConnectorStatus />
+          <Button onClick={() => openCreate()}>
+            <Plus className="mr-2 h-4 w-4" />
+            New reminder
+          </Button>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
@@ -302,7 +316,12 @@ export function PortfolioCalendar() {
           ) : eventsLoading ? (
             <p className="py-8 text-sm text-muted-foreground">Loading events...</p>
           ) : events.length === 0 ? (
-            <EmptyState icon={CalendarDays} message="No reminders found across the portfolio." />
+            <EmptyState
+              icon={CalendarDays}
+              message="No reminders found across the portfolio."
+              action="New reminder"
+              onAction={() => openCreate()}
+            />
           ) : (
             <div className="rounded-lg border border-border">
               {events.map((event) => {
@@ -383,6 +402,7 @@ export function PortfolioCalendar() {
                   setDetailEventId(occ.eventId);
                   setDetailOpen(true);
                 }}
+                onAddOnDay={(day) => openCreate(day)}
               />
             </div>
           )}
@@ -394,6 +414,10 @@ export function PortfolioCalendar() {
         onOpenChange={setDialogOpen}
         companyId={editingEvent?.companyId ?? selectedCompanyId}
         event={editingEvent}
+        // No single company is in view here, so a new reminder has to say
+        // which one it belongs to.
+        companyChoices={companyOptions}
+        startOn={createOnDay}
       />
 
       <EventDetailDialog
