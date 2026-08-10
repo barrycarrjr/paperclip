@@ -9,6 +9,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { useCurrentUserId } from "../hooks/useCurrentUserId";
 import { queryKeys } from "../lib/queryKeys";
+import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
 import { EmptyState } from "../components/EmptyState";
 import { PageTabBar } from "../components/PageTabBar";
 import { CalendarConnectorStatus } from "../components/calendar/CalendarConnectorStatus";
@@ -30,6 +31,8 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 
 type CalendarTab = "list" | "calendar";
 
+const LS_HIDDEN_SOURCES_KEY = "paperclip:calendar:hiddenSources";
+
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -46,7 +49,12 @@ export function Calendar() {
   const activeTab: CalendarTab = searchParams.get("tab") === "calendar" ? "calendar" : "list";
 
   const [viewMonth, setViewMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set());
+  // Stored as an array because a Set does not survive JSON. The shape is
+  // re-checked on read so a hand-edited or half-written value cannot throw.
+  const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
+    const stored = readLsFilter<string[]>(LS_HIDDEN_SOURCES_KEY, []);
+    return new Set(Array.isArray(stored) ? stored : []);
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   /** Day the operator picked on the grid, seeded into a new reminder. */
@@ -58,6 +66,8 @@ export function Calendar() {
   useEffect(() => {
     setBreadcrumbs([{ label: "Calendar" }]);
   }, [setBreadcrumbs]);
+
+  useEffect(() => writeLsFilter(LS_HIDDEN_SOURCES_KEY, [...hiddenSources]), [hiddenSources]);
 
   const range = useMemo(() => monthRange(viewMonth), [viewMonth]);
 

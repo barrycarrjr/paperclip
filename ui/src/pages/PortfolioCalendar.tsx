@@ -38,6 +38,7 @@ type PortfolioCalendarTab = "list" | "calendar";
 
 const LS_STATUS_KEY = "paperclip:portfolio-calendar:statusFilter";
 const LS_COMPANY_KEY = "paperclip:portfolio-calendar:companyFilter";
+const LS_HIDDEN_SOURCES_KEY = "paperclip:portfolio-calendar:hiddenSources";
 
 const STATUS_OPTIONS = [
   { value: "active", label: "Active" },
@@ -138,7 +139,12 @@ export function PortfolioCalendar() {
   const activeTab: PortfolioCalendarTab = searchParams.get("tab") === "calendar" ? "calendar" : "list";
 
   const [viewMonth, setViewMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set());
+  // Stored as an array because a Set does not survive JSON. The shape is
+  // re-checked on read so a hand-edited or half-written value cannot throw.
+  const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
+    const stored = readLsFilter<string[]>(LS_HIDDEN_SOURCES_KEY, []);
+    return new Set(Array.isArray(stored) ? stored : []);
+  });
   const [statusFilter, setStatusFilter] = useState<string[]>(() => readLsFilter<string[]>(LS_STATUS_KEY, []));
   const [companyIdFilter, setCompanyIdFilter] = useState<string[]>(() => readLsFilter<string[]>(LS_COMPANY_KEY, []));
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -158,6 +164,7 @@ export function PortfolioCalendar() {
   useEffect(() => setBreadcrumbs([{ label: "Portfolio Calendar" }]), [setBreadcrumbs]);
   useEffect(() => writeLsFilter(LS_STATUS_KEY, statusFilter), [statusFilter]);
   useEffect(() => writeLsFilter(LS_COMPANY_KEY, companyIdFilter), [companyIdFilter]);
+  useEffect(() => writeLsFilter(LS_HIDDEN_SOURCES_KEY, [...hiddenSources]), [hiddenSources]);
 
   const range = useMemo(() => monthRange(viewMonth), [viewMonth]);
 
