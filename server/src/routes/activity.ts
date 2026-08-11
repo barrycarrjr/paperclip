@@ -4,6 +4,10 @@ import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { companyService, heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
@@ -73,7 +77,13 @@ export function activityRoutes(db: Db) {
     const perCompanyLimit = normalizeActivityLimit(Number(req.query.limit ?? 50));
 
     const allCompanies = await companySvc.list();
-    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    // A roll-up across "everything" must still stop at people's private
+    // companies. Without this, HQ's activity feed would show what every user
+    // did in their Personal.
+    let targetCompanies = excludeOthersPersonalCompanies(
+      allCompanies,
+      viewerUserIdForPersonalCheck(req.actor),
+    ).filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
       targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));

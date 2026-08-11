@@ -43,6 +43,8 @@ import {
 } from "./services/index.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
+import { loadPersonalCompanyIndex } from "./services/personal-companies.js";
+import { ensureHqCompany } from "./services/instance-bootstrap.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { restoreHostClaudeTokenAtStartup } from "./adapters/registry.js";
@@ -849,6 +851,16 @@ export async function startServer(): Promise<StartedServer> {
       },
     };
   })();
+
+  // HQ ships with the software: a brand-new instance gets one rather than
+  // starting with nothing for the cross-company features to point at.
+  await ensureHqCompany(db as any);
+
+  // Load which companies are personal, and whose, before the first request.
+  // The access check that reads this is synchronous and runs on effectively
+  // every route: if the index were empty at that moment, a personal company
+  // would look like an ordinary one and the isolation would be off.
+  await loadPersonalCompanyIndex(db as any);
 
   const pluginWorkerManager = createPluginWorkerManager();
   const app = await createApp(db as any, {

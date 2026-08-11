@@ -4,6 +4,10 @@ import { createEventSchema, updateEventSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { calendarService, companyService, logActivity } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { forbidden } from "../errors.js";
 
 function parseDateParam(raw: unknown, fallback: Date): Date {
@@ -88,7 +92,10 @@ export function calendarRoutes(db: Db) {
     const statusFilter = parseCommaList(req.query.status);
     const kindsFilter = parseCommaList(req.query.kinds);
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
@@ -139,7 +146,10 @@ export function calendarRoutes(db: Db) {
     const from = parseDateParam(req.query.from, defaultFrom);
     const to = parseDateParam(req.query.to, defaultTo);
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));

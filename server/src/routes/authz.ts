@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import { forbidden, unauthorized } from "../errors.js";
+import { personalCompanyOwner } from "../services/personal-companies.js";
 
 export type AccessMode = "read" | "write";
 
@@ -59,6 +60,48 @@ export function assertCompanyAccess(
   mode: AccessMode = "write",
 ) {
   assertAuthenticated(req);
+
+  // Personal companies first, before any rule that could grant access.
+  //
+  // Two of the rules below deliberately reach across company lines for the
+  // portfolio root — an HQ agent and an HQ user-admin can both read any
+  // company. That is right for roll-ups and wrong for Personal, which is
+  // private to one person by definition. Checking here means those bypasses
+  // never see a personal company id, rather than each of them having to
+  // remember to exclude one.
+  //
+  // Local single-user mode is not exempt either: `local_implicit` skips the
+  // board checks further down, but on an instance with more than one user
+  // that would be the whole hole.
+  const personalOwner = personalCompanyOwner(companyId);
+  if (personalOwner) {
+    // Single-operator local install: there is nobody to be isolated from, and
+    // the implicit actor carries a synthetic id rather than a real user row.
+    if (req.actor.type === "board" && req.actor.source === "local_implicit") {
+      return;
+    }
+
+    // The owner's own staff. An agent or Clippy session scoped to this very
+    // company is the owner acting through it, so it is allowed; anything
+    // scoped elsewhere is not, and that deliberately includes the portfolio
+    // root's agents, which can otherwise read across every company.
+    if (req.actor.type === "agent" || req.actor.type === "tool_session") {
+      const sameCompany = req.actor.companyId === companyId;
+      const sameUser =
+        req.actor.type === "agent" || !req.actor.userId || req.actor.userId === personalOwner;
+      if (sameCompany && sameUser) return;
+      throw forbidden("This is someone's personal company");
+    }
+
+    if (req.actor.type === "board" && req.actor.userId === personalOwner) {
+      return;
+    }
+
+    // Says nothing about whose it is. Note there is no instance-admin branch:
+    // administrators cannot look inside someone's Personal, by design.
+    throw forbidden("This is someone's personal company");
+  }
+
   if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
     if (mode === "read" && req.actor.isPortfolioRootAgent) {
       return;

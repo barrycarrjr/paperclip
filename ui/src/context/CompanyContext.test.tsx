@@ -41,6 +41,8 @@ function makeCompany(id: string): Company {
     requireBoardApprovalForNewAgents: false,
     brandColor: null,
     isPortfolioRoot: false,
+    kind: "standard" as const,
+    ownerUserId: null,
     logoAssetId: null,
     logoUrl: null,
     createdAt: new Date(),

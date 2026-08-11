@@ -1,6 +1,17 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
+/**
+ * What sort of company this is.
+ *
+ * `personal` is the one that behaves differently: it belongs to a single user,
+ * cannot be shared with anyone, and cannot be deleted — only paused. HQ is not
+ * a kind; it is the `isPortfolioRoot` flag, which carries its own singleton
+ * guarantee in the database.
+ */
+export const COMPANY_KINDS = ["standard", "personal"] as const;
+export type CompanyKind = (typeof COMPANY_KINDS)[number];
+
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
 export type DeploymentMode = (typeof DEPLOYMENT_MODES)[number];
 

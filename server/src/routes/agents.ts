@@ -57,6 +57,10 @@ import {
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
+import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectAgentAdapterWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
@@ -1253,7 +1257,12 @@ export function agentRoutes(
     const roleFilter = req.query.role as string | undefined;
 
     const allCompanies = await companySvc.list();
-    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    // The HQ agent roster stops at private companies: whose agents someone
+    // keeps in their Personal is their business.
+    let targetCompanies = excludeOthersPersonalCompanies(
+      allCompanies,
+      viewerUserIdForPersonalCheck(req.actor),
+    ).filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
       targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));

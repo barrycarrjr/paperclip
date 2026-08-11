@@ -53,6 +53,10 @@ import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
+import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectIssueWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
@@ -981,7 +985,10 @@ export function issueRoutes(
     const companyIdsFilter = req.query.companyIds as string | undefined;
     const qFilter = req.query.q as string | undefined;
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
@@ -1036,7 +1043,10 @@ export function issueRoutes(
       return;
     }
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     const companyById = new Map(targetCompanies.map((c) => [c.id, c]));
 
@@ -3109,7 +3119,10 @@ export function issueRoutes(
     }
 
     const interactionSvc = issueThreadInteractionService(db);
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     const interactionArrays = await Promise.all(
       targetCompanies.map((company) => interactionSvc.listPendingForCompany(company.id)),
@@ -3152,7 +3165,10 @@ export function issueRoutes(
       return;
     }
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     const reviewArrays = await Promise.all(
       targetCompanies.map((company) => svc.listPendingHumanReviewsForCompany(company.id)),

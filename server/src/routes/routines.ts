@@ -11,6 +11,10 @@ import {
 import { validate } from "../middleware/validate.js";
 import { accessService, companyService, logActivity, routineService } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { forbidden, unauthorized } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -90,7 +94,11 @@ export function routineRoutes(
     const statusFilter = req.query.status as string | undefined;
 
     const allCompanies = await companySvc.list();
-    let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
+    // Private companies stay out of cross-company roll-ups.
+    let targetCompanies = excludeOthersPersonalCompanies(
+      allCompanies,
+      viewerUserIdForPersonalCheck(req.actor),
+    ).filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));
       targetCompanies = targetCompanies.filter((c) => allowed.has(c.id));

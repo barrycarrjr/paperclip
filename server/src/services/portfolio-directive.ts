@@ -6,6 +6,7 @@ import { issueService } from "./issues.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 import { logger } from "../middleware/logger.js";
+import { personalCompanyOwner } from "./personal-companies.js";
 
 // ─── Portfolio Directive (the "conductor") ────────────────────────────────
 //
@@ -168,6 +169,24 @@ export function portfolioDirectiveService(db: Db) {
           });
         }
         continue;
+      }
+      const personalOwner = personalCompanyOwner(row.id);
+      if (personalOwner) {
+        // A directive is an instruction to the businesses. Somebody's Personal
+        // is not one of them, and a portfolio-wide fan-out that reached into
+        // it would put work in a place its owner never opted in to. Only its
+        // owner naming it explicitly gets through.
+        const namedByOwner = companyIds?.includes(row.id) && actor.userId === personalOwner;
+        if (!namedByOwner) {
+          if (companyIds?.includes(row.id)) {
+            skipped.push({
+              companyId: row.id,
+              companyName: row.name,
+              reason: "Personal companies are private and are not directive targets",
+            });
+          }
+          continue;
+        }
       }
       if (INACTIVE_COMPANY_STATUSES.includes(row.status)) {
         skipped.push({ companyId: row.id, companyName: row.name, reason: `Company is ${row.status}` });

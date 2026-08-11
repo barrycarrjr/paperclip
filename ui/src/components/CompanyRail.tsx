@@ -70,6 +70,17 @@ function CompanyPeekContent({
             Root
           </span>
         )}
+        {company.kind === "personal" && (
+          // Worth saying out loud. Personal looks like every other company in
+          // this list, and the one thing that matters about it — that nobody
+          // else can see it — is invisible otherwise.
+          <span
+            className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80"
+            title="Private to you. Nobody else on this instance can see it, including administrators."
+          >
+            Private
+          </span>
+        )}
       </div>
       <nav className="max-h-[70vh] overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-3">
         <SidebarMenu

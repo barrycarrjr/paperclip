@@ -9,6 +9,7 @@ import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
+import { ensurePersonalCompanyOnce } from "../services/personal-companies.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -31,6 +32,11 @@ const TOOL_SESSION_SUB_PATTERN = /^clippy-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
  */
 async function annotateHqStatus(req: Request, db: Db): Promise<void> {
   const actor = req.actor;
+  // Everyone gets a Personal on first sight. Costs a map lookup once the
+  // index knows them, so this is not a query per request.
+  if (actor.type === "board" && actor.userId && actor.source !== "local_implicit") {
+    await ensurePersonalCompanyOnce(db, actor.userId, actor.userName ?? null);
+  }
   if ((actor.type === "agent" || actor.type === "tool_session") && actor.companyId) {
     const rootId = await getPortfolioRootCompanyId(db);
     if (rootId && actor.companyId === rootId) {

@@ -9,6 +9,11 @@ import {
   updateCompanySchema,
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
+import {
+  PERSONAL_COMPANY_KIND,
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
@@ -71,22 +76,38 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   router.get("/", async (req, res) => {
     assertAuthenticated(req);
     const result = await svc.list();
+
+    /**
+     * Strip out other people's personal companies.
+     *
+     * Every branch below hands back more than the caller's own memberships —
+     * that is the point of them, for HQ roll-ups and administration. Without
+     * this, an administrator's company list would name every user's Personal.
+     * Not being able to open it is not enough; its existence and its issue
+     * count are already more than "you cannot see anything in my personal".
+     */
+    const mine = (companies: typeof result) =>
+      excludeOthersPersonalCompanies(companies, viewerUserIdForPersonalCheck(req.actor));
+
     // HQ agent (cross-company read via membership in portfolio root)
     if (req.actor.type === "agent" && req.actor.isPortfolioRootAgent) {
-      res.json(result);
+      // An HQ agent has no user identity, so no personal company is ever its
+      // own — every one of them is somebody else's.
+      res.json(mine(result));
       return;
     }
     assertBoard(req);
-    if (
-      req.actor.source === "local_implicit" ||
-      req.actor.isInstanceAdmin ||
-      req.actor.isPortfolioRootUserAdmin
-    ) {
+    if (req.actor.source === "local_implicit") {
+      // Single-operator install: one person, nothing to hide from them.
       res.json(result);
       return;
     }
+    if (req.actor.isInstanceAdmin || req.actor.isPortfolioRootUserAdmin) {
+      res.json(mine(result));
+      return;
+    }
     const allowed = new Set(req.actor.companyIds ?? []);
-    res.json(result.filter((company) => allowed.has(company.id)));
+    res.json(mine(result.filter((company) => allowed.has(company.id))));
   });
 
   router.get("/stats", async (req, res) => {
@@ -352,6 +373,16 @@ export function companyRoutes(db: Db, storage?: StorageService) {
       });
       return;
     }
+    if (target.kind === PERSONAL_COMPANY_KIND) {
+      // Switch it off, yes; get rid of it, no. Personal ships with the
+      // software and belongs to the user — pausing hides it without
+      // destroying whatever they kept in there.
+      res.status(409).json({
+        error:
+          "[EPERSONAL_UNDELETABLE] Your personal company can't be archived — pause it instead if you don't want to see it",
+      });
+      return;
+    }
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -380,6 +411,13 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     if (target.isPortfolioRoot) {
       res.status(409).json({
         error: "[EROOT_UNDELETABLE] HQ (portfolio-root company) cannot be deleted",
+      });
+      return;
+    }
+    if (target.kind === PERSONAL_COMPANY_KIND) {
+      res.status(409).json({
+        error:
+          "[EPERSONAL_UNDELETABLE] Your personal company can't be deleted — pause it instead if you don't want to see it",
       });
       return;
     }

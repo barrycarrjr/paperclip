@@ -18,6 +18,7 @@ import { calendarService } from "./calendar.js";
 import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
+import { personalCompanyOwner } from "./personal-companies.js";
 
 export type ToolActor = {
   userId: string;
@@ -57,6 +58,16 @@ export interface ChatToolDefinition<TInput = unknown> {
 }
 
 async function assertCompanyAccess(ctx: ToolContext, companyId: string) {
+  // Personal first, ahead of the instance-admin bypass below. An admin's
+  // Clippy could otherwise read straight into anyone's private company —
+  // which is exactly the door this is supposed to have no key for.
+  const personalOwner = personalCompanyOwner(companyId);
+  if (personalOwner) {
+    if (ctx.actor.userId !== personalOwner) {
+      throw forbidden("This is someone's personal company");
+    }
+    return;
+  }
   if (ctx.actor.isInstanceAdmin) return;
   if (!ctx.actor.companyIds.includes(companyId)) {
     throw forbidden(`No access to company ${companyId}`);
@@ -64,11 +75,19 @@ async function assertCompanyAccess(ctx: ToolContext, companyId: string) {
 }
 
 async function resolveAccessibleCompanyIds(ctx: ToolContext): Promise<string[]> {
+  // Whatever the source of the list, other people's personal companies come
+  // out of it — an admin listing companies should not learn they exist.
+  const keepMine = (ids: string[]) =>
+    ids.filter((id) => {
+      const owner = personalCompanyOwner(id);
+      return !owner || owner === ctx.actor.userId;
+    });
+
   if (ctx.actor.isInstanceAdmin) {
     const rows = await ctx.db.select({ id: companies.id }).from(companies);
-    return rows.map((r) => r.id);
+    return keepMine(rows.map((r) => r.id));
   }
-  return ctx.actor.companyIds;
+  return keepMine(ctx.actor.companyIds);
 }
 
 function summarizeIssue(row: typeof issues.$inferSelect) {

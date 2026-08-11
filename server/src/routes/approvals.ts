@@ -18,6 +18,10 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
@@ -96,7 +100,10 @@ export function approvalRoutes(
     const statusFilter = (req.query.status as string | undefined) ?? "pending";
     const companyIdsFilter = req.query.companyIds as string | undefined;
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));

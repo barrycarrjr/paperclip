@@ -6,6 +6,10 @@ import { accessService } from "../services/access.js";
 import { companyService } from "../services/companies.js";
 import { inboxDismissalService } from "../services/inbox-dismissals.js";
 import { assertCompanyAccess } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 
 /**
  * The attention queue endpoints. One list of open decisions per company,
@@ -86,7 +90,10 @@ export function attentionRoutes(db: Db) {
     }
 
     const includeSetAside = req.query.setAside === "1";
-    const allCompanies = await companies.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companies.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     const targets = allCompanies.filter((company) => company.status !== "archived");
     const perCompany = await Promise.all(
       targets.map(async (company) => {

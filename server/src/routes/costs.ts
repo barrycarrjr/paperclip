@@ -18,6 +18,10 @@ import {
   logActivity,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { badRequest } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -239,7 +243,10 @@ export function costRoutes(
     const companyIdsFilter = req.query.companyIds as string | undefined;
     const range = parseCostDateRange(req.query);
 
-    const allCompanies = await companies.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companies.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     let targetCompanies = allCompanies.filter((c) => c.status !== "archived");
     if (companyIdsFilter) {
       const allowed = new Set(companyIdsFilter.split(",").map((id) => id.trim()).filter(Boolean));

@@ -1,4 +1,4 @@
-import type { CompanyStatus, PauseReason } from "../constants.js";
+import type { CompanyKind, CompanyStatus, PauseReason } from "../constants.js";
 
 export interface Company {
   id: string;
@@ -15,6 +15,13 @@ export interface Company {
   brandColor: string | null;
   /** True if this is HQ — the portfolio-root holding-company entity. Singleton per instance. */
   isPortfolioRoot: boolean;
+  /**
+   * `standard` — an ordinary company people share.
+   * `personal`  — belongs to one user and cannot be shared, joined, or deleted.
+   */
+  kind: CompanyKind;
+  /** Set only on personal companies: the one person it belongs to. */
+  ownerUserId: string | null;
   logoAssetId: string | null;
   logoUrl: string | null;
   createdAt: Date;

@@ -48,6 +48,8 @@ export function companyService(db: Db) {
     requireBoardApprovalForNewAgents: companies.requireBoardApprovalForNewAgents,
     brandColor: companies.brandColor,
     isPortfolioRoot: companies.isPortfolioRoot,
+    kind: companies.kind,
+    ownerUserId: companies.ownerUserId,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
     updatedAt: companies.updatedAt,

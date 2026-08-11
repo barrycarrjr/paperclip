@@ -9,7 +9,8 @@ import {
   principalPermissionGrants,
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
-import { conflict } from "../errors.js";
+import { conflict, forbidden } from "../errors.js";
+import { personalCompanyOwner } from "./personal-companies.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -506,6 +507,21 @@ export function accessService(db: Db) {
     const existing = await listUserCompanyAccess(userId);
     const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
     const target = new Set(companyIds);
+
+    // Nobody is granted access to a personal company — not by an admin
+    // editing someone's company list, not by an invite. This is the path a
+    // well-meaning administrator would otherwise use to "share" one.
+    for (const companyId of target) {
+      const owner = personalCompanyOwner(companyId);
+      if (owner && owner !== userId) {
+        throw forbidden("A personal company belongs to one person and cannot be shared");
+      }
+    }
+    // Equally, the owner's own personal company is never revoked by a company
+    // list that happens to omit it — that list is about shared companies.
+    for (const row of existing) {
+      if (personalCompanyOwner(row.companyId) === userId) target.add(row.companyId);
+    }
 
     await db.transaction(async (tx) => {
       const toArchive = existing.filter((row) => !target.has(row.companyId) && row.status !== "archived");

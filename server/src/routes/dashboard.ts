@@ -3,6 +3,10 @@ import type { Db } from "@paperclipai/db";
 import { dashboardService } from "../services/dashboard.js";
 import { companyService } from "../services/index.js";
 import { assertCompanyAccess } from "./authz.js";
+import {
+  excludeOthersPersonalCompanies,
+  viewerUserIdForPersonalCheck,
+} from "../services/personal-companies.js";
 
 export function dashboardRoutes(db: Db) {
   const router = Router();
@@ -39,7 +43,10 @@ export function dashboardRoutes(db: Db) {
       return;
     }
 
-    const allCompanies = await companySvc.list();
+    const allCompanies = excludeOthersPersonalCompanies(
+      await companySvc.list(),
+      viewerUserIdForPersonalCheck(req.actor),
+    );
     const targetCompanies = allCompanies.filter((c) => c.status !== "archived");
 
     const summaries = await Promise.all(

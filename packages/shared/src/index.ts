@@ -41,6 +41,7 @@ export {
 } from "./starter-catalog.js";
 export {
   COMPANY_STATUSES,
+  COMPANY_KINDS,
   DEPLOYMENT_MODES,
   DEPLOYMENT_EXPOSURES,
   BIND_MODES,
@@ -156,6 +157,7 @@ export {
   PLUGIN_EVENT_TYPES,
   PLUGIN_BRIDGE_ERROR_CODES,
   type CompanyStatus,
+  type CompanyKind,
   type DeploymentMode,
   type DeploymentExposure,
   type BindMode,
