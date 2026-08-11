@@ -616,6 +616,12 @@ export function createPluginWorkerHandle(
       PAPERCLIP_PLUGIN_ID: pluginId,
       NODE_ENV: process.env.NODE_ENV ?? "production",
       TZ: process.env.TZ ?? "UTC",
+      // The host's own base URL. Not a secret — it is the address the browser
+      // already talks to — and workers need it to build absolute links and to
+      // reach host endpoints that have no RPC equivalent. It was missing from
+      // this allowlist, so `process.env.PAPERCLIP_API_URL` was always empty in
+      // a worker even though plugins are documented to read it.
+      PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL ?? "",
     };
 
     const child = fork(options.entrypointPath, [], {
