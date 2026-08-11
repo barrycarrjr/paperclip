@@ -142,6 +142,12 @@ export interface HostServices {
     }): Promise<void>;
   };
 
+  /** Provides `system.createSnapshot` / `system.releaseSnapshot`. */
+  system: {
+    createSnapshot(): Promise<WorkerToHostMethods["system.createSnapshot"][1]>;
+    releaseSnapshot(params: { filePath: string }): Promise<void>;
+  };
+
   /** Provides `metrics.write`. */
   metrics: {
     write(params: WorkerToHostMethods["metrics.write"][0]): Promise<void>;
@@ -314,6 +320,10 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
 
   // Activity
   "activity.log": "activity.log.write",
+
+  // System snapshot — both sides of the borrow gated on the same capability
+  "system.createSnapshot": "system.snapshot.read",
+  "system.releaseSnapshot": "system.snapshot.read",
 
   // Metrics
   "metrics.write": "metrics.write",
@@ -502,6 +512,14 @@ export function createHostClientHandlers(
     // Activity
     "activity.log": gated("activity.log", async (params) => {
       return services.activity.log(params);
+    }),
+
+    // System snapshot
+    "system.createSnapshot": gated("system.createSnapshot", async () => {
+      return services.system.createSnapshot();
+    }),
+    "system.releaseSnapshot": gated("system.releaseSnapshot", async (params) => {
+      return services.system.releaseSnapshot(params);
     }),
 
     // Metrics

@@ -699,6 +699,46 @@ export interface WorkerToHostMethods {
     result: { text: string; modelUsed: string },
   ];
 
+  // System snapshot — whole-instance database dump, for backup/migration
+  // plugins. The host writes the dump to a file on its own disk and returns
+  // the path: the worker runs on the same machine, so there is no reason to
+  // stream gigabytes through this channel, and a path costs nothing to pass.
+  // The caller MUST call `system.releaseSnapshot` when done, or the file
+  // stays on disk.
+  "system.createSnapshot": [
+    params: Record<string, never>,
+    result: {
+      /** Envelope describing what's in the dump — counts, versions, ids. */
+      manifest: {
+        instanceId: string;
+        snapshotUuid: string;
+        createdAt: string;
+        publicTableCounts: Record<string, number>;
+        pluginNamespaces: Array<{
+          pluginKey: string;
+          pluginVersion: string;
+          namespaceName: string;
+          tableCounts: Record<string, number>;
+        }>;
+        excludedPluginNamespaces: Array<{
+          pluginKey: string;
+          pluginVersion: string;
+          namespaceName: string;
+          reason: string;
+        }>;
+        estimatedUncompressedBytes: number;
+      };
+      /** Absolute path to the gzipped SQL dump on the host's filesystem. */
+      filePath: string;
+      /** Size of the file at `filePath`, so the caller can budget uploads. */
+      sizeBytes: number;
+    },
+  ];
+  "system.releaseSnapshot": [
+    params: { filePath: string },
+    result: void,
+  ];
+
   // Logger
   "log": [
     params: { level: "info" | "warn" | "error" | "debug"; message: string; meta?: Record<string, unknown> },

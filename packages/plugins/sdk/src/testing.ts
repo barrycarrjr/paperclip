@@ -89,6 +89,13 @@ export interface TestHarness {
   simulateSessionEvent(sessionId: string, event: Omit<AgentSessionEvent, "sessionId">): void;
   logs: TestHarnessLogEntry[];
   activity: Array<{ message: string; entityType?: string; entityId?: string; metadata?: Record<string, unknown> }>;
+  /**
+   * Snapshot file paths handed out by `ctx.system.createSnapshot()` and not
+   * yet released. Assert this is empty at the end of a test to prove the
+   * plugin cleans up after itself — a leaked snapshot is a whole database
+   * left on disk.
+   */
+  snapshots: string[];
   metrics: Array<{ name: string; value: number; tags?: Record<string, string> }>;
   telemetry: Array<{ eventName: string; dimensions?: Record<string, string | number | boolean> }>;
   dbQueries: Array<{ sql: string; params?: unknown[] }>;
@@ -409,6 +416,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
 
   const logs: TestHarnessLogEntry[] = [];
   const activity: TestHarness["activity"] = [];
+  const snapshots: TestHarness["snapshots"] = [];
   const metrics: TestHarness["metrics"] = [];
   const telemetry: TestHarness["telemetry"] = [];
   const dbQueries: TestHarness["dbQueries"] = [];
@@ -558,6 +566,35 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       async log(entry) {
         requireCapability(manifest, capabilitySet, "activity.log.write");
         activity.push(entry);
+      },
+    },
+    system: {
+      async createSnapshot() {
+        requireCapability(manifest, capabilitySet, "system.snapshot.read");
+        const snapshotUuid = `stub-snapshot-${snapshots.length + 1}`;
+        // A path, not a real file — a test that wants to exercise reading the
+        // dump should stub `createSnapshot` itself. What this harness is for
+        // is proving the capability gate and the create/release pairing.
+        const filePath = `/stub/snapshots/${snapshotUuid}.sql.gz`;
+        snapshots.push(filePath);
+        return {
+          manifest: {
+            instanceId: "stub-instance",
+            snapshotUuid,
+            createdAt: new Date(0).toISOString(),
+            publicTableCounts: {},
+            pluginNamespaces: [],
+            excludedPluginNamespaces: [],
+            estimatedUncompressedBytes: 0,
+          },
+          filePath,
+          sizeBytes: 0,
+        };
+      },
+      async releaseSnapshot(filePath) {
+        requireCapability(manifest, capabilitySet, "system.snapshot.read");
+        const idx = snapshots.indexOf(filePath);
+        if (idx >= 0) snapshots.splice(idx, 1);
       },
     },
     state: {
@@ -1318,6 +1355,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     },
     logs,
     activity,
+    snapshots,
     metrics,
     telemetry,
     dbQueries,

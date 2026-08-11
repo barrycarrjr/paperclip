@@ -53,6 +53,7 @@ import {
 } from "./chat-providers.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import type { SystemSnapshotService } from "../routes/system-snapshot.js";
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { IncomingMessage, RequestOptions as HttpRequestOptions } from "node:http";
 import { request as httpRequest } from "node:http";
@@ -682,8 +683,27 @@ export function buildHostServices(
   pluginKey: string,
   eventBus: PluginEventBus,
   notifyWorker?: (method: string, params: unknown) => void,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    systemSnapshotService?: SystemSnapshotService;
+  } = {},
 ): HostServices & { dispose(): void } {
+  /**
+   * Snapshot files this plugin has been given and not yet released. Scoped to
+   * one plugin's services, so a plugin can only release its own snapshots —
+   * and can't be tricked into deleting an arbitrary path.
+   */
+  const snapshotFilesIssuedToPlugin = new Set<string>();
+
+  function requireSnapshotService(): SystemSnapshotService {
+    if (!options.systemSnapshotService) {
+      throw new Error(
+        "Instance snapshots are not available on this deployment (no snapshot service configured)",
+      );
+    }
+    return options.systemSnapshotService;
+  }
+
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
   const pluginDb = pluginDatabaseService(db);
@@ -1061,6 +1081,58 @@ export function buildHostServices(
     secrets: {
       async resolve(params) {
         return secretsHandler.resolve(params);
+      },
+    },
+
+    system: {
+      /**
+       * Produce a whole-instance snapshot for a backup/migration plugin.
+       *
+       * Capability-gated upstream (`system.snapshot.read`) — by the time we
+       * get here the plugin has already been checked. We hand back the file
+       * path rather than the bytes: the worker is a child process on this
+       * same machine, and a database dump is far too big to push through the
+       * RPC channel.
+       *
+       * The file is the caller's to release. `releaseSnapshot` below is the
+       * matching half; a plugin that forgets it will fill the disk at one
+       * database per run.
+       */
+      async createSnapshot() {
+        const snapshots = requireSnapshotService();
+        const result = await snapshots.produceSnapshot();
+        snapshotFilesIssuedToPlugin.add(result.bodyFilePath);
+        logger.info(
+          { pluginId, pluginKey, sizeBytes: result.bodySizeBytes },
+          "plugin took an instance snapshot",
+        );
+        return {
+          manifest: {
+            instanceId: result.manifest.instanceId,
+            snapshotUuid: result.manifest.snapshotUuid,
+            createdAt: result.manifest.createdAt,
+            publicTableCounts: result.manifest.publicTableCounts,
+            pluginNamespaces: result.manifest.pluginNamespaces,
+            excludedPluginNamespaces: result.manifest.excludedPluginNamespaces,
+            estimatedUncompressedBytes: result.manifest.estimatedUncompressedBytes,
+          },
+          filePath: result.bodyFilePath,
+          sizeBytes: result.bodySizeBytes,
+        };
+      },
+
+      async releaseSnapshot(params) {
+        const snapshots = requireSnapshotService();
+        // Only delete paths we actually handed to this plugin. Without this
+        // check `releaseSnapshot` would be an arbitrary file-delete primitive
+        // reachable by any plugin holding the capability.
+        if (!snapshotFilesIssuedToPlugin.has(params.filePath)) {
+          throw new Error(
+            "releaseSnapshot: unknown snapshot path — pass a filePath returned by createSnapshot()",
+          );
+        }
+        snapshotFilesIssuedToPlugin.delete(params.filePath);
+        snapshots.cleanupSnapshotFile(params.filePath);
       },
     },
 
@@ -2090,6 +2162,26 @@ export function buildHostServices(
      */
     dispose() {
       disposed = true;
+
+      // Delete any snapshot the plugin took and never released. A worker that
+      // crashes mid-backup would otherwise leave a whole database on disk with
+      // nothing left holding a reference to it — and a nightly job that
+      // crashes nightly fills the drive in a week.
+      if (snapshotFilesIssuedToPlugin.size > 0 && options.systemSnapshotService) {
+        const orphaned = Array.from(snapshotFilesIssuedToPlugin);
+        snapshotFilesIssuedToPlugin.clear();
+        logger.warn(
+          { pluginId, pluginKey, count: orphaned.length },
+          "cleaning up snapshot files the plugin never released",
+        );
+        for (const filePath of orphaned) {
+          try {
+            options.systemSnapshotService.cleanupSnapshotFile(filePath);
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
 
       // Clear event bus subscriptions to prevent accumulation on worker restart.
       // Without this, each crash/restart cycle adds duplicate subscriptions.

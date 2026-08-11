@@ -513,6 +513,15 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         },
       },
 
+      system: {
+        async createSnapshot() {
+          return callHost("system.createSnapshot", {} as Record<string, never>);
+        },
+        async releaseSnapshot(filePath: string): Promise<void> {
+          await callHost("system.releaseSnapshot", { filePath });
+        },
+      },
+
       state: {
         async get(input: ScopeKey): Promise<unknown> {
           return callHost("state.get", {

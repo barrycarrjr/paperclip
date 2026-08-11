@@ -691,6 +691,18 @@ export const PLUGIN_CAPABILITIES = [
   "secrets.read-ref",
   "ai.complete",
   "environment.drivers.register",
+  /**
+   * Ask the host to produce a full instance snapshot (the whole database).
+   *
+   * The most powerful capability in this list — grant it only to a plugin
+   * whose entire job is backup or migration. It exists because the backup
+   * plugin previously tried to reach the host's own HTTP API, which cannot
+   * work by design: that endpoint requires instance-admin rights a worker
+   * has no way to hold, and plugin outbound HTTP blocks loopback addresses
+   * precisely so a plugin cannot attack its own host. Rather than making a
+   * hole in either of those, the host hands the snapshot over directly.
+   */
+  "system.snapshot.read",
   // Agent Tools
   "agent.tools.register",
   // UI

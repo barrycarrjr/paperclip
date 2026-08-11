@@ -543,6 +543,74 @@ export interface PluginActivityClient {
 }
 
 /**
+ * `ctx.system` — whole-instance snapshots, for backup and migration plugins.
+ *
+ * Requires the `system.snapshot.read` capability, which is the most powerful
+ * one the host grants: a snapshot is the entire database. Declare it only if
+ * copying the whole instance somewhere is the plugin's actual job.
+ *
+ * The host writes the dump to a file on its own disk and returns the path
+ * rather than streaming the bytes back — the worker is on the same machine,
+ * so a path is enough, and pushing gigabytes through the RPC channel would
+ * not be. That does mean the file is yours to release:
+ *
+ * ```ts
+ * const snap = await ctx.system.createSnapshot();
+ * try {
+ *   await uploadSomewhere(createReadStream(snap.filePath));
+ * } finally {
+ *   await ctx.system.releaseSnapshot(snap.filePath);
+ * }
+ * ```
+ */
+export interface PluginSystemClient {
+  /**
+   * Produce a fresh snapshot of the whole instance.
+   *
+   * @returns The manifest describing its contents, plus the path and size of
+   *   the gzipped SQL dump on the host filesystem.
+   */
+  createSnapshot(): Promise<PluginSystemSnapshot>;
+
+  /**
+   * Delete a snapshot file produced by {@link createSnapshot}.
+   *
+   * Idempotent — a path that's already gone is not an error. Always call it,
+   * ideally in a `finally`: snapshots are the size of your database, and a
+   * nightly job that leaks one fills the disk in a week.
+   *
+   * @param filePath - The `filePath` from a previous `createSnapshot()`
+   */
+  releaseSnapshot(filePath: string): Promise<void>;
+}
+
+/** What {@link PluginSystemClient.createSnapshot} hands back. */
+export interface PluginSystemSnapshot {
+  manifest: {
+    instanceId: string;
+    snapshotUuid: string;
+    createdAt: string;
+    publicTableCounts: Record<string, number>;
+    pluginNamespaces: Array<{
+      pluginKey: string;
+      pluginVersion: string;
+      namespaceName: string;
+      tableCounts: Record<string, number>;
+    }>;
+    excludedPluginNamespaces: Array<{
+      pluginKey: string;
+      pluginVersion: string;
+      namespaceName: string;
+      reason: string;
+    }>;
+    estimatedUncompressedBytes: number;
+  };
+  /** Absolute path to the gzipped SQL dump on the host's filesystem. */
+  filePath: string;
+  sizeBytes: number;
+}
+
+/**
  * `ctx.state` — read and write plugin-scoped key-value state.
  *
  * Each plugin gets an isolated namespace: state written by plugin A can never
@@ -1526,6 +1594,9 @@ export interface PluginContext {
 
   /** Write activity log entries. Requires `activity.log.write`. */
   activity: PluginActivityClient;
+
+  /** Whole-instance snapshots, for backup and migration. Requires `system.snapshot.read`. */
+  system: PluginSystemClient;
 
   /** Read and write scoped plugin state. Requires `plugin.state.read` / `plugin.state.write`. */
   state: PluginStateClient;
