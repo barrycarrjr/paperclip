@@ -17,6 +17,14 @@ interface AgentPropertiesProps {
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
+/**
+ * How old a failed run has to be before its `error` status is worth flagging
+ * as possibly out of date. An hour is long enough that a genuine, current
+ * failure isn't second-guessed, and short enough to catch the real case —
+ * a flag left behind by a run that died days ago.
+ */
+const STALE_ERROR_MS = 60 * 60 * 1000;
+
 function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3 py-1.5">
@@ -37,11 +45,31 @@ export function AgentProperties({ agent, runtimeState }: AgentPropertiesProps) {
 
   const reportsToAgent = agent.reportsTo ? agents?.find((a) => a.id === agent.reportsTo) : null;
 
+  // An `error` status whose failing run finished a while ago. The status flag
+  // itself carries no time, so without this the badge cannot be told apart
+  // from a failure that happened seconds ago.
+  const errorAt = runtimeState?.updatedAt ?? agent.lastHeartbeatAt ?? null;
+  const staleError =
+    agent.status === "error" && errorAt && Date.now() - new Date(errorAt).getTime() > STALE_ERROR_MS
+      ? { at: errorAt }
+      : null;
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
         <PropertyRow label="Status">
           <StatusBadge status={agent.status} />
+          {staleError && (
+            // `error` is sticky: it is set when a run fails and only cleared by
+            // a later successful run. An agent with its schedule switched off
+            // never gets that run, so a single old failure reads forever as
+            // "broken right now". Two CEOs sat like this for three days after
+            // an expired login that had long since been fixed. Say how old it
+            // is, so a stale flag is recognisable as stale.
+            <span className="text-xs text-muted-foreground">
+              since {formatDate(staleError.at)} — may already be fixed; run it to confirm
+            </span>
+          )}
         </PropertyRow>
         <PropertyRow label="Role">
           <span className="text-sm">{roleLabels[agent.role] ?? agent.role}</span>
