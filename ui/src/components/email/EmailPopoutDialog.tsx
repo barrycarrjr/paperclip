@@ -30,6 +30,7 @@ import { makeEmailToolsApi, type MailHeader } from "../../api/emailTools";
 import { agentsApi } from "../../api/agents";
 import { useEmailMessageActions, type EmailMessageActionHooks } from "./useEmailMessageActions";
 import { usePrintEmail } from "./usePrintEmail";
+import { resolveActionHeader } from "./emailActionHeader";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -175,20 +176,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     ? actions.markRead.isPending
     : actions.markUnread.isPending;
 
-  // The list row the mutations want. When the opener did not supply one, the
-  // fetched message carries everything the mutations actually read.
-  const headerForActions: MailHeader | null = request?.header
-    ?? (message
-      ? {
-          uid: message.uid,
-          messageId: message.messageId,
-          from: message.from,
-          subject: message.subject,
-          date: message.date,
-          snippet: "",
-          unseen: isUnread,
-        }
-      : null);
+  // The list row the mutations want. When the opener did not supply one, it is
+  // rebuilt from the fetched message.
+  const headerForActions = resolveActionHeader({
+    uid: request?.uid ?? null,
+    listRows: request?.header ? [request.header] : [],
+    openMessage: message,
+    assumeUnseen: isUnread,
+  });
 
   const open = Boolean(request);
 

@@ -65,6 +65,7 @@ import {
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
 import { usePrintEmail } from "../components/email/usePrintEmail";
+import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
@@ -1276,17 +1277,19 @@ export function Email() {
     );
   }
 
-  // Falls back to the search results because a message opened from a search
-  // often is not in the folder list behind it — it may be older than the list's
-  // limit, or read while the list is filtered to unread. Without this the
-  // detail pane renders (it fetches by uid) but its action bar has no header to
-  // act on, so mark-read, keep-always and the rest quietly do nothing.
-  const selectedMsg =
-    messages.find((m) => m.uid === selectedUid) ??
-    searchResults.find(
-      (h) => h.uid === selectedUid && h.mailbox === selectedMailbox && h.folder === selectedFolder,
-    ) ??
-    null;
+  // The row every action-bar button acts on. It is not always in the list on
+  // screen: the pane renders from a fetch by uid, so a search hit, a message
+  // read while the list shows unread only, or anything past the list's 50-row
+  // limit (where a ?uid= link from Portfolio Email often lands) leaves the list
+  // without it. See resolveActionHeader for how each case is covered.
+  const selectedMsg = resolveActionHeader({
+    uid: selectedUid,
+    listRows: messages,
+    searchHits: searchResults,
+    location: { mailbox: selectedMailbox, folder: selectedFolder },
+    openMessage: fullMessage,
+    assumeUnseen: !showAllMessages,
+  });
 
   // ── Mailbox name helpers ──────────────────────────────────────────────────
   // Name format: "Display Name - email@domain.com"
