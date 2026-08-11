@@ -31,6 +31,15 @@ export {
   tooLargeMessage,
 } from "./attachments.js";
 export {
+  STARTER_CARDS,
+  STARTER_CATEGORIES,
+  findStarterCard,
+  searchStarterCards,
+  type StarterCard,
+  type StarterCategoryId,
+  type StarterPriority,
+} from "./starter-catalog.js";
+export {
   COMPANY_STATUSES,
   DEPLOYMENT_MODES,
   DEPLOYMENT_EXPOSURES,

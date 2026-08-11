@@ -1,4 +1,6 @@
-import { Search, SquarePen } from "lucide-react";
+import { useState } from "react";
+import { Search, Sparkles, SquarePen } from "lucide-react";
+import { StarterCatalogDialog } from "./StarterCatalogDialog";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
@@ -10,6 +12,7 @@ export function Sidebar() {
   const { openNewIssue } = useDialog();
   const { selectedCompany } = useCompany();
   const { keyboardShortcutsEnabled } = useGeneralSettings();
+  const [starterOpen, setStarterOpen] = useState(false);
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -42,7 +45,27 @@ export function Sidebar() {
             <kbd className="ml-auto text-[10px] text-muted-foreground/70 font-mono group-hover:text-muted-foreground transition-colors">C</kbd>
           )}
         </button>
+
+        {/* Permanent, not a first-run wizard you complete once and can never
+            find again. Phrased as a question so it doesn't assume you already
+            know Paperclip's vocabulary — "New routine" only helps someone who
+            already knows what a routine is. */}
+        <button
+          onClick={() => setStarterOpen(true)}
+          className="group mt-1.5 flex w-full items-center gap-2.5 border border-border bg-background px-3 py-1.5 text-[13px] font-medium text-foreground hover:border-foreground/30 hover:bg-accent transition-all"
+        >
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
+          <span className="truncate">What do you want done?</span>
+        </button>
       </div>
+
+      {selectedCompany && (
+        <StarterCatalogDialog
+          companyId={selectedCompany.id}
+          open={starterOpen}
+          onClose={() => setStarterOpen(false)}
+        />
+      )}
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-1">
         {selectedCompany && <SidebarMenu company={selectedCompany} />}

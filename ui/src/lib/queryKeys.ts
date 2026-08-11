@@ -184,6 +184,10 @@ export const queryKeys = {
   skills: {
     available: ["skills", "available"] as const,
   },
+  starterCatalog: {
+    all: ["starter-catalog"] as const,
+    list: (companyId: string) => ["starter-catalog", companyId] as const,
+  },
   plugins: {
     all: ["plugins"] as const,
     /**

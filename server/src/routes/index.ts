@@ -6,6 +6,7 @@ export { projectRoutes } from "./projects.js";
 export { issueRoutes } from "./issues.js";
 export { issueTreeControlRoutes } from "./issue-tree-control.js";
 export { routineRoutes } from "./routines.js";
+export { starterCatalogRoutes } from "./starter-catalog.js";
 export { goalRoutes } from "./goals.js";
 export { memoryRoutes } from "./memories.js";
 export { workQueueRoutes } from "./work-queues.js";

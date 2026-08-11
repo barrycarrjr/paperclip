@@ -17,6 +17,7 @@ import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
 import { issueTreeControlRoutes } from "./routes/issue-tree-control.js";
 import { routineRoutes } from "./routes/routines.js";
+import { starterCatalogRoutes } from "./routes/starter-catalog.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { internalNotificationRoutes } from "./routes/internal-notifications.js";
 import { templateRoutes } from "./routes/templates.js";
@@ -216,6 +217,12 @@ export async function createApp(
   const toolDispatcherRef: { current: ReturnType<typeof createPluginToolDispatcher> | null } = {
     current: null,
   };
+  // Same late-binding trick: the plugin lifecycle is built further down, but
+  // the starter catalog needs it at request time (to switch a plugin back on
+  // when a card requires one that is installed but disabled), not at mount.
+  const lifecycleRef: { current: ReturnType<typeof pluginLifecycleManager> | null } = {
+    current: null,
+  };
 
   // Mount API routes
   const api = Router();
@@ -244,6 +251,16 @@ export async function createApp(
   }));
   api.use(issueTreeControlRoutes(db));
   api.use(routineRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(
+    starterCatalogRoutes(db, {
+      enablePlugin: async (pluginId) => {
+        if (!lifecycleRef.current) {
+          throw new Error("Plugin lifecycle is not ready yet");
+        }
+        return lifecycleRef.current.enable(pluginId);
+      },
+    }),
+  );
   api.use(calendarRoutes(db));
   api.use(internalNotificationRoutes(db));
   api.use(templateRoutes(db, { pluginWorkerManager: workerManager }));
@@ -281,6 +298,7 @@ export async function createApp(
   setPluginEventBus(eventBus);
   const jobStore = pluginJobStore(db);
   const lifecycle = pluginLifecycleManager(db, { workerManager });
+  lifecycleRef.current = lifecycle;
   const scheduler = createPluginJobScheduler({
     db,
     jobStore,
