@@ -20,6 +20,7 @@ import {
   Forward,
   Send,
   Pencil,
+  Printer,
   Trash2,
   Users,
   AlignLeft,
@@ -63,6 +64,7 @@ import {
   EmailPopoutDialog,
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
+import { usePrintEmail } from "../components/email/usePrintEmail";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
@@ -904,6 +906,10 @@ export function Email() {
     setActionToast({ text, issueId });
     setTimeout(() => setActionToast(null), 4000);
   }
+
+  const emailPrinter = usePrintEmail(selectedCompanyId, {
+    onDone: (text) => showToast(text),
+  });
 
   function noteOverride(uid: number, kind: ImapOverrideKind) {
     if (overrideScope) imapOverrideStore.set(overrideScope, uid, kind);
@@ -2324,6 +2330,38 @@ export function Email() {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>Reply</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {/* The button stays visible when the print plugin is off
+                          so the feature is discoverable; the tooltip says how
+                          to turn it on. Disabled buttons swallow hover, hence
+                          the wrapper span. */}
+                      <span
+                        className={cn(
+                          "inline-flex",
+                          !emailPrinter.canPrint && "cursor-not-allowed",
+                        )}
+                      >
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          onClick={() => {
+                            if (fullMessage) emailPrinter.print.mutate(fullMessage);
+                          }}
+                          disabled={!emailPrinter.canPrint || emailPrinter.print.isPending}
+                          aria-label="Print"
+                        >
+                          {emailPrinter.print.isPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Printer className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{emailPrinter.tooltip}</TooltipContent>
                   </Tooltip>
 
                   {/* Same full-size view the portfolio list opens, so "open

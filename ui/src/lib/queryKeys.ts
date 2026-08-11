@@ -186,6 +186,13 @@ export const queryKeys = {
   },
   plugins: {
     all: ["plugins"] as const,
+    /**
+     * The UNFILTERED install list, disabled plugins included. Distinct from
+     * `all`, which callers populate with the ready-only list — sharing one key
+     * would let a ready-only response hide installed-but-off plugins from
+     * availability checks (and vice versa).
+     */
+    listAll: ["plugins", "list-all"] as const,
     examples: ["plugins", "examples"] as const,
     library: ["plugins", "library"] as const,
     detail: (pluginId: string) => ["plugins", pluginId] as const,

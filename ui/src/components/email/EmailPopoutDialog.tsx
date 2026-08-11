@@ -7,6 +7,7 @@ import {
   Loader2,
   MailOpen,
   MoveRight,
+  Printer,
   Reply,
   Send,
   Trash2,
@@ -27,6 +28,7 @@ import {
 import { makeEmailToolsApi, type MailHeader } from "../../api/emailTools";
 import { agentsApi } from "../../api/agents";
 import { useEmailMessageActions, type EmailMessageActionHooks } from "./useEmailMessageActions";
+import { usePrintEmail } from "./usePrintEmail";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -69,6 +71,10 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   const [handOffOpen, setHandOffOpen] = useState(false);
   const [handOffAgentId, setHandOffAgentId] = useState<string | null>(null);
   const [handOffNote, setHandOffNote] = useState("");
+  // Outcome of the last print click. Printing keeps the dialog open (unlike
+  // delete or move), and not every opener wires a toast, so the dialog shows
+  // its own confirmation inline.
+  const [printNote, setPrintNote] = useState<string | null>(null);
 
   // A different message means a different draft; carrying the old text over
   // would risk sending it to the wrong person.
@@ -79,7 +85,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     setHandOffOpen(false);
     setHandOffAgentId(null);
     setHandOffNote("");
+    setPrintNote(null);
   }, [request?.uid, request?.mailbox, request?.companyId]);
+
+  useEffect(() => {
+    if (!printNote) return;
+    const timer = setTimeout(() => setPrintNote(null), 4000);
+    return () => clearTimeout(timer);
+  }, [printNote]);
 
   const api = useMemo(
     () => (request ? makeEmailToolsApi(request.pluginId, request.companyId) : null),
@@ -123,6 +136,10 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
       : null,
     actionHooks,
   );
+
+  const printer = usePrintEmail(request?.companyId ?? null, {
+    onDone: (text) => setPrintNote(text),
+  });
 
   // Actions that dispose of the message close the pop-out; there is nothing
   // left to look at, and leaving it open invites acting on it twice.
@@ -233,6 +250,23 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 setBody("");
               }}
             />
+            <ToolbarButton
+              label={printer.tooltip}
+              icon={
+                printer.print.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Printer className="h-3.5 w-3.5" />
+                )
+              }
+              disabled={!printer.canPrint || printer.print.isPending}
+              onClick={() => printer.print.mutate(message)}
+            />
+            {printNote && (
+              <span role="status" className="px-1 text-xs text-muted-foreground">
+                {printNote}
+              </span>
+            )}
             <div className="ml-auto">
               <ToolbarButton
                 label="Delete (move to Trash)"
@@ -426,24 +460,32 @@ function ToolbarButton({
   icon,
   onClick,
   active,
+  disabled,
 }: {
   label: string;
   icon: React.ReactNode;
   onClick: () => void;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          size="icon-sm"
-          variant="outline"
-          aria-label={label}
-          onClick={onClick}
-          className={cn(active && "bg-accent")}
-        >
-          {icon}
-        </Button>
+        {/* A disabled button swallows pointer events, and the tooltip is where
+            a greyed-out control explains how to become usable, so the trigger
+            hangs off a wrapper that still hears the hover. */}
+        <span className={cn("inline-flex", disabled && "cursor-not-allowed")}>
+          <Button
+            size="icon-sm"
+            variant="outline"
+            aria-label={label}
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(active && "bg-accent")}
+          >
+            {icon}
+          </Button>
+        </span>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
