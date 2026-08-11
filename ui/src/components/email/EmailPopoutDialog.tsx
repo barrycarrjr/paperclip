@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Forward,
   Loader2,
+  Mail,
   MailOpen,
   MoveRight,
   Printer,
@@ -75,6 +76,11 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   // delete or move), and not every opener wires a toast, so the dialog shows
   // its own confirmation inline.
   const [printNote, setPrintNote] = useState<string | null>(null);
+  // Read state as this dialog knows it, once something in here has changed it.
+  // The opening list row is the starting point, but `request` is a snapshot
+  // taken when the dialog opened and never updates, so the read/unread toggle
+  // and a reply (which marks read) have to record the new state themselves.
+  const [readStateChange, setReadStateChange] = useState<boolean | null>(null);
 
   // A different message means a different draft; carrying the old text over
   // would risk sending it to the wrong person.
@@ -86,6 +92,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     setHandOffAgentId(null);
     setHandOffNote("");
     setPrintNote(null);
+    setReadStateChange(null);
   }, [request?.uid, request?.mailbox, request?.companyId]);
 
   useEffect(() => {
@@ -148,6 +155,26 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     onClose();
   }
 
+  const isUnread = readStateChange ?? request?.header?.unseen ?? false;
+
+  /**
+   * One button for both directions, showing the action available rather than
+   * the state the message is in: an unread message offers "mark as read", and
+   * once that is done the same button turns into "mark as unread". Neither
+   * closes the dialog — the operator is still reading the message, and the
+   * point of the toggle is being able to see it flip.
+   */
+  function toggleRead(msg: MailHeader) {
+    const wasUnread = isUnread;
+    setReadStateChange(!wasUnread);
+    const mutation = wasUnread ? actions.markRead : actions.markUnread;
+    mutation.mutate(msg, { onError: () => setReadStateChange(wasUnread) });
+  }
+
+  const readTogglePending = isUnread
+    ? actions.markRead.isPending
+    : actions.markUnread.isPending;
+
   // The list row the mutations want. When the opener did not supply one, the
   // fetched message carries everything the mutations actually read.
   const headerForActions: MailHeader | null = request?.header
@@ -159,7 +186,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
           subject: message.subject,
           date: message.date,
           snippet: "",
-          unseen: false,
+          unseen: isUnread,
         }
       : null);
 
@@ -198,9 +225,18 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
         {message && headerForActions && (
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-5 py-2">
             <ToolbarButton
-              label="Mark as unread"
-              icon={<MailOpen className="h-3.5 w-3.5" />}
-              onClick={() => runAndClose(() => actions.markUnread.mutate(headerForActions))}
+              label={isUnread ? "Mark as read" : "Mark as unread"}
+              icon={
+                readTogglePending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : isUnread ? (
+                  <MailOpen className="h-3.5 w-3.5" />
+                ) : (
+                  <Mail className="h-3.5 w-3.5" />
+                )
+              }
+              disabled={readTogglePending}
+              onClick={() => toggleRead(headerForActions)}
             />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -348,7 +384,15 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 onClick={() =>
                   actions.reply.mutate(
                     { msg: headerForActions, body, replyAll: composer.replyAll },
-                    { onSuccess: () => { setComposer(null); setBody(""); } },
+                    {
+                      onSuccess: () => {
+                        setComposer(null);
+                        setBody("");
+                        // Replying marks the message read, so the toolbar has
+                        // to stop offering to do it again.
+                        setReadStateChange(false);
+                      },
+                    },
                   )}
               >
                 {actions.reply.isPending ? (
