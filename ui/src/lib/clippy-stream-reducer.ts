@@ -172,17 +172,26 @@ export function reduceClippyStreamEvent(
         lastEventAt: now,
         stopReason: event.stopReason,
       };
-    case "error":
+    case "error": {
+      // Keep whatever the assistant had already produced and append the error
+      // underneath it. Replacing the partial content threw away the visible
+      // half of an interrupted turn, which is exactly the evidence the user
+      // needs to decide whether to retry or carry on. `finalizeUnfinishedToolCalls`
+      // does the same job for tool cards — this does it for the text.
+      const partial = prev.pendingAssistant;
+      const blocks = [...(partial?.blocks ?? [])];
+      blocks.push({ type: "text", text: `Error: ${event.error}` });
       return {
         ...EMPTY_STREAM_STATE,
         toolCalls: finalizeUnfinishedToolCalls(prev.toolCalls, now),
         lastEventAt: now,
         pendingAssistant: {
-          id: `pending-error-${now}`,
+          id: partial?.id ?? `pending-error-${now}`,
           role: "assistant",
-          blocks: [{ type: "text", text: `Error: ${event.error}` }],
+          blocks,
         },
       };
+    }
     case "ping":
       return prev;
   }

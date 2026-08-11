@@ -30,6 +30,23 @@ export interface StreamHandle {
   abort: () => void;
 }
 
+/**
+ * Error code for "the SSE stream ended without ever sending `done` or
+ * `error`". That means the connection went away mid-turn — a proxy idle
+ * timeout, the machine sleeping, a wifi blip, a server restart.
+ *
+ * This used to be invisible: the reader simply reported end-of-stream, the
+ * loop broke, and the turn stopped with nothing on screen. The user saw the
+ * assistant go quiet and had no way to tell a dropped connection from a
+ * model that had finished. Work was lost with no error anywhere.
+ */
+export const STREAM_INTERRUPTED_CODE = "stream_interrupted";
+
+const STREAM_INTERRUPTED_MESSAGE =
+  "The connection dropped before this turn finished. Anything above arrived " +
+  "before the drop; anything the assistant was still doing did not complete. " +
+  "Send the message again to retry.";
+
 export function postChatMessageStream(
   sessionId: string,
   text: string,
@@ -73,6 +90,9 @@ export function postChatMessageStream(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
+    // Whether the server ever sent a terminal event. If the stream ends and
+    // this is still false, the connection died rather than the turn ending.
+    let sawTerminalEvent = false;
     try {
       while (true) {
         const { value, done: streamDone } = await reader.read();
@@ -92,14 +112,39 @@ export function postChatMessageStream(
           if (!dataLine) continue;
           try {
             const parsed = JSON.parse(dataLine) as ChatStreamEvent;
+            if (parsed.type === "done" || parsed.type === "error") {
+              sawTerminalEvent = true;
+            }
             onEvent(parsed);
           } catch {
             /* skip malformed event */
           }
         }
       }
+      // Clean end-of-stream, but the server never said the turn was over.
+      // Report it — the alternative is the silent stop this whole code path
+      // exists to eliminate. A deliberate Stop takes the AbortError branch
+      // below instead, so this only fires on a genuine drop.
+      if (!sawTerminalEvent && !controller.signal.aborted) {
+        onEvent({
+          type: "error",
+          error: STREAM_INTERRUPTED_MESSAGE,
+          code: STREAM_INTERRUPTED_CODE,
+        });
+      }
     } catch (err) {
       if ((err as { name?: string }).name === "AbortError") return;
+      // A read that throws mid-stream is the same failure wearing a different
+      // hat — the socket died. Say so in the same words rather than surfacing
+      // a raw browser network message the user can't act on.
+      if (!sawTerminalEvent) {
+        onEvent({
+          type: "error",
+          error: STREAM_INTERRUPTED_MESSAGE,
+          code: STREAM_INTERRUPTED_CODE,
+        });
+        return;
+      }
       onEvent({ type: "error", error: err instanceof Error ? err.message : String(err) });
     } finally {
       try {

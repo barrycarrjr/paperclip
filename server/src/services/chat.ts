@@ -600,6 +600,24 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       chatPermissions.cancelSession(sessionId);
     });
 
+    /**
+     * Terminal event for an abandoned turn.
+     *
+     * Every `aborted` exit below used to be a bare `return`, which ended the
+     * generator without yielding anything. The route then closed the stream
+     * and the client saw end-of-stream with no `done` and no `error` — the
+     * turn simply stopped. That was the silent-drop symptom: work vanished
+     * with nothing on screen and nothing in the logs.
+     *
+     * If the socket really is gone this write goes nowhere, which costs
+     * nothing. If it is still open — a server-side abort, a Stop, a tool
+     * cancellation — the client now gets a proper ending instead of silence.
+     */
+    const interruptedEvent = (): StreamEvent => ({
+      type: "done",
+      stopReason: "interrupted",
+    });
+
     const toolCtx: ToolContext = {
       db,
       actor,
@@ -692,14 +710,21 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
         }
       } catch (err) {
         // Aborts are user-initiated (Stop button or socket close) and not
-        // actually errors — don't log noise or emit an error event.
-        if (aborted || isAbortError(err)) return;
+        // actually errors — don't log them as failures. They still get a
+        // terminal event so the turn ends explicitly rather than trailing off.
+        if (aborted || isAbortError(err)) {
+          yield interruptedEvent();
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         logger.error({ err, sessionId, provider: provider.name }, "Chat provider stream errored");
         yield { type: "error", error: message };
         return;
       }
-      if (aborted || !result) return;
+      if (aborted || !result) {
+        yield interruptedEvent();
+        return;
+      }
 
       const persisted = await appendAssistantMessage(sessionId, result.content);
       yield { type: "message_completed", messageId: persisted.id };
@@ -716,7 +741,10 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       const toolResults: CanonicalContentBlock[] = [];
       let draftedThisIteration = false;
       for (const block of toolUseBlocks) {
-        if (aborted) return;
+        if (aborted) {
+          yield interruptedEvent();
+          return;
+        }
         const def = CHAT_TOOLS.find((t) => t.name === block.name);
         const mutating = def?.mutating ?? false;
         yield {
@@ -740,7 +768,10 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
           approved = decision === "approve";
         }
 
-        if (aborted) return;
+        if (aborted) {
+          yield interruptedEvent();
+          return;
+        }
 
         if (!approved) {
           toolResults.push({
@@ -824,6 +855,13 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
         type: "error",
         error: `Tool loop exceeded max iterations (${MAX_TOOL_LOOPS}). Stopping to avoid runaway.`,
       };
+      return;
+    }
+
+    // The `!aborted` condition on the tool loop can also drop us out here.
+    // Same rule as every other abort path: end the turn out loud.
+    if (aborted) {
+      yield interruptedEvent();
     }
   }
 

@@ -10,7 +10,7 @@ import {
 } from "../services/chat-attachments.js";
 import { badRequest, forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
-import { MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
+import { attachmentTooLargeMessage, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 
 function requireBoardActor(req: Request): ChatActor {
   if (req.actor.type !== "board") {
@@ -154,9 +154,36 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     }, 15_000);
     heartbeat.unref?.();
 
+    // Diagnostics for dropped turns. When the socket closes we cannot tell a
+    // deliberate Stop from a proxy timeout or a sleeping laptop — both look
+    // identical at this end — but we CAN record that it happened, when, how
+    // far the turn had got, and whether it had finished. Without that, a
+    // dropped connection leaves no trace anywhere and every investigation
+    // starts from zero.
+    const sessionId = req.params.id as string;
+    const turnStartedAt = Date.now();
+    let eventsSent = 0;
+    let turnFinished = false;
+    let lastEventType: string | null = null;
+
     let abortFn: (() => void) | null = null;
     const handleClose = () => {
       clearInterval(heartbeat);
+      if (!turnFinished) {
+        logger.warn(
+          {
+            sessionId,
+            elapsedMs: Date.now() - turnStartedAt,
+            eventsSent,
+            lastEventType: lastEventType ?? null,
+            // Node exposes these on the socket when the peer goes away; they
+            // are the closest thing to a close reason available here.
+            writableEnded: res.writableEnded,
+            destroyed: res.destroyed,
+          },
+          "Chat SSE closed before the turn finished — client disconnected mid-turn",
+        );
+      }
       abortFn?.();
     };
     res.on("close", handleClose);
@@ -164,7 +191,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     try {
       for await (const event of svc.runTurn(
         actor,
-        req.params.id as string,
+        sessionId,
         parsed.data.text,
         (cb) => {
           abortFn = cb;
@@ -172,10 +199,14 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
         parsed.data.attachmentIds ?? [],
       )) {
         writeSseEvent(res, event);
+        eventsSent += 1;
+        lastEventType = event.type;
       }
+      turnFinished = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err, sessionId: req.params.id }, "Chat turn failed");
+      logger.error({ err, sessionId }, "Chat turn failed");
+      turnFinished = true;
       try {
         writeSseEvent(res, { type: "error", error: message });
       } catch {
@@ -204,7 +235,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     } catch (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === "LIMIT_FILE_SIZE") {
-          res.status(422).json({ error: `File exceeds ${MAX_ATTACHMENT_BYTES} bytes` });
+          res.status(422).json({ error: attachmentTooLargeMessage() });
           return;
         }
         res.status(400).json({ error: err.message });

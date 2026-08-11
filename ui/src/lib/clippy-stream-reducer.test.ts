@@ -115,7 +115,24 @@ describe("reduceClippyStreamEvent", () => {
     // dies: it gets an interrupted result and a completion time.
     expect(state.toolCalls["tu-1"].completedAt).toBe(NOW + 500);
     expect(state.toolCalls["tu-1"].result?.ok).toBe(false);
-    expect(state.pendingAssistant?.blocks).toEqual([{ type: "text", text: "Error: boom" }]);
+    // The error is appended below whatever the assistant had already produced,
+    // not swapped in place of it. Discarding the partial content was what made
+    // an interrupted turn look like nothing had happened.
+    expect(state.pendingAssistant?.blocks).toEqual([
+      { type: "tool_use", id: "tu-1", name: "list_issues", input: {} },
+      { type: "text", text: "Error: boom" },
+    ]);
+  });
+
+  it("keeps partial assistant text when a turn is interrupted", () => {
+    let state = reduce(EMPTY_STREAM_STATE, { type: "message_started", messageId: "m1", role: "assistant" });
+    state = reduce(state, { type: "text_delta", delta: "Half an ans" });
+    state = reduce(state, { type: "error", error: "connection dropped" }, NOW + 500);
+
+    expect(state.pendingAssistant?.blocks).toEqual([
+      { type: "text", text: "Half an ans" },
+      { type: "text", text: "Error: connection dropped" },
+    ]);
   });
 
   it("appends text deltas to the trailing text block", () => {

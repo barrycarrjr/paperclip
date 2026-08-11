@@ -157,11 +157,17 @@ export const clippyStreamManager = {
       // the new turn's abort handle or wipe its state.
       if (aborts.get(sessionId) !== handle.abort) return;
       aborts.delete(sessionId);
-      // Defensive: if the SSE returned without a terminal `done`/`error`
-      // event (network drop), still clear streaming so the UI isn't stuck.
+      // Backstop only. postChatMessageStream now synthesises an `error` event
+      // when the stream ends without a terminal one, so a drop normally
+      // arrives through applyEvent and keeps its partial content. If we still
+      // land here streaming, clear it so the UI isn't stuck spinning — but
+      // keep the partial assistant text rather than wiping it, because
+      // silently discarding it is what made dropped turns look like nothing
+      // had happened at all.
       if (getState(sessionId).streaming) {
         setState(sessionId, (prev) => ({
           ...EMPTY_STREAM_STATE,
+          pendingAssistant: prev.pendingAssistant,
           toolCalls: finalizeUnfinishedToolCalls(prev.toolCalls, Date.now()),
         }));
       }
