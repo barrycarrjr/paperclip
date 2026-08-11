@@ -8,6 +8,7 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-code: var(--code);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
@@ -60,7 +61,10 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
+  /* Text/icons placed ON a destructive surface. This was set to the same red
+     as --destructive, so `bg-destructive text-destructive-foreground` painted
+     red on red and rendered the label invisible in light mode. */
+  --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -77,41 +81,111 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Scrollbars. Declared as tokens rather than repeated literals because the
+     same three colours appear across four scrollbar variants below — when the
+     dark palette moved, the hardcoded copies did not move with it. */
+  --scrollbar-track: oklch(0.925 0 0);
+  --scrollbar-thumb: oklch(0.71 0 0);
+  --scrollbar-thumb-hover: oklch(0.6 0 0);
+
+  /* Sunken surface for code, logs and raw payload blocks — recessed below a
+     card rather than raised above it. Previously hardcoded per component as
+     `bg-neutral-100 dark:bg-neutral-950`, which is why those blocks did not
+     follow the theme. Use `bg-code`. */
+  --code: oklch(0.965 0 0);
 }
 
+/*
+ * Dark palette.
+ *
+ * The previous values were the stock shadcn dark set, and they measured badly
+ * on the two things that decide whether a dark UI is readable:
+ *
+ *   card vs background   1.10:1   surfaces were invisible — a card, a dialog
+ *                                 and the page behind them were the same wall
+ *   border vs background 1.31:1   nothing had an edge, so the eye had no
+ *                                 structure to follow
+ *   focus ring vs bg     2.54:1   below the 3:1 WCAG 1.4.11 floor
+ *
+ * Text was never the problem (foreground measured ~19:1) — if anything it was
+ * glaring white on near-black, which reads as harsh AND murky at once.
+ *
+ * So: lift the whole page off near-black, widen the gap between stacked
+ * surfaces, make edges actually visible, and pull the brightest white down a
+ * touch. Values are oklch lightness, which is perceptually even, so the steps
+ * below are equal-looking steps rather than equal numbers.
+ *
+ * Contrast after this change (WCAG, against --background):
+ *   foreground        17.0:1   comfortable, no longer glaring
+ *   muted-foreground   8.4:1   passes AAA for body text
+ *   input border       3.1:1   meets the 3:1 non-text floor
+ *   focus ring         5.6:1   unmistakable
+ */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Page. 0.145 was effectively a black void; 0.19 still reads as a dark
+     theme but gives the surfaces above it somewhere to sit. */
+  --background: oklch(0.19 0 0);
+  /* Pulled down from 0.985 — pure white on near-black is what makes long
+     reading sessions tiring. Still 17:1. */
+  --foreground: oklch(0.96 0 0);
+
+  /* Raised surfaces: cards, dialogs, popovers. The step up from the page is
+     what tells you an element is a distinct thing. */
+  --card: oklch(0.245 0 0);
+  --card-foreground: oklch(0.96 0 0);
+  --popover: oklch(0.245 0 0);
+  --popover-foreground: oklch(0.96 0 0);
+
+  --primary: oklch(0.96 0 0);
+  --primary-foreground: oklch(0.19 0 0);
+
+  /* Interactive fills. `accent` sits a step above `secondary` so a hover
+     state is actually distinguishable from the resting state. */
+  --secondary: oklch(0.30 0 0);
+  --secondary-foreground: oklch(0.96 0 0);
+  --muted: oklch(0.30 0 0);
+  --muted-foreground: oklch(0.76 0 0);
+  --accent: oklch(0.34 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+
   --destructive: oklch(0.637 0.237 25.331);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
+
+  /* `border` is applied to essentially every element by the base layer, so it
+     stays a hairline rather than a hard rule — but a clearly visible one.
+     `input` is higher because a form control's boundary is load-bearing:
+     WCAG 1.4.11 wants 3:1 for anything you have to find in order to use. */
+  --border: oklch(0.40 0 0);
+  --input: oklch(0.50 0 0);
+  --ring: oklch(0.65 0 0);
+
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.145 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
+
+  /* Sidebar tracks the page rather than sitting a shade darker, so the app
+     doesn't read as two disconnected panels. */
+  --sidebar: oklch(0.215 0 0);
+  --sidebar-foreground: oklch(0.96 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
+  --sidebar-accent: oklch(0.32 0 0);
+  --sidebar-accent-foreground: oklch(0.96 0 0);
+  --sidebar-border: oklch(0.40 0 0);
+  --sidebar-ring: oklch(0.65 0 0);
+
+  /* Tuned to the lifted surfaces above: the track sits just under a card so
+     it reads as a groove, the thumb is clearly grabbable. */
+  --scrollbar-track: oklch(0.26 0 0);
+  --scrollbar-thumb: oklch(0.48 0 0);
+  --scrollbar-thumb-hover: oklch(0.60 0 0);
+
+  /* Recessed below both the page (0.19) and a card (0.245), so a log block
+     still reads as sunken now that the surfaces above it have lifted. */
+  --code: oklch(0.155 0 0);
 }
 
 @layer base {
@@ -184,16 +258,16 @@
 }
 
 .dark *::-webkit-scrollbar-track {
-  background: oklch(0.205 0 0);
+  background: var(--scrollbar-track);
 }
 
 .dark *::-webkit-scrollbar-thumb {
-  background: oklch(0.4 0 0);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 .dark *::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.5 0 0);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Auto-hide scrollbar: always reserves space, thumb visible only on hover */
@@ -207,25 +281,16 @@
 .scrollbar-auto-hide::-webkit-scrollbar-thumb {
   background: transparent !important;
 }
-/* Light mode scrollbar on hover */
+/* Revealed on hover. Both themes come from the same tokens, so there is only
+   one place to change a scrollbar colour. */
 .scrollbar-auto-hide:hover::-webkit-scrollbar-track {
-  background: oklch(0.92 0 0) !important;
+  background: var(--scrollbar-track) !important;
 }
 .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb {
-  background: oklch(0.7 0 0) !important;
+  background: var(--scrollbar-thumb) !important;
 }
 .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.6 0 0) !important;
-}
-/* Dark mode scrollbar on hover */
-.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-track {
-  background: oklch(0.205 0 0) !important;
-}
-.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb {
-  background: oklch(0.4 0 0) !important;
-}
-.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.5 0 0) !important;
+  background: var(--scrollbar-thumb-hover) !important;
 }
 
 /* Always-visible scrollbar: the opposite of .scrollbar-auto-hide, for strips
@@ -238,24 +303,15 @@
   height: 10px;
 }
 .scrollbar-visible::-webkit-scrollbar-track {
-  background: oklch(0.93 0 0);
+  background: var(--scrollbar-track);
   border-radius: 9999px;
 }
 .scrollbar-visible::-webkit-scrollbar-thumb {
-  background: oklch(0.72 0 0);
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
 }
 .scrollbar-visible::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.6 0 0);
-}
-.dark .scrollbar-visible::-webkit-scrollbar-track {
-  background: oklch(0.25 0 0);
-}
-.dark .scrollbar-visible::-webkit-scrollbar-thumb {
-  background: oklch(0.47 0 0);
-}
-.dark .scrollbar-visible::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.58 0 0);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Expandable dialog transition for max-width changes */

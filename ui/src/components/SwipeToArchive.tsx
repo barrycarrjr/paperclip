@@ -153,7 +153,9 @@ export function SwipeToArchive({
         data-inbox-row-surface
         className={cn(
           "relative will-change-transform",
-          selected ? "bg-zinc-100 dark:bg-zinc-800" : "bg-card",
+          // Themed rather than hardcoded zinc: the selected-row highlight has
+          // to keep tracking the palette, and the literal pair didn't.
+          selected ? "bg-accent" : "bg-card",
         )}
         style={{
           transform: `translate3d(${offsetX}px, 0, 0)`,

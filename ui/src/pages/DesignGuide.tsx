@@ -1164,7 +1164,10 @@ export function DesignGuide() {
       {/*  LOG VIEWER                                                   */}
       {/* ============================================================ */}
       <Section title="Log Viewer">
-        <div className="bg-neutral-950 rounded-lg p-3 font-mono text-xs max-h-80 overflow-y-auto">
+        {/* bg-code, not a hardcoded near-black: this block paired a fixed dark
+            background with `text-foreground`, so in light mode the log lines
+            were near-black on near-black and unreadable. */}
+        <div className="bg-code rounded-lg p-3 font-mono text-xs max-h-80 overflow-y-auto">
           <div className="text-foreground">[12:00:01] INFO  Agent started successfully</div>
           <div className="text-foreground">[12:00:02] INFO  Processing task PAP-001</div>
           <div className="text-yellow-400">[12:00:05] WARN  Rate limit approaching (80%)</div>
