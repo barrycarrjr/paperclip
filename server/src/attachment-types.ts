@@ -15,6 +15,12 @@
  *   - Wildcards:     "image/*"  or  "application/vnd.openxmlformats-officedocument.*"
  */
 
+import {
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  formatByteSize,
+  tooLargeMessage,
+} from "@paperclipai/shared";
+
 export const DEFAULT_ALLOWED_TYPES: readonly string[] = [
   "image/png",
   "image/jpeg",
@@ -91,4 +97,23 @@ export function isAllowedContentType(contentType: string): boolean {
 }
 
 export const MAX_ATTACHMENT_BYTES =
-  Number(process.env.PAPERCLIP_ATTACHMENT_MAX_BYTES) || 10 * 1024 * 1024;
+  Number(process.env.PAPERCLIP_ATTACHMENT_MAX_BYTES) || DEFAULT_MAX_ATTACHMENT_BYTES;
+
+/**
+ * Rejection text for an oversized upload. Callers pass the size that was
+ * actually received so the user sees both numbers rather than a bare
+ * "too large" that leaves them guessing how far over they were.
+ *
+ * `actualBytes` is unknown on the multer `LIMIT_FILE_SIZE` path — multer
+ * aborts the stream at the ceiling and never counts the rest — so that
+ * caller omits it and gets the limit-only wording.
+ */
+export function attachmentTooLargeMessage(actualBytes?: number): string {
+  if (typeof actualBytes === "number") {
+    return tooLargeMessage(actualBytes, MAX_ATTACHMENT_BYTES);
+  }
+  return (
+    `File is over the ${formatByteSize(MAX_ATTACHMENT_BYTES)} limit. ` +
+    `Compress it or trim it down and try again.`
+  );
+}

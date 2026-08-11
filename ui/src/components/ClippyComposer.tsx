@@ -20,6 +20,11 @@ import {
   type PermissionMode,
 } from "../api/chat";
 import { cn } from "../lib/utils";
+import {
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  formatByteSize as formatBytes,
+  tooLargeMessage,
+} from "@paperclipai/shared";
 
 /**
  * Decode an `adapter:<type>:<modelId>` id into the bare model + adapter
@@ -588,15 +593,10 @@ function UploadChip({ upload, onRemove }: { upload: PendingUpload; onRemove: () 
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// Common per-MIME max from the server (10 MB default). Tested client-side so
-// the user gets feedback without a round-trip.
-const CLIENT_MAX_BYTES = 10 * 1024 * 1024;
+// Same default the server enforces, imported rather than re-typed so the
+// number the user is told can't drift from the number actually applied.
+// Tested client-side so they get feedback without a round-trip.
+const CLIENT_MAX_BYTES = DEFAULT_MAX_ATTACHMENT_BYTES;
 
 /**
  * Reject the obvious "this won't work" cases before we even hit the server,
@@ -605,6 +605,10 @@ const CLIENT_MAX_BYTES = 10 * 1024 * 1024;
  *    Browsers report them as `application/x-ms-shortcut` (or no MIME) and
  *    the server allowlist would reject anyway with a less obvious message.
  *  - Empty / zero-byte drops (folders, broken handoffs).
+ *  - Video and audio, which upload fine but which the assistant cannot
+ *    actually watch or listen to. Letting those through looks like success
+ *    and then quietly does nothing, which is worse than a clear refusal —
+ *    so say what it can't do and name the two things that do work.
  */
 function preflightRejectionFor(file: File): string | null {
   const name = (file.name ?? "").toLowerCase();
@@ -615,13 +619,19 @@ function preflightRejectionFor(file: File): string | null {
   if (name.endsWith(".url") || mime === "application/internet-shortcut") {
     return "Internet shortcuts can't be uploaded — drop the actual file";
   }
+  if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+    return (
+      "I can't watch video or listen to audio. Send a screenshot of the " +
+      "moment that matters, or paste the file's path and I'll read it off disk."
+    );
+  }
   if (file.size === 0) {
     // Folder drops show up as zero-byte entries in some browsers. So do
     // genuinely empty files; either way there's nothing useful to send.
     return "File is empty (folders can't be uploaded — drop a file inside)";
   }
   if (file.size > CLIENT_MAX_BYTES) {
-    return `File is too large (${formatBytes(file.size)} > ${formatBytes(CLIENT_MAX_BYTES)})`;
+    return tooLargeMessage(file.size, CLIENT_MAX_BYTES);
   }
   return null;
 }

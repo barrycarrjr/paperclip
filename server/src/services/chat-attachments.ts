@@ -8,6 +8,7 @@ import { forbidden, notFound, badRequest } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { resolveClippyAttachmentDir } from "../home-paths.js";
 import {
+  attachmentTooLargeMessage,
   isAllowedContentType,
   MAX_ATTACHMENT_BYTES,
   normalizeContentType,
@@ -98,9 +99,21 @@ export function chatAttachmentService(db: Db) {
       throw badRequest("Attachment is empty");
     }
     if (input.buffer.length > MAX_ATTACHMENT_BYTES) {
-      throw badRequest(`Attachment exceeds ${MAX_ATTACHMENT_BYTES} bytes`);
+      // We have the real byte count here (the whole buffer made it through),
+      // so quote it — this is the one path that can tell the user how far over
+      // they were rather than just naming the ceiling.
+      throw badRequest(attachmentTooLargeMessage(input.buffer.length));
     }
     if (!isAllowedContentType(mediaType)) {
+      // Video/audio is the common case here and deserves its own wording:
+      // the file is fine, the assistant just can't consume it, and the user
+      // needs to know what to send instead.
+      if (mediaType.startsWith("video/") || mediaType.startsWith("audio/")) {
+        throw badRequest(
+          `${mediaType} can't be read by the assistant. Send a screenshot of the ` +
+            `relevant moment, or give it the file's path on disk instead.`,
+        );
+      }
       throw badRequest(`Unsupported attachment type: ${mediaType}`);
     }
 

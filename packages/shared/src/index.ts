@@ -26,6 +26,11 @@ export {
   outboundToolLabel,
 } from "./approval-labels.js";
 export {
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  formatByteSize,
+  tooLargeMessage,
+} from "./attachments.js";
+export {
   COMPANY_STATUSES,
   DEPLOYMENT_MODES,
   DEPLOYMENT_EXPOSURES,

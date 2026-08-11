@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
-import { MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
+import { attachmentTooLargeMessage, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import type { StorageService } from "../storage/types.js";
 
 const { createAssetMock, getAssetByIdMock, logActivityMock } = vi.hoisted(() => ({
@@ -297,7 +297,10 @@ describe("POST /api/companies/:companyId/logo", () => {
     );
 
     expect(res.status).toBe(422);
-    expect(res.body.error).toBe(`Image exceeds ${MAX_ATTACHMENT_BYTES} bytes`);
+    expect(res.body.error).toBe(attachmentTooLargeMessage());
+    // The message has to name a real size, not a raw byte count — that's the
+    // whole point of the change, so pin it rather than only pinning equality.
+    expect(res.body.error).toMatch(/\d+(\.\d+)?\s(B|KB|MB|GB)\slimit/);
   });
 
   it("rejects unsupported image types", async () => {
