@@ -177,7 +177,11 @@ export function PluginSettings() {
   // Filter slots to only show settings pages for this specific plugin
   const pluginSlots = slots.filter((slot) => slot.pluginId === pluginId);
 
-  // If the plugin has a custom settingsPage slot, prefer that over auto-generated form
+  // A plugin's own settings panel renders *alongside* the generated config
+  // form, not instead of it. It used to replace it, which meant the moment a
+  // plugin contributed any settings UI its operator lost the ability to
+  // configure the plugin at all — including the credentials and mailboxes the
+  // contributed panel itself depends on.
   const hasCustomSettingsPage = pluginSlots.length > 0;
 
   useEffect(() => {
@@ -306,8 +310,27 @@ export function PluginSettings() {
               <div className="space-y-1">
                 <h2 className="text-base font-semibold">Settings</h2>
               </div>
-              {hasCustomSettingsPage ? (
-                <div className="space-y-3">
+              {hasConfigSchema ? (
+                <PluginConfigForm
+                  pluginId={pluginId!}
+                  schema={configSchema!}
+                  initialValues={configData?.configJson}
+                  isLoading={configLoading}
+                  pluginStatus={plugin.status}
+                  supportsConfigTest={(plugin as unknown as { supportsConfigTest?: boolean }).supportsConfigTest === true}
+                  secrets={secretsData}
+                />
+              ) : hasCustomSettingsPage ? null : (
+                <p className="text-sm text-muted-foreground">
+                  This plugin does not require any settings.
+                </p>
+              )}
+            </section>
+
+            {hasCustomSettingsPage && (
+              <>
+                <Separator />
+                <section className="space-y-3">
                   {pluginSlots.map((slot) => (
                     <PluginSlotMount
                       key={`${slot.pluginKey}:${slot.id}`}
@@ -319,23 +342,9 @@ export function PluginSettings() {
                       missingBehavior="placeholder"
                     />
                   ))}
-                </div>
-              ) : hasConfigSchema ? (
-                <PluginConfigForm
-                  pluginId={pluginId!}
-                  schema={configSchema!}
-                  initialValues={configData?.configJson}
-                  isLoading={configLoading}
-                  pluginStatus={plugin.status}
-                  supportsConfigTest={(plugin as unknown as { supportsConfigTest?: boolean }).supportsConfigTest === true}
-                  secrets={secretsData}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  This plugin does not require any settings.
-                </p>
-              )}
-            </section>
+                </section>
+              </>
+            )}
           </div>
         </TabsContent>
 
