@@ -78,6 +78,88 @@ import {
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
 import { badRequest, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
+import { logger } from "../middleware/logger.js";
+
+const log = logger.child({ service: "plugin-routes" });
+
+/**
+ * Unwrap a `fetch` rejection into something an operator can act on.
+ *
+ * Node's fetch reports every network-level failure as the same three words,
+ * "fetch failed", and hides the real reason (DNS, TLS, reset socket) one or
+ * more levels down in `cause`. Surfacing the bare message meant a plugin
+ * update could fail with no indication of why, or even that it was the
+ * download that failed rather than the plugin itself.
+ */
+export function describeFetchFailure(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  const seen = new Set<unknown>();
+  while (current && !seen.has(current) && parts.length < 4) {
+    seen.add(current);
+    const e = current as { message?: unknown; code?: unknown; cause?: unknown };
+    const code = typeof e.code === "string" ? e.code : null;
+    const message = typeof e.message === "string" ? e.message : null;
+    if (message) parts.push(code ? `${message} [${code}]` : message);
+    else if (code) parts.push(code);
+    current = e.cause;
+  }
+  return parts.length > 0 ? parts.join(": ") : String(err);
+}
+
+/** How many times to attempt a plugin asset download before giving up. */
+const PLUGIN_ASSET_DOWNLOAD_ATTEMPTS = 3;
+
+/**
+ * Download a plugin asset, retrying transient network failures.
+ *
+ * A single dropped socket used to permanently block a plugin update: the route
+ * made one attempt, and any failure surfaced as "fetch failed" with no retry
+ * and no detail. Larger plugins are hit hardest simply because they spend
+ * longer on the wire, so the biggest plugin in the library could sit
+ * un-updatable for release after release while small ones sailed through.
+ *
+ * Only the connection is retried. An HTTP error status is returned to the
+ * caller as-is, because re-requesting a 404 will not make the asset exist.
+ */
+export async function downloadPluginAsset(
+  url: string,
+  label: string,
+): Promise<{ ok: true; buffer: Buffer } | { ok: false; status: number; error: string }> {
+  let lastFailure = "";
+  for (let attempt = 1; attempt <= PLUGIN_ASSET_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(url, { headers: { accept: "application/octet-stream" } });
+      if (!res.ok) {
+        return {
+          ok: false,
+          status: 502,
+          error: `Failed to download ${label} (HTTP ${res.status}).`,
+        };
+      }
+      return { ok: true, buffer: Buffer.from(await res.arrayBuffer()) };
+    } catch (err) {
+      lastFailure = describeFetchFailure(err);
+      log.warn(
+        { url, label, attempt, attempts: PLUGIN_ASSET_DOWNLOAD_ATTEMPTS, error: lastFailure },
+        "plugin asset download failed",
+      );
+      if (attempt < PLUGIN_ASSET_DOWNLOAD_ATTEMPTS) {
+        // Back off a little so a blip has time to clear, and so a reset
+        // pooled socket is not immediately reused for the retry.
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+    }
+  }
+  return {
+    ok: false,
+    status: 502,
+    error:
+      `Could not download ${label} after ${PLUGIN_ASSET_DOWNLOAD_ATTEMPTS} attempts. ` +
+      `Last error: ${lastFailure}. The plugin archive can also be installed by ` +
+      `uploading the .pcplugin file directly.`,
+  };
+}
 
 /** UI slot declaration extracted from plugin manifest */
 type PluginUiSlotDeclaration = NonNullable<NonNullable<PaperclipPluginManifestV1["ui"]>["slots"]>[number];
@@ -1471,16 +1553,12 @@ export function pluginRoutes(
     const tempRoot = path.join(os.tmpdir(), "paperclip-pcplugin-library");
     const tempDir = path.join(tempRoot, randomUUID());
     try {
-      const assetRes = await fetch(entry.downloadUrl, {
-        headers: { accept: "application/octet-stream" },
-      });
-      if (!assetRes.ok) {
-        res.status(502).json({
-          error: `Failed to download ${entry.fileName ?? id} (HTTP ${assetRes.status}).`,
-        });
+      const download = await downloadPluginAsset(entry.downloadUrl, entry.fileName ?? id);
+      if (!download.ok) {
+        res.status(download.status).json({ error: download.error });
         return;
       }
-      const buf = Buffer.from(await assetRes.arrayBuffer());
+      const buf = download.buffer;
 
       let zip: JSZip;
       try {
@@ -2680,16 +2758,15 @@ export function pluginRoutes(
     const tempDir = path.join(tempRoot, randomUUID());
     const previousVersion = plugin.version;
     try {
-      const assetRes = await fetch(entry.downloadUrl, {
-        headers: { accept: "application/octet-stream" },
-      });
-      if (!assetRes.ok) {
-        res.status(502).json({
-          error: `Failed to download plugin from library (HTTP ${assetRes.status}).`,
-        });
+      const download = await downloadPluginAsset(
+        entry.downloadUrl,
+        entry.fileName ?? plugin.pluginKey,
+      );
+      if (!download.ok) {
+        res.status(download.status).json({ error: download.error });
         return;
       }
-      const buf = Buffer.from(await assetRes.arrayBuffer());
+      const buf = download.buffer;
       let zip: JSZip;
       try {
         zip = await JSZip.loadAsync(buf);

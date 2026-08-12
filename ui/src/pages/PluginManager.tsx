@@ -777,6 +777,38 @@ export function PluginManager() {
                       <p className="text-sm text-muted-foreground truncate mt-1">
                         {row.description ?? "No description provided."}
                       </p>
+                      {installed?.status === "upgrade_pending" && (
+                        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2">
+                          <div className="flex flex-wrap items-start gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-200">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                <span>Waiting for your approval</span>
+                              </div>
+                              <p className="mt-1 text-sm text-amber-800/90 dark:text-amber-200/90 break-words">
+                                v{installed.version} is installed but not running. This version asks
+                                for permissions the previous one did not have, so it stays paused
+                                until you approve it.
+                              </p>
+                              {(installed.manifestJson?.capabilities ?? []).length > 0 && (
+                                <p className="mt-1.5 text-xs text-amber-800/80 dark:text-amber-200/80 break-words">
+                                  <span className="font-medium">It will be able to:</span>{" "}
+                                  {(installed.manifestJson.capabilities ?? []).join(", ")}
+                                </p>
+                              )}
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-amber-500/40 bg-background/60 text-amber-800 hover:bg-amber-500/10 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
+                              onClick={() => enableMutation.mutate(installed.id)}
+                              disabled={enableMutation.isPending}
+                            >
+                              {enableMutation.isPending ? "Approving…" : "Approve and enable"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                       {installed?.status === "error" && (
                         <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/[0.06] px-3 py-2">
                           <div className="flex flex-wrap items-start gap-3">
