@@ -221,6 +221,23 @@ export interface ToolRunContext {
    * a follow-up message into the transcript. Absent for ordinary agent runs.
    */
   chatSessionId?: string;
+  /**
+   * UUID of the human whose action produced this tool call, when there is one.
+   * Set for Clippy turns and for board users invoking a tool directly. Null or
+   * absent for ordinary agent runs, which have no person behind them.
+   *
+   * This is the counterpart of `PluginApiRequestInput.actor.userId` and exists
+   * so a plugin can own per-user data (a personal list, a per-operator setting)
+   * and still be reachable from chat.
+   *
+   * SECURITY: host-populated only. It is derived from the authenticated session
+   * at every dispatch site and is stripped from any caller-supplied runContext
+   * on `POST /api/plugins/tools/execute`. Never accept it from the wire, and
+   * never let a tool take an owner as a parameter instead — that would let one
+   * caller act as another user. When it is absent, a per-user tool must refuse
+   * rather than guess.
+   */
+  userId?: string | null;
 }
 
 /**

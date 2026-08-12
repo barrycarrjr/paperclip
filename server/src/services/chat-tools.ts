@@ -1097,6 +1097,10 @@ export async function executePluginChatTool(
     companyId: ctx.defaultCompanyId,
     projectId: "",
     chatSessionId: ctx.chatSessionId,
+    // The person behind this turn. Taken from the authenticated chat actor, so
+    // a plugin tool can own per-user data without the model being able to name
+    // an owner itself. See ToolRunContext.userId.
+    userId: ctx.actor.userId ?? null,
   };
   try {
     const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext);

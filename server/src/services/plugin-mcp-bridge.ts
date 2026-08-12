@@ -341,6 +341,9 @@ export function createPluginMcpBridge(
               companyId: session.companyId,
               projectId: session.agentRunContext.projectId ?? "",
               chatSessionId: session.chatSessionId,
+              // An agent run has no person behind it, so per-user tools must
+              // refuse rather than act as somebody.
+              userId: null,
             }
           : {
               agentId: `clippy:${session.actor.userId}`,
@@ -348,6 +351,7 @@ export function createPluginMcpBridge(
               companyId: session.companyId,
               projectId: "",
               chatSessionId: session.chatSessionId,
+              userId: session.actor.userId ?? null,
             };
 
         try {

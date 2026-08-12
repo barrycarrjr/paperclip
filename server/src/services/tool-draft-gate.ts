@@ -376,6 +376,11 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         // Clippy can pick up where it left off after the user resolves the
         // draft. Null/absent for ordinary agent runs (those wake via heartbeat).
         chatSessionId: runContext.chatSessionId ?? null,
+        // The person who set this call in motion, captured at draft time so the
+        // replay after approval acts as them and not as whoever clicked
+        // approve. `actor.userId` is the fallback for the older convention
+        // where the Clippy user id was only encoded in the agentId prefix.
+        userId: runContext.userId ?? actor.userId ?? null,
         draftedAt: new Date().toISOString(),
       } satisfies Record<string, unknown>;
 
@@ -496,11 +501,17 @@ export async function executeDraftedApproval(
 
   // Re-dispatch via the same dispatcher path. The agentId is the same one
   // that drafted, so company-scope checks and audit attribution stay correct.
+  //
+  // userId comes from the draft payload rather than from whoever approved, so a
+  // per-user tool writes to the list of the person who asked for it. Left
+  // undefined when the draft predates that field, which makes a per-user tool
+  // refuse instead of acting as the wrong person.
   const runContext: ToolRunContext = {
     companyId: approval.companyId,
     agentId: originalAgentId ?? "draft-approval",
     runId: typeof payload?.runId === "string" ? payload.runId : `approval:${approval.id}`,
     projectId: "",
+    userId: typeof payload?.userId === "string" ? payload.userId : null,
   };
 
   try {

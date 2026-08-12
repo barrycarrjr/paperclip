@@ -962,6 +962,18 @@ export function pluginRoutes(
       return;
     }
 
+    // `runContext.userId` is host-populated and must never be taken from the
+    // request body: a plugin can key per-user data off it (a personal list, a
+    // per-operator setting), so honouring a caller-supplied value would let an
+    // agent read or write any user's rows just by naming them. Overwrite it
+    // from the authenticated principal, which the checks above have already
+    // matched against runContext.agentId. An agent has no person behind it and
+    // gets null, so per-user tools refuse rather than guess.
+    const safeRunContext: ToolRunContext = {
+      ...runContext,
+      userId: req.actor.type === "board" ? req.actor.userId ?? null : null,
+    };
+
     // Verify the tool exists
     const registeredTool = toolDeps.toolDispatcher.getTool(tool);
     if (!registeredTool) {
@@ -973,7 +985,7 @@ export function pluginRoutes(
       const result = await toolDeps.toolDispatcher.executeTool(
         tool,
         parameters ?? {},
-        runContext,
+        safeRunContext,
       );
       res.json(result);
     } catch (err) {

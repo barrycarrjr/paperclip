@@ -461,8 +461,94 @@ describe.sequential("plugin tool and bridge authz", () => {
         runId: runA,
         companyId: companyA,
         projectId: projectA,
+        // Filled in by the route from the authenticated board actor, so a
+        // plugin can key per-user data off it.
+        userId: "user-1",
       },
     );
+  });
+
+  it("overwrites a caller-supplied runContext.userId with the authenticated board user", async () => {
+    // A plugin may key per-user data off runContext.userId (the todo-list
+    // plugin's personal list does), so honouring a body-supplied value would
+    // let any caller read or write another person's rows just by naming them.
+    const executeTool = vi.fn().mockResolvedValue({ content: "ok" });
+    const { app } = await createApp(boardActor(), {}, {
+      db: createSelectQueueDb([
+        [{ companyId: companyA }],
+        [{ companyId: companyA, agentId: agentA }],
+        [{ companyId: companyA }],
+      ]),
+      toolDeps: {
+        toolDispatcher: {
+          listToolsForAgent: vi.fn(),
+          getTool: vi.fn(() => ({ name: "paperclip.example:search" })),
+          executeTool,
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/plugins/tools/execute")
+      .send({
+        tool: "paperclip.example:search",
+        parameters: {},
+        runContext: {
+          agentId: agentA,
+          runId: runA,
+          companyId: companyA,
+          projectId: projectA,
+          userId: "somebody-elses-user-id",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    const dispatched = executeTool.mock.calls[0]?.[2] as { userId?: string | null };
+    expect(dispatched.userId).toBe("user-1");
+    expect(dispatched.userId).not.toBe("somebody-elses-user-id");
+  });
+
+  it("gives an agent-authenticated caller a null runContext.userId", async () => {
+    // An agent run has no person behind it. Per-user plugin tools must refuse
+    // rather than act as somebody, so the field has to be null and not merely
+    // absent-but-spoofable.
+    const executeTool = vi.fn().mockResolvedValue({ content: "ok" });
+    const { app } = await createApp(
+      { type: "agent", agentId: agentA, companyId: companyA, source: "agent_key" },
+      {},
+      {
+        db: createSelectQueueDb([
+          [{ companyId: companyA }],
+          [{ companyId: companyA, agentId: agentA }],
+          [{ companyId: companyA }],
+        ]),
+        toolDeps: {
+          toolDispatcher: {
+            listToolsForAgent: vi.fn(),
+            getTool: vi.fn(() => ({ name: "paperclip.example:search" })),
+            executeTool,
+          },
+        },
+      },
+    );
+
+    const res = await request(app)
+      .post("/api/plugins/tools/execute")
+      .send({
+        tool: "paperclip.example:search",
+        parameters: {},
+        runContext: {
+          agentId: agentA,
+          runId: runA,
+          companyId: companyA,
+          projectId: projectA,
+          userId: "somebody-elses-user-id",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    const dispatched = executeTool.mock.calls[0]?.[2] as { userId?: string | null };
+    expect(dispatched.userId).toBeNull();
   });
 
   it.each([
