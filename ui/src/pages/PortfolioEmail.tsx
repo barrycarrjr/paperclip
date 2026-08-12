@@ -44,6 +44,7 @@ import {
 } from "../components/email/EmailPopoutDialog";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
 import { queryKeys } from "../lib/queryKeys";
+import { useToastActions } from "@/context/ToastContext";
 import { timeAgo } from "../lib/timeAgo";
 import {
   applyImapOverrides,
@@ -801,6 +802,11 @@ function MailboxPanel({
     return false;
   }
 
+  // A rule the server rejects (a malformed pattern, say) used to land nowhere:
+  // every mutation here swallowed its error, so the button looked like it had
+  // done nothing at all.
+  const { pushToast } = useToastActions();
+
   function invalidateRules() {
     queryClient.invalidateQueries({
       queryKey: ["email", pluginId, primaryCompanyId, key, "rules"],
@@ -881,6 +887,8 @@ function MailboxPanel({
       await emailApi.setRule(key, sender, "keep-always");
     },
     onSuccess: () => invalidateRules(),
+    onError: (err) =>
+      pushToast({ title: "Keep always failed", body: (err as Error).message, tone: "error" }),
   });
 
   const autoTriageMutation = useMutation({
@@ -894,9 +902,10 @@ function MailboxPanel({
       invalidateRules();
       invalidateMessageLists();
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      pushToast({ title: "Auto-triage failed", body: (err as Error).message, tone: "error" });
     },
   });
 

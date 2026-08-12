@@ -920,9 +920,10 @@ export function Email() {
       const tail = sweptCount > 0 ? ` (+ ${sweptCount} existing)` : "";
       showToast(`Auto-triaged: ${sender}${tail}`);
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      showToast(`Auto-triage failed: ${(err as Error).message}`);
     },
   });
 
@@ -935,6 +936,7 @@ export function Email() {
       invalidateRules();
       showToast(`Keep always: ${extractSender(msg)}`);
     },
+    onError: (err) => showToast(`Keep always failed: ${(err as Error).message}`),
   });
 
   const markReadMutation = useMutation({

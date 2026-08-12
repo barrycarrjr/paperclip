@@ -119,8 +119,10 @@ const PLUGIN_ASSET_DOWNLOAD_ATTEMPTS = 3;
  * longer on the wire, so the biggest plugin in the library could sit
  * un-updatable for release after release while small ones sailed through.
  *
- * Only the connection is retried. An HTTP error status is returned to the
- * caller as-is, because re-requesting a 404 will not make the asset exist.
+ * Retries cover a dropped connection and the transient server-side statuses:
+ * 429 (rate limited) and 5xx, which GitHub's release CDN does serve during an
+ * incident. A 4xx other than 429 returns immediately, because re-requesting a
+ * 404 will not make the asset exist.
  */
 export async function downloadPluginAsset(
   url: string,
@@ -130,25 +132,32 @@ export async function downloadPluginAsset(
   for (let attempt = 1; attempt <= PLUGIN_ASSET_DOWNLOAD_ATTEMPTS; attempt += 1) {
     try {
       const res = await fetch(url, { headers: { accept: "application/octet-stream" } });
-      if (!res.ok) {
+      if (res.ok) return { ok: true, buffer: Buffer.from(await res.arrayBuffer()) };
+
+      const worthRetrying = res.status === 429 || res.status >= 500;
+      lastFailure = `HTTP ${res.status}`;
+      if (!worthRetrying || attempt === PLUGIN_ASSET_DOWNLOAD_ATTEMPTS) {
         return {
           ok: false,
           status: 502,
           error: `Failed to download ${label} (HTTP ${res.status}).`,
         };
       }
-      return { ok: true, buffer: Buffer.from(await res.arrayBuffer()) };
+      log.warn(
+        { url, label, attempt, attempts: PLUGIN_ASSET_DOWNLOAD_ATTEMPTS, status: res.status },
+        "plugin asset download returned a retryable status",
+      );
     } catch (err) {
       lastFailure = describeFetchFailure(err);
       log.warn(
         { url, label, attempt, attempts: PLUGIN_ASSET_DOWNLOAD_ATTEMPTS, error: lastFailure },
         "plugin asset download failed",
       );
-      if (attempt < PLUGIN_ASSET_DOWNLOAD_ATTEMPTS) {
-        // Back off a little so a blip has time to clear, and so a reset
-        // pooled socket is not immediately reused for the retry.
-        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
-      }
+    }
+    if (attempt < PLUGIN_ASSET_DOWNLOAD_ATTEMPTS) {
+      // Back off a little so a blip has time to clear, and so a reset pooled
+      // socket is not immediately reused for the retry.
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
   }
   return {

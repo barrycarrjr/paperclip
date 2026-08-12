@@ -91,7 +91,7 @@ describe("downloadPluginAsset", () => {
     }
   });
 
-  it("does not retry an HTTP error status", async () => {
+  it("does not retry a 404", async () => {
     // Re-requesting a 404 will not make the asset exist, and retrying would
     // just triple the wait before the operator sees a real answer.
     const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 404 }));
@@ -105,5 +105,33 @@ describe("downloadPluginAsset", () => {
       expect(result.status).toBe(502);
       expect(result.error).toContain("HTTP 404");
     }
+  });
+
+  it("retries a 503 and succeeds when the incident clears", async () => {
+    // Observed for real: GitHub's release CDN served 503 for a stretch while
+    // the assets were perfectly fine. Giving up on the first one would strand
+    // the update for as long as the incident lasted.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(okResponse(1024));
+    globalThis.fetch = fetchMock;
+
+    const result = await downloadPluginAsset("https://example.test/a.pcplugin", "a.pcplugin");
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a 429 as well, then reports the status if it never clears", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("slow down", { status: 429 }));
+    globalThis.fetch = fetchMock;
+
+    const result = await downloadPluginAsset("https://example.test/a.pcplugin", "a.pcplugin");
+
+    expect(result.ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    if (!result.ok) expect(result.error).toContain("HTTP 429");
   });
 });
