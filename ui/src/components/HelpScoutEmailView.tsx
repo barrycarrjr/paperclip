@@ -312,6 +312,57 @@ export function HelpScoutEmailView({
     queryClient.invalidateQueries({ queryKey: fullKey });
   }
 
+  // ── Triage rules ──────────────────────────────────────────────────────────
+  //
+  // Standing per-sender policy, held in the plugin database. Loaded here so
+  // the open conversation can say whether its sender is already covered,
+  // rather than the operator pressing a button and wondering if it took.
+
+  const rulesKey = [
+    "helpscout",
+    pluginId,
+    primaryCompanyId,
+    accountKey,
+    mailboxId,
+    "rules",
+  ];
+  const { data: rulesData } = useQuery({
+    queryKey: rulesKey,
+    queryFn: () => api.listRules(accountKey, mailboxId),
+    enabled: !!accountKey,
+    staleTime: 60_000,
+    // Plugins older than v0.6.0 have no such bridge handler. Treat that as
+    // "no rules" rather than surfacing an error on every mailbox open.
+    retry: false,
+  });
+
+  function invalidateRules() {
+    queryClient.invalidateQueries({ queryKey: rulesKey });
+  }
+
+  /** Which rule, if any, already covers the open conversation's sender. */
+  const selectedSenderRule = useMemo(() => {
+    const rules = rulesData?.rules ?? [];
+    if (rules.length === 0) return null;
+    const address =
+      (full?.primaryCustomer as { email?: string } | undefined)?.email ??
+      (full?.customer as { email?: string } | undefined)?.email ??
+      null;
+    const addr = (address ?? "").trim().toLowerCase();
+    if (!addr) return null;
+    const at = addr.lastIndexOf("@");
+    const domain = at >= 0 ? addr.slice(at + 1) : "";
+    for (const rule of rules) {
+      const p = rule.senderPattern;
+      if (p === addr) return rule;
+      if (p.startsWith("@") && domain) {
+        const target = p.slice(1);
+        if (domain === target || domain.endsWith(`.${target}`)) return rule;
+      }
+    }
+    return null;
+  }, [rulesData, full]);
+
   useEffect(() => {
     if (pendingReplyOnOpen && full && full.id !== undefined) {
       setReplyOpen(true);
@@ -442,13 +493,57 @@ export function HelpScoutEmailView({
     onError: (err) => showToast(`Note failed: ${(err as Error).message}`),
   });
 
+  /**
+   * The sender address for the open conversation, or null when Help Scout has
+   * no address for it (rare, but it happens on conversations created from a
+   * phone call or a chat).
+   */
+  function selectedSenderAddress(): string | null {
+    const raw =
+      (full?.primaryCustomer as { email?: string } | undefined)?.email ??
+      (full?.customer as { email?: string } | undefined)?.email ??
+      conversations.find((c) => c.id === selectedConvId)?.customer?.email ??
+      null;
+    const trimmed = (raw ?? "").trim().toLowerCase();
+    return trimmed ? trimmed : null;
+  }
+
+  /**
+   * Record the operator's decision as a durable rule so the triage routine
+   * applies it to future conversations too.
+   *
+   * Before v0.6.0 these buttons only tagged the one conversation, and the tag
+   * was never read back by anything, so the same sender came round again the
+   * next day. The tag is still written (it is what a human sees in Help Scout
+   * itself); the rule is what makes the decision stick.
+   *
+   * A missing address is not an error worth blocking on: the per-conversation
+   * tag and status change still happen, and the operator is told the standing
+   * rule was skipped.
+   */
+  async function recordTriageRule(ruleType: "auto-noise" | "keep-active"): Promise<boolean> {
+    const sender = selectedSenderAddress();
+    if (!sender) return false;
+    await api.setRule(accountKey, sender, ruleType, mailboxId);
+    return true;
+  }
+
   const keepActiveMutation = useMutation({
-    mutationFn: () => api.addLabel(accountKey, selectedConvId!, [KEEP_ALWAYS_LABEL]),
-    onSuccess: () => {
-      showToast("Tagged keep-always.");
+    mutationFn: async () => {
+      await api.addLabel(accountKey, selectedConvId!, [KEEP_ALWAYS_LABEL]);
+      return recordTriageRule("keep-active");
+    },
+    onSuccess: (ruleWritten) => {
+      showToast(
+        ruleWritten
+          ? "Keep active: tagged, and this sender will be left alone from now on."
+          : "Tagged keep-always. No sender address on this conversation, so no standing rule was written.",
+      );
       invalidateFull();
       invalidateList();
+      invalidateRules();
     },
+    onError: (err) => showToast(`Keep active failed: ${(err as Error).message}`),
   });
 
   const autoNoiseMutation = useMutation({
@@ -458,17 +553,37 @@ export function HelpScoutEmailView({
       try {
         await api.addLabel(accountKey, id, [AUTO_NOISE_LABEL]);
         await api.changeStatus(accountKey, id, "closed");
+        return await recordTriageRule("auto-noise");
       } catch (e) {
         clearStatus(id);
         throw e;
       }
     },
-    onSuccess: () => {
-      showToast("Auto-noise: tagged and closed.");
+    onSuccess: (ruleWritten) => {
+      showToast(
+        ruleWritten
+          ? "Auto-noise: closed, and this sender will be closed automatically from now on."
+          : "Auto-noise: tagged and closed. No sender address on this conversation, so no standing rule was written.",
+      );
       invalidateList();
+      invalidateRules();
       setSelectedConvId(null);
     },
     onError: (err) => showToast(`Auto-noise failed: ${(err as Error).message}`),
+  });
+
+  const clearRuleMutation = useMutation({
+    mutationFn: async () => {
+      const rule = selectedSenderRule;
+      if (!rule) return;
+      await api.deleteRule(accountKey, rule.senderPattern, rule.mailboxId ?? undefined);
+    },
+    onSuccess: () => {
+      showToast("Standing rule removed for this sender.");
+      invalidateRules();
+      invalidateList();
+    },
+    onError: (err) => showToast(`Could not remove rule: ${(err as Error).message}`),
   });
 
   const closeMutation = useMutation({
@@ -705,6 +820,25 @@ export function HelpScoutEmailView({
                         <> · tags: {full.tags.map((t) => t.tag).filter(Boolean).join(", ")}</>
                       )}
                     </div>
+                    {selectedSenderRule && (
+                      <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+                        <span className="px-1.5 py-0.5 border border-border bg-muted text-muted-foreground">
+                          {selectedSenderRule.ruleType === "auto-noise"
+                            ? "Auto-noise rule"
+                            : "Keep-active rule"}
+                          {": "}
+                          {selectedSenderRule.senderPattern}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => clearRuleMutation.mutate()}
+                          disabled={clearRuleMutation.isPending}
+                          className="text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {clearRuleMutation.isPending ? "Removing…" : "Remove rule"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Tooltip>
@@ -756,7 +890,11 @@ export function HelpScoutEmailView({
                           )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Tag keep-always</TooltipContent>
+                      <TooltipContent>
+                        {selectedSenderRule?.ruleType === "keep-active"
+                          ? "Already kept active. This sender is never auto-closed."
+                          : "Keep active: tag this conversation and never auto-close this sender."}
+                      </TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -774,7 +912,11 @@ export function HelpScoutEmailView({
                           )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Auto-noise tag and close</TooltipContent>
+                      <TooltipContent>
+                        {selectedSenderRule?.ruleType === "auto-noise"
+                          ? "Already auto-noise. This sender is closed automatically."
+                          : "Auto-noise: close this conversation and auto-close this sender from now on."}
+                      </TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>

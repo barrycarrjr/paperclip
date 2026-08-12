@@ -70,7 +70,9 @@ export function RunDocumentsCard({
 const KNOWN_DOCUMENT_LABELS: Record<string, string> = {
   "continuation-summary": "Handoff notes",
   plan: "Plan",
-  "email-triage-rules": "Email triage rules",
+  // Retired: rules live in the email-tools database, the cursor in plugin
+  // state. Existing issues still carry the document as history.
+  "email-triage-rules": "Email triage rules (retired)",
 };
 
 function documentLabel(revision: RunDocumentRevision): string {

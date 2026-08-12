@@ -237,16 +237,6 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
-    importRules: async (mailbox: string, docBody: string): Promise<{ ok: boolean; imported: number }> => {
-      const result = await pluginsApi.bridgePerformAction(
-        pluginId,
-        "email.import-rules",
-        { companyId, mailbox, docBody },
-        companyId,
-      );
-      return extract(result);
-    },
-
     deleteRule: async (mailbox: string, senderPattern: string): Promise<{ ok: boolean }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,

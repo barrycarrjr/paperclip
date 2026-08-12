@@ -72,11 +72,9 @@ import { emailDraftsApi } from "../api/emailDrafts";
 import { chatApi } from "../api/chat";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
-import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
-import { dismissReviewSender } from "../lib/email-triage-rules";
 import {
   applyImapOverrides,
   imapMailboxScope,
@@ -85,11 +83,8 @@ import {
   type ImapOverrideKind,
 } from "../lib/mailboxTriageOverrides";
 import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
-import type { IssueDocument } from "@paperclipai/shared";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
-const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
-const RULES_HOME_DOC_KEY = "email-triage-rules";
 
 // Width of the mailbox column's thin rail when collapsed (px). Wide enough for
 // one icon-sized button; kept in sync with the `w-11` rail below.
@@ -268,13 +263,6 @@ const DraftInput = forwardRef<DraftFieldHandle, DraftInputProps>(
     );
   },
 );
-
-interface RulesBundle {
-  issueId: string;
-  title: string;
-  body: string;
-  latestRevisionId: string | null;
-}
 
 export function Email() {
   // The URL, not the context selection. A mailbox belongs to exactly one
@@ -867,30 +855,6 @@ export function Email() {
     setPendingRowAction(null);
   }, [fullMessage, pendingRowAction]);
 
-  // ── Rules home issue ──────────────────────────────────────────────────────
-
-  const { data: rulesBundle } = useQuery<RulesBundle | null>({
-    queryKey: ["email", "rulesHome", selectedCompanyId, selectedMailbox],
-    enabled: !!selectedCompanyId && !!selectedMailbox,
-    queryFn: async () => {
-      const titlePrefix = `${RULES_HOME_TITLE_PREFIX}${selectedMailbox}`;
-      const issues = await issuesApi.list(selectedCompanyId!, { q: titlePrefix, limit: 5 });
-      const match = issues.find((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX));
-      if (!match) return null;
-      try {
-        const doc: IssueDocument = await issuesApi.getDocument(match.id, RULES_HOME_DOC_KEY);
-        return {
-          issueId: match.id,
-          title: match.title,
-          body: doc?.body ?? "",
-          latestRevisionId: doc?.latestRevisionId ?? null,
-        };
-      } catch {
-        return null;
-      }
-    },
-  });
-
   // ── Agents list ───────────────────────────────────────────────────────────
 
   const { data: agents } = useQuery({
@@ -922,32 +886,6 @@ export function Email() {
     if (overrideScope) imapOverrideStore.clear(overrideScope, uid);
   }
 
-  async function applyRulesTransform(
-    sender: string,
-    transform: (body: string, sender: string) => string,
-  ) {
-    if (!rulesBundle) return;
-    const { issueId, title, body, latestRevisionId } = rulesBundle;
-    const submit = async (docBody: string, revId: string | null) => {
-      await issuesApi.upsertDocument(issueId, RULES_HOME_DOC_KEY, {
-        title,
-        format: "markdown",
-        body: transform(docBody, sender),
-        baseRevisionId: revId ?? undefined,
-      });
-    };
-    try {
-      await submit(body, latestRevisionId);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 409) throw err;
-      const fresh: IssueDocument = await issuesApi.getDocument(issueId, RULES_HOME_DOC_KEY);
-      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
-    }
-    queryClient.invalidateQueries({
-      queryKey: ["email", "rulesHome", selectedCompanyId, selectedMailbox],
-    });
-  }
-
   // Every cached variant of this mailbox's list, not just the one on screen, so
   // the Portfolio Email panel's copy is refreshed too. The triage note keeps
   // the row hidden meanwhile, so an IMAP server that still reports the old flag
@@ -974,7 +912,6 @@ export function Email() {
       // DB is the source of truth; setRule also sweeps unread INBOX for any
       // existing mail matching the new rule (plugin v0.13.0+).
       const ruleResult = await emailApi!.setRule(selectedMailbox!, sender, "auto-triage");
-      await applyRulesTransform(sender, dismissReviewSender);
       return { sender, sweptCount: ruleResult.sweptCount ?? 0 };
     },
     onSuccess: ({ sender, sweptCount }) => {
@@ -993,7 +930,6 @@ export function Email() {
     mutationFn: async (msg: MailHeader) => {
       const sender = extractSender(msg);
       await emailApi!.setRule(selectedMailbox!, sender, "keep-always");
-      await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: (_, msg) => {
       invalidateRules();

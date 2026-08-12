@@ -18,9 +18,7 @@ import type {
   Company,
   DashboardSummary,
   Issue,
-  IssueDocument,
 } from "@paperclipai/shared";
-import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { attentionApi } from "../api/attention";
@@ -46,10 +44,7 @@ import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
-import {
-  buildReviewSenderGroups,
-  dismissReviewSender,
-} from "../lib/email-triage-rules";
+import { buildReviewSenderGroups } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { pluginsApi } from "../api/plugins";
@@ -66,23 +61,19 @@ const REVIEW_QUEUE_PER_COMPANY = 5;
 const AGENT_RUNS_PER_COMPANY = 4;
 const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
-const RULES_HOME_DOC_KEY = "email-triage-rules";
 
 interface ReviewQueueRow {
   sender: string;
   count: number;
   mailbox: string;
-  rulesIssueId: string;
   companyId: string;
 }
 
-interface RulesHomeBundle {
+/** A rules-home issue is now only a mailbox registry entry, not a document. */
+interface RulesHomeIssue {
   issueId: string;
   companyId: string;
   mailbox: string;
-  title: string;
-  body: string;
-  latestRevisionId: string | null;
 }
 
 function greeting(now: Date): { word: string; icon: typeof Sun } {
@@ -174,7 +165,11 @@ export function PortfolioBrief() {
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
-  const { data: rulesData } = useQuery<{ bundles: RulesHomeBundle[]; companies: Company[] }>({
+  // Which mailboxes each company triages. The issue title is the registry;
+  // the document that used to hang off it has been retired, so this no longer
+  // fans out one fetch per issue. `companies` still matters: it is how a
+  // company that only appears here gets into the company map below.
+  const { data: rulesData } = useQuery<{ issues: RulesHomeIssue[]; companies: Company[] }>({
     queryKey: ["portfolioBrief", "emailTriageRules", selectedCompanyId],
     enabled: !!selectedCompanyId && isPortfolioRoot,
     queryFn: async () => {
@@ -182,26 +177,14 @@ export function PortfolioBrief() {
         q: RULES_HOME_TITLE_PREFIX,
         limit: 200,
       });
-      const rulesIssues = result.issues.filter((i) =>
-        i.title.startsWith(RULES_HOME_TITLE_PREFIX),
-      );
-      const docs = await Promise.allSettled(
-        rulesIssues.map(async (issue) => {
-          const doc: IssueDocument = await issuesApi.getDocument(issue.id, RULES_HOME_DOC_KEY);
-          return {
+      return {
+        issues: result.issues
+          .filter((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX))
+          .map((issue) => ({
             issueId: issue.id,
             companyId: issue.companyId,
             mailbox: issue.title.slice(RULES_HOME_TITLE_PREFIX.length).trim(),
-            title: issue.title,
-            body: doc?.body ?? "",
-            latestRevisionId: doc?.latestRevisionId ?? null,
-          } satisfies RulesHomeBundle;
-        }),
-      );
-      return {
-        bundles: docs
-          .filter((r): r is PromiseFulfilledResult<RulesHomeBundle> => r.status === "fulfilled")
-          .map((r) => r.value),
+          })),
         companies: result.companies,
       };
     },
@@ -453,14 +436,14 @@ export function PortfolioBrief() {
   // listRules path; computing the same way here keeps the two surfaces in
   // agreement.
   const uniqueReviewMailboxes = useMemo(() => {
-    if (!rulesData?.bundles) return [] as { companyId: string; mailbox: string; issueId: string }[];
+    if (!rulesData?.issues) return [] as { companyId: string; mailbox: string }[];
     const seen = new Set<string>();
-    const out: { companyId: string; mailbox: string; issueId: string }[] = [];
-    for (const b of rulesData.bundles) {
-      const k = `${b.companyId}::${b.mailbox}`;
+    const out: { companyId: string; mailbox: string }[] = [];
+    for (const entry of rulesData.issues) {
+      const k = `${entry.companyId}::${entry.mailbox}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      out.push({ companyId: b.companyId, mailbox: b.mailbox, issueId: b.issueId });
+      out.push({ companyId: entry.companyId, mailbox: entry.mailbox });
     }
     return out;
   }, [rulesData]);
@@ -506,7 +489,7 @@ export function PortfolioBrief() {
     const headerMap = new Map<string, MailHeader>();
     const uidsMap = new Map<string, number[]>();
 
-    uniqueReviewMailboxes.forEach(({ companyId, mailbox, issueId }, idx) => {
+    uniqueReviewMailboxes.forEach(({ companyId, mailbox }, idx) => {
       const messages = reviewMessagesQueries[idx]?.data?.messages ?? [];
       if (messages.length === 0) return;
 
@@ -518,7 +501,6 @@ export function PortfolioBrief() {
           sender: group.sender,
           count: group.count,
           mailbox,
-          rulesIssueId: issueId,
           companyId,
         });
         const previewKey = `${companyId}::${mailbox}::${group.sender}`;
@@ -576,41 +558,9 @@ export function PortfolioBrief() {
     );
   }
 
-  async function applyReviewTransform(
-    row: ReviewQueueRow,
-    transform: (body: string, sender: string) => string,
-  ) {
-    const bundle = rulesData?.bundles.find((b) => b.issueId === row.rulesIssueId);
-    if (!bundle) throw new Error("Rules document no longer available.");
-
-    // Refetch the latest revision before writing — the email-triage agent
-    // writes to this same document during runs, and stale baseRevisionIds
-    // come back as 409 Conflict. One retry on conflict is enough for the
-    // common race; persistent contention will surface as the second error.
-    const submit = async (body: string, baseRevisionId: string | null) => {
-      await issuesApi.upsertDocument(row.rulesIssueId, RULES_HOME_DOC_KEY, {
-        title: bundle.title,
-        format: "markdown",
-        body: transform(body, row.sender),
-        baseRevisionId: baseRevisionId ?? undefined,
-      });
-    };
-
-    try {
-      await submit(bundle.body, bundle.latestRevisionId);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 409) throw err;
-      const fresh: IssueDocument = await issuesApi.getDocument(
-        row.rulesIssueId,
-        RULES_HOME_DOC_KEY,
-      );
-      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
-    }
-  }
-
   const reviewMutationOptions = {
     onMutate: (row: ReviewQueueRow) =>
-      setPendingRowAction(`${row.rulesIssueId}::${row.sender}`),
+      setPendingRowAction(`${row.companyId}::${row.mailbox}::${row.sender}`),
     onSettled: () => setPendingRowAction(null),
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -627,19 +577,15 @@ export function PortfolioBrief() {
 
   const graduateMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      // DB is the source of truth for sender rules. The Markdown's rule
-      // sections are no longer written — the agent reads rules from the DB
-      // via email_list_rules. We still remove the row from the Markdown's
-      // Review queue section so it doesn't keep appearing.
+      // The rule is the whole action. The row disappears on its own once the
+      // sender is covered, because the list is unread mail minus ruled senders.
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "auto-triage");
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
   const keepUnreadMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
@@ -647,7 +593,6 @@ export function PortfolioBrief() {
     mutationFn: async (row: ReviewQueueRow) => {
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "keep-always");
       await markRowUidsRead(row);
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
@@ -661,7 +606,6 @@ export function PortfolioBrief() {
       // for this row in case the sweep missed any (race with new arrivals).
       await writeRuleToDb(row.companyId, row.mailbox, row.sender, "mute");
       await markRowUidsRead(row);
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
@@ -672,9 +616,6 @@ export function PortfolioBrief() {
       // sender from the brief. Next time they email, the new (unread) mail
       // will resurface here.
       await markRowUidsRead(row);
-      // Also strip from the markdown's stale Review queue (no longer the
-      // brief's source of truth, but external consumers may still read it).
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
@@ -938,8 +879,8 @@ export function PortfolioBrief() {
                     return (
                       <CompanyBlock key={company.id} company={company} total={total}>
                         {visible.map((row) => {
-                          const key = `${row.rulesIssueId}::${row.sender}`;
                           const previewKey = `${row.companyId}::${row.mailbox}::${row.sender}`;
+                          const key = previewKey;
                           const isPending = pendingRowAction === key;
                           const preview = reviewPreviewLookup.get(previewKey) ?? null;
                           const isHovered = hoveredPreviewKey === previewKey;

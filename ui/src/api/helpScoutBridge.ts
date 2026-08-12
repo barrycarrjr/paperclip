@@ -77,6 +77,23 @@ export interface ListConversationsOptions {
   page?: number;
 }
 
+/**
+ * `auto-noise` closes and tags the conversation; `keep-active` leaves it alone
+ * and beats auto-noise when both match. Deliberately not the same words as the
+ * IMAP side's auto-triage/keep-always/mute: Help Scout closes conversations
+ * rather than moving mail, and has no mute equivalent.
+ */
+export type HSTriageRuleType = "auto-noise" | "keep-active";
+
+export interface HSTriageRule {
+  senderPattern: string;
+  ruleType: HSTriageRuleType;
+  /** null means the rule covers every mailbox in the account. */
+  mailboxId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function extract<T>(result: { data: unknown }): T {
   return result.data as T;
 }
@@ -223,6 +240,53 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
         pluginId,
         "helpscout.remove-label",
         { companyId, accountKey, conversationId, labels },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    /**
+     * Triage rules. Needs help-scout plugin >= 0.6.0; before that these rules
+     * lived in a Markdown document and there was no way to write them from the
+     * UI at all.
+     */
+    listRules: async (
+      accountKey: string,
+      mailboxId?: string,
+    ): Promise<{ rules: HSTriageRule[] }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "helpscout.list-rules",
+        { companyId, accountKey, ...(mailboxId ? { mailboxId } : {}) },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    setRule: async (
+      accountKey: string,
+      senderPattern: string,
+      ruleType: HSTriageRuleType,
+      mailboxId?: string,
+    ): Promise<{ ok: boolean; senderPattern: string; ruleType: HSTriageRuleType }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "helpscout.set-rule",
+        { companyId, accountKey, senderPattern, ruleType, ...(mailboxId ? { mailboxId } : {}) },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    deleteRule: async (
+      accountKey: string,
+      senderPattern: string,
+      mailboxId?: string,
+    ): Promise<{ ok: boolean; deleted: number }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "helpscout.delete-rule",
+        { companyId, accountKey, senderPattern, ...(mailboxId ? { mailboxId } : {}) },
         companyId,
       );
       return extract(result);

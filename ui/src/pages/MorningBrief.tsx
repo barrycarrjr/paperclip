@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   PauseCircle,
 } from "lucide-react";
-import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { attentionApi } from "../api/attention";
@@ -49,14 +48,11 @@ import { cn, formatCents } from "../lib/utils";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
-import {
-  buildReviewSenderGroups,
-  dismissReviewSender,
-} from "../lib/email-triage-rules";
+import { buildReviewSenderGroups } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Agent, ActivityEvent, Issue, IssueDocument } from "@paperclipai/shared";
+import type { Agent, ActivityEvent, Issue } from "@paperclipai/shared";
 
 const OVERNIGHT_HOURS = 14;
 const OUTCOMES_LIMIT = 200;
@@ -64,21 +60,17 @@ const OUTCOMES_SHOWN = 8;
 const ATTENTION_SHOWN = 8;
 const REVIEW_QUEUE_SHOWN = 5;
 const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
-const RULES_HOME_DOC_KEY = "email-triage-rules";
 
 interface ReviewQueueRow {
   sender: string;
   count: number;
   mailbox: string;
-  rulesIssueId: string;
 }
 
-interface RulesHomeBundle {
+/** A rules-home issue is now only a mailbox registry entry, not a document. */
+interface RulesHomeIssue {
   issueId: string;
   mailbox: string;
-  title: string;
-  body: string;
-  latestRevisionId: string | null;
 }
 
 function greeting(now: Date): { word: string; icon: typeof Sun } {
@@ -165,7 +157,10 @@ export function MorningBrief() {
     [emailPluginId, selectedCompanyId],
   );
 
-  const { data: rulesBundles } = useQuery<RulesHomeBundle[]>({
+  // Which mailboxes this company triages. The issue title is the registry;
+  // the document that used to hang off it has been retired, so this no longer
+  // fans out one fetch per issue on every render.
+  const { data: rulesHomeIssues } = useQuery<RulesHomeIssue[]>({
     queryKey: ["morningBrief", "emailTriageRules", selectedCompanyId],
     enabled: !!selectedCompanyId,
     queryFn: async () => {
@@ -173,46 +168,27 @@ export function MorningBrief() {
         q: RULES_HOME_TITLE_PREFIX,
         limit: 50,
       });
-      const rulesIssues = matches.filter((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX));
-      const docs = await Promise.allSettled(
-        rulesIssues.map(async (issue) => {
-          const doc: IssueDocument = await issuesApi.getDocument(issue.id, RULES_HOME_DOC_KEY);
-          return {
-            issueId: issue.id,
-            mailbox: issue.title.slice(RULES_HOME_TITLE_PREFIX.length).trim(),
-            title: issue.title,
-            body: doc?.body ?? "",
-            latestRevisionId: doc?.latestRevisionId ?? null,
-          } satisfies RulesHomeBundle;
-        }),
-      );
-      return docs
-        .filter((r): r is PromiseFulfilledResult<RulesHomeBundle> => r.status === "fulfilled")
-        .map((r) => r.value);
+      return matches
+        .filter((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX))
+        .map((issue) => ({
+          issueId: issue.id,
+          mailbox: issue.title.slice(RULES_HOME_TITLE_PREFIX.length).trim(),
+        }));
     },
   });
 
-  // "Waiting" is computed live from the inbox plus the server-side rules per
-  // mailbox, NOT from the markdown `## Review queue` section. That section is
-  // written by an out-of-band triage routine and goes stale: it left this page
-  // saying "nothing waiting" while real unread mail sat unmatched in the
-  // mailbox. The Portfolio Brief and the Email page both compute it this way
-  // already; this page was the last one still reading the document, which is
-  // why the same company could show different senders in two places.
+  // "Waiting" is computed live: unread mail in the mailbox, minus every sender
+  // already covered by a rule. Deriving it on read rather than storing it is
+  // what keeps this page, the Portfolio Brief and the Email page from
+  // disagreeing about the same mailbox, and means acting on a row here is
+  // reflected everywhere without anything needing to be kept in sync.
   const uniqueReviewMailboxes = useMemo(() => {
-    if (!rulesBundles) return [] as { mailbox: string; issueId: string }[];
-    const seen = new Set<string>();
-    const out: { mailbox: string; issueId: string }[] = [];
-    for (const bundle of rulesBundles) {
-      if (seen.has(bundle.mailbox)) continue;
-      seen.add(bundle.mailbox);
-      out.push({ mailbox: bundle.mailbox, issueId: bundle.issueId });
-    }
-    return out;
-  }, [rulesBundles]);
+    if (!rulesHomeIssues) return [] as string[];
+    return [...new Set(rulesHomeIssues.map((i) => i.mailbox))];
+  }, [rulesHomeIssues]);
 
   const reviewMessagesQueries = useQueries({
-    queries: uniqueReviewMailboxes.map(({ mailbox }) => ({
+    queries: uniqueReviewMailboxes.map((mailbox) => ({
       queryKey: ["morningBrief", "reviewQueueMessages", selectedCompanyId, emailPluginId, mailbox],
       queryFn: () => emailApi!.listMessages(mailbox, { limit: 200, unseen: true }),
       enabled: !!emailApi && !!selectedCompanyId,
@@ -221,7 +197,7 @@ export function MorningBrief() {
   });
 
   const reviewRulesQueries = useQueries({
-    queries: uniqueReviewMailboxes.map(({ mailbox }) => ({
+    queries: uniqueReviewMailboxes.map((mailbox) => ({
       queryKey: ["morningBrief", "reviewQueueRules", selectedCompanyId, emailPluginId, mailbox],
       queryFn: () => emailApi!.listRules(mailbox),
       enabled: !!emailApi && !!selectedCompanyId,
@@ -234,7 +210,7 @@ export function MorningBrief() {
     const headerMap = new Map<string, MailHeader>();
     const uidsMap = new Map<string, number[]>();
 
-    uniqueReviewMailboxes.forEach(({ mailbox, issueId }, idx) => {
+    uniqueReviewMailboxes.forEach((mailbox, idx) => {
       const messages = reviewMessagesQueries[idx]?.data?.messages ?? [];
       if (messages.length === 0) return;
 
@@ -242,7 +218,7 @@ export function MorningBrief() {
         messages,
         reviewRulesQueries[idx]?.data?.rules ?? [],
       )) {
-        rows.push({ sender: group.sender, count: group.count, mailbox, rulesIssueId: issueId });
+        rows.push({ sender: group.sender, count: group.count, mailbox });
         const key = `${mailbox}::${group.sender}`;
         headerMap.set(key, group.messages[0]! as MailHeader);
         uidsMap.set(key, group.messages.map((m) => m.uid));
@@ -276,62 +252,31 @@ export function MorningBrief() {
 
   const reviewMutationOptions = {
     onMutate: (row: ReviewQueueRow) =>
-      setPendingRowAction(`${row.rulesIssueId}::${row.sender}`),
+      setPendingRowAction(`${row.mailbox}::${row.sender}`),
     onSettled: () => setPendingRowAction(null),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["morningBrief", "emailTriageRules", selectedCompanyId],
+        queryKey: ["morningBrief", "reviewQueueMessages", selectedCompanyId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["morningBrief", "reviewQueueRules", selectedCompanyId],
       });
     },
   };
 
-  async function applyReviewTransform(
-    row: ReviewQueueRow,
-    transform: (body: string, sender: string) => string,
-  ) {
-    const bundle = rulesBundles?.find((b) => b.issueId === row.rulesIssueId);
-    if (!bundle) throw new Error("Rules document no longer available.");
-
-    // Refetch the latest revision before writing — the email-triage agent
-    // writes to this same document during runs, and stale baseRevisionIds
-    // come back as 409 Conflict. One retry on conflict is enough for the
-    // common race; persistent contention will surface as the second error.
-    const submit = async (body: string, baseRevisionId: string | null) => {
-      await issuesApi.upsertDocument(row.rulesIssueId, RULES_HOME_DOC_KEY, {
-        title: bundle.title,
-        format: "markdown",
-        body: transform(body, row.sender),
-        baseRevisionId: baseRevisionId ?? undefined,
-      });
-    };
-
-    try {
-      await submit(bundle.body, bundle.latestRevisionId);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 409) throw err;
-      const fresh: IssueDocument = await issuesApi.getDocument(
-        row.rulesIssueId,
-        RULES_HOME_DOC_KEY,
-      );
-      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
-    }
-  }
-
   const graduateMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      // DB is the source of truth for sender rules. The Markdown's rule
-      // sections are no longer written — the agent reads rules from the DB
-      // via email_list_rules. We still remove the row from the Markdown's
-      // Review queue section so it doesn't keep appearing.
-      if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "auto-triage");
-      await applyReviewTransform(row, dismissReviewSender);
+      // The rule is the whole action. The row disappears on its own once the
+      // sender is covered, because the list is unread mail minus ruled senders.
+      if (!emailApi) return;
+      await emailApi.setRule(row.mailbox, row.sender, "auto-triage");
     },
     ...reviewMutationOptions,
   });
   const keepUnreadMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      if (emailApi) await emailApi.setRule(row.mailbox, row.sender, "keep-always");
-      await applyReviewTransform(row, dismissReviewSender);
+      if (!emailApi) return;
+      await emailApi.setRule(row.mailbox, row.sender, "keep-always");
     },
     ...reviewMutationOptions,
   });
@@ -344,16 +289,9 @@ export function MorningBrief() {
 
   const keepReadMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
-      if (!emailApi) {
-        await applyReviewTransform(row, dismissReviewSender);
-        return;
-      }
+      if (!emailApi) return;
       await emailApi.setRule(row.mailbox, row.sender, "keep-always");
-      const uids = reviewMatchedUidsLookup.get(`${row.mailbox}::${row.sender}`) ?? [];
-      await Promise.allSettled(
-        uids.map((uid) => emailApi.markRead(row.mailbox, uid, "INBOX")),
-      );
-      await applyReviewTransform(row, dismissReviewSender);
+      await markRowUidsRead(row);
     },
     ...reviewMutationOptions,
   });
@@ -362,30 +300,19 @@ export function MorningBrief() {
       // Mute = keep in INBOX + auto-mark future arrivals read on poll.
       // The set-rule action also sweeps existing unread backlog; we still
       // mark the row's tracked UIDs read locally in case of races.
-      if (!emailApi) {
-        await applyReviewTransform(row, dismissReviewSender);
-        return;
-      }
+      if (!emailApi) return;
       await emailApi.setRule(row.mailbox, row.sender, "mute");
-      const uids = reviewMatchedUidsLookup.get(`${row.mailbox}::${row.sender}`) ?? [];
-      await Promise.allSettled(
-        uids.map((uid) => emailApi.markRead(row.mailbox, uid, "INBOX")),
-      );
-      await applyReviewTransform(row, dismissReviewSender);
+      await markRowUidsRead(row);
     },
     ...reviewMutationOptions,
   });
   const dismissMutation = useMutation({
     mutationFn: async (row: ReviewQueueRow) => {
       // Dismiss means "I dealt with this without making a rule". The count is
-      // now unread-and-unmatched mail, so marking those messages read is what
-      // actually clears the row; editing the document alone would leave the
-      // row exactly where it was. Next time this sender writes, the new
+      // unread-and-unmatched mail, so marking those messages read is the only
+      // thing that clears the row. Next time this sender writes, the new
       // unread mail brings them back.
       await markRowUidsRead(row);
-      // The markdown Review queue is no longer read here, but the triage
-      // routine still writes it, so keep it tidy for anything else reading it.
-      await applyReviewTransform(row, dismissReviewSender);
     },
     ...reviewMutationOptions,
   });
@@ -722,8 +649,8 @@ export function MorningBrief() {
                     ? reviewQueue
                     : reviewQueue.slice(0, REVIEW_QUEUE_SHOWN)
                   ).map((row) => {
-                    const key = `${row.rulesIssueId}::${row.sender}`;
-                    const previewKey = `${row.mailbox}::${row.sender}`;
+                    const key = `${row.mailbox}::${row.sender}`;
+                    const previewKey = key;
                     const isPending = pendingRowAction === key;
                     const preview = reviewPreviewLookup.get(previewKey) ?? null;
                     const isHovered = hoveredPreviewKey === previewKey;
@@ -732,6 +659,7 @@ export function MorningBrief() {
                         key={key}
                         row={row}
                         pending={isPending}
+                        canWriteRules={!!emailPluginId}
                         preview={preview}
                         fullBodyText={isHovered ? hoveredFullMessage?.text ?? null : null}
                         fullBodyLoading={isHovered && !!preview && !hoveredFullMessage}
@@ -913,6 +841,12 @@ export function MorningBrief() {
 interface ReviewQueueRowProps {
   row: ReviewQueueRow;
   pending: boolean;
+  /**
+   * Every action on this row writes a rule or marks mail read through the
+   * email-tools plugin. Without it they would silently do nothing, so the
+   * buttons disable rather than looking like they worked.
+   */
+  canWriteRules: boolean;
   preview: MailHeader | null;
   fullBodyText: string | null;
   fullBodyLoading: boolean;
@@ -935,6 +869,7 @@ function truncateBody(text: string, max: number): { text: string; truncated: boo
 function ReviewQueueRow({
   row,
   pending,
+  canWriteRules,
   preview,
   fullBodyText,
   fullBodyLoading,
@@ -1035,7 +970,7 @@ function ReviewQueueRow({
           <button
             type="button"
             onClick={onGraduate}
-            disabled={pending}
+            disabled={pending || !canWriteRules}
             title="Write an auto-triage rule and move every message from this sender (now and going forward) to _paperclip/triage."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-foreground text-background hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -1044,7 +979,7 @@ function ReviewQueueRow({
           <button
             type="button"
             onClick={onKeepRead}
-            disabled={pending}
+            disabled={pending || !canWriteRules}
             title="Keep this sender in INBOX going forward AND mark the existing messages as read."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -1053,7 +988,7 @@ function ReviewQueueRow({
           <button
             type="button"
             onClick={onKeepUnread}
-            disabled={pending}
+            disabled={pending || !canWriteRules}
             title="Keep this sender in INBOX going forward and leave existing messages unread."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -1062,7 +997,7 @@ function ReviewQueueRow({
           <button
             type="button"
             onClick={onMute}
-            disabled={pending}
+            disabled={pending || !canWriteRules}
             title="Keep this sender in INBOX going forward and automatically mark all future arrivals as read on the next poll. Marks the existing backlog as read too."
             className="px-2.5 py-1 text-[11px] font-medium border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -1071,7 +1006,7 @@ function ReviewQueueRow({
           <button
             type="button"
             onClick={onDismiss}
-            disabled={pending}
+            disabled={pending || !canWriteRules}
             title="Remove from this list without writing a rule. Sender may reappear if they send more mail."
             className="px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
           >

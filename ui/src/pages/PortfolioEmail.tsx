@@ -18,7 +18,7 @@ import {
   Bot,
   MoreHorizontal,
 } from "lucide-react";
-import type { Company, IssueDocument } from "@paperclipai/shared";
+import type { Company } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -43,11 +43,8 @@ import {
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
 import type { HelpScoutMailboxRef } from "../lib/mailboxKind";
-import { issuesApi } from "../api/issues";
-import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
-import { dismissReviewSender } from "../lib/email-triage-rules";
 import {
   applyImapOverrides,
   imapMailboxScope,
@@ -70,8 +67,6 @@ import {
 } from "../components/HelpScoutMailboxPanel";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
-const RULES_HOME_TITLE_PREFIX = "Email triage rules - ";
-const RULES_HOME_DOC_KEY = "email-triage-rules";
 
 interface ConfigMailbox {
   name?: string;
@@ -87,13 +82,6 @@ interface ResolvedMailbox {
   allowedCompanies: string[];
   primaryCompanyId: string;
   primaryCompany: Company | null;
-}
-
-interface RulesBundle {
-  issueId: string;
-  title: string;
-  body: string;
-  latestRevisionId: string | null;
 }
 
 function mailboxEmail(name: string | undefined, key: string): string {
@@ -813,27 +801,6 @@ function MailboxPanel({
     return false;
   }
 
-  const { data: rulesBundle } = useQuery<RulesBundle | null>({
-    queryKey: ["email", "rulesHome", primaryCompanyId, key],
-    queryFn: async () => {
-      const titlePrefix = `${RULES_HOME_TITLE_PREFIX}${key}`;
-      const issues = await issuesApi.list(primaryCompanyId, { q: titlePrefix, limit: 5 });
-      const match = issues.find((i) => i.title.startsWith(RULES_HOME_TITLE_PREFIX));
-      if (!match) return null;
-      try {
-        const doc: IssueDocument = await issuesApi.getDocument(match.id, RULES_HOME_DOC_KEY);
-        return {
-          issueId: match.id,
-          title: match.title,
-          body: doc?.body ?? "",
-          latestRevisionId: doc?.latestRevisionId ?? null,
-        };
-      } catch {
-        return null;
-      }
-    },
-  });
-
   function invalidateRules() {
     queryClient.invalidateQueries({
       queryKey: ["email", pluginId, primaryCompanyId, key, "rules"],
@@ -859,32 +826,6 @@ function MailboxPanel({
   }
   function clearOverride(uid: number) {
     imapOverrideStore.clear(overrideScope, uid);
-  }
-
-  async function applyRulesTransform(
-    sender: string,
-    transform: (body: string, sender: string) => string,
-  ) {
-    if (!rulesBundle) return;
-    const { issueId, title, body, latestRevisionId } = rulesBundle;
-    const submit = async (docBody: string, revId: string | null) => {
-      await issuesApi.upsertDocument(issueId, RULES_HOME_DOC_KEY, {
-        title,
-        format: "markdown",
-        body: transform(docBody, sender),
-        baseRevisionId: revId ?? undefined,
-      });
-    };
-    try {
-      await submit(body, latestRevisionId);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 409) throw err;
-      const fresh: IssueDocument = await issuesApi.getDocument(issueId, RULES_HOME_DOC_KEY);
-      await submit(fresh.body ?? "", fresh.latestRevisionId ?? null);
-    }
-    queryClient.invalidateQueries({
-      queryKey: ["email", "rulesHome", primaryCompanyId, key],
-    });
   }
 
   // Mark-read implies "this sender matters" — auto-add keep-always when not
@@ -938,7 +879,6 @@ function MailboxPanel({
     mutationFn: async (msg: MailHeader) => {
       const sender = extractSender(msg);
       await emailApi.setRule(key, sender, "keep-always");
-      await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: () => invalidateRules(),
   });
@@ -949,7 +889,6 @@ function MailboxPanel({
       await emailApi.moveMessage(key, msg.uid, pollFolder, TRIAGE_FOLDER);
       const sender = extractSender(msg);
       await emailApi.setRule(key, sender, "auto-triage");
-      await applyRulesTransform(sender, dismissReviewSender);
     },
     onSuccess: () => {
       invalidateRules();
