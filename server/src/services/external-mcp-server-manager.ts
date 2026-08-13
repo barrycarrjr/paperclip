@@ -60,6 +60,26 @@ function getExtraHostEnv(): Record<string, string> {
   return env;
 }
 
+/**
+ * Thrown when a discovery call gives up waiting for a cold server to finish
+ * its handshake. The connect itself is *not* cancelled: it keeps warming in
+ * the background so a later call can use the pooled client. Callers should
+ * treat this as "not ready yet" rather than as a failure.
+ */
+export class ExternalMcpWarmingError extends Error {
+  readonly code = "EWARMING" as const;
+  readonly serverKey: string;
+
+  constructor(serverKey: string, waitedMs: number) {
+    super(
+      `MCP server "${serverKey}" is still starting up (waited ${waitedMs}ms); ` +
+        `it continues connecting in the background`,
+    );
+    this.name = "ExternalMcpWarmingError";
+    this.serverKey = serverKey;
+  }
+}
+
 interface PooledClient {
   client: Client;
   /** Set of redacted env keys / header names — for log scrubbing. */
@@ -113,8 +133,30 @@ export interface ExternalMcpServerManager {
   getServer(serverId: string): Promise<ExternalMcpServerRecord | null>;
   /** Look up a server record by key. */
   getServerByKey(key: string): Promise<ExternalMcpServerRecord | null>;
-  /** Connect (or reuse) and list the server's tools for the calling company. */
-  listTools(serverId: string, companyId: string): Promise<ExternalMcpToolDescriptor[]>;
+  /**
+   * Connect (or reuse) and list the server's tools for the calling company.
+   *
+   * Pass `deadlineMs` from latency-sensitive callers (agent tool discovery):
+   * if the server has not finished connecting by then the call rejects with
+   * `ExternalMcpWarmingError` while the connect continues in the background.
+   * Omit it to wait out the full connect budget.
+   */
+  listTools(
+    serverId: string,
+    companyId: string,
+    options?: { deadlineMs?: number },
+  ): Promise<ExternalMcpToolDescriptor[]>;
+  /**
+   * True when a client for this (server, company) is already connected and
+   * pooled, i.e. `listTools` will answer without paying a cold start.
+   */
+  isReady(serverId: string, companyId: string): boolean;
+  /**
+   * Incremented whenever an operator config change evicts a client. Callers
+   * that cache discovery results key off this so an edit takes effect at once
+   * instead of waiting for a cache TTL.
+   */
+  configGeneration(): number;
   /** Call a tool by its bare name (not namespaced). Mutation gating happens here. */
   callTool(
     serverId: string,
@@ -130,6 +172,8 @@ export interface ExternalMcpServerManager {
 
 export interface ExternalMcpServerManagerOptions {
   idleTimeoutMs?: number;
+  /** Overrides `CONNECT_TIMEOUT_MS`. Exposed for tests. */
+  connectTimeoutMs?: number;
 }
 
 export function createExternalMcpServerManager(
@@ -137,11 +181,21 @@ export function createExternalMcpServerManager(
   options: ExternalMcpServerManagerOptions = {},
 ): ExternalMcpServerManager {
   const idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
+  const connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   const log = logger.child({ service: "external-mcp-server-manager" });
   const secrets: ExternalMcpSecretsService = externalMcpSecretsService(db);
 
   // Pool keyed by `${serverId}::${companyId}`.
   const pool = new Map<string, PooledClient>();
+  // In-flight connects, keyed the same way. Without this every caller that
+  // arrives during a cold start spawns its own child process. With a gateway
+  // that takes 60-90s to come up that means several redundant containers, and
+  // each one competing for the same Docker daemon makes the start-up slower
+  // still.
+  const connecting = new Map<string, Promise<PooledClient>>();
+  // Bumped on explicit eviction (config edit / delete) so downstream discovery
+  // caches can drop everything at once.
+  let generation = 0;
 
   function poolKey(serverId: string, companyId: string): string {
     return `${serverId}::${companyId}`;
@@ -251,11 +305,20 @@ export function createExternalMcpServerManager(
 
     const { transport, getStderrTail } = await buildTransport(server, resolved);
 
-    const connectPromise = client.connect(transport);
+    // Pass the timeout explicitly. The SDK's `initialize` request otherwise
+    // uses its own `DEFAULT_REQUEST_TIMEOUT_MSEC` (60s), which fires long
+    // before CONNECT_TIMEOUT_MS and makes the race below unreachable. The
+    // handshake was being abandoned at exactly 60s with
+    // "MCP error -32001: Request timed out" no matter how generous our budget
+    // was. That is what stopped Docker MCP Gateway ever finishing a cold
+    // start, since it enumerates every enabled server before answering.
+    const connectPromise = client.connect(transport, { timeout: connectTimeoutMs });
+    // Belt-and-braces for transports that hang before `initialize` is even
+    // sent (a stdio child that never execs never gets an SDK-side timeout).
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(
-        () => reject(new Error(`MCP connect timed out after ${CONNECT_TIMEOUT_MS}ms`)),
-        CONNECT_TIMEOUT_MS,
+        () => reject(new Error(`MCP connect timed out after ${connectTimeoutMs}ms`)),
+        connectTimeoutMs,
       ).unref?.();
     });
     try {
@@ -297,22 +360,73 @@ export function createExternalMcpServerManager(
     return pooled;
   }
 
+  /**
+   * Start a connect, or join the one already running for this key. The
+   * returned promise is shared, so a slow cold start is paid once no matter
+   * how many callers arrive during it.
+   */
+  function beginConnect(
+    server: ExternalMcpServerRecord,
+    companyId: string,
+    key: string,
+  ): Promise<PooledClient> {
+    const inFlight = connecting.get(key);
+    if (inFlight) return inFlight;
+
+    const startedAt = Date.now();
+    const promise = connect(server, companyId)
+      .then((pooled) => {
+        pool.set(key, pooled);
+        scheduleIdleEviction(key, pooled);
+        log.info(
+          { serverKey: server.key, companyId, connectMs: Date.now() - startedAt },
+          "external mcp client connected",
+        );
+        return pooled;
+      })
+      .finally(() => {
+        connecting.delete(key);
+      });
+
+    connecting.set(key, promise);
+    // A caller that walked away at its deadline leaves nobody awaiting this
+    // promise; mark it handled so a later failure can't surface as an
+    // unhandled rejection. Callers still see rejections from their own await.
+    promise.catch(() => {});
+    return promise;
+  }
+
   async function getOrCreate(
     server: ExternalMcpServerRecord,
     companyId: string,
+    deadlineMs?: number,
   ): Promise<PooledClient> {
     const key = poolKey(server.id, companyId);
-    let pooled = pool.get(key);
+    const pooled = pool.get(key);
     if (pooled && !pooled.closing) {
       pooled.lastUsedAt = Date.now();
       scheduleIdleEviction(key, pooled);
       return pooled;
     }
-    pooled = await connect(server, companyId);
-    pool.set(key, pooled);
-    scheduleIdleEviction(key, pooled);
-    log.info({ serverKey: server.key, companyId }, "external mcp client connected");
-    return pooled;
+
+    const connectPromise = beginConnect(server, companyId, key);
+    if (deadlineMs === undefined) return connectPromise;
+
+    // Wait only as long as the caller can afford. The connect is deliberately
+    // left running: it will populate the pool for the next call.
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    const deadlinePromise = new Promise<never>((_, reject) => {
+      deadlineTimer = setTimeout(
+        () => reject(new ExternalMcpWarmingError(server.key, deadlineMs)),
+        deadlineMs,
+      );
+      deadlineTimer.unref?.();
+    });
+    try {
+      return await Promise.race([connectPromise, deadlinePromise]);
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+    }
   }
 
   function isToolBlocked(server: ExternalMcpServerRecord, toolName: string): { blocked: boolean; reason?: string } {
@@ -353,10 +467,19 @@ export function createExternalMcpServerManager(
     getServer: getServerById,
     getServerByKey,
 
-    async listTools(serverId, companyId) {
+    isReady(serverId, companyId) {
+      const pooled = pool.get(poolKey(serverId, companyId));
+      return Boolean(pooled && !pooled.closing);
+    },
+
+    configGeneration() {
+      return generation;
+    },
+
+    async listTools(serverId, companyId, options) {
       const server = await getServerById(serverId);
       if (!server) throw new Error(`MCP server ${serverId} not found`);
-      const pooled = await getOrCreate(server, companyId);
+      const pooled = await getOrCreate(server, companyId, options?.deadlineMs);
       const result = await pooled.client.listTools(undefined, {
         timeout: CALL_TIMEOUT_MS,
       });
@@ -415,6 +538,8 @@ export function createExternalMcpServerManager(
     },
 
     async evict(serverId, companyId) {
+      // Config changed under us, so invalidate downstream discovery caches too.
+      generation += 1;
       if (companyId) {
         await evictByKey(poolKey(serverId, companyId), "explicit-evict");
         return;

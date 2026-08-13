@@ -22,6 +22,8 @@
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { companies, createDb, externalMcpServers } from "@paperclipai/db";
@@ -238,4 +240,121 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     const flat = JSON.stringify(result.content);
     expect(flat).toContain("SECRET_TOKEN=shh-this-is-the-test-value");
   }, 30_000);
+
+  // -----------------------------------------------------------------------
+  // 6. Slow cold start: a server that takes longer to boot than the
+  //    discovery deadline must not hold up the turn, and must join in on
+  //    its own once it finishes connecting.
+  // -----------------------------------------------------------------------
+  it("skips a slow-starting server, then picks it up once it is warm", async () => {
+    const key = `slow-${randomUUID().slice(0, 8)}`;
+    const id = await insertServer({
+      key,
+      allowedCompanies: [companyA],
+      // Longer than DISCOVERY_DEADLINE_MS (5s) in the tool source.
+      envBindings: { MOCK_MCP_STARTUP_DELAY_MS: { type: "plain", value: "8000" } },
+    });
+
+    const startedAt = Date.now();
+    const firstPass = await toolSource.listToolsForCompany(companyA);
+    const firstPassMs = Date.now() - startedAt;
+
+    // The turn went ahead without it. This is the whole point.
+    expect(firstPass.filter((t) => t.serverKey === key)).toHaveLength(0);
+    expect(firstPassMs).toBeLessThan(7_000);
+
+    // Meanwhile the connect kept running in the background. Wait for it.
+    const readyBy = Date.now() + 20_000;
+    while (!manager.isReady(id, companyA) && Date.now() < readyBy) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    expect(manager.isReady(id, companyA)).toBe(true);
+
+    // Readiness beats the failure cool-off, so the tools show up on the very
+    // next turn rather than after a further minute of being skipped.
+    const secondPass = await toolSource.listToolsForCompany(companyA);
+    const names = secondPass
+      .filter((t) => t.serverKey === key)
+      .map((t) => t.name)
+      .sort();
+    expect(names).toEqual(["create_thing", "echo", "read_secret_env"]);
+  }, 60_000);
+
+  // -----------------------------------------------------------------------
+  // 7. Concurrent callers share one cold start rather than each spawning
+  //    their own child.
+  // -----------------------------------------------------------------------
+  it("spawns a single child when several callers arrive during one connect", async () => {
+    const spawnLog = path.join(
+      os.tmpdir(),
+      `mcp-spawns-${randomUUID().slice(0, 8)}.log`,
+    );
+    const id = await insertServer({
+      key: `dedupe-${randomUUID().slice(0, 8)}`,
+      allowedCompanies: [companyA],
+      envBindings: {
+        MOCK_MCP_SPAWN_LOG: { type: "plain", value: spawnLog },
+        MOCK_MCP_STARTUP_DELAY_MS: { type: "plain", value: "1500" },
+      },
+    });
+
+    const results = await Promise.all([
+      manager.listTools(id, companyA),
+      manager.listTools(id, companyA),
+      manager.listTools(id, companyA),
+      manager.listTools(id, companyA),
+    ]);
+    for (const tools of results) {
+      expect(tools.map((t) => t.name).sort()).toEqual([
+        "create_thing",
+        "echo",
+        "read_secret_env",
+      ]);
+    }
+
+    const spawns = readFileSync(spawnLog, "utf8").trim().split("\n").filter(Boolean);
+    expect(spawns).toHaveLength(1);
+    rmSync(spawnLog, { force: true });
+  }, 60_000);
+
+  // -----------------------------------------------------------------------
+  // 8. The connect budget actually governs the handshake.
+  //
+  //    Regression: `client.connect()` was called without a timeout, so the
+  //    SDK applied its own 60s `DEFAULT_REQUEST_TIMEOUT_MSEC` to `initialize`
+  //    and CONNECT_TIMEOUT_MS was never reached. Any server slower than 60s
+  //    to boot (Docker MCP Gateway among them) could never connect at all,
+  //    no matter how the budget was configured.
+  // -----------------------------------------------------------------------
+  it("honours the configured connect budget in both directions", async () => {
+    const generousManager = createExternalMcpServerManager(db, {
+      idleTimeoutMs: 5_000,
+      connectTimeoutMs: 15_000,
+    });
+    const stingyManager = createExternalMcpServerManager(db, {
+      idleTimeoutMs: 5_000,
+      connectTimeoutMs: 1_000,
+    });
+
+    const id = await insertServer({
+      key: `budget-${randomUUID().slice(0, 8)}`,
+      allowedCompanies: [companyA],
+      envBindings: { MOCK_MCP_STARTUP_DELAY_MS: { type: "plain", value: "4000" } },
+    });
+
+    try {
+      // 4s boot inside a 15s budget: connects. Before the fix this proved
+      // nothing, because the SDK's own default governed instead.
+      const tools = await generousManager.listTools(id, companyA);
+      expect(tools.map((t) => t.name).sort()).toContain("echo");
+
+      // 4s boot against a 1s budget: gives up, and says so.
+      await expect(stingyManager.listTools(id, companyA)).rejects.toThrow(
+        /timed out/i,
+      );
+    } finally {
+      await generousManager.shutdown();
+      await stingyManager.shutdown();
+    }
+  }, 60_000);
 });

@@ -50,5 +50,22 @@ server.tool(
   }),
 );
 
+// Records one line per process start, so a test can assert how many children
+// were actually spawned (the connect pool is supposed to dedupe concurrent
+// callers into a single cold start).
+if (process.env.MOCK_MCP_SPAWN_LOG) {
+  const { appendFileSync } = await import("node:fs");
+  appendFileSync(process.env.MOCK_MCP_SPAWN_LOG, `${process.pid}\n`);
+}
+
+// Simulates a gateway that is slow to come up (Docker MCP Gateway cold-starts
+// a container per enabled server before it will answer `initialize`). The
+// child is alive and healthy the whole time, it just has not finished
+// starting, which is exactly the case discovery has to survive.
+const startupDelayMs = Number(process.env.MOCK_MCP_STARTUP_DELAY_MS ?? "0");
+if (startupDelayMs > 0) {
+  await new Promise((resolve) => setTimeout(resolve, startupDelayMs));
+}
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
