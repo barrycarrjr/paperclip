@@ -514,13 +514,34 @@ function formatProviderError(source: string, error: unknown): string {
   return `${source}: ${message}`;
 }
 
-export async function getQuotaWindows(): Promise<ProviderQuotaResult> {
+export async function getQuotaWindows(credential?: string): Promise<ProviderQuotaResult> {
   if (
     process.env.CLAUDE_CODE_USE_BEDROCK === "1" ||
     process.env.CLAUDE_CODE_USE_BEDROCK === "true" ||
     hasNonEmptyProcessEnv("ANTHROPIC_BEDROCK_BASE_URL")
   ) {
     return { provider: "anthropic", source: "bedrock", ok: true, windows: [] };
+  }
+
+  // When the server names the account it is actually running work on, answer
+  // about that one. The usage endpoint is a stateless call taking a token, so
+  // this costs nothing beyond preferring the supplied credential.
+  const suppliedCredential = credential?.trim();
+  if (suppliedCredential) {
+    try {
+      const windows = await fetchClaudeQuota(suppliedCredential);
+      return { provider: "anthropic", source: CLAUDE_USAGE_SOURCE_OAUTH, ok: true, windows };
+    } catch (error) {
+      // Deliberately no fallback to the machine's own token: the caller asked
+      // about a specific account, and answering with a different account's
+      // numbers is worse than admitting we could not tell.
+      return {
+        provider: "anthropic",
+        ok: false,
+        error: formatProviderError("Anthropic OAuth usage for the active account", error),
+        windows: [],
+      };
+    }
   }
 
   const authStatus = await readClaudeAuthStatus();

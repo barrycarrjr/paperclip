@@ -119,6 +119,7 @@ import {
   forgetExpiredAccountLimits,
 } from "./adapter-account-router.js";
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
+import { accountCredentialEnvVarFor } from "./active-account.js";
 import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
@@ -270,20 +271,6 @@ function readPlanResetFromRun(run: Pick<typeof heartbeatRuns.$inferSelect, "resu
 const ACCOUNT_FAILOVER_RETRY_REASON = "account_failover";
 const PLAN_EXHAUSTED_RETRY_REASON = "plan_exhausted";
 
-/**
- * The environment variable an adapter's credential travels in, when it has
- * opted into holding a list of accounts. Null means it has not, and its
- * existing single sign-in is left alone.
- */
-function accountCredentialEnvVarFor(adapterType: string): string | null {
-  try {
-    const envVar = getServerAdapter(adapterType).accountCredentialEnvVar;
-    return typeof envVar === "string" && envVar.trim().length > 0 ? envVar.trim() : null;
-  } catch {
-    // An unknown or unloaded adapter simply has no account routing.
-    return null;
-  }
-}
 
 function mergeAdapterRecoveryMetadata(input: {
   resultJson: Record<string, unknown> | null | undefined;

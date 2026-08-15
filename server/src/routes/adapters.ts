@@ -40,6 +40,7 @@ import {
   setAdapterAccountEnabled,
   upsertAdapterAccount,
 } from "../services/adapter-accounts.js";
+import { resolveActiveAccountCredential } from "../services/active-account.js";
 import {
   listAdapterPlugins,
   addAdapterPlugin,
@@ -745,7 +746,12 @@ export function adapterRoutes() {
           return [adapter.type, { supported: false, status: null }] as const;
         }
         try {
-          const status = await adapter.getAuthStatus();
+          // Describe the account this adapter is actually running work on. A
+          // badge reporting the machine's sign-in while runs use a different
+          // account reads as authoritative and is simply wrong.
+          const status = await adapter.getAuthStatus(
+            await resolveActiveAccountCredential(adapter.type),
+          );
           return [adapter.type, { supported: true, status }] as const;
         } catch (err) {
           logger.warn(

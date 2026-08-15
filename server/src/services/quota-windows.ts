@@ -1,5 +1,6 @@
 import type { ProviderQuotaResult } from "@paperclipai/shared";
 import { listServerAdapters } from "../adapters/registry.js";
+import { resolveActiveAccountCredential } from "./active-account.js";
 
 const QUOTA_PROVIDER_TIMEOUT_MS = 20_000;
 
@@ -24,7 +25,15 @@ export async function fetchAllQuotaWindows(): Promise<ProviderQuotaResult[]> {
   const adapters = listServerAdapters().filter((a) => a.getQuotaWindows != null);
 
   const settled = await Promise.allSettled(
-    adapters.map((adapter) => withQuotaTimeout(adapter.type, adapter.getQuotaWindows!())),
+    adapters.map(async (adapter) =>
+      // Ask about the account this adapter is actually running work on. Without
+      // it the page reports the machine's own sign-in, which is a different
+      // account entirely once a list is configured.
+      withQuotaTimeout(
+        adapter.type,
+        adapter.getQuotaWindows!(await resolveActiveAccountCredential(adapter.type)),
+      ),
+    ),
   );
 
   return settled.map((result, i) => {

@@ -180,7 +180,24 @@ function clipOutput(stdout: string, stderr: string): string {
   return `${combined.slice(0, 2000)}\n…\n${combined.slice(-1500)}`;
 }
 
-async function claudeGetAuthStatus(): Promise<AdapterAuthStatus | null> {
+async function claudeGetAuthStatus(credential?: string): Promise<AdapterAuthStatus | null> {
+  // When the server names the account it is actually running work on, describe
+  // that one. Everything below reads the machine's own sign-in, which is a
+  // different account entirely once a list is configured, and a badge that
+  // confidently describes an account nothing is using is worse than no badge.
+  //
+  // Holding a usable credential IS the sign-in here: there is no separate
+  // status to read for an account whose token we were handed, and the token's
+  // validity is proven by the runs that use it rather than by asking.
+  const suppliedCredential = credential?.trim();
+  if (suppliedCredential) {
+    return {
+      loggedIn: true,
+      method: "Claude subscription",
+      detail: "signed in with the active account",
+    };
+  }
+
   // `claude auth status` reports loggedIn from stored metadata and ignores token
   // expiry (it says loggedIn:true even after the token has died), so decide the
   // *real* usable credential here instead of trusting that flag.

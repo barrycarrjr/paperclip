@@ -6,14 +6,13 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { runningProcesses, signalRunningProcess } from "@paperclipai/adapter-utils/server-utils";
-import { getServerAdapter } from "../adapters/index.js";
 import {
   accountSwitchDecision,
-  activeAccount,
   applyAccountSwitch,
   forgetExpiredAccountLimits,
 } from "./adapter-account-router.js";
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
+import { resolveActiveAccount } from "./active-account.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
 
 /**
@@ -931,17 +930,9 @@ const ADAPTER_PREFIX = "adapter:";
 export async function resolveActiveAccountEnv(
   adapterType: string,
 ): Promise<{ slot: string; env: Record<string, string> } | null> {
-  let envVar: string | undefined;
-  try {
-    envVar = getServerAdapter(adapterType).accountCredentialEnvVar;
-  } catch {
-    return null;
-  }
-  if (!envVar || envVar.trim().length === 0) return null;
-  const state = forgetExpiredAccountLimits(await readAdapterAccountState(adapterType), Date.now());
-  const account = activeAccount(state);
+  const account = await resolveActiveAccount(adapterType);
   if (!account) return null;
-  return { slot: account.slot, env: { [envVar.trim()]: account.token } };
+  return { slot: account.slot, env: { [account.envVar]: account.credential } };
 }
 
 /**

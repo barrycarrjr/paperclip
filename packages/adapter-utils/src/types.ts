@@ -380,8 +380,15 @@ export interface ServerAdapterModule {
    * Optional: fetch live provider quota/rate-limit windows for this adapter.
    * Returns a ProviderQuotaResult so the server can aggregate across adapters
    * without knowing provider-specific credential paths or API shapes.
+   *
+   * `credential` is the account the server is actually running work on, when
+   * an account list is configured. Report that account's usage, not whatever
+   * the machine happens to be signed in as: with several accounts the two are
+   * routinely different, and showing the machine's numbers next to a list of
+   * accounts describes an account nothing is using. Omitted means no list is
+   * configured, so the machine's own sign-in is the right answer.
    */
-  getQuotaWindows?: () => Promise<ProviderQuotaResult>;
+  getQuotaWindows?: (credential?: string) => Promise<ProviderQuotaResult>;
   /**
    * Optional: detect the currently configured model from local config files.
    * Returns the detected model/provider and the config source, or null if
@@ -401,8 +408,13 @@ export interface ServerAdapterModule {
    * Returning `null` signals "auth concept not applicable" (e.g. http, process,
    * env-var-only adapters with no interactive flow). The UI uses presence/absence
    * of this method to decide whether to show an auth status badge.
+   *
+   * `credential` is the account the server is actually running work on, when an
+   * account list is configured. Describe that account: a badge reporting the
+   * machine's sign-in while runs use a different one is worse than no badge,
+   * because it reads as authoritative. Omitted means no list is configured.
    */
-  getAuthStatus?: () => Promise<AdapterAuthStatus | null>;
+  getAuthStatus?: (credential?: string) => Promise<AdapterAuthStatus | null>;
 
   /**
    * Optional: trigger an interactive re-auth flow for the adapter, instance-wide.
