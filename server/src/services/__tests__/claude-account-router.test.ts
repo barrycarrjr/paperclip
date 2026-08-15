@@ -11,14 +11,14 @@ import {
 } from "../claude-account-router.js";
 
 const NOW = Date.parse("2026-08-15T15:00:00.000Z");
-/** The real reset the CLI reported when Barry's weekly window ran out. */
+/** The real reset the CLI reported when a weekly window ran out. */
 const AUG_17_RESET = Date.parse("2026-08-17T07:00:00.000Z");
 
 function stateWith(overrides: Partial<ClaudeAccountState> = {}): ClaudeAccountState {
   return {
     slots: [
-      { slot: "1", token: "sk-ant-oat01-one", label: "barrycarrjr" },
-      { slot: "2", token: "sk-ant-oat01-two", label: "printinginabox" },
+      { slot: "1", token: "sk-ant-oat01-one", label: "Main" },
+      { slot: "2", token: "sk-ant-oat01-two", label: "Backup" },
     ],
     activeSlot: "1",
     lastSwitch: null,
@@ -33,7 +33,7 @@ describe("activeClaudeAccount", () => {
   });
 
   it("picks the recorded active account", () => {
-    expect(activeClaudeAccount(stateWith({ activeSlot: "2" }))?.label).toBe("printinginabox");
+    expect(activeClaudeAccount(stateWith({ activeSlot: "2" }))?.label).toBe("Backup");
   });
 
   it("falls back to the first usable account when the active one is gone or disabled", () => {
@@ -42,8 +42,8 @@ describe("activeClaudeAccount", () => {
       activeClaudeAccount(
         stateWith({
           slots: [
-            { slot: "1", token: "sk-ant-oat01-one", label: "barrycarrjr", enabled: false },
-            { slot: "2", token: "sk-ant-oat01-two", label: "printinginabox" },
+            { slot: "1", token: "sk-ant-oat01-one", label: "Main", enabled: false },
+            { slot: "2", token: "sk-ant-oat01-two", label: "Backup" },
           ],
         }),
       )?.slot,
@@ -280,8 +280,8 @@ describe("describeClaudeAccounts", () => {
       stateWith({ exhaustedUntil: { "2": AUG_17_RESET } }),
       NOW,
     );
-    expect(described).toContain("barrycarrjr (active)");
-    expect(described).toContain("printinginabox (out until 2026-08-17T07:00:00.000Z)");
+    expect(described).toContain("Main (active)");
+    expect(described).toContain("Backup (out until 2026-08-17T07:00:00.000Z)");
     expect(described).not.toContain("sk-ant");
   });
 

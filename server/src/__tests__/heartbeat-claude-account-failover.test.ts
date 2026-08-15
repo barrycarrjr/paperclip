@@ -36,7 +36,7 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
-/** The reset the CLI reported when Barry's weekly window actually ran out. */
+/** The reset the CLI reported when a real weekly window actually ran out. */
 const AUG_17_RESET = "2026-08-17T07:00:00.000Z";
 
 describeEmbeddedPostgres("Claude account failover", () => {
@@ -144,8 +144,8 @@ describeEmbeddedPostgres("Claude account failover", () => {
   }
 
   it("switches to the standby account and retries straight away", async () => {
-    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "barrycarrjr" });
-    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "printinginabox" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "Main" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
     const now = new Date("2026-08-15T15:00:00.000Z");
@@ -175,7 +175,7 @@ describeEmbeddedPostgres("Claude account failover", () => {
   });
 
   it("parks the work until the reset when there is nowhere left to go", async () => {
-    await upsertClaudeAccount({ token: "sk-ant-oat01-only", label: "barrycarrjr" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-only", label: "Main" });
 
     const runId = randomUUID();
     const now = new Date("2026-08-15T15:00:00.000Z");
@@ -202,8 +202,8 @@ describeEmbeddedPostgres("Claude account failover", () => {
   });
 
   it("never re-routes an agent that carries its own token", async () => {
-    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "barrycarrjr" });
-    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "printinginabox" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "Main" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
     const now = new Date("2026-08-15T15:00:00.000Z");
@@ -229,8 +229,8 @@ describeEmbeddedPostgres("Claude account failover", () => {
   });
 
   it("leaves a transient failure on the plain backoff ladder", async () => {
-    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "barrycarrjr" });
-    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "printinginabox" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-one", label: "Main" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
     const now = new Date("2026-08-15T15:00:00.000Z");
@@ -253,7 +253,7 @@ describeEmbeddedPostgres("Claude account failover", () => {
   });
 
   it("keeps tokens out of the account list handed to the UI", async () => {
-    await upsertClaudeAccount({ token: "sk-ant-oat01-secret-value", label: "barrycarrjr" });
+    await upsertClaudeAccount({ token: "sk-ant-oat01-secret-value", label: "Main" });
     expect(JSON.stringify(listClaudeAccounts())).not.toContain("sk-ant");
     // And out of the file on disk, which holds ciphertext only.
     const onDisk = fs.readFileSync(path.join(homeDir, "claude-accounts.json"), "utf-8");

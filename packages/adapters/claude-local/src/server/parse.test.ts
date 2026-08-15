@@ -10,7 +10,7 @@ import {
 } from "./parse.js";
 
 /**
- * The exact stream the CLI produced when Barry's weekly limit ran out on
+ * The exact stream the CLI produced when a weekly limit ran out on
  * 2026-08-15, lifted verbatim from the run log at
  * ~/.paperclip/instances/default/data/run-logs/c613cfaf-.../c27f3705-....ndjson
  * (the 9KB system/init line is trimmed to its identifying fields; nothing else

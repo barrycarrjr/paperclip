@@ -448,7 +448,7 @@ function ClaudeTokenDialog({
                 id="claude-account-label"
                 value={accountLabel}
                 onChange={(e) => onAccountLabelChange(e.target.value)}
-                placeholder="e.g. printinginabox@gmail.com"
+                placeholder="e.g. Main account"
               />
               <p className="text-xs text-muted-foreground">
                 A token carries no account name, so this label is the only way to tell them apart.

@@ -257,7 +257,7 @@ describe("SidebarAccountMenu", () => {
     });
   });
 
-  // The gap Barry's instance was in: the checkout was level with GitHub but 28
+  // The gap a real instance was found in: the checkout was level with GitHub but 28
   // commits ahead of the build that was actually running. Pulling would have
   // done nothing, so the pill has to offer the rebuild that does.
   it("offers Rebuild instead of Update when the build is the thing that is behind", async () => {
