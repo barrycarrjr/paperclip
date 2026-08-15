@@ -61,7 +61,7 @@ describe("GET /api/plugins/connectors", () => {
             companyId: "company-a",
             companyName: "Industry Bureau LLC",
             connected: true,
-            accountLabel: "books@ib.com",
+            accountLabel: "books@example.org",
             viaPortfolioWide: false,
           },
         ],

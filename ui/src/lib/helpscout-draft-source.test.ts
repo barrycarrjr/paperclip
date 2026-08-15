@@ -33,7 +33,7 @@ function conv(threads: HSThread[], extra: Partial<HSConversationFull> = {}): HSC
   return {
     id: 1,
     subject: "Admin Panel",
-    primaryCustomer: { email: "sue@songprinting.com" },
+    primaryCustomer: { email: "sue@example.com" },
     _embedded: { threads },
     ...extra,
   };
@@ -56,13 +56,13 @@ describe("pickDraftSource", () => {
           type: "customer",
           body: "<p>Please let me know how to do this.</p>",
           createdAt: "2026-07-23T08:00:00Z",
-          customer: { email: "sue@songprinting.com" },
+          customer: { email: "sue@example.com" },
         },
       ]),
     );
     expect(source).toEqual({
       subject: "Admin Panel",
-      from: "sue@songprinting.com",
+      from: "sue@example.com",
       bodyText: "Please let me know how to do this.",
     });
   });
@@ -82,14 +82,14 @@ describe("pickDraftSource", () => {
           type: "customer",
           body: "Second question",
           createdAt: "2026-07-23T11:00:00Z",
-          customer: { email: "sue@songprinting.com" },
+          customer: { email: "sue@example.com" },
         },
         {
           id: 1,
           type: "customer",
           body: "First question",
           createdAt: "2026-07-23T08:00:00Z",
-          customer: { email: "sue@songprinting.com" },
+          customer: { email: "sue@example.com" },
         },
       ]),
     );
@@ -134,7 +134,7 @@ describe("pickDraftSource", () => {
 
   it("falls back to the conversation's customer when the thread has no address", () => {
     const source = pickDraftSource(conv([{ id: 1, type: "customer", body: "Hi" }]));
-    expect(source?.from).toBe("sue@songprinting.com");
+    expect(source?.from).toBe("sue@example.com");
   });
 
   it("uses the thread's plain text when there is no html body", () => {

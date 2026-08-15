@@ -49,7 +49,7 @@ describe("plugin connectors", () => {
       accounts: [
         {
           key: "ib",
-          userEmail: "books@industrybureau.com",
+          userEmail: "books@example.com",
           allowedCompanies: ["company-a"],
           refreshTokenRef: "secret-uuid",
         },
@@ -59,7 +59,7 @@ describe("plugin connectors", () => {
     expect(result.companies[0]).toMatchObject({
       companyId: "company-a",
       connected: true,
-      accountLabel: "books@industrybureau.com",
+      accountLabel: "books@example.com",
       viaPortfolioWide: false,
     });
     expect(result.companies[1]).toMatchObject({ companyId: "company-b", connected: false });
@@ -80,12 +80,12 @@ describe("plugin connectors", () => {
     const result = resolve({
       accounts: [
         { key: "all", userEmail: "ops@example.com", allowedCompanies: ["*"], refreshTokenRef: "secret" },
-        { key: "ib", userEmail: "books@ib.com", allowedCompanies: ["company-a"], refreshTokenRef: "secret" },
+        { key: "ib", userEmail: "books@example.org", allowedCompanies: ["company-a"], refreshTokenRef: "secret" },
       ],
     });
 
     expect(result.companies[0]).toMatchObject({
-      accountLabel: "books@ib.com",
+      accountLabel: "books@example.org",
       viaPortfolioWide: false,
     });
     expect(result.companies[1]).toMatchObject({
@@ -100,17 +100,17 @@ describe("plugin connectors", () => {
   it("does not count an account that is still missing its credentials", () => {
     const result = resolve({
       accounts: [
-        { key: "ib", userEmail: "books@ib.com", allowedCompanies: ["company-a"], refreshTokenRef: "" },
+        { key: "ib", userEmail: "books@example.org", allowedCompanies: ["company-a"], refreshTokenRef: "" },
       ],
     });
 
     expect(result.companies[0].connected).toBe(false);
-    expect(result.unfinishedAccounts).toEqual(["books@ib.com"]);
+    expect(result.unfinishedAccounts).toEqual(["books@example.org"]);
   });
 
   it("reads an account with an empty company list as unusable, matching plugin deny rules", () => {
     const result = resolve({
-      accounts: [{ key: "ib", userEmail: "books@ib.com", allowedCompanies: [], refreshTokenRef: "secret" }],
+      accounts: [{ key: "ib", userEmail: "books@example.org", allowedCompanies: [], refreshTokenRef: "secret" }],
     });
 
     expect(result.companies.every((company) => company.connected)).toBe(false);

@@ -39,7 +39,7 @@ function createConnector(overrides: Partial<PluginConnectorStatus> = {}): Plugin
         companyId: "company-a",
         companyName: "Industry Bureau LLC",
         connected: true,
-        accountLabel: "books@ib.com",
+        accountLabel: "books@example.org",
         viaPortfolioWide: false,
       },
       {
@@ -128,7 +128,7 @@ describe("CalendarConnectorStatus", () => {
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("Industry Bureau LLC");
-    expect(text).toContain("books@ib.com");
+    expect(text).toContain("books@example.org");
     expect(text).toContain("Print Shop");
     expect(text).toContain("Not connected");
   });
@@ -156,7 +156,7 @@ describe("CalendarConnectorStatus", () => {
   });
 
   it("calls out accounts that are missing their credentials", async () => {
-    connectorsFixture = [createConnector({ unfinishedAccounts: ["books@ib.com"] })];
+    connectorsFixture = [createConnector({ unfinishedAccounts: ["books@example.org"] })];
     await render();
     clickChip();
 
