@@ -1,25 +1,40 @@
 /**
- * Compares the local checkout's current commit against the latest commit on the
- * install's tracked branch via the GitHub REST API.
+ * Whether the running Paperclip is behind, and in which of the two ways it can
+ * be.
  *
- * The local side is read from the checkout itself (`git rev-parse HEAD`), not
- * from the `commit` field in `~/.paperclip/install.json`. That field is only
- * rewritten when the update flow runs all the way to its final step, so any
- * other way the checkout moves forward (a local commit, a manual `git pull`, or
- * an update that dies partway through) leaves it pointing at an older commit
- * and the UI keeps offering an update that has already been applied. The marker
- * is still the source of truth for *where* the checkout lives, and its recorded
- * commit is kept as a fallback for when git can't be run.
+ * There are three commits in play, not two, and conflating any of them hides a
+ * real problem:
  *
- * The result drives the UI's "update available" indicator. Cached in-process
- * with a short TTL so repeated UI polls and multi-tab sessions don't burn
- * GitHub's 60/hr unauthenticated rate limit. The cache resets on server
- * restart, which is exactly what we want — after the user runs the update flow
- * the server reboots and the next call refetches against fresh state.
+ * - what GitHub has on the tracked branch,
+ * - what the local checkout is on (`git rev-parse HEAD`),
+ * - what was last built and installed (`commit` in `~/.paperclip/install.json`,
+ *   written only by the final step of the update and rebuild scripts).
  *
- * Non-github.com remotes (e.g. self-hosted GitHub Enterprise, or custom git
- * hosts) are not supported here; we surface a benign `unsupported_remote`
- * error and the UI hides its indicator.
+ * Comparing only the first two answers "is there anything new to pull", which
+ * says nothing about whether the thing that was pulled was ever built. A
+ * checkout that is level with GitHub while the installed build sits 28 commits
+ * behind reports "up to date" and is not: that is what a partly-finished update
+ * leaves behind, and it is silent.
+ *
+ * Comparing only the last two was the original behaviour and had the opposite
+ * fault: it kept offering an update that had already been applied, because
+ * anything that moved the checkout without running the updater to completion
+ * left the marker behind.
+ *
+ * So both comparisons are made and reported separately. `remote_ahead` wants a
+ * pull, `build_behind` wants a rebuild, and they are different buttons.
+ * `available` stays true for either, so an existing caller that only reads that
+ * flag keeps working and simply stops missing the second case.
+ *
+ * Results are cached in-process with a short TTL so repeated UI polls and
+ * multi-tab sessions don't burn GitHub's 60/hr unauthenticated rate limit. The
+ * cache resets on server restart, which is exactly what we want: after an
+ * update the server reboots and the next call refetches against fresh state.
+ *
+ * Non-github.com remotes (self-hosted GitHub Enterprise, other git hosts) can't
+ * be checked against a remote; we surface a benign `unsupported_remote` and the
+ * UI hides the indicator. The build comparison is local, so it is still
+ * reported in that case.
  */
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -43,10 +58,26 @@ export type UpdateCheckErrorReason =
   | "github_unreachable"
   | "github_error";
 
+/**
+ * Why an update is being offered.
+ *
+ * `remote_ahead` means there is something to pull. `build_behind` means what is
+ * checked out has never been built, so a rebuild applies it without touching
+ * the remote. When both are true the pull is reported, because updating does
+ * the rebuild too.
+ */
+export type UpdateCheckReason = "remote_ahead" | "build_behind";
+
 export interface UpdateCheckResult {
   available: boolean;
+  /** What the checkout is on. */
   localCommit: string | null;
+  /** What GitHub has on the tracked branch. */
   remoteCommit: string | null;
+  /** What was last built and installed, from the install marker. */
+  installedCommit: string | null;
+  /** Which of the two gaps this is, or null when there is no gap. */
+  reason: UpdateCheckReason | null;
   branch: string | null;
   lastChecked: string;
   error?: UpdateCheckErrorReason;
@@ -242,59 +273,70 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
       available: false,
       localCommit: null,
       remoteCommit: null,
+      installedCommit: null,
+      reason: null,
       branch: null,
       lastChecked,
       error: "no_install_marker",
     };
   }
 
-  // Prefer the checkout's real HEAD; the marker's recorded commit goes stale
-  // any time the checkout moves without a completed update run.
+  // The checkout's real HEAD, falling back to the marker only when git cannot
+  // be run at all. These are different things and are compared against each
+  // other below, so the fallback deliberately collapses the comparison to "no
+  // gap" rather than inventing one.
   const readHead = opts.headImpl ?? readCheckoutHead;
-  const localCommit = (await readHead(info.repoPath)) ?? info.commit;
+  const checkoutCommit = await readHead(info.repoPath);
+  const localCommit = checkoutCommit ?? info.commit;
+  const installedCommit = info.commit;
 
-  if (!info.remote) {
-    return {
-      available: false,
-      localCommit,
-      remoteCommit: null,
-      branch: info.branch,
-      lastChecked,
-      error: "missing_remote",
-    };
-  }
+  /**
+   * Is the installed build behind what is checked out?
+   *
+   * Only answerable when git actually ran; with no HEAD there is nothing to
+   * compare the marker against and claiming a gap would be a guess.
+   */
+  const buildBehind = Boolean(
+    checkoutCommit && installedCommit && checkoutCommit !== installedCommit,
+  );
+
+  /** The answer when there is no usable remote to compare against. */
+  const localOnly = (error: UpdateCheckErrorReason): UpdateCheckResult => ({
+    available: buildBehind,
+    localCommit,
+    remoteCommit: null,
+    installedCommit,
+    reason: buildBehind ? "build_behind" : null,
+    branch: info.branch,
+    lastChecked,
+    error,
+  });
+
+  if (!info.remote) return localOnly("missing_remote");
 
   const parsed = parseGitHubRemote(info.remote);
-  if (!parsed || !isGitHubHostname(parsed.hostname)) {
-    return {
-      available: false,
-      localCommit,
-      remoteCommit: null,
-      branch: info.branch,
-      lastChecked,
-      error: "unsupported_remote",
-    };
-  }
+  if (!parsed || !isGitHubHostname(parsed.hostname)) return localOnly("unsupported_remote");
 
   const branch = info.branch ?? DEFAULT_BRANCH;
   const { remoteCommit, live } = await fetchRemoteCommit(parsed, branch, opts);
 
   if (!remoteCommit) {
-    return {
-      available: false,
-      localCommit,
-      remoteCommit: null,
-      branch,
-      lastChecked,
-      error: "github_unreachable",
-    };
+    return { ...localOnly("github_unreachable"), branch };
   }
 
-  const available = Boolean(localCommit) && localCommit !== remoteCommit;
+  const remoteAhead = Boolean(localCommit) && localCommit !== remoteCommit;
+  // A pull wins when both are true, because updating rebuilds as its last step.
+  const reason: UpdateCheckReason | null = remoteAhead
+    ? "remote_ahead"
+    : buildBehind
+      ? "build_behind"
+      : null;
   return {
-    available,
+    available: reason !== null,
     localCommit,
     remoteCommit,
+    installedCommit,
+    reason,
     branch,
     lastChecked,
     ...(live ? {} : { error: "github_unreachable" as const }),

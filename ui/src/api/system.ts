@@ -15,10 +15,21 @@ export type SystemUpdateCheckErrorReason =
   | "github_unreachable"
   | "github_error";
 
+/**
+ * Which gap is being reported. `remote_ahead` needs a pull, `build_behind`
+ * needs a rebuild of what is already checked out.
+ */
+export type SystemUpdateCheckReason = "remote_ahead" | "build_behind";
+
 export interface SystemUpdateCheck {
   available: boolean;
+  /** What the checkout is on. */
   localCommit: string | null;
+  /** What GitHub has on the tracked branch. */
   remoteCommit: string | null;
+  /** What was last built and installed. */
+  installedCommit: string | null;
+  reason: SystemUpdateCheckReason | null;
   branch: string | null;
   lastChecked: string;
   error?: SystemUpdateCheckErrorReason;

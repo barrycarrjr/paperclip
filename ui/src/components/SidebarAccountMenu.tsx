@@ -37,10 +37,19 @@ interface SidebarAccountMenuProps {
   version?: string | null;
   commit?: string | null;
   /**
-   * When true, the trigger row shows a clickable "Update" pill in place of the
-   * commit hash, and the dropdown's Update icon gains a badge dot.
+   * When true, the trigger row shows a clickable pill in place of the commit
+   * hash, and the dropdown's matching icon gains a badge dot.
    */
   updateAvailable?: boolean;
+  /**
+   * Which gap the pill is offering to close.
+   *
+   * `remote_ahead` means there is something to pull, so the pill runs Update.
+   * `build_behind` means what is checked out was never built, so pulling would
+   * do nothing and the pill runs Rebuild instead. Defaults to a pull, which is
+   * what the pill always did before the two cases were told apart.
+   */
+  updateReason?: "remote_ahead" | "build_behind" | null;
 }
 
 interface MenuActionProps {
@@ -207,6 +216,9 @@ function IconAction({
 const UPDATE_CONFIRM_MESSAGE =
   "Update Paperclip? A console window will open and pull the latest, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the update.";
 
+const REBUILD_CONFIRM_MESSAGE =
+  "Rebuild Paperclip? Everything is already downloaded, but it has not been built yet, so the server is still running older code. A console window will open and build, migrate, and relaunch the server. Everyone connected will be disconnected during the rebuild.";
+
 export function SidebarAccountMenu({
   deploymentMode,
   instanceSettingsTarget,
@@ -215,6 +227,7 @@ export function SidebarAccountMenu({
   version,
   commit,
   updateAvailable = false,
+  updateReason = null,
 }: SidebarAccountMenuProps) {
   const shortCommit = commit ? commit.slice(0, 8) : null;
   const [internalOpen, setInternalOpen] = useState(false);
@@ -290,6 +303,21 @@ export function SidebarAccountMenu({
     }
   }
 
+  // Pulling cannot fix a build that was never run, so the pill has to offer the
+  // action that actually closes the gap it found.
+  const needsRebuildOnly = updateReason === "build_behind";
+  const pillPending = needsRebuildOnly ? rebuildMutation.isPending : updateMutation.isPending;
+  const pillLabel = needsRebuildOnly ? "Rebuild" : "Update";
+
+  function runPillAction() {
+    if (lifecycleBusy) return;
+    if (needsRebuildOnly) {
+      if (window.confirm(REBUILD_CONFIRM_MESSAGE)) rebuildMutation.mutate();
+      return;
+    }
+    confirmAndUpdate();
+  }
+
   return (
     <div className="relative border-t border-r border-border bg-background px-3 py-2">
       <Popover open={open} onOpenChange={setOpen}>
@@ -323,24 +351,32 @@ export function SidebarAccountMenu({
                 onClick={(event) => {
                   event.stopPropagation();
                   event.preventDefault();
-                  confirmAndUpdate();
+                  runPillAction();
                 }}
                 disabled={lifecycleBusy}
                 aria-label={
-                  updateMutation.isPending
-                    ? "Updating Paperclip"
-                    : "Update available — click to update Paperclip"
+                  pillPending
+                    ? needsRebuildOnly
+                      ? "Rebuilding Paperclip"
+                      : "Updating Paperclip"
+                    : needsRebuildOnly
+                      ? "Downloaded but not built — click to rebuild Paperclip"
+                      : "Update available — click to update Paperclip"
                 }
                 className="absolute right-5 top-1/2 z-10 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 text-[10px] font-medium text-amber-500 transition-colors hover:bg-amber-500/15 hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <Download className="size-3" />
-                <span>{updateMutation.isPending ? "Updating…" : "Update"}</span>
+                {needsRebuildOnly ? <Hammer className="size-3" /> : <Download className="size-3" />}
+                <span>{pillPending ? (needsRebuildOnly ? "Rebuilding…" : "Updating…") : pillLabel}</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={6} className="max-w-[220px]">
-              <p className="font-medium">Update available</p>
+              <p className="font-medium">
+                {needsRebuildOnly ? "Downloaded but not built" : "Update available"}
+              </p>
               <p className="text-[10px] opacity-80">
-                A new commit is on origin/master. Click to pull, rebuild, and relaunch.
+                {needsRebuildOnly
+                  ? "The latest code is already here, but the server is still running an older build. Click to build and relaunch."
+                  : "A new commit is on origin/master. Click to pull, rebuild, and relaunch."}
               </p>
             </TooltipContent>
           </Tooltip>
@@ -388,7 +424,9 @@ export function SidebarAccountMenu({
                   ) : null}
                   {updateAvailable ? (
                     <p className="mt-1 text-xs font-medium text-amber-500">
-                      Update available — pull origin/master to apply.
+                      {needsRebuildOnly
+                        ? "Downloaded but not built — rebuild to run it."
+                        : "Update available — pull origin/master to apply."}
                     </p>
                   ) : null}
                 </div>
@@ -454,6 +492,9 @@ export function SidebarAccountMenu({
                   icon={Hammer}
                   tone="info"
                   disabled={lifecycleBusy}
+                  // Badge whichever action actually closes the gap, so the dot
+                  // never points at a pull that would do nothing.
+                  badge={updateAvailable && needsRebuildOnly}
                   onClick={() => {
                     if (lifecycleBusy) return;
                     if (
@@ -471,7 +512,7 @@ export function SidebarAccountMenu({
                   icon={Download}
                   tone="warning"
                   disabled={lifecycleBusy}
-                  badge={updateAvailable}
+                  badge={updateAvailable && !needsRebuildOnly}
                   onClick={confirmAndUpdate}
                 />
                 <IconAction

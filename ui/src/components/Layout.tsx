@@ -104,6 +104,7 @@ export function Layout() {
     refetchIntervalInBackground: true,
   });
   const updateAvailable = updateCheck?.available === true;
+  const updateReason = updateCheck?.reason ?? null;
   const keyboardShortcutsEnabled = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -375,6 +376,7 @@ export function Layout() {
               version={health?.version}
               commit={health?.commit}
               updateAvailable={updateAvailable}
+              updateReason={updateReason}
             />
           </div>
         ) : (
@@ -401,6 +403,7 @@ export function Layout() {
                 version={health?.version}
                 commit={health?.commit}
                 updateAvailable={updateAvailable}
+              updateReason={updateReason}
               />
             </div>
           </div>

@@ -217,14 +217,13 @@ describe("checkForRemoteUpdate", () => {
     expect(result.available).toBe(false);
   });
 
-  // install.json's `commit` is only rewritten by the final step of
-  // update-paperclip.bat. An update that dies before that step (and any local
-  // commit or manual `git pull`) leaves it behind the real checkout, so the
-  // live HEAD has to win or the UI offers an update that already happened.
+  // Three commits matter: what GitHub has, what is checked out, and what was
+  // last built. The checkout is compared against both of its neighbours,
+  // because each gap is real and needs a different button.
   describe("local commit resolution", () => {
     const LIVE_HEAD = "7050126a0000000000000000000000000000beef";
 
-    it("prefers the checkout's live HEAD over a stale marker commit", async () => {
+    it("reads the checkout's live HEAD rather than trusting the marker", async () => {
       mockInstall({});
       const headImpl = vi.fn(async () => LIVE_HEAD);
       const fetchImpl = vi.fn(async () => jsonResponse({ sha: LIVE_HEAD }));
@@ -235,8 +234,41 @@ describe("checkForRemoteUpdate", () => {
       });
 
       expect(result.localCommit).toBe(LIVE_HEAD);
-      expect(result.available).toBe(false);
       expect(headImpl).toHaveBeenCalledWith(SAMPLE_INSTALL.repoPath);
+    });
+
+    // The case that used to report "up to date" while the running build sat 28
+    // commits behind: the checkout is level with GitHub, but nothing ever built
+    // it. Pulling would do nothing; a rebuild is what applies it.
+    it("reports a rebuild when the checkout is level with GitHub but the build is not", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => LIVE_HEAD);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: LIVE_HEAD }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.available).toBe(true);
+      expect(result.reason).toBe("build_behind");
+      expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
+      expect(result.localCommit).toBe(LIVE_HEAD);
+      expect(result.remoteCommit).toBe(LIVE_HEAD);
+    });
+
+    it("says nothing is needed when all three commits agree", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => SAMPLE_INSTALL.commit);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: SAMPLE_INSTALL.commit }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.available).toBe(false);
+      expect(result.reason).toBeNull();
     });
 
     it("still reports an update when the live HEAD is behind the remote", async () => {
@@ -252,6 +284,39 @@ describe("checkForRemoteUpdate", () => {
       expect(result.localCommit).toBe(LIVE_HEAD);
       expect(result.remoteCommit).toBe("feedface");
       expect(result.available).toBe(true);
+      // A pull wins over a rebuild, because updating rebuilds as its last step.
+      expect(result.reason).toBe("remote_ahead");
+    });
+
+    it("still reports the rebuild when the remote cannot be reached", async () => {
+      mockInstall({ remote: "https://gitlab.com/foo/bar.git" });
+      const headImpl = vi.fn(async () => LIVE_HEAD);
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: vi.fn() as never,
+        headImpl,
+      });
+
+      expect(result.error).toBe("unsupported_remote");
+      expect(result.available).toBe(true);
+      expect(result.reason).toBe("build_behind");
+    });
+
+    // Without a HEAD there is nothing to compare the marker against, and
+    // inventing a gap would put a permanent Rebuild button on any install where
+    // git cannot run.
+    it("claims no rebuild is needed when HEAD cannot be read at all", async () => {
+      mockInstall({});
+      const headImpl = vi.fn(async () => null);
+      const fetchImpl = vi.fn(async () => jsonResponse({ sha: SAMPLE_INSTALL.commit }));
+
+      const result = await checkForRemoteUpdate({
+        fetchImpl: fetchImpl as never,
+        headImpl,
+      });
+
+      expect(result.available).toBe(false);
+      expect(result.reason).toBeNull();
     });
 
     it("falls back to the marker commit when HEAD can't be read", async () => {
@@ -279,6 +344,7 @@ describe("checkForRemoteUpdate", () => {
 
       expect(result.error).toBe("unsupported_remote");
       expect(result.localCommit).toBe(LIVE_HEAD);
+      expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
     });
 
     it("reports no update when both HEAD and marker are unreadable", async () => {

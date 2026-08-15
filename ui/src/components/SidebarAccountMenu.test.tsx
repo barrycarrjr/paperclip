@@ -257,6 +257,56 @@ describe("SidebarAccountMenu", () => {
     });
   });
 
+  // The gap Barry's instance was in: the checkout was level with GitHub but 28
+  // commits ahead of the build that was actually running. Pulling would have
+  // done nothing, so the pill has to offer the rebuild that does.
+  it("offers Rebuild instead of Update when the build is the thing that is behind", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockSystemApi.rebuild.mockResolvedValue({ ok: true, action: "rebuild" });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+          <SidebarAccountMenu
+            deploymentMode="authenticated"
+            instanceSettingsTarget="/instance/settings/general"
+            version="1.2.3"
+            commit="9be597811d288770ab6722fad3e69aa40ebf4a64"
+            updateAvailable={true}
+            updateReason="build_behind"
+          />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const pill = container.querySelector('button[aria-label^="Downloaded but not built"]');
+    expect(pill).not.toBeNull();
+    expect(pill?.textContent).toContain("Rebuild");
+    expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+
+    await act(async () => {
+      pill?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(mockSystemApi.rebuild).toHaveBeenCalledOnce();
+    expect(mockSystemApi.update).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("clicking the Update pill confirms then triggers systemApi.update without opening the popover", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockSystemApi.update.mockResolvedValue({ ok: true, action: "update" });
