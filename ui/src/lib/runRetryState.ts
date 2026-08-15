@@ -24,6 +24,8 @@ const RETRY_REASON_LABELS: Record<string, string> = {
   process_lost: "Process lost",
   assignment_recovery: "Assignment recovery",
   issue_continuation_needed: "Continuation needed",
+  claude_account_failover: "Switched Claude account",
+  claude_plan_exhausted: "Claude plan limit",
 };
 
 function readNonEmptyString(value: unknown) {

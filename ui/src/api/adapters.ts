@@ -58,6 +58,23 @@ export interface AdapterAuthStatusEntry {
   status: AdapterAuthStatus | null;
 }
 
+/**
+ * One Claude subscription this machine can sign runs in with.
+ *
+ * Never carries a token: the server holds those encrypted and hands back only
+ * what a person needs to see.
+ */
+export interface ClaudeAccountSummary {
+  slot: string;
+  label: string;
+  enabled: boolean;
+  createdAt: string;
+  /** True for the account new runs currently sign in with. */
+  active: boolean;
+  /** When this account's limit resets, if it is known to have run out. */
+  exhaustedUntil: string | null;
+}
+
 export const adaptersApi = {
   /** List all registered adapters (built-in + external). */
   list: () => api.get<AdapterInfo[]>("/adapters"),
@@ -110,4 +127,30 @@ export const adaptersApi = {
    */
   submitToken: (type: string, token: string) =>
     api.post<{ ok: boolean; expiresAt: string | null }>(`/adapters/${type}/submit-token`, { token }),
+
+  /** The Claude subscriptions this machine can sign runs in with. */
+  listClaudeAccounts: () =>
+    api.get<{ accounts: ClaudeAccountSummary[] }>("/adapters/claude_local/accounts"),
+
+  /** Add an account, or replace the token on one that already exists. */
+  saveClaudeAccount: (input: { token: string; accountLabel: string; slot?: string | null }) =>
+    api.post<{ ok: boolean; account: ClaudeAccountSummary; accounts: ClaudeAccountSummary[] }>(
+      "/adapters/claude_local/submit-token",
+      {
+        token: input.token,
+        accountLabel: input.accountLabel,
+        ...(input.slot ? { slot: input.slot } : {}),
+      },
+    ),
+
+  removeClaudeAccount: (slot: string) =>
+    api.delete<{ ok: boolean; accounts: ClaudeAccountSummary[] }>(
+      `/adapters/claude_local/accounts/${slot}`,
+    ),
+
+  activateClaudeAccount: (slot: string) =>
+    api.post<{ ok: boolean; accounts: ClaudeAccountSummary[] }>(
+      `/adapters/claude_local/accounts/${slot}/activate`,
+      {},
+    ),
 };

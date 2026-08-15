@@ -111,6 +111,15 @@ import {
 import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-guard.js";
 import { recoveryService } from "./recovery/service.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
+import {
+  activeClaudeAccount,
+  applyClaudeAccountSwitch,
+  claudeAccountSwitchDecision,
+  describeClaudeAccounts,
+  forgetExpiredClaudeAccountLimits,
+} from "./claude-account-router.js";
+import { readClaudeAccountState, saveClaudeAccountRouting } from "./claude-accounts.js";
+import { agentHasOwnClaudeToken } from "./claude-sign-in-impact.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
   hasSessionCompactionThresholds,
@@ -194,6 +203,9 @@ function readHeartbeatRunErrorFamily(
   if (run.errorCode === "codex_transient_upstream" || run.errorCode === "claude_transient_upstream") {
     return "transient_upstream";
   }
+  if (run.errorCode === "claude_plan_exhausted") {
+    return "plan_exhausted";
+  }
   return null;
 }
 
@@ -217,6 +229,36 @@ function readTransientRecoveryContractFromRun(
       }
     : null;
 }
+
+/**
+ * The recovery contract for either kind of provider failure.
+ *
+ * Kept separate from the transient-only reader above because the retry
+ * scheduler must honour the reset time for BOTH families. Reading only the
+ * transient one silently drops the reset time the moment a retry carries a
+ * different reason, and the run comes back in two minutes instead of when the
+ * subscription window actually reopens.
+ */
+function readRunRecoveryContract(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson">,
+) {
+  const family = readHeartbeatRunErrorFamily(run);
+  if (family !== "transient_upstream" && family !== "plan_exhausted") return null;
+  return { errorFamily: family, retryNotBefore: readTransientRetryNotBeforeFromRun(run) };
+}
+
+/** When a spent plan says it comes back, in epoch ms. */
+function readPlanResetFromRun(run: Pick<typeof heartbeatRuns.$inferSelect, "resultJson">): number | null {
+  const resultJson = parseObject(run.resultJson);
+  const value = readNonEmptyString(resultJson.claudePlanResetsAt) ?? readNonEmptyString(resultJson.retryNotBefore);
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** Retry reasons this file writes, so the UI can name them in plain words. */
+const CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON = "claude_account_failover";
+const CLAUDE_PLAN_EXHAUSTED_RETRY_REASON = "claude_plan_exhausted";
 
 function mergeAdapterRecoveryMetadata(input: {
   resultJson: Record<string, unknown> | null | undefined;
@@ -3372,6 +3414,106 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return queued;
   }
 
+  /**
+   * A run died because its Claude subscription is spent. Move to an account
+   * that still has room and retry there, or park the work until the earliest
+   * window reopens.
+   *
+   * Retrying rather than re-invoking in place is deliberate. Calling back into
+   * executeRun from its own tail would re-enter while the MCP token, the
+   * workspace, the run-log handle and the issue execution lock are all still
+   * held. The scheduled retry is picked up on the next scheduler tick instead,
+   * which costs seconds and avoids that whole class of problem.
+   */
+  async function handleClaudeAccountFailover(
+    run: typeof heartbeatRuns.$inferSelect,
+    agent: typeof agents.$inferSelect,
+  ) {
+    const now = new Date();
+    const contextSnapshot = parseObject(run.contextSnapshot);
+    const ranOn = readNonEmptyString(contextSnapshot.claudeAccountSlot);
+    const resetsAt = readPlanResetFromRun(run);
+    const state = forgetExpiredClaudeAccountLimits(await readClaudeAccountState(), now.getTime());
+    const decision = claudeAccountSwitchDecision({
+      state,
+      ranOn,
+      family: "plan_exhausted",
+      resetsAt,
+      now: now.getTime(),
+    });
+
+    // No accounts configured, or the agent signed in with its own pinned token.
+    // Either way there is nowhere to move it to, so fall back to parking the
+    // work until the plan says it comes back.
+    if (!decision) {
+      await scheduleBoundedRetryForRun(run, agent, {
+        now,
+        retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+        wakeReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+      });
+      return;
+    }
+
+    const nextState = applyClaudeAccountSwitch({
+      state,
+      decision,
+      ranOn,
+      resetsAt,
+      now: now.getTime(),
+    });
+    saveClaudeAccountRouting({
+      activeSlot: nextState.activeSlot,
+      lastSwitch: nextState.lastSwitch,
+      exhaustedUntil: nextState.exhaustedUntil,
+    });
+
+    if (decision.kind === "exhausted") {
+      await appendRunEvent(run, await nextRunEventSeq(run.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message: decision.resetsAt
+          ? `Every Claude account has hit its limit. Waiting until ${new Date(decision.resetsAt).toISOString()}.`
+          : "Every Claude account has hit its limit.",
+        payload: { retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON, accounts: describeClaudeAccounts(nextState, now.getTime()) },
+      });
+      await scheduleBoundedRetryForRun(run, agent, {
+        now,
+        retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+        wakeReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+      });
+      return;
+    }
+
+    const movedTo = nextState.slots.find((slot) => slot.slot === decision.to);
+    await appendRunEvent(run, await nextRunEventSeq(run.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "warn",
+      message:
+        decision.kind === "switch"
+          ? `Claude account "${state.slots.find((slot) => slot.slot === ranOn)?.label ?? ranOn}" hit its limit; switched to "${movedTo?.label ?? decision.to}" and retrying.`
+          : `Another run already switched to Claude account "${movedTo?.label ?? decision.to}"; retrying there.`,
+      payload: {
+        retryReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
+        from: ranOn,
+        to: decision.to,
+      },
+    });
+    // Due now, and not counted against the backoff ladder: this is a move to a
+    // subscription with room, not a wait for one to recover.
+    await scheduleBoundedRetryForRun(run, agent, {
+      now,
+      retryReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
+      wakeReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
+      schedule: {
+        dueAt: now,
+        attempt: run.scheduledRetryAttempt ?? 0,
+        maxAttempts: BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS,
+      },
+    });
+  }
+
   async function scheduleBoundedRetryForRun(
     run: typeof heartbeatRuns.$inferSelect,
     agent: typeof agents.$inferSelect,
@@ -3380,22 +3522,46 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       random?: () => number;
       retryReason?: string;
       wakeReason?: string;
+      /**
+       * Overrides the backoff ladder.
+       *
+       * An account failover is not a backoff: the work is being moved to a
+       * subscription that has room, so it should go now. Letting it take a
+       * ladder rung would also mean two account moves burn the whole ladder,
+       * leaving nothing for a genuine transient failure afterwards.
+       */
+      schedule?: { dueAt: Date; attempt: number; maxAttempts: number };
     },
   ) {
     const now = opts?.now ?? new Date();
     const retryReason = opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason = opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
     const nextAttempt = (run.scheduledRetryAttempt ?? 0) + 1;
-    const baseSchedule = computeBoundedTransientHeartbeatRetrySchedule(nextAttempt, now, opts?.random);
+    const baseSchedule = opts?.schedule
+      ? {
+          ...opts.schedule,
+          delayMs: Math.max(0, opts.schedule.dueAt.getTime() - now.getTime()),
+          baseDelayMs: 0,
+        }
+      : computeBoundedTransientHeartbeatRetrySchedule(nextAttempt, now, opts?.random);
+    // Read the contract for any provider-failure reason this file schedules,
+    // not just the transient one, so the reset time survives the new reasons.
     const transientRecovery =
-      retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON
-        ? readTransientRecoveryContractFromRun(run)
+      retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON ||
+      retryReason === CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON ||
+      retryReason === CLAUDE_PLAN_EXHAUSTED_RETRY_REASON
+        ? readRunRecoveryContract(run)
         : null;
     const codexTransientFallbackMode =
-      agent.adapterType === "codex_local" && transientRecovery
+      agent.adapterType === "codex_local" && transientRecovery?.errorFamily === "transient_upstream"
         ? resolveCodexTransientFallbackMode(nextAttempt)
         : null;
-    const transientRetryNotBefore = transientRecovery?.retryNotBefore ?? null;
+    // A failover is going somewhere with room, so the failed account's reset
+    // time must not hold it back; every other reason honours it.
+    const transientRetryNotBefore =
+      retryReason === CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON
+        ? null
+        : transientRecovery?.retryNotBefore ?? null;
 
     if (!baseSchedule) {
       await appendRunEvent(run, await nextRunEventSeq(run.id), {
@@ -4935,6 +5101,39 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       ...effectiveResolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
     };
+
+    // Which Claude subscription signs this run in.
+    //
+    // Only for claude_local, and only when the agent has not been given a token
+    // of its own: an agent with its own token is pinned to that account on
+    // purpose and must not be re-routed. Setting it here is the whole
+    // injection - buildClaudeRuntimeConfig copies every string in config.env
+    // into the child, and buildSpawnChildEnv deliberately preserves an
+    // explicitly supplied CLAUDE_CODE_OAUTH_TOKEN, so this also takes
+    // precedence over whatever the machine-wide token restore left in
+    // process.env.
+    //
+    // With no accounts configured this does nothing at all, which is what keeps
+    // an install that has never seen this feature on its existing sign-in.
+    if (agent.adapterType === "claude_local" && !agentHasOwnClaudeToken(agent.adapterConfig)) {
+      const accountState = forgetExpiredClaudeAccountLimits(
+        await readClaudeAccountState(),
+        Date.now(),
+      );
+      const account = activeClaudeAccount(accountState);
+      if (account) {
+        runtimeConfig = {
+          ...runtimeConfig,
+          env: {
+            ...parseObject((runtimeConfig as Record<string, unknown>).env),
+            CLAUDE_CODE_OAUTH_TOKEN: account.token,
+          },
+        } as typeof runtimeConfig;
+        // Recorded so the failover knows which account actually failed, and so
+        // a crashed run still says which subscription it was spending.
+        context.claudeAccountSlot = account.slot;
+      }
+    }
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
       companyId: agent.companyId,
       heartbeatRunId: run.id,
@@ -5759,8 +5958,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             );
           }
         }
-        if (outcome === "failed" && readTransientRecoveryContractFromRun(livenessRun)) {
-          await scheduleBoundedRetryForRun(livenessRun, agent);
+        if (outcome === "failed") {
+          if (readHeartbeatRunErrorFamily(livenessRun) === "plan_exhausted") {
+            await handleClaudeAccountFailover(livenessRun, agent);
+          } else if (readTransientRecoveryContractFromRun(livenessRun)) {
+            await scheduleBoundedRetryForRun(livenessRun, agent);
+          }
         }
         await finalizeIssueCommentPolicy(livenessRun, agent);
         await releaseIssueExecutionAndPromote(livenessRun);
@@ -7548,6 +7751,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const agent = await getAgent(run.agentId);
       if (!agent) return { outcome: "missing_agent" as const };
       return scheduleBoundedRetryForRun(run, agent, opts);
+    },
+
+    /** Move a plan-exhausted run onto a Claude account that still has room. */
+    handleClaudeAccountFailover: async (runId: string) => {
+      const run = await getRun(runId, { unsafeFullResultJson: true });
+      if (!run) return { outcome: "missing_run" as const };
+      const agent = await getAgent(run.agentId);
+      if (!agent) return { outcome: "missing_agent" as const };
+      await handleClaudeAccountFailover(run, agent);
+      return { outcome: "handled" as const };
     },
 
     reconcileStrandedAssignedIssues,

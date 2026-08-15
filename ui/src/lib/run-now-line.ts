@@ -86,6 +86,20 @@ export function runNowLine(
   if (run.status === "scheduled_retry") {
     const retry = describeRunRetryState(run);
     const when = run.scheduledRetryAt ? formatDateTime(run.scheduledRetryAt) : null;
+    // A spent Claude plan can park work for days, not minutes. Saying only
+    // "Will retry Sunday" in the ordinary warning tone reads like a blip, so
+    // name the cause and treat a long wait as something to look at.
+    if (run.scheduledRetryReason === "claude_plan_exhausted") {
+      const dueMs = run.scheduledRetryAt ? new Date(run.scheduledRetryAt).getTime() : null;
+      const farOut = dueMs !== null && Number.isFinite(dueMs) && dueMs - now > 6 * 60 * 60 * 1000;
+      return {
+        text: when
+          ? `Waiting for Claude limit reset ${when}`
+          : "Waiting for a Claude limit to reset",
+        tone: farOut ? "err" : "warn",
+        title: retry?.detail ?? undefined,
+      };
+    }
     return {
       text: when ? `Will retry ${when}` : "Will retry on its own",
       tone: "warn",

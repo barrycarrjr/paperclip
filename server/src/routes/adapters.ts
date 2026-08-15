@@ -31,6 +31,14 @@ import {
   setOverridePaused,
   applyClaudeHostToken,
 } from "../adapters/registry.js";
+import { extractClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
+import {
+  listClaudeAccounts,
+  removeClaudeAccount,
+  setActiveClaudeAccount,
+  setClaudeAccountEnabled,
+  upsertClaudeAccount,
+} from "../services/claude-accounts.js";
 import {
   listAdapterPlugins,
   addAdapterPlugin,
@@ -788,6 +796,12 @@ export function adapterRoutes() {
   // Apply a long-lived token pasted from `claude setup-token` (run in a terminal)
   // host-wide. Reliable alternative to the spawned interactive sign-in, which
   // can't complete the browser/device flow headless. claude_local only.
+  //
+  // With `accountLabel` (or `slot`) the token is added to the account list
+  // instead, so agents can move between subscriptions when one runs out of
+  // weekly allowance. Without either, this behaves exactly as it always has and
+  // sets the machine-wide token, which stays the fallback for installs with no
+  // accounts configured.
   router.post("/adapters/:type/submit-token", async (req, res) => {
     assertInstanceAdmin(req);
     const { type } = req.params;
@@ -796,12 +810,70 @@ export function adapterRoutes() {
       return;
     }
     const rawToken = typeof req.body?.token === "string" ? req.body.token : "";
+    const accountLabel = typeof req.body?.accountLabel === "string" ? req.body.accountLabel.trim() : "";
+    const slot = typeof req.body?.slot === "string" ? req.body.slot.trim() : "";
+
+    if (accountLabel || slot) {
+      const token = extractClaudeSetupToken(rawToken);
+      if (!token) {
+        res.status(400).json({
+          ok: false,
+          error: "Paste the token from `claude setup-token` - it starts with sk-ant-oat01-.",
+        });
+        return;
+      }
+      const account = await upsertClaudeAccount({ token, label: accountLabel, slot: slot || null });
+      res.json({ ok: true, account, accounts: listClaudeAccounts() });
+      return;
+    }
+
     const result = await applyClaudeHostToken(rawToken);
     if (!result.ok) {
       res.status(400).json({ ok: false, error: result.error ?? "Invalid token." });
       return;
     }
     res.json({ ok: true, expiresAt: result.expiresAt });
+  });
+
+  // ── Claude accounts ──────────────────────────────────────────────────────
+  // The subscriptions this machine can sign runs in with. Tokens are never
+  // returned; a response carries labels, which account is active, and when a
+  // spent one comes back.
+  router.get("/adapters/claude_local/accounts", async (req, res) => {
+    assertInstanceAdmin(req);
+    res.json({ accounts: listClaudeAccounts() });
+  });
+
+  router.delete("/adapters/claude_local/accounts/:slot", async (req, res) => {
+    assertInstanceAdmin(req);
+    if (!removeClaudeAccount(req.params.slot)) {
+      res.status(404).json({ error: "No such Claude account." });
+      return;
+    }
+    res.json({ ok: true, accounts: listClaudeAccounts() });
+  });
+
+  router.post("/adapters/claude_local/accounts/:slot/activate", async (req, res) => {
+    assertInstanceAdmin(req);
+    if (!setActiveClaudeAccount(req.params.slot)) {
+      res.status(404).json({ error: "No such Claude account." });
+      return;
+    }
+    res.json({ ok: true, accounts: listClaudeAccounts() });
+  });
+
+  router.patch("/adapters/claude_local/accounts/:slot", async (req, res) => {
+    assertInstanceAdmin(req);
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be true or false." });
+      return;
+    }
+    if (!setClaudeAccountEnabled(req.params.slot, enabled)) {
+      res.status(404).json({ error: "No such Claude account." });
+      return;
+    }
+    res.json({ ok: true, accounts: listClaudeAccounts() });
   });
 
   return router;

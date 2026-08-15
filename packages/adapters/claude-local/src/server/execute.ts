@@ -38,12 +38,12 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   parseClaudeStreamJson,
+  classifyClaudeFailure,
   describeClaudeFailure,
   detectClaudeLoginRequired,
-  extractClaudeRetryNotBefore,
   isClaudeMaxTurnsResult,
-  isClaudeTransientUpstreamError,
   isClaudeUnknownSessionError,
+  type ClaudeFailureClassification,
 } from "./parse.js";
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
@@ -727,6 +727,48 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     return { proc, parsedStream, parsed };
   };
 
+  /**
+   * Turn a failure classification into the fields the scheduler reads back.
+   *
+   * `retryNotBefore` is populated for both families on purpose: the existing
+   * bounded-retry code already pushes a scheduled retry out to it, so an
+   * exhausted plan lands on its real reset time without the scheduler needing
+   * to know a second error family exists. `transientRetryNotBefore` is kept
+   * alongside it because older run rows are read through that key.
+   */
+  const describeRecovery = (classification: ClaudeFailureClassification) => {
+    if (!classification) {
+      return { errorCode: null, errorFamily: null, retryNotBefore: null, resultJsonPatch: {} };
+    }
+    if (classification.family === "plan_exhausted") {
+      const resetsAt = classification.resetsAt ? classification.resetsAt.toISOString() : null;
+      return {
+        errorCode: "claude_plan_exhausted" as const,
+        errorFamily: "plan_exhausted" as const,
+        retryNotBefore: resetsAt,
+        resultJsonPatch: {
+          errorFamily: "plan_exhausted",
+          ...(resetsAt ? { retryNotBefore: resetsAt, claudePlanResetsAt: resetsAt } : {}),
+          ...(classification.window ? { claudeRateLimitWindow: classification.window } : {}),
+        } as Record<string, unknown>,
+      };
+    }
+    const retryNotBefore = classification.retryNotBefore
+      ? classification.retryNotBefore.toISOString()
+      : null;
+    return {
+      errorCode: "claude_transient_upstream" as const,
+      errorFamily: "transient_upstream" as const,
+      retryNotBefore,
+      resultJsonPatch: {
+        errorFamily: "transient_upstream",
+        ...(retryNotBefore
+          ? { retryNotBefore, transientRetryNotBefore: retryNotBefore }
+          : {}),
+      } as Record<string, unknown>,
+    };
+  };
+
   const toAdapterResult = (
     attempt: {
       proc: RunProcessResult;
@@ -762,47 +804,30 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     if (!parsed) {
       const fallbackErrorMessage = parseFallbackErrorMessage(proc);
-      const transientUpstream =
-        !loginMeta.requiresLogin &&
-        (proc.exitCode ?? 0) !== 0 &&
-        isClaudeTransientUpstreamError({
-          parsed: null,
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          errorMessage: fallbackErrorMessage,
-        });
-      const transientRetryNotBefore = transientUpstream
-        ? extractClaudeRetryNotBefore({
-            parsed: null,
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            errorMessage: fallbackErrorMessage,
-          })
-        : null;
-      const errorCode = loginMeta.requiresLogin
-        ? "claude_auth_required"
-        : transientUpstream
-        ? "claude_transient_upstream"
-        : null;
+      const recovery = describeRecovery(
+        (proc.exitCode ?? 0) !== 0
+          ? classifyClaudeFailure({
+              parsed: null,
+              stdout: proc.stdout,
+              stderr: proc.stderr,
+              errorMessage: fallbackErrorMessage,
+              rateLimit: parsedStream.rateLimit,
+            })
+          : null,
+      );
       return {
         exitCode: proc.exitCode,
         signal: proc.signal,
         timedOut: false,
         errorMessage: fallbackErrorMessage,
-        errorCode,
-        errorFamily: transientUpstream ? "transient_upstream" : null,
-        retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
+        errorCode: loginMeta.requiresLogin ? "claude_auth_required" : recovery.errorCode,
+        errorFamily: recovery.errorFamily,
+        retryNotBefore: recovery.retryNotBefore,
         errorMeta,
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
-          ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
-          ...(transientRetryNotBefore
-            ? { retryNotBefore: transientRetryNotBefore.toISOString() }
-            : {}),
-          ...(transientRetryNotBefore
-            ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() }
-            : {}),
+          ...recovery.resultJsonPatch,
         },
         clearSession: Boolean(opts.clearSessionOnMissingSession),
       };
@@ -843,33 +868,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const errorMessage = failed
       ? describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`
       : null;
-    const transientUpstream =
-      failed &&
-      !loginMeta.requiresLogin &&
-      isClaudeTransientUpstreamError({
-        parsed,
-        stdout: proc.stdout,
-        stderr: proc.stderr,
-        errorMessage,
-      });
-    const transientRetryNotBefore = transientUpstream
-      ? extractClaudeRetryNotBefore({
-          parsed,
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          errorMessage,
-        })
-      : null;
+    const recovery = describeRecovery(
+      failed
+        ? classifyClaudeFailure({
+            parsed,
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            errorMessage,
+            rateLimit: parsedStream.rateLimit,
+          })
+        : null,
+    );
     const resolvedErrorCode = loginMeta.requiresLogin
       ? "claude_auth_required"
-      : transientUpstream
-      ? "claude_transient_upstream"
-      : null;
+      : recovery.errorCode;
     const mergedResultJson: Record<string, unknown> = {
       ...parsed,
-      ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
-      ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
-      ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
+      ...recovery.resultJsonPatch,
     };
 
     return {
@@ -878,8 +893,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timedOut: false,
       errorMessage,
       errorCode: resolvedErrorCode,
-      errorFamily: transientUpstream ? "transient_upstream" : null,
-      retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
+      errorFamily: recovery.errorFamily,
+      retryNotBefore: recovery.retryNotBefore,
       errorMeta,
       usage,
       sessionId: resolvedSessionId,

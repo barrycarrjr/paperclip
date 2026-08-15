@@ -9,7 +9,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Cpu, Plus, Power, Trash2, FolderOpen, Package, RefreshCw, Download, LogIn } from "lucide-react";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { adaptersApi } from "@/api/adapters";
-import type { AdapterInfo, AdapterAuthResult, AdapterAuthStatusEntry } from "@/api/adapters";
+import type {
+  AdapterInfo,
+  AdapterAuthResult,
+  AdapterAuthStatusEntry,
+  ClaudeAccountSummary,
+} from "@/api/adapters";
 import { getAdapterLabel } from "@/adapters/adapter-display-registry";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -297,6 +302,93 @@ function formatElapsed(totalSec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/**
+ * The Claude subscriptions this machine can sign runs in with.
+ *
+ * One account is the one agents use. When its weekly allowance runs out, work
+ * moves to the next account with room instead of stopping until the window
+ * reopens, which can be days.
+ */
+function ClaudeAccountsCard({
+  accounts,
+  onAdd,
+  onActivate,
+  onRemove,
+  busy,
+}: {
+  accounts: ClaudeAccountSummary[];
+  onAdd: () => void;
+  onActivate: (slot: string) => void;
+  onRemove: (slot: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium">Claude accounts</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {accounts.length === 0
+                ? "Agents sign in with this computer's Claude login. Add an account here to let them move to another subscription when one runs out of its weekly allowance."
+                : "Agents sign in with the active account. If it runs out of its weekly allowance, work moves to the next one on this list by itself."}
+            </p>
+          </div>
+          <Button size="sm" variant="outline" className="gap-2 shrink-0" onClick={onAdd} disabled={busy}>
+            <Plus className="h-4 w-4" />
+            Add account
+          </Button>
+        </div>
+
+        {accounts.length > 0 && (
+          <ul className="divide-y rounded-md border">
+            {accounts.map((account) => {
+              const outUntil = account.exhaustedUntil ? new Date(account.exhaustedUntil) : null;
+              return (
+                <li key={account.slot} className="flex items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm truncate">{account.label}</span>
+                      {account.active && (
+                        <Badge variant="outline" className="text-emerald-700 border-emerald-400 dark:text-emerald-400">
+                          Active
+                        </Badge>
+                      )}
+                      {!account.enabled && <Badge variant="outline">Paused</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {outUntil
+                        ? `Out of allowance until ${outUntil.toLocaleString()}`
+                        : account.active
+                          ? "In use now"
+                          : "Ready if the active account runs out"}
+                    </p>
+                  </div>
+                  {!account.active && (
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => onActivate(account.slot)}>
+                      Use this one
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    disabled={busy}
+                    onClick={() => onRemove(account.slot)}
+                    aria-label={`Remove ${account.label}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ClaudeTokenDialog({
   open,
   value,
@@ -307,6 +399,9 @@ function ClaudeTokenDialog({
   expiresAt,
   errorMessage,
   onClose,
+  accountLabel,
+  onAccountLabelChange,
+  hasAccounts,
 }: {
   open: boolean;
   value: string;
@@ -317,21 +412,49 @@ function ClaudeTokenDialog({
   expiresAt: string | null;
   errorMessage: string | null;
   onClose: () => void;
+  /** Non-null when adding an account rather than setting the machine-wide token. */
+  accountLabel: string | null;
+  onAccountLabelChange: (v: string) => void;
+  hasAccounts: boolean;
 }) {
+  const addingAccount = accountLabel !== null;
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Sign in to claude_local</DialogTitle>
+          <DialogTitle>{addingAccount ? "Add a Claude account" : "Sign in to claude_local"}</DialogTitle>
           <DialogDescription>
             In a terminal on the host run{" "}
             <code className="text-xs bg-muted px-1 py-0.5 rounded">claude setup-token</code>, approve
             the sign-in in your browser, then paste the token (starts with{" "}
-            <code className="text-xs bg-muted px-1 py-0.5 rounded">sk-ant-oat01-</code>) below. It's
-            applied host-wide for all claude_local agents.
+            <code className="text-xs bg-muted px-1 py-0.5 rounded">sk-ant-oat01-</code>) below.
+            {addingAccount ? (
+              <> To add a second subscription, sign in as that account in the browser step.</>
+            ) : hasAccounts ? (
+              // Without this, pasting here looks like it did nothing: agents are
+              // signing in with an account from the list, not this token.
+              <> This is the fallback sign-in. Agents are using the accounts listed on
+                the Adapters page, so change the active account there instead.</>
+            ) : (
+              <> It's applied host-wide for all claude_local agents.</>
+            )}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
+          {addingAccount && (
+            <div className="space-y-1">
+              <Label htmlFor="claude-account-label">Name for this account</Label>
+              <Input
+                id="claude-account-label"
+                value={accountLabel}
+                onChange={(e) => onAccountLabelChange(e.target.value)}
+                placeholder="e.g. printinginabox@gmail.com"
+              />
+              <p className="text-xs text-muted-foreground">
+                A token carries no account name, so this label is the only way to tell them apart.
+              </p>
+            </div>
+          )}
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
@@ -342,15 +465,24 @@ function ClaudeTokenDialog({
           />
           {ok && (
             <p className="text-sm text-emerald-700 dark:text-emerald-400">
-              ✓ Token applied{expiresAt ? ` — valid until ${new Date(expiresAt).toLocaleDateString()}` : ""}.
+              {addingAccount
+                ? "✓ Account added."
+                : `✓ Token applied${expiresAt ? ` — valid until ${new Date(expiresAt).toLocaleDateString()}` : ""}.`}
             </p>
           )}
           {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Done</Button>
-          <Button onClick={onSubmit} disabled={pending || value.trim().length === 0}>
-            {pending ? "Saving…" : "Save token"}
+          <Button
+            onClick={onSubmit}
+            disabled={
+              pending ||
+              value.trim().length === 0 ||
+              (addingAccount && accountLabel.trim().length === 0)
+            }
+          >
+            {pending ? "Saving…" : addingAccount ? "Add account" : "Save token"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -604,12 +736,50 @@ export function AdapterManager() {
   // claude_local uses a pasted long-lived token (terminal `claude setup-token`)
   // applied host-wide, instead of the unreliable spawned interactive sign-in.
   const [hostTokenInput, setHostTokenInput] = useState("");
-  const submitClaudeHostToken = useMutation({
-    mutationFn: () => adaptersApi.submitToken("claude_local", hostTokenInput.trim()),
+  // Set when the paste dialog is adding an account rather than replacing the
+  // machine-wide token. Holds the label the account will be listed under.
+  const [accountLabelInput, setAccountLabelInput] = useState<string | null>(null);
+  const submitClaudeHostToken = useMutation<{ ok: boolean; expiresAt?: string | null }, Error, void>({
+    mutationFn: async () =>
+      accountLabelInput === null
+        ? await adaptersApi.submitToken("claude_local", hostTokenInput.trim())
+        : await adaptersApi.saveClaudeAccount({
+            token: hostTokenInput.trim(),
+            accountLabel: accountLabelInput.trim(),
+          }),
     onSuccess: () => {
       setHostTokenInput("");
       queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
+      queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] });
     },
+  });
+
+  const claudeAccountsQuery = useQuery({
+    queryKey: ["claudeAccounts"],
+    queryFn: () => adaptersApi.listClaudeAccounts(),
+  });
+  const claudeAccounts = claudeAccountsQuery.data?.accounts ?? [];
+
+  const activateClaudeAccount = useMutation({
+    mutationFn: (slot: string) => adaptersApi.activateClaudeAccount(slot),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] }),
+    onError: (err) =>
+      pushToast({
+        title: "Could not switch account",
+        body: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      }),
+  });
+
+  const removeClaudeAccount = useMutation({
+    mutationFn: (slot: string) => adaptersApi.removeClaudeAccount(slot),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] }),
+    onError: (err) =>
+      pushToast({
+        title: "Could not remove account",
+        body: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      }),
   });
 
   const handleSignIn = (type: string) => {
@@ -617,6 +787,7 @@ export function AdapterManager() {
     if (type === "claude_local") {
       // Paste-token flow — no spawned sign-in.
       setHostTokenInput("");
+      setAccountLabelInput(null);
       submitClaudeHostToken.reset();
       return;
     }
@@ -634,9 +805,18 @@ export function AdapterManager() {
     setSignInJobId(null);
     setSignInStartedAt(null);
     setHostTokenInput("");
+    setAccountLabelInput(null);
     startSignInMutation.reset();
     submitClaudeHostToken.reset();
     queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
+  };
+
+  /** Open the same paste dialog, in add-an-account mode. */
+  const handleAddClaudeAccount = () => {
+    setHostTokenInput("");
+    setAccountLabelInput("");
+    submitClaudeHostToken.reset();
+    setSignInTarget("claude_local");
   };
 
   const signInPhase: "starting" | "running" | "ok" | "error" = startSignInMutation.isError
@@ -869,6 +1049,15 @@ export function AdapterManager() {
         )}
       </section>
 
+      {/* Which Claude subscription agents sign in with */}
+      <ClaudeAccountsCard
+        accounts={claudeAccounts}
+        onAdd={handleAddClaudeAccount}
+        onActivate={(slot) => activateClaudeAccount.mutate(slot)}
+        onRemove={(slot) => removeClaudeAccount.mutate(slot)}
+        busy={activateClaudeAccount.isPending || removeClaudeAccount.isPending}
+      />
+
       {/* Built-in adapters */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
@@ -984,6 +1173,9 @@ export function AdapterManager() {
             submitClaudeHostToken.error instanceof Error ? submitClaudeHostToken.error.message : null
           }
           onClose={handleCloseSignIn}
+          accountLabel={accountLabelInput}
+          onAccountLabelChange={setAccountLabelInput}
+          hasAccounts={claudeAccounts.length > 0}
         />
       ) : (
         <AdapterLoginDialog

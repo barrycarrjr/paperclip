@@ -64,7 +64,23 @@ export interface AdapterRuntimeServiceReport {
   healthStatus?: "unknown" | "healthy" | "unhealthy";
 }
 
-export type AdapterExecutionErrorFamily = "transient_upstream";
+/**
+ * How a failure should be recovered from, as opposed to what it was.
+ *
+ * `transient_upstream` is "the provider is busy right now": a 429, an overloaded
+ * error, a 503. Retrying the same account in a couple of minutes is the right
+ * move and usually works.
+ *
+ * `plan_exhausted` is "this subscription has nothing left": a weekly or
+ * five-hour window that has been spent, with no overage credit behind it. The
+ * same account keeps failing until its window resets, which can be days away,
+ * so backing off is pointless and the recovery is a different account.
+ *
+ * Keeping the two apart is the whole reason this is a union rather than a
+ * boolean. A bounded backoff ladder applied to an exhausted plan just burns its
+ * rungs against a wall and gives up while the work sits undone.
+ */
+export type AdapterExecutionErrorFamily = "transient_upstream" | "plan_exhausted";
 
 export interface AdapterExecutionResult {
   exitCode: number | null;
