@@ -571,6 +571,9 @@ const claudeLocalAdapter: ServerAdapterModule = {
   getQuotaWindows: claudeGetQuotaWindows,
   getAuthStatus: claudeGetAuthStatus,
   authenticate: claudeAuthenticate,
+  // Opts this adapter into holding several accounts. A run whose subscription
+  // reports its weekly window spent moves to the next account with room.
+  accountCredentialEnvVar: "CLAUDE_CODE_OAUTH_TOKEN",
 };
 
 async function codexGetAuthStatus(): Promise<AdapterAuthStatus | null> {

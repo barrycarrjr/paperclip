@@ -441,6 +441,24 @@ export interface ServerAdapterModule {
    * rather than reading config.paperclipRuntimeSkills.
    */
   requiresMaterializedRuntimeSkills?: boolean;
+
+  /**
+   * The environment variable that carries a single account's credential.
+   *
+   * Declaring it opts the adapter into having a LIST of accounts rather than
+   * one sign-in: the operator can add several on the Adapters page, one is
+   * active, and a run whose account reports its plan spent moves to the next
+   * one with room and is retried there.
+   *
+   * The value is the whole contract. The server never learns anything
+   * provider-specific: it picks an account, sets this variable on the child,
+   * and the adapter signs in with it exactly as it would a single credential.
+   *
+   * Only meaningful for adapters whose accounts are interchangeable, which is
+   * the normal case here since every adapter runs the same kind of work. Leave
+   * it undefined and the adapter keeps its existing single sign-in untouched.
+   */
+  accountCredentialEnvVar?: string;
 }
 
 // ---------------------------------------------------------------------------

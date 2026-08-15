@@ -748,8 +748,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         retryNotBefore: resetsAt,
         resultJsonPatch: {
           errorFamily: "plan_exhausted",
-          ...(resetsAt ? { retryNotBefore: resetsAt, claudePlanResetsAt: resetsAt } : {}),
-          ...(classification.window ? { claudeRateLimitWindow: classification.window } : {}),
+          ...(resetsAt ? { retryNotBefore: resetsAt, planResetsAt: resetsAt } : {}),
+          ...(classification.window ? { rateLimitWindow: classification.window } : {}),
         } as Record<string, unknown>,
       };
     }

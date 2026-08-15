@@ -33,12 +33,13 @@ import {
 } from "../adapters/registry.js";
 import { extractClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
 import {
-  listClaudeAccounts,
-  removeClaudeAccount,
-  setActiveClaudeAccount,
-  setClaudeAccountEnabled,
-  upsertClaudeAccount,
-} from "../services/claude-accounts.js";
+  listAdapterAccounts,
+  listAllAdapterAccounts,
+  removeAdapterAccount,
+  setActiveAdapterAccount,
+  setAdapterAccountEnabled,
+  upsertAdapterAccount,
+} from "../services/adapter-accounts.js";
 import {
   listAdapterPlugins,
   addAdapterPlugin,
@@ -98,6 +99,8 @@ interface AdapterCapabilities {
   supportsSkills: boolean;
   supportsLocalAgentJwt: boolean;
   requiresMaterializedRuntimeSkills: boolean;
+  /** Can hold several accounts and move between them when one runs out. */
+  supportsAccounts: boolean;
 }
 
 interface AdapterInfo {
@@ -153,7 +156,29 @@ function buildAdapterCapabilities(adapter: ServerAdapterModule): AdapterCapabili
     supportsSkills: Boolean(adapter.listSkills || adapter.syncSkills),
     supportsLocalAgentJwt: adapter.supportsLocalAgentJwt ?? false,
     requiresMaterializedRuntimeSkills: adapter.requiresMaterializedRuntimeSkills ?? false,
+    supportsAccounts: Boolean(adapter.accountCredentialEnvVar),
   };
+}
+
+/**
+ * Has this adapter opted into holding several accounts?
+ *
+ * It has when it names the environment variable its credential travels in,
+ * because that is all the server needs to hand one account to a run.
+ */
+function adapterSupportsAccounts(type: string): boolean {
+  try {
+    return Boolean(findActiveServerAdapter(type)?.accountCredentialEnvVar);
+  } catch {
+    return false;
+  }
+}
+
+/** Every adapter that can hold a list of accounts, for the UI to render a "+". */
+function adapterTypesSupportingAccounts(): string[] {
+  return listServerAdapters()
+    .filter((adapter) => Boolean(adapter.accountCredentialEnvVar))
+    .map((adapter) => adapter.type);
 }
 
 function buildAdapterInfo(adapter: ServerAdapterModule, externalRecord: AdapterPluginRecord | undefined, disabledSet: Set<string>): AdapterInfo {
@@ -805,28 +830,47 @@ export function adapterRoutes() {
   router.post("/adapters/:type/submit-token", async (req, res) => {
     assertInstanceAdmin(req);
     const { type } = req.params;
-    if (type !== "claude_local") {
-      res.status(400).json({ error: `Pasting a token is only supported for claude_local (got "${type}").` });
-      return;
-    }
     const rawToken = typeof req.body?.token === "string" ? req.body.token : "";
     const accountLabel = typeof req.body?.accountLabel === "string" ? req.body.accountLabel.trim() : "";
     const slot = typeof req.body?.slot === "string" ? req.body.slot.trim() : "";
 
     if (accountLabel || slot) {
-      const token = extractClaudeSetupToken(rawToken);
-      if (!token) {
+      if (!adapterSupportsAccounts(type)) {
         res.status(400).json({
-          ok: false,
-          error: "Paste the token from `claude setup-token` - it starts with sk-ant-oat01-.",
+          error: `${type} does not support multiple accounts.`,
         });
         return;
       }
-      const account = await upsertClaudeAccount({ token, label: accountLabel, slot: slot || null });
-      res.json({ ok: true, account, accounts: listClaudeAccounts() });
+      // Claude prints its credential inside a wall of terminal text, so the
+      // token is fished out of the paste. Other adapters take the paste as-is.
+      const token =
+        type === "claude_local" ? extractClaudeSetupToken(rawToken) : rawToken.trim() || null;
+      if (!token) {
+        res.status(400).json({
+          ok: false,
+          error:
+            type === "claude_local"
+              ? "Paste the token from `claude setup-token` - it starts with sk-ant-oat01-."
+              : "Paste the credential this adapter signs in with.",
+        });
+        return;
+      }
+      const account = await upsertAdapterAccount({
+        adapterType: type,
+        token,
+        label: accountLabel,
+        slot: slot || null,
+      });
+      res.json({ ok: true, account, accounts: listAdapterAccounts(type) });
       return;
     }
 
+    // No label and no slot: the original single machine-wide sign-in, which
+    // remains the fallback for an adapter with no accounts configured.
+    if (type !== "claude_local") {
+      res.status(400).json({ error: `Pasting a host token is only supported for claude_local (got "${type}").` });
+      return;
+    }
     const result = await applyClaudeHostToken(rawToken);
     if (!result.ok) {
       res.status(400).json({ ok: false, error: result.error ?? "Invalid token." });
@@ -835,45 +879,56 @@ export function adapterRoutes() {
     res.json({ ok: true, expiresAt: result.expiresAt });
   });
 
-  // ── Claude accounts ──────────────────────────────────────────────────────
-  // The subscriptions this machine can sign runs in with. Tokens are never
+  // ── Adapter accounts ─────────────────────────────────────────────────────
+  // The accounts each adapter can sign runs in with. Credentials are never
   // returned; a response carries labels, which account is active, and when a
   // spent one comes back.
-  router.get("/adapters/claude_local/accounts", async (req, res) => {
+  router.get("/adapters/accounts", async (req, res) => {
     assertInstanceAdmin(req);
-    res.json({ accounts: listClaudeAccounts() });
+    res.json({ accounts: listAllAdapterAccounts(), supported: adapterTypesSupportingAccounts() });
   });
 
-  router.delete("/adapters/claude_local/accounts/:slot", async (req, res) => {
+  router.get("/adapters/:type/accounts", async (req, res) => {
     assertInstanceAdmin(req);
-    if (!removeClaudeAccount(req.params.slot)) {
-      res.status(404).json({ error: "No such Claude account." });
+    res.json({
+      accounts: listAdapterAccounts(req.params.type),
+      supported: adapterSupportsAccounts(req.params.type),
+    });
+  });
+
+  router.delete("/adapters/:type/accounts/:slot", async (req, res) => {
+    assertInstanceAdmin(req);
+    const { type, slot } = req.params;
+    if (!removeAdapterAccount(type, slot)) {
+      res.status(404).json({ error: "No such account." });
       return;
     }
-    res.json({ ok: true, accounts: listClaudeAccounts() });
+    res.json({ ok: true, accounts: listAdapterAccounts(type) });
   });
 
-  router.post("/adapters/claude_local/accounts/:slot/activate", async (req, res) => {
+  router.post("/adapters/:type/accounts/:slot/activate", async (req, res) => {
     assertInstanceAdmin(req);
-    if (!setActiveClaudeAccount(req.params.slot)) {
-      res.status(404).json({ error: "No such Claude account." });
+    const { type, slot } = req.params;
+    if (!setActiveAdapterAccount(type, slot)) {
+      res.status(404).json({ error: "No such account." });
       return;
     }
-    res.json({ ok: true, accounts: listClaudeAccounts() });
+    res.json({ ok: true, accounts: listAdapterAccounts(type) });
   });
 
-  router.patch("/adapters/claude_local/accounts/:slot", async (req, res) => {
+  router.patch("/adapters/:type/accounts/:slot", async (req, res) => {
     assertInstanceAdmin(req);
+    const { type, slot } = req.params;
     const enabled = req.body?.enabled;
     if (typeof enabled !== "boolean") {
       res.status(400).json({ error: "enabled must be true or false." });
       return;
     }
-    if (!setClaudeAccountEnabled(req.params.slot, enabled)) {
-      res.status(404).json({ error: "No such Claude account." });
+    if (!setAdapterAccountEnabled(type, slot, enabled)) {
+      res.status(404).json({ error: "No such account." });
       return;
     }
-    res.json({ ok: true, accounts: listClaudeAccounts() });
+    res.json({ ok: true, accounts: listAdapterAccounts(type) });
   });
 
   return router;

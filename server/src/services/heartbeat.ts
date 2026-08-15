@@ -112,14 +112,14 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-
 import { recoveryService } from "./recovery/service.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
 import {
-  activeClaudeAccount,
-  applyClaudeAccountSwitch,
-  claudeAccountSwitchDecision,
-  describeClaudeAccounts,
-  forgetExpiredClaudeAccountLimits,
-} from "./claude-account-router.js";
-import { readClaudeAccountState, saveClaudeAccountRouting } from "./claude-accounts.js";
-import { agentHasOwnClaudeToken } from "./claude-sign-in-impact.js";
+  activeAccount,
+  applyAccountSwitch,
+  accountSwitchDecision,
+  describeAccounts,
+  forgetExpiredAccountLimits,
+} from "./adapter-account-router.js";
+import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
+import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
   hasSessionCompactionThresholds,
@@ -203,7 +203,9 @@ function readHeartbeatRunErrorFamily(
   if (run.errorCode === "codex_transient_upstream" || run.errorCode === "claude_transient_upstream") {
     return "transient_upstream";
   }
-  if (run.errorCode === "claude_plan_exhausted") {
+  // Any adapter may report a spent plan; the family is what matters, and the
+  // code is conventionally "<adapter>_plan_exhausted".
+  if (typeof run.errorCode === "string" && run.errorCode.endsWith("_plan_exhausted")) {
     return "plan_exhausted";
   }
   return null;
@@ -247,18 +249,41 @@ function readRunRecoveryContract(
   return { errorFamily: family, retryNotBefore: readTransientRetryNotBeforeFromRun(run) };
 }
 
-/** When a spent plan says it comes back, in epoch ms. */
+/**
+ * When a spent plan says it comes back, in epoch ms.
+ *
+ * `claudePlanResetsAt` is read for runs recorded before the key was named
+ * without a provider in it; both mean the same thing.
+ */
 function readPlanResetFromRun(run: Pick<typeof heartbeatRuns.$inferSelect, "resultJson">): number | null {
   const resultJson = parseObject(run.resultJson);
-  const value = readNonEmptyString(resultJson.claudePlanResetsAt) ?? readNonEmptyString(resultJson.retryNotBefore);
+  const value =
+    readNonEmptyString(resultJson.planResetsAt) ??
+    readNonEmptyString(resultJson.claudePlanResetsAt) ??
+    readNonEmptyString(resultJson.retryNotBefore);
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
 }
 
 /** Retry reasons this file writes, so the UI can name them in plain words. */
-const CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON = "claude_account_failover";
-const CLAUDE_PLAN_EXHAUSTED_RETRY_REASON = "claude_plan_exhausted";
+const ACCOUNT_FAILOVER_RETRY_REASON = "account_failover";
+const PLAN_EXHAUSTED_RETRY_REASON = "plan_exhausted";
+
+/**
+ * The environment variable an adapter's credential travels in, when it has
+ * opted into holding a list of accounts. Null means it has not, and its
+ * existing single sign-in is left alone.
+ */
+function accountCredentialEnvVarFor(adapterType: string): string | null {
+  try {
+    const envVar = getServerAdapter(adapterType).accountCredentialEnvVar;
+    return typeof envVar === "string" && envVar.trim().length > 0 ? envVar.trim() : null;
+  } catch {
+    // An unknown or unloaded adapter simply has no account routing.
+    return null;
+  }
+}
 
 function mergeAdapterRecoveryMetadata(input: {
   resultJson: Record<string, unknown> | null | undefined;
@@ -3415,9 +3440,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   /**
-   * A run died because its Claude subscription is spent. Move to an account
-   * that still has room and retry there, or park the work until the earliest
-   * window reopens.
+   * A run died because the subscription it used is spent. Move to another
+   * account on the same adapter that still has room and retry there, or park
+   * the work until the earliest window reopens.
    *
    * Retrying rather than re-invoking in place is deliberate. Calling back into
    * executeRun from its own tail would re-enter while the MCP token, the
@@ -3425,16 +3450,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
    * held. The scheduled retry is picked up on the next scheduler tick instead,
    * which costs seconds and avoids that whole class of problem.
    */
-  async function handleClaudeAccountFailover(
+  async function handleAdapterAccountFailover(
     run: typeof heartbeatRuns.$inferSelect,
     agent: typeof agents.$inferSelect,
   ) {
     const now = new Date();
     const contextSnapshot = parseObject(run.contextSnapshot);
-    const ranOn = readNonEmptyString(contextSnapshot.claudeAccountSlot);
+    const ranOn = readNonEmptyString(contextSnapshot.adapterAccountSlot);
     const resetsAt = readPlanResetFromRun(run);
-    const state = forgetExpiredClaudeAccountLimits(await readClaudeAccountState(), now.getTime());
-    const decision = claudeAccountSwitchDecision({
+    const state = forgetExpiredAccountLimits(
+      await readAdapterAccountState(agent.adapterType),
+      now.getTime(),
+    );
+    const decision = accountSwitchDecision({
       state,
       ranOn,
       family: "plan_exhausted",
@@ -3442,26 +3470,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       now: now.getTime(),
     });
 
-    // No accounts configured, or the agent signed in with its own pinned token.
-    // Either way there is nowhere to move it to, so fall back to parking the
-    // work until the plan says it comes back.
+    // No accounts configured, or the agent signed in with its own pinned
+    // credential. Either way there is nowhere to move it to, so fall back to
+    // parking the work until the plan says it comes back.
     if (!decision) {
       await scheduleBoundedRetryForRun(run, agent, {
         now,
-        retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
-        wakeReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+        retryReason: PLAN_EXHAUSTED_RETRY_REASON,
+        wakeReason: PLAN_EXHAUSTED_RETRY_REASON,
       });
       return;
     }
 
-    const nextState = applyClaudeAccountSwitch({
+    const nextState = applyAccountSwitch({
       state,
       decision,
       ranOn,
       resetsAt,
       now: now.getTime(),
     });
-    saveClaudeAccountRouting({
+    saveAdapterAccountRouting(agent.adapterType, {
       activeSlot: nextState.activeSlot,
       lastSwitch: nextState.lastSwitch,
       exhaustedUntil: nextState.exhaustedUntil,
@@ -3473,14 +3501,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         stream: "system",
         level: "warn",
         message: decision.resetsAt
-          ? `Every Claude account has hit its limit. Waiting until ${new Date(decision.resetsAt).toISOString()}.`
-          : "Every Claude account has hit its limit.",
-        payload: { retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON, accounts: describeClaudeAccounts(nextState, now.getTime()) },
+          ? `Every ${agent.adapterType} account has hit its limit. Waiting until ${new Date(decision.resetsAt).toISOString()}.`
+          : `Every ${agent.adapterType} account has hit its limit.`,
+        payload: {
+          retryReason: PLAN_EXHAUSTED_RETRY_REASON,
+          adapterType: agent.adapterType,
+          accounts: describeAccounts(nextState, now.getTime()),
+        },
       });
       await scheduleBoundedRetryForRun(run, agent, {
         now,
-        retryReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
-        wakeReason: CLAUDE_PLAN_EXHAUSTED_RETRY_REASON,
+        retryReason: PLAN_EXHAUSTED_RETRY_REASON,
+        wakeReason: PLAN_EXHAUSTED_RETRY_REASON,
       });
       return;
     }
@@ -3492,10 +3524,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       level: "warn",
       message:
         decision.kind === "switch"
-          ? `Claude account "${state.slots.find((slot) => slot.slot === ranOn)?.label ?? ranOn}" hit its limit; switched to "${movedTo?.label ?? decision.to}" and retrying.`
-          : `Another run already switched to Claude account "${movedTo?.label ?? decision.to}"; retrying there.`,
+          ? `Account "${state.slots.find((slot) => slot.slot === ranOn)?.label ?? ranOn}" hit its limit; switched to "${movedTo?.label ?? decision.to}" and retrying.`
+          : `Another run already switched to account "${movedTo?.label ?? decision.to}"; retrying there.`,
       payload: {
-        retryReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
+        retryReason: ACCOUNT_FAILOVER_RETRY_REASON,
+        adapterType: agent.adapterType,
         from: ranOn,
         to: decision.to,
       },
@@ -3504,8 +3537,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // subscription with room, not a wait for one to recover.
     await scheduleBoundedRetryForRun(run, agent, {
       now,
-      retryReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
-      wakeReason: CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON,
+      retryReason: ACCOUNT_FAILOVER_RETRY_REASON,
+      wakeReason: ACCOUNT_FAILOVER_RETRY_REASON,
       schedule: {
         dueAt: now,
         attempt: run.scheduledRetryAttempt ?? 0,
@@ -3548,8 +3581,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // not just the transient one, so the reset time survives the new reasons.
     const transientRecovery =
       retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON ||
-      retryReason === CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON ||
-      retryReason === CLAUDE_PLAN_EXHAUSTED_RETRY_REASON
+      retryReason === ACCOUNT_FAILOVER_RETRY_REASON ||
+      retryReason === PLAN_EXHAUSTED_RETRY_REASON
         ? readRunRecoveryContract(run)
         : null;
     const codexTransientFallbackMode =
@@ -3559,7 +3592,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // A failover is going somewhere with room, so the failed account's reset
     // time must not hold it back; every other reason honours it.
     const transientRetryNotBefore =
-      retryReason === CLAUDE_ACCOUNT_FAILOVER_RETRY_REASON
+      retryReason === ACCOUNT_FAILOVER_RETRY_REASON
         ? null
         : transientRecovery?.retryNotBefore ?? null;
 
@@ -5102,36 +5135,37 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       paperclipRuntimeSkills: runtimeSkillEntries,
     };
 
-    // Which Claude subscription signs this run in.
+    // Which account signs this run in.
     //
-    // Only for claude_local, and only when the agent has not been given a token
-    // of its own: an agent with its own token is pinned to that account on
-    // purpose and must not be re-routed. Setting it here is the whole
-    // injection - buildClaudeRuntimeConfig copies every string in config.env
-    // into the child, and buildSpawnChildEnv deliberately preserves an
-    // explicitly supplied CLAUDE_CODE_OAUTH_TOKEN, so this also takes
-    // precedence over whatever the machine-wide token restore left in
-    // process.env.
+    // The adapter names the environment variable its credential travels in;
+    // nothing here knows anything provider-specific. Setting that one variable
+    // is the whole injection, because an adapter copies every string in
+    // config.env into its child and buildSpawnChildEnv deliberately preserves
+    // an explicitly supplied credential, so this also takes precedence over
+    // whatever a machine-wide token restore left in process.env.
     //
-    // With no accounts configured this does nothing at all, which is what keeps
-    // an install that has never seen this feature on its existing sign-in.
-    if (agent.adapterType === "claude_local" && !agentHasOwnClaudeToken(agent.adapterConfig)) {
-      const accountState = forgetExpiredClaudeAccountLimits(
-        await readClaudeAccountState(),
+    // Skipped when the agent carries its own credential: that agent is pinned
+    // to a specific account on purpose and must never be re-routed. And with no
+    // accounts configured this does nothing at all, which is what keeps an
+    // install that has never seen this feature on its existing sign-in.
+    const accountEnvVar = accountCredentialEnvVarFor(agent.adapterType);
+    if (accountEnvVar && !agentHasOwnCredential(agent.adapterConfig, accountEnvVar)) {
+      const accountState = forgetExpiredAccountLimits(
+        await readAdapterAccountState(agent.adapterType),
         Date.now(),
       );
-      const account = activeClaudeAccount(accountState);
+      const account = activeAccount(accountState);
       if (account) {
         runtimeConfig = {
           ...runtimeConfig,
           env: {
             ...parseObject((runtimeConfig as Record<string, unknown>).env),
-            CLAUDE_CODE_OAUTH_TOKEN: account.token,
+            [accountEnvVar]: account.token,
           },
         } as typeof runtimeConfig;
         // Recorded so the failover knows which account actually failed, and so
         // a crashed run still says which subscription it was spending.
-        context.claudeAccountSlot = account.slot;
+        context.adapterAccountSlot = account.slot;
       }
     }
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
@@ -5960,7 +5994,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
         if (outcome === "failed") {
           if (readHeartbeatRunErrorFamily(livenessRun) === "plan_exhausted") {
-            await handleClaudeAccountFailover(livenessRun, agent);
+            await handleAdapterAccountFailover(livenessRun, agent);
           } else if (readTransientRecoveryContractFromRun(livenessRun)) {
             await scheduleBoundedRetryForRun(livenessRun, agent);
           }
@@ -7753,13 +7787,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return scheduleBoundedRetryForRun(run, agent, opts);
     },
 
-    /** Move a plan-exhausted run onto a Claude account that still has room. */
-    handleClaudeAccountFailover: async (runId: string) => {
+    /** Move a plan-exhausted run onto another account that still has room. */
+    handleAdapterAccountFailover: async (runId: string) => {
       const run = await getRun(runId, { unsafeFullResultJson: true });
       if (!run) return { outcome: "missing_run" as const };
       const agent = await getAgent(run.agentId);
       if (!agent) return { outcome: "missing_agent" as const };
-      await handleClaudeAccountFailover(run, agent);
+      await handleAdapterAccountFailover(run, agent);
       return { outcome: "handled" as const };
     },
 

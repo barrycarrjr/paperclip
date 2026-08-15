@@ -1,24 +1,22 @@
 /**
- * Choosing which Claude subscription signs a run in, and moving off one that
- * has run out.
+ * Choosing which account signs a run in, and moving off one that has run out.
  *
- * The Claude Code CLI signs in as exactly one account, so every agent on this
- * machine shares one subscription's limits. When that subscription's weekly
- * window is spent, every agent stops, and the bounded retry ladder (2 minutes,
- * 10, 30, then 2 hours) burns all four rungs against a window that does not
- * reopen for days.
+ * Each adapter signs in as one account at a time, so every agent using that
+ * adapter shares one subscription's limits. When that subscription's window is
+ * spent, every one of those agents stops, and the bounded retry ladder (2
+ * minutes, 10, 30, then 2 hours) burns all four rungs against a window that
+ * does not reopen for days.
  *
- * The fix is a list of accounts and one active choice. A run that fails because
- * its plan is spent marks that account as out until its reset time, moves the
- * active choice to the next account with room, and is retried there. The move
- * is sticky and instance-wide, so only the first failure pays for it rather
- * than every agent discovering the wall separately.
+ * The fix is a list of accounts per adapter and one active choice. A run that
+ * fails because its plan is spent marks that account as out until its reset
+ * time, moves the active choice to the next account with room, and is retried
+ * there. The move is sticky and instance-wide, so only the first failure pays
+ * for it rather than every agent discovering the wall separately.
  *
  * Everything here is pure: no database, no filesystem, no process environment.
  * State comes in as a plain object and a decision comes out, which is what
- * makes the interesting cases (a concurrent run that already moved, both
- * accounts out, a flap between two accounts) testable without a running
- * instance.
+ * makes the interesting cases (a concurrent run that already moved, every
+ * account out, a flap between two) testable without a running instance.
  */
 
 /**
@@ -29,9 +27,9 @@
  * When a real reset time is known, `exhaustedUntil` does the work and this is
  * only the backstop.
  */
-export const CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS = 10 * 60 * 1000;
+export const ACCOUNT_SWITCH_COOLDOWN_MS = 10 * 60 * 1000;
 
-export interface ClaudeAccountSlot {
+export interface AdapterAccountSlot {
   /** Stable id, used as the active-account key and in run context. */
   slot: string;
   /** The long-lived `sk-ant-oat01-...` token this account signs in with. */
@@ -42,9 +40,9 @@ export interface ClaudeAccountSlot {
   enabled?: boolean;
 }
 
-export interface ClaudeAccountState {
+export interface AdapterAccountState {
   /** Configured accounts, in preference order. */
-  slots: ClaudeAccountSlot[];
+  slots: AdapterAccountSlot[];
   /** The account new runs sign in with. Empty when nothing is configured. */
   activeSlot: string;
   /** The most recent move, for the cooldown. */
@@ -53,7 +51,7 @@ export interface ClaudeAccountState {
   exhaustedUntil: Record<string, number>;
 }
 
-export type ClaudeAccountSwitch =
+export type AdapterAccountSwitch =
   /** Move the active account and retry there. */
   | { kind: "switch"; to: string; from: string }
   /** Another run already moved us; retry on the new account without moving again. */
@@ -63,18 +61,18 @@ export type ClaudeAccountSwitch =
   /** Not a failure this router acts on. */
   | null;
 
-export const EMPTY_CLAUDE_ACCOUNT_STATE: ClaudeAccountState = {
+export const EMPTY_ADAPTER_ACCOUNT_STATE: AdapterAccountState = {
   slots: [],
   activeSlot: "",
   lastSwitch: null,
   exhaustedUntil: {},
 };
 
-function usableSlots(state: ClaudeAccountState): ClaudeAccountSlot[] {
+function usableSlots(state: AdapterAccountState): AdapterAccountSlot[] {
   return state.slots.filter((slot) => slot.enabled !== false && slot.token.trim().length > 0);
 }
 
-function findSlot(state: ClaudeAccountState, slot: string): ClaudeAccountSlot | null {
+function findSlot(state: AdapterAccountState, slot: string): AdapterAccountSlot | null {
   if (!slot) return null;
   return usableSlots(state).find((candidate) => candidate.slot === slot) ?? null;
 }
@@ -87,17 +85,17 @@ function findSlot(state: ClaudeAccountState, slot: string): ClaudeAccountSlot | 
  * account that no longer exists. Returns null when nothing is configured, which
  * is what keeps an install with no accounts on its existing single sign-in.
  */
-export function activeClaudeAccount(state: ClaudeAccountState): ClaudeAccountSlot | null {
+export function activeAccount(state: AdapterAccountState): AdapterAccountSlot | null {
   const usable = usableSlots(state);
   if (usable.length === 0) return null;
   return findSlot(state, state.activeSlot) ?? usable[0] ?? null;
 }
 
 /** The active account and the standbys, for a status line. Never a token. */
-export function describeClaudeAccounts(state: ClaudeAccountState, now = Date.now()): string {
+export function describeAccounts(state: AdapterAccountState, now = Date.now()): string {
   const usable = usableSlots(state);
-  if (usable.length === 0) return "No Claude accounts configured";
-  const active = activeClaudeAccount(state);
+  if (usable.length === 0) return "No accounts configured";
+  const active = activeAccount(state);
   return usable
     .map((slot) => {
       const until = state.exhaustedUntil[slot.slot] ?? 0;
@@ -116,14 +114,14 @@ export function describeClaudeAccounts(state: ClaudeAccountState, now = Date.now
  * that only applies to the account we have just moved away from.
  */
 function accountUnavailableUntil(
-  state: ClaudeAccountState,
+  state: AdapterAccountState,
   slot: string,
   justLeft: string | null,
 ): number {
   const resets = state.exhaustedUntil[slot] ?? 0;
   const cooled =
     state.lastSwitch && state.lastSwitch.from === slot && slot !== justLeft
-      ? state.lastSwitch.at + CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS
+      ? state.lastSwitch.at + ACCOUNT_SWITCH_COOLDOWN_MS
       : 0;
   return Math.max(resets, cooled);
 }
@@ -136,15 +134,15 @@ function accountUnavailableUntil(
  * minutes, so moving accounts for one would spread load onto a second
  * subscription for no reason and hide a real outage behind a rotation.
  */
-export function claudeAccountSwitchDecision(input: {
-  state: ClaudeAccountState;
+export function accountSwitchDecision(input: {
+  state: AdapterAccountState;
   /** The account the failed run signed in with, or null if it used its own token. */
   ranOn: string | null;
   family: "plan_exhausted" | "transient_upstream" | null;
   /** When the failed account comes back, from the CLI's rate-limit event. */
   resetsAt: number | null;
   now: number;
-}): ClaudeAccountSwitch {
+}): AdapterAccountSwitch {
   const { state, ranOn, family, resetsAt, now } = input;
   if (family !== "plan_exhausted") return null;
   if (!ranOn) return null;
@@ -166,9 +164,9 @@ export function claudeAccountSwitchDecision(input: {
   // before choosing, so it cannot be picked again on this pass.
   const exhaustedUntil: Record<string, number> = {
     ...state.exhaustedUntil,
-    [ranOn]: Math.max(state.exhaustedUntil[ranOn] ?? 0, resetsAt ?? now + CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS),
+    [ranOn]: Math.max(state.exhaustedUntil[ranOn] ?? 0, resetsAt ?? now + ACCOUNT_SWITCH_COOLDOWN_MS),
   };
-  const withFailure: ClaudeAccountState = { ...state, exhaustedUntil };
+  const withFailure: AdapterAccountState = { ...state, exhaustedUntil };
 
   for (const candidate of usable) {
     if (candidate.slot === ranOn) continue;
@@ -191,13 +189,13 @@ export function claudeAccountSwitchDecision(input: {
  * Kept beside the decision so persistence has nothing to work out for itself,
  * and so the transition is covered by the same tests as the decision.
  */
-export function applyClaudeAccountSwitch(input: {
-  state: ClaudeAccountState;
-  decision: ClaudeAccountSwitch;
+export function applyAccountSwitch(input: {
+  state: AdapterAccountState;
+  decision: AdapterAccountSwitch;
   ranOn: string | null;
   resetsAt: number | null;
   now: number;
-}): ClaudeAccountState {
+}): AdapterAccountState {
   const { state, decision, ranOn, resetsAt, now } = input;
   if (!decision || !ranOn) return state;
 
@@ -205,7 +203,7 @@ export function applyClaudeAccountSwitch(input: {
   if (decision.kind !== "adopt") {
     exhaustedUntil[ranOn] = Math.max(
       exhaustedUntil[ranOn] ?? 0,
-      resetsAt ?? now + CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS,
+      resetsAt ?? now + ACCOUNT_SWITCH_COOLDOWN_MS,
     );
   }
 
@@ -227,10 +225,10 @@ export function applyClaudeAccountSwitch(input: {
  * Called before a decision so an account whose window reopened while nothing
  * was running becomes selectable again without needing a failure to clear it.
  */
-export function forgetExpiredClaudeAccountLimits(
-  state: ClaudeAccountState,
+export function forgetExpiredAccountLimits(
+  state: AdapterAccountState,
   now: number,
-): ClaudeAccountState {
+): AdapterAccountState {
   const exhaustedUntil: Record<string, number> = {};
   for (const [slot, until] of Object.entries(state.exhaustedUntil)) {
     if (until > now) exhaustedUntil[slot] = until;

@@ -84,10 +84,22 @@ export async function countClaudeSignedOutAgents(
  * token" means, since the shape is easy to get subtly wrong.
  */
 export function agentHasOwnClaudeToken(adapterConfig: unknown): boolean {
+  return agentHasOwnCredential(adapterConfig, "CLAUDE_CODE_OAUTH_TOKEN");
+}
+
+/**
+ * The same question for any adapter: does this agent carry its own credential,
+ * in whichever variable its adapter signs in with?
+ *
+ * An agent that does is pinned to one account deliberately, so account routing
+ * must leave it alone rather than moving it when another account runs out.
+ * Reads the binding, never a value.
+ */
+export function agentHasOwnCredential(adapterConfig: unknown, envVar: string): boolean {
   if (!adapterConfig || typeof adapterConfig !== "object") return false;
   const env = (adapterConfig as Record<string, unknown>).env;
   if (!env || typeof env !== "object") return false;
-  const binding = (env as Record<string, unknown>).CLAUDE_CODE_OAUTH_TOKEN;
+  const binding = (env as Record<string, unknown>)[envVar];
   if (!binding) return false;
   if (typeof binding === "string") return binding.trim().length > 0;
   if (typeof binding !== "object") return false;

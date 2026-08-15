@@ -9,6 +9,11 @@ export interface AdapterCapabilities {
   supportsSkills: boolean;
   supportsLocalAgentJwt: boolean;
   requiresMaterializedRuntimeSkills: boolean;
+  /**
+   * The adapter can hold several accounts and moves to the next one when the
+   * account a run used reports its plan spent.
+   */
+  supportsAccounts?: boolean;
 }
 
 export interface AdapterInfo {
@@ -59,17 +64,18 @@ export interface AdapterAuthStatusEntry {
 }
 
 /**
- * One Claude subscription this machine can sign runs in with.
+ * One account an adapter can sign runs in with.
  *
- * Never carries a token: the server holds those encrypted and hands back only
- * what a person needs to see.
+ * Never carries a credential: the server holds those encrypted and hands back
+ * only what a person needs to see.
  */
-export interface ClaudeAccountSummary {
+export interface AdapterAccountSummary {
+  adapterType: string;
   slot: string;
   label: string;
   enabled: boolean;
   createdAt: string;
-  /** True for the account new runs currently sign in with. */
+  /** True for the account new runs on this adapter currently sign in with. */
   active: boolean;
   /** When this account's limit resets, if it is known to have run out. */
   exhaustedUntil: string | null;
@@ -128,14 +134,21 @@ export const adaptersApi = {
   submitToken: (type: string, token: string) =>
     api.post<{ ok: boolean; expiresAt: string | null }>(`/adapters/${type}/submit-token`, { token }),
 
-  /** The Claude subscriptions this machine can sign runs in with. */
-  listClaudeAccounts: () =>
-    api.get<{ accounts: ClaudeAccountSummary[] }>("/adapters/claude_local/accounts"),
+  /** Every adapter's accounts, keyed by adapter type, in one request. */
+  listAllAccounts: () =>
+    api.get<{ accounts: Record<string, AdapterAccountSummary[]>; supported: string[] }>(
+      "/adapters/accounts",
+    ),
 
-  /** Add an account, or replace the token on one that already exists. */
-  saveClaudeAccount: (input: { token: string; accountLabel: string; slot?: string | null }) =>
-    api.post<{ ok: boolean; account: ClaudeAccountSummary; accounts: ClaudeAccountSummary[] }>(
-      "/adapters/claude_local/submit-token",
+  /** Add an account to an adapter, or replace the credential on one it has. */
+  saveAdapterAccount: (input: {
+    adapterType: string;
+    token: string;
+    accountLabel: string;
+    slot?: string | null;
+  }) =>
+    api.post<{ ok: boolean; account: AdapterAccountSummary; accounts: AdapterAccountSummary[] }>(
+      `/adapters/${input.adapterType}/submit-token`,
       {
         token: input.token,
         accountLabel: input.accountLabel,
@@ -143,14 +156,14 @@ export const adaptersApi = {
       },
     ),
 
-  removeClaudeAccount: (slot: string) =>
-    api.delete<{ ok: boolean; accounts: ClaudeAccountSummary[] }>(
-      `/adapters/claude_local/accounts/${slot}`,
+  removeAdapterAccount: (adapterType: string, slot: string) =>
+    api.delete<{ ok: boolean; accounts: AdapterAccountSummary[] }>(
+      `/adapters/${adapterType}/accounts/${slot}`,
     ),
 
-  activateClaudeAccount: (slot: string) =>
-    api.post<{ ok: boolean; accounts: ClaudeAccountSummary[] }>(
-      `/adapters/claude_local/accounts/${slot}/activate`,
+  activateAdapterAccount: (adapterType: string, slot: string) =>
+    api.post<{ ok: boolean; accounts: AdapterAccountSummary[] }>(
+      `/adapters/${adapterType}/accounts/${slot}/activate`,
       {},
     ),
 };

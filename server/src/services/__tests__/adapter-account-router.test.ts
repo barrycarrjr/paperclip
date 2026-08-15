@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS,
-  EMPTY_CLAUDE_ACCOUNT_STATE,
-  activeClaudeAccount,
-  applyClaudeAccountSwitch,
-  claudeAccountSwitchDecision,
-  describeClaudeAccounts,
-  forgetExpiredClaudeAccountLimits,
-  type ClaudeAccountState,
-} from "../claude-account-router.js";
+  ACCOUNT_SWITCH_COOLDOWN_MS,
+  EMPTY_ADAPTER_ACCOUNT_STATE,
+  activeAccount,
+  applyAccountSwitch,
+  accountSwitchDecision,
+  describeAccounts,
+  forgetExpiredAccountLimits,
+  type AdapterAccountState,
+} from "../adapter-account-router.js";
 
 const NOW = Date.parse("2026-08-15T15:00:00.000Z");
 /** The real reset the CLI reported when a weekly window ran out. */
 const AUG_17_RESET = Date.parse("2026-08-17T07:00:00.000Z");
 
-function stateWith(overrides: Partial<ClaudeAccountState> = {}): ClaudeAccountState {
+function stateWith(overrides: Partial<AdapterAccountState> = {}): AdapterAccountState {
   return {
     slots: [
       { slot: "1", token: "sk-ant-oat01-one", label: "Main" },
@@ -27,19 +27,19 @@ function stateWith(overrides: Partial<ClaudeAccountState> = {}): ClaudeAccountSt
   };
 }
 
-describe("activeClaudeAccount", () => {
+describe("activeAccount", () => {
   it("returns null when nothing is configured, leaving the single sign-in alone", () => {
-    expect(activeClaudeAccount(EMPTY_CLAUDE_ACCOUNT_STATE)).toBeNull();
+    expect(activeAccount(EMPTY_ADAPTER_ACCOUNT_STATE)).toBeNull();
   });
 
   it("picks the recorded active account", () => {
-    expect(activeClaudeAccount(stateWith({ activeSlot: "2" }))?.label).toBe("Backup");
+    expect(activeAccount(stateWith({ activeSlot: "2" }))?.label).toBe("Backup");
   });
 
   it("falls back to the first usable account when the active one is gone or disabled", () => {
-    expect(activeClaudeAccount(stateWith({ activeSlot: "gone" }))?.slot).toBe("1");
+    expect(activeAccount(stateWith({ activeSlot: "gone" }))?.slot).toBe("1");
     expect(
-      activeClaudeAccount(
+      activeAccount(
         stateWith({
           slots: [
             { slot: "1", token: "sk-ant-oat01-one", label: "Main", enabled: false },
@@ -52,17 +52,17 @@ describe("activeClaudeAccount", () => {
 
   it("ignores an account with no token", () => {
     expect(
-      activeClaudeAccount(
+      activeAccount(
         stateWith({ slots: [{ slot: "1", token: "   ", label: "half-added" }], activeSlot: "1" }),
       ),
     ).toBeNull();
   });
 });
 
-describe("claudeAccountSwitchDecision", () => {
+describe("accountSwitchDecision", () => {
   it("does nothing for a transient failure, so a busy provider never rotates accounts", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith(),
         ranOn: "1",
         family: "transient_upstream",
@@ -74,7 +74,7 @@ describe("claudeAccountSwitchDecision", () => {
 
   it("does nothing when the failure is neither family", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith(),
         ranOn: "1",
         family: null,
@@ -86,7 +86,7 @@ describe("claudeAccountSwitchDecision", () => {
 
   it("does nothing for a run that signed in with its own pinned token", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith(),
         ranOn: null,
         family: "plan_exhausted",
@@ -98,7 +98,7 @@ describe("claudeAccountSwitchDecision", () => {
 
   it("moves to the standby account when the plan is spent", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith(),
         ranOn: "1",
         family: "plan_exhausted",
@@ -110,7 +110,7 @@ describe("claudeAccountSwitchDecision", () => {
 
   it("adopts the account a concurrent run already moved to, without moving again", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith({
           activeSlot: "2",
           lastSwitch: { at: NOW - 1_000, from: "1", to: "2" },
@@ -125,7 +125,7 @@ describe("claudeAccountSwitchDecision", () => {
 
   it("reports exhausted when the only other account is out until its own reset", () => {
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: stateWith({ exhaustedUntil: { "2": AUG_17_RESET } }),
         ranOn: "1",
         family: "plan_exhausted",
@@ -143,7 +143,7 @@ describe("claudeAccountSwitchDecision", () => {
     // Account 2 has now failed too. Account 1 was abandoned a second ago, so
     // with no reset times known this is "both are out", not a ping-pong.
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: justLeft,
         ranOn: "2",
         family: "plan_exhausted",
@@ -154,12 +154,12 @@ describe("claudeAccountSwitchDecision", () => {
 
     // Once the cooldown has passed, account 1 is worth trying again.
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: justLeft,
         ranOn: "2",
         family: "plan_exhausted",
         resetsAt: null,
-        now: NOW + CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS + 1,
+        now: NOW + ACCOUNT_SWITCH_COOLDOWN_MS + 1,
       }),
     ).toEqual({ kind: "switch", to: "1", from: "2" });
   });
@@ -174,7 +174,7 @@ describe("claudeAccountSwitchDecision", () => {
       exhaustedUntil: { "2": NOW + 60_000 },
     });
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: threeAccounts,
         ranOn: "1",
         family: "plan_exhausted",
@@ -184,7 +184,7 @@ describe("claudeAccountSwitchDecision", () => {
     ).toEqual({ kind: "switch", to: "3", from: "1" });
 
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state: threeAccounts,
         ranOn: "1",
         family: "plan_exhausted",
@@ -204,16 +204,16 @@ describe("claudeAccountSwitchDecision", () => {
     });
     const visited: string[] = [];
     for (let step = 0; step < 3; step += 1) {
-      const ranOn = activeClaudeAccount(state)?.slot ?? null;
+      const ranOn = activeAccount(state)?.slot ?? null;
       visited.push(ranOn ?? "none");
-      const decision = claudeAccountSwitchDecision({
+      const decision = accountSwitchDecision({
         state,
         ranOn,
         family: "plan_exhausted",
         resetsAt: AUG_17_RESET,
         now: NOW + step,
       });
-      state = applyClaudeAccountSwitch({
+      state = applyAccountSwitch({
         state,
         decision,
         ranOn,
@@ -224,7 +224,7 @@ describe("claudeAccountSwitchDecision", () => {
     }
     expect(visited).toEqual(["1", "2", "3"]);
     expect(
-      claudeAccountSwitchDecision({
+      accountSwitchDecision({
         state,
         ranOn: "3",
         family: "plan_exhausted",
@@ -235,9 +235,9 @@ describe("claudeAccountSwitchDecision", () => {
   });
 });
 
-describe("applyClaudeAccountSwitch", () => {
+describe("applyAccountSwitch", () => {
   it("records the move and marks the spent account out until its reset", () => {
-    const next = applyClaudeAccountSwitch({
+    const next = applyAccountSwitch({
       state: stateWith(),
       decision: { kind: "switch", to: "2", from: "1" },
       ranOn: "1",
@@ -251,7 +251,7 @@ describe("applyClaudeAccountSwitch", () => {
 
   it("leaves the active account alone when a concurrent run already moved it", () => {
     const state = stateWith({ activeSlot: "2" });
-    const next = applyClaudeAccountSwitch({
+    const next = applyAccountSwitch({
       state,
       decision: { kind: "adopt", to: "2" },
       ranOn: "1",
@@ -263,20 +263,20 @@ describe("applyClaudeAccountSwitch", () => {
   });
 
   it("falls back to a cooldown-length block when no reset time is known", () => {
-    const next = applyClaudeAccountSwitch({
+    const next = applyAccountSwitch({
       state: stateWith(),
       decision: { kind: "exhausted", resetsAt: null },
       ranOn: "1",
       resetsAt: null,
       now: NOW,
     });
-    expect(next.exhaustedUntil["1"]).toBe(NOW + CLAUDE_ACCOUNT_SWITCH_COOLDOWN_MS);
+    expect(next.exhaustedUntil["1"]).toBe(NOW + ACCOUNT_SWITCH_COOLDOWN_MS);
   });
 });
 
-describe("describeClaudeAccounts", () => {
+describe("describeAccounts", () => {
   it("names the active account and the standbys, and never leaks a token", () => {
-    const described = describeClaudeAccounts(
+    const described = describeAccounts(
       stateWith({ exhaustedUntil: { "2": AUG_17_RESET } }),
       NOW,
     );
@@ -286,22 +286,20 @@ describe("describeClaudeAccounts", () => {
   });
 
   it("says so plainly when nothing is configured", () => {
-    expect(describeClaudeAccounts(EMPTY_CLAUDE_ACCOUNT_STATE, NOW)).toBe(
-      "No Claude accounts configured",
-    );
+    expect(describeAccounts(EMPTY_ADAPTER_ACCOUNT_STATE, NOW)).toBe("No accounts configured");
   });
 });
 
-describe("forgetExpiredClaudeAccountLimits", () => {
+describe("forgetExpiredAccountLimits", () => {
   it("clears a window that reopened while nothing was running", () => {
     const state = stateWith({ exhaustedUntil: { "1": NOW - 1, "2": AUG_17_RESET } });
-    expect(forgetExpiredClaudeAccountLimits(state, NOW).exhaustedUntil).toEqual({
+    expect(forgetExpiredAccountLimits(state, NOW).exhaustedUntil).toEqual({
       "2": AUG_17_RESET,
     });
   });
 
   it("returns the same object when there is nothing to clear", () => {
     const state = stateWith({ exhaustedUntil: { "2": AUG_17_RESET } });
-    expect(forgetExpiredClaudeAccountLimits(state, NOW)).toBe(state);
+    expect(forgetExpiredAccountLimits(state, NOW)).toBe(state);
   });
 });

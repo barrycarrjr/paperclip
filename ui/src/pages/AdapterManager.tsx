@@ -13,7 +13,7 @@ import type {
   AdapterInfo,
   AdapterAuthResult,
   AdapterAuthStatusEntry,
-  ClaudeAccountSummary,
+  AdapterAccountSummary,
 } from "@/api/adapters";
 import { getAdapterLabel } from "@/adapters/adapter-display-registry";
 import { queryKeys } from "@/lib/queryKeys";
@@ -56,6 +56,11 @@ function AdapterRow({
   toggleTitleDisabled,
   /** Custom label for the disabled badge (defaults to "Hidden from menus"). */
   disabledBadgeLabel,
+  accounts,
+  onAddAccount,
+  onActivateAccount,
+  onRemoveAccount,
+  accountsBusy,
 }: {
   adapter: AdapterInfo;
   canRemove: boolean;
@@ -74,6 +79,12 @@ function AdapterRow({
   toggleTitleEnabled?: string;
   toggleTitleDisabled?: string;
   disabledBadgeLabel?: string;
+  /** This adapter's accounts, when it can hold more than one. */
+  accounts?: AdapterAccountSummary[];
+  onAddAccount?: (type: string) => void;
+  onActivateAccount?: (type: string, slot: string) => void;
+  onRemoveAccount?: (type: string, slot: string) => void;
+  accountsBusy?: boolean;
 }) {
   const showAuthBadge = authStatus?.supported && authStatus.status;
   const loggedIn = showAuthBadge && authStatus.status?.loggedIn;
@@ -142,6 +153,16 @@ function AdapterRow({
             )}
             {" · "}{adapter.modelsCount} models
           </p>
+          {adapter.capabilities?.supportsAccounts && onAddAccount && (
+            <AdapterAccountsStrip
+              adapterType={adapter.type}
+              accounts={accounts ?? []}
+              busy={Boolean(accountsBusy)}
+              onAdd={onAddAccount}
+              onActivate={onActivateAccount}
+              onRemove={onRemoveAccount}
+            />
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {showSignInButton && (
@@ -303,89 +324,108 @@ function formatElapsed(totalSec: number): string {
 }
 
 /**
- * The Claude subscriptions this machine can sign runs in with.
+ * The accounts one adapter can sign runs in with, shown inside its own row.
  *
- * One account is the one agents use. When its weekly allowance runs out, work
- * moves to the next account with room instead of stopping until the window
- * reopens, which can be days.
+ * One account is the one agents on this adapter use. When it runs out of its
+ * allowance, work moves to the next account with room instead of stopping
+ * until the window reopens, which can be days.
  */
-function ClaudeAccountsCard({
+function AdapterAccountsStrip({
+  adapterType,
   accounts,
+  busy,
   onAdd,
   onActivate,
   onRemove,
-  busy,
 }: {
-  accounts: ClaudeAccountSummary[];
-  onAdd: () => void;
-  onActivate: (slot: string) => void;
-  onRemove: (slot: string) => void;
+  adapterType: string;
+  accounts: AdapterAccountSummary[];
   busy: boolean;
+  onAdd: (type: string) => void;
+  onActivate?: (type: string, slot: string) => void;
+  onRemove?: (type: string, slot: string) => void;
 }) {
   return (
-    <Card>
-      <CardContent className="p-4 space-y-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-medium">Claude accounts</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {accounts.length === 0
-                ? "Agents sign in with this computer's Claude login. Add an account here to let them move to another subscription when one runs out of its weekly allowance."
-                : "Agents sign in with the active account. If it runs out of its weekly allowance, work moves to the next one on this list by itself."}
-            </p>
-          </div>
-          <Button size="sm" variant="outline" className="gap-2 shrink-0" onClick={onAdd} disabled={busy}>
-            <Plus className="h-4 w-4" />
-            Add account
-          </Button>
-        </div>
-
-        {accounts.length > 0 && (
-          <ul className="divide-y rounded-md border">
-            {accounts.map((account) => {
-              const outUntil = account.exhaustedUntil ? new Date(account.exhaustedUntil) : null;
-              return (
-                <li key={account.slot} className="flex items-center gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm truncate">{account.label}</span>
-                      {account.active && (
-                        <Badge variant="outline" className="text-emerald-700 border-emerald-400 dark:text-emerald-400">
-                          Active
-                        </Badge>
-                      )}
-                      {!account.enabled && <Badge variant="outline">Paused</Badge>}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {outUntil
-                        ? `Out of allowance until ${outUntil.toLocaleString()}`
-                        : account.active
-                          ? "In use now"
-                          : "Ready if the active account runs out"}
-                    </p>
+    <div className="mt-2 rounded-md border bg-muted/30 p-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium">
+          {accounts.length === 0
+            ? "Accounts"
+            : `Accounts (${accounts.length})`}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={() => onAdd(adapterType)}
+          disabled={busy}
+          aria-label={`Add an account to ${adapterType}`}
+        >
+          <Plus className="h-3 w-3" />
+          Add
+        </Button>
+      </div>
+      {accounts.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Signs in with this computer's login. Add a second account and work moves to it
+          automatically when the first runs out of its allowance.
+        </p>
+      ) : (
+        <ul className="mt-1 divide-y rounded border bg-background">
+          {accounts.map((account) => {
+            const outUntil = account.exhaustedUntil ? new Date(account.exhaustedUntil) : null;
+            return (
+              <li key={account.slot} className="flex items-center gap-2 px-2 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-xs">{account.label}</span>
+                    {account.active && (
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] text-emerald-700 border-emerald-400 dark:text-emerald-400"
+                      >
+                        Active
+                      </Badge>
+                    )}
+                    {!account.enabled && <Badge variant="outline" className="text-[10px]">Paused</Badge>}
                   </div>
-                  {!account.active && (
-                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => onActivate(account.slot)}>
-                      Use this one
-                    </Button>
-                  )}
+                  <p className="text-[10px] text-muted-foreground">
+                    {outUntil
+                      ? `Out of allowance until ${outUntil.toLocaleString()}`
+                      : account.active
+                        ? "In use now"
+                        : "Ready if the active account runs out"}
+                  </p>
+                </div>
+                {!account.active && onActivate && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-destructive"
+                    className="h-6 px-2 text-xs"
                     disabled={busy}
-                    onClick={() => onRemove(account.slot)}
+                    onClick={() => onActivate(adapterType, account.slot)}
+                  >
+                    Use this one
+                  </Button>
+                )}
+                {onRemove && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-destructive"
+                    disabled={busy}
+                    onClick={() => onRemove(adapterType, account.slot)}
                     aria-label={`Remove ${account.label}`}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="h-3 w-3" />
                   </Button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -741,28 +781,30 @@ export function AdapterManager() {
   const [accountLabelInput, setAccountLabelInput] = useState<string | null>(null);
   const submitClaudeHostToken = useMutation<{ ok: boolean; expiresAt?: string | null }, Error, void>({
     mutationFn: async () =>
-      accountLabelInput === null
-        ? await adaptersApi.submitToken("claude_local", hostTokenInput.trim())
-        : await adaptersApi.saveClaudeAccount({
+      accountLabelInput === null || !signInTarget
+        ? await adaptersApi.submitToken(signInTarget ?? "claude_local", hostTokenInput.trim())
+        : await adaptersApi.saveAdapterAccount({
+            adapterType: signInTarget,
             token: hostTokenInput.trim(),
             accountLabel: accountLabelInput.trim(),
           }),
     onSuccess: () => {
       setHostTokenInput("");
       queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
-      queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] });
+      queryClient.invalidateQueries({ queryKey: ["adapterAccounts"] });
     },
   });
 
-  const claudeAccountsQuery = useQuery({
-    queryKey: ["claudeAccounts"],
-    queryFn: () => adaptersApi.listClaudeAccounts(),
+  const adapterAccountsQuery = useQuery({
+    queryKey: ["adapterAccounts"],
+    queryFn: () => adaptersApi.listAllAccounts(),
   });
-  const claudeAccounts = claudeAccountsQuery.data?.accounts ?? [];
+  const accountsByAdapter = adapterAccountsQuery.data?.accounts ?? {};
 
-  const activateClaudeAccount = useMutation({
-    mutationFn: (slot: string) => adaptersApi.activateClaudeAccount(slot),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] }),
+  const activateAdapterAccount = useMutation({
+    mutationFn: ({ type, slot }: { type: string; slot: string }) =>
+      adaptersApi.activateAdapterAccount(type, slot),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapterAccounts"] }),
     onError: (err) =>
       pushToast({
         title: "Could not switch account",
@@ -771,15 +813,29 @@ export function AdapterManager() {
       }),
   });
 
-  const removeClaudeAccount = useMutation({
-    mutationFn: (slot: string) => adaptersApi.removeClaudeAccount(slot),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["claudeAccounts"] }),
+  const removeAdapterAccount = useMutation({
+    mutationFn: ({ type, slot }: { type: string; slot: string }) =>
+      adaptersApi.removeAdapterAccount(type, slot),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapterAccounts"] }),
     onError: (err) =>
       pushToast({
         title: "Could not remove account",
         body: err instanceof Error ? err.message : String(err),
         tone: "error",
       }),
+  });
+
+  const accountsBusy = activateAdapterAccount.isPending || removeAdapterAccount.isPending;
+
+  /** Props every adapter row needs so its accounts strip works. */
+  const accountRowProps = (type: string) => ({
+    accounts: accountsByAdapter[type] ?? [],
+    onAddAccount: handleAddAdapterAccount,
+    onActivateAccount: (adapterType: string, slot: string) =>
+      activateAdapterAccount.mutate({ type: adapterType, slot }),
+    onRemoveAccount: (adapterType: string, slot: string) =>
+      removeAdapterAccount.mutate({ type: adapterType, slot }),
+    accountsBusy,
   });
 
   const handleSignIn = (type: string) => {
@@ -811,13 +867,13 @@ export function AdapterManager() {
     queryClient.invalidateQueries({ queryKey: queryKeys.adapters.authStatuses });
   };
 
-  /** Open the same paste dialog, in add-an-account mode. */
-  const handleAddClaudeAccount = () => {
+  /** Open the same paste dialog, in add-an-account mode, for one adapter. */
+  function handleAddAdapterAccount(type: string) {
     setHostTokenInput("");
     setAccountLabelInput("");
     submitClaudeHostToken.reset();
-    setSignInTarget("claude_local");
-  };
+    setSignInTarget(type);
+  }
 
   const signInPhase: "starting" | "running" | "ok" | "error" = startSignInMutation.isError
     ? "error"
@@ -1042,21 +1098,13 @@ export function AdapterManager() {
                   toggleTitleDisabled={isBuiltinOverride ? "Pause external override" : undefined}
                   toggleTitleEnabled={isBuiltinOverride ? "Resume external override" : undefined}
                   disabledBadgeLabel={isBuiltinOverride ? "Override paused" : undefined}
+                  {...accountRowProps(adapter.type)}
                 />
               );
             })}
           </ul>
         )}
       </section>
-
-      {/* Which Claude subscription agents sign in with */}
-      <ClaudeAccountsCard
-        accounts={claudeAccounts}
-        onAdd={handleAddClaudeAccount}
-        onActivate={(slot) => activateClaudeAccount.mutate(slot)}
-        onRemove={(slot) => removeClaudeAccount.mutate(slot)}
-        busy={activateClaudeAccount.isPending || removeClaudeAccount.isPending}
-      />
 
       {/* Built-in adapters */}
       <section className="space-y-3">
@@ -1079,6 +1127,7 @@ export function AdapterManager() {
                 onSignIn={authStatuses[adapter.type]?.supported ? handleSignIn : undefined}
                 authStatus={authStatuses[adapter.type]}
                 isToggling={isMutating}
+                {...accountRowProps(adapter.type)}
               />
             ))}
             {overriddenBuiltins.map((virtual) => (
@@ -1096,6 +1145,7 @@ export function AdapterManager() {
                     supportsSkills: false,
                     supportsLocalAgentJwt: false,
                     requiresMaterializedRuntimeSkills: false,
+                    supportsAccounts: false,
                   },
                 }}
                 canRemove={false}
@@ -1175,7 +1225,7 @@ export function AdapterManager() {
           onClose={handleCloseSignIn}
           accountLabel={accountLabelInput}
           onAccountLabelChange={setAccountLabelInput}
-          hasAccounts={claudeAccounts.length > 0}
+          hasAccounts={(accountsByAdapter[signInTarget ?? ""] ?? []).length > 0}
         />
       ) : (
         <AdapterLoginDialog
