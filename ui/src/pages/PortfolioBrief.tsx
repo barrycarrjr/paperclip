@@ -200,8 +200,8 @@ export function PortfolioBrief() {
   const { pluginId: emailPluginId } = useEmailToolsPlugin(selectedCompanyId);
 
   // The rules-home issue can live in a different company than the mailbox
-  // is `allowedCompanies`-listed under (e.g. M3 Media owns the rules issue
-  // but the m3-barry mailbox is only allowed for Personal). Building the
+  // is `allowedCompanies`-listed under (e.g. Northwind Trading owns the rules issue
+  // but the shared-inbox mailbox is only allowed for Personal). Building the
   // /email link from the rules-home company sends the operator to a page
   // that says "Email not configured". Resolve a company that IS in the
   // mailbox's allow-list so the link actually opens the message.

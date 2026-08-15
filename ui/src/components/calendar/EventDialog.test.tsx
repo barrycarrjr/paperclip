@@ -18,7 +18,7 @@ vi.mock("@/context/ToastContext", () => ({
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const COMPANY_CHOICES = [
-  { value: "company-a", label: "Industry Bureau LLC" },
+  { value: "company-a", label: "Northwind Trading LLC" },
   { value: "company-b", label: "Print Shop" },
 ];
 

@@ -26,7 +26,7 @@ vi.mock("@/context/ToastContext", () => ({
  * max-width, so the fixture keeps a real one (the reminder Barry hit it on).
  */
 const LONG_URL =
-  "https://autoprint-software.atlassian.net/wiki/spaces/AUTO/blog/2022/09/26/4344315909/Pay+schedule+2022-2023+calendar";
+  "https://example.atlassian.net/wiki/spaces/DEMO/blog/2022/09/26/1234567890/Pay+schedule+2022-2023+calendar";
 
 let eventFixture: CalendarEventDetail;
 
@@ -87,7 +87,7 @@ async function renderDialog() {
           eventId="event-1"
           currentUserId="user-1"
           onEdit={vi.fn()}
-          companyLabel="Industry Bureau LLC"
+          companyLabel="Northwind Trading LLC"
         />
       </QueryClientProvider>,
     );
@@ -95,7 +95,7 @@ async function renderDialog() {
 
   // Let the react-query fetch settle so the rows render instead of the spinner.
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (document.body.textContent?.includes("Industry Bureau LLC")) return;
+    if (document.body.textContent?.includes("Northwind Trading LLC")) return;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -122,7 +122,7 @@ describe("EventDetailDialog", () => {
 
     const dialog = document.querySelector("[data-slot='dialog-content']");
     expect(dialog?.textContent).toContain("IB Payroll");
-    expect(dialog?.textContent).toContain("Industry Bureau LLC");
+    expect(dialog?.textContent).toContain("Northwind Trading LLC");
     expect(dialog?.textContent).toContain(LONG_URL);
   });
 

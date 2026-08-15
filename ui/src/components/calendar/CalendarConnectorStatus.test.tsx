@@ -37,7 +37,7 @@ function createConnector(overrides: Partial<PluginConnectorStatus> = {}): Plugin
     companies: [
       {
         companyId: "company-a",
-        companyName: "Industry Bureau LLC",
+        companyName: "Northwind Trading LLC",
         connected: true,
         accountLabel: "books@example.org",
         viaPortfolioWide: false,
@@ -127,7 +127,7 @@ describe("CalendarConnectorStatus", () => {
     clickChip();
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Industry Bureau LLC");
+    expect(text).toContain("Northwind Trading LLC");
     expect(text).toContain("books@example.org");
     expect(text).toContain("Print Shop");
     expect(text).toContain("Not connected");

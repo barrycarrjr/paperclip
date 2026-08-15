@@ -13,7 +13,7 @@ const CONNECTOR: PluginConnectorDeclaration = {
 };
 
 const COMPANIES = [
-  { id: "company-a", name: "Industry Bureau LLC" },
+  { id: "company-a", name: "Northwind Trading LLC" },
   { id: "company-b", name: "Print Shop" },
 ];
 
@@ -28,7 +28,7 @@ describe("plugin connectors", () => {
     expect(result.companies).toEqual([
       {
         companyId: "company-a",
-        companyName: "Industry Bureau LLC",
+        companyName: "Northwind Trading LLC",
         connected: false,
         accountLabel: null,
         viaPortfolioWide: false,

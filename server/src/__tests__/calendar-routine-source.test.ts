@@ -44,7 +44,7 @@ describeEmbeddedPostgres("routine calendar source", () => {
   async function seedCompany(): Promise<string> {
     const [row] = await db
       .insert(companies)
-      .values({ id: randomUUID(), name: "Industry Bureau LLC", issuePrefix: "IB" })
+      .values({ id: randomUUID(), name: "Northwind Trading LLC", issuePrefix: "NW" })
       .returning();
     companyId = row.id;
     return row.id;

@@ -59,7 +59,7 @@ describe("GET /api/plugins/connectors", () => {
         companies: [
           {
             companyId: "company-a",
-            companyName: "Industry Bureau LLC",
+            companyName: "Northwind Trading LLC",
             connected: true,
             accountLabel: "books@example.org",
             viaPortfolioWide: false,

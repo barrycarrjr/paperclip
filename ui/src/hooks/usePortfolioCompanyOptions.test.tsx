@@ -57,23 +57,23 @@ afterEach(() => {
 describe("usePortfolioCompanyOptions", () => {
   it("offers every non-archived company", () => {
     companyState.companies = [
-      company({ id: "a", name: "Carr Rock Holdings" }),
-      company({ id: "b", name: "Industry Bureau LLC" }),
-      company({ id: "c", name: "C3 Media LLC" }),
+      company({ id: "a", name: "Summit Holdings" }),
+      company({ id: "b", name: "Northwind Trading LLC" }),
+      company({ id: "c", name: "Blue Harbor Media LLC" }),
     ];
 
     expect(readOptions().map((o) => o.label)).toEqual([
-      "Carr Rock Holdings",
-      "Industry Bureau LLC",
-      "C3 Media LLC",
+      "Summit Holdings",
+      "Northwind Trading LLC",
+      "Blue Harbor Media LLC",
     ]);
   });
 
   it("puts the portfolio root first", () => {
     companyState.companies = [
-      company({ id: "a", name: "Carr Rock Holdings" }),
+      company({ id: "a", name: "Summit Holdings" }),
       company({ id: "hq", name: "HQ", isPortfolioRoot: true }),
-      company({ id: "b", name: "C3 Media LLC" }),
+      company({ id: "b", name: "Blue Harbor Media LLC" }),
     ];
 
     expect(readOptions()[0].label).toBe("HQ");
@@ -81,11 +81,11 @@ describe("usePortfolioCompanyOptions", () => {
 
   it("leaves archived companies out", () => {
     companyState.companies = [
-      company({ id: "a", name: "Carr Rock Holdings" }),
+      company({ id: "a", name: "Summit Holdings" }),
       company({ id: "z", name: "Old Co", status: "archived" }),
     ];
 
-    expect(readOptions().map((o) => o.label)).toEqual(["Carr Rock Holdings"]);
+    expect(readOptions().map((o) => o.label)).toEqual(["Summit Holdings"]);
   });
 
   it("does not shrink when the caller has filtered down to one company", () => {
@@ -95,9 +95,9 @@ describe("usePortfolioCompanyOptions", () => {
     // the full company list, which no filter can narrow, so the menu is the
     // same size whatever is selected.
     companyState.companies = [
-      company({ id: "a", name: "Carr Rock Holdings" }),
-      company({ id: "b", name: "Industry Bureau LLC" }),
-      company({ id: "c", name: "C3 Media LLC" }),
+      company({ id: "a", name: "Summit Holdings" }),
+      company({ id: "b", name: "Northwind Trading LLC" }),
+      company({ id: "c", name: "Blue Harbor Media LLC" }),
     ];
 
     const optionsWhileUnfiltered = readOptions();
@@ -115,8 +115,8 @@ describe("usePortfolioCompanyOptions", () => {
   });
 
   it("maps each option to the company id the filter sends to the server", () => {
-    companyState.companies = [company({ id: "company-1", name: "Carr Rock Holdings" })];
+    companyState.companies = [company({ id: "company-1", name: "Summit Holdings" })];
 
-    expect(readOptions()[0]).toEqual({ value: "company-1", label: "Carr Rock Holdings" });
+    expect(readOptions()[0]).toEqual({ value: "company-1", label: "Summit Holdings" });
   });
 });
