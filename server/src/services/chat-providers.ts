@@ -6,6 +6,14 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { runningProcesses, signalRunningProcess } from "@paperclipai/adapter-utils/server-utils";
+import { getServerAdapter } from "../adapters/index.js";
+import {
+  accountSwitchDecision,
+  activeAccount,
+  applyAccountSwitch,
+  forgetExpiredAccountLimits,
+} from "./adapter-account-router.js";
+import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
 
 /**
@@ -913,6 +921,76 @@ class GeminiProvider implements ChatProvider {
 
 const ADAPTER_PREFIX = "adapter:";
 
+/**
+ * The environment holding the account this adapter should sign in with.
+ *
+ * Null when the adapter has no account list, which leaves it on whatever
+ * sign-in the machine already had. Nothing here is provider-specific: the
+ * adapter names the variable, and the account supplies the value.
+ */
+export async function resolveActiveAccountEnv(
+  adapterType: string,
+): Promise<{ slot: string; env: Record<string, string> } | null> {
+  let envVar: string | undefined;
+  try {
+    envVar = getServerAdapter(adapterType).accountCredentialEnvVar;
+  } catch {
+    return null;
+  }
+  if (!envVar || envVar.trim().length === 0) return null;
+  const state = forgetExpiredAccountLimits(await readAdapterAccountState(adapterType), Date.now());
+  const account = activeAccount(state);
+  if (!account) return null;
+  return { slot: account.slot, env: { [envVar.trim()]: account.token } };
+}
+
+/**
+ * Mark the account a chat turn just spent, and move the active one on.
+ *
+ * Uses the same decision the agent-run path uses, so a limit hit in Clippy and
+ * a limit hit by an agent leave the account list in the same state and neither
+ * has to discover the wall twice.
+ */
+export async function recordAccountExhausted(input: {
+  adapterType: string;
+  slot: string;
+  resultJson: Record<string, unknown> | null;
+}): Promise<void> {
+  const now = Date.now();
+  const rawReset =
+    input.resultJson &&
+    (typeof input.resultJson.planResetsAt === "string"
+      ? input.resultJson.planResetsAt
+      : typeof input.resultJson.retryNotBefore === "string"
+        ? input.resultJson.retryNotBefore
+        : null);
+  const parsedReset = rawReset ? Date.parse(rawReset) : Number.NaN;
+  const resetsAt = Number.isNaN(parsedReset) ? null : parsedReset;
+
+  const state = forgetExpiredAccountLimits(await readAdapterAccountState(input.adapterType), now);
+  const decision = accountSwitchDecision({
+    state,
+    ranOn: input.slot,
+    family: "plan_exhausted",
+    resetsAt,
+    now,
+  });
+  const next = applyAccountSwitch({ state, decision, ranOn: input.slot, resetsAt, now });
+  saveAdapterAccountRouting(input.adapterType, {
+    activeSlot: next.activeSlot,
+    lastSwitch: next.lastSwitch,
+    exhaustedUntil: next.exhaustedUntil,
+  });
+  logger.warn(
+    {
+      adapterType: input.adapterType,
+      spentSlot: input.slot,
+      movedTo: decision?.kind === "switch" ? decision.to : null,
+    },
+    "chat turn hit an account limit; account list updated",
+  );
+}
+
 export interface AdapterRoutingDecoded {
   adapterType: string;
   modelId: string;
@@ -1126,6 +1204,15 @@ class AdapterExecuteProvider implements ChatProvider {
     // runId lives at this scope so the abort handler can find the spawned
     // CLI process in runningProcesses and actually terminate it.
     const runId = randomId();
+    // Which account Clippy signs in with.
+    //
+    // Same rule as an agent run: the adapter names the variable its credential
+    // travels in, and the active account's credential goes in there. Without
+    // this the child inherits the machine-wide sign-in, so Clippy would keep
+    // using an account the operator had already moved off and would report a
+    // limit that the configured accounts do not have. Resolved out here so the
+    // result handler below knows which account was actually spent.
+    const accountEnv = await resolveActiveAccountEnv(decoded.adapterType);
     const executePromise = (async () => {
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(
@@ -1153,6 +1240,7 @@ class AdapterExecuteProvider implements ChatProvider {
         promptTemplate: "",
         dangerouslySkipPermissions: true,
         maxTurnsPerRun: 0,
+        ...(accountEnv ? { env: accountEnv.env } : {}),
         // Always route the adapter's working dir to the per-session Clippy
         // workspace, whether or not this turn carries images. The CLI adapter
         // sends only the latest user message and relies on `--resume` to carry
@@ -1251,6 +1339,17 @@ class AdapterExecuteProvider implements ChatProvider {
     }
 
     const result = await executePromise;
+    // The account Clippy just used has run out. Record that and move the
+    // active account on, so the operator's next message lands on one with
+    // room. This turn is not retried: it has already streamed its output, and
+    // replaying it would duplicate what the reader has just seen.
+    if (accountEnv && result.errorFamily === "plan_exhausted") {
+      await recordAccountExhausted({
+        adapterType: decoded.adapterType,
+        slot: accountEnv.slot,
+        resultJson: result.resultJson ?? null,
+      });
+    }
     // Persist sessionParams for next-turn continuity. Adapters that don't
     // produce sessionParams just clear (null) — also fine.
     await ctx.saveSessionParams(result.sessionParams ?? null);
