@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agents,
   agentRuntimeState,
@@ -36,8 +36,18 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
+/**
+ * When the runs below failed, held on a fixed clock.
+ *
+ * The reset has to still be ahead of "now" for these to mean anything: the
+ * router forgets a reset once it has passed, and a retry is only moved out to
+ * the reset when that is later than the ordinary backoff. Written-in dates go
+ * stale, so the clock is frozen here instead and every date is derived from it.
+ */
+const NOW = new Date("2026-08-15T15:00:00.000Z");
+
 /** The reset the CLI reported when a real weekly window actually ran out. */
-const AUG_17_RESET = "2026-08-17T07:00:00.000Z";
+const PLAN_RESET = new Date(NOW.getTime() + 40 * 60 * 60 * 1_000).toISOString();
 
 describeEmbeddedPostgres("Adapter account failover", () => {
   let db!: ReturnType<typeof createDb>;
@@ -54,6 +64,10 @@ describeEmbeddedPostgres("Adapter account failover", () => {
   }, 20_000);
 
   beforeEach(() => {
+    // Only the clock is faked, not setTimeout: the embedded Postgres driver
+    // needs its own timers to keep running, and nothing here waits on one.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     // Accounts and their encryption key live under PAPERCLIP_HOME, so a temp
     // home keeps this test away from the real instance's account list.
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-accounts-"));
@@ -63,6 +77,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await db.delete(heartbeatRunEvents);
     await db.delete(environmentLeases);
     await db.delete(issues);
@@ -123,8 +138,8 @@ describeEmbeddedPostgres("Adapter account failover", () => {
       finishedAt: input.now,
       resultJson: {
         errorFamily: input.errorFamily,
-        retryNotBefore: AUG_17_RESET,
-        planResetsAt: AUG_17_RESET,
+        retryNotBefore: PLAN_RESET,
+        planResetsAt: PLAN_RESET,
         rateLimitWindow: "seven_day",
       },
       contextSnapshot: {
@@ -150,7 +165,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     await upsertAdapterAccount({ adapterType: "claude_local", token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
-    const now = new Date("2026-08-15T15:00:00.000Z");
+    const now = new Date(NOW);
     await seedFailedRun({
       runId,
       companyId: randomUUID(),
@@ -172,7 +187,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
 
     const state = await readAdapterAccountState("claude_local");
     expect(state.activeSlot).toBe("2");
-    expect(state.exhaustedUntil["1"]).toBe(Date.parse(AUG_17_RESET));
+    expect(state.exhaustedUntil["1"]).toBe(Date.parse(PLAN_RESET));
     expect(listAdapterAccounts("claude_local").find((account) => account.slot === "2")?.active).toBe(true);
   });
 
@@ -191,7 +206,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     await upsertAdapterAccount({ adapterType: "codex_local", token: "codex-two", label: "Codex backup" });
 
     const runId = randomUUID();
-    const now = new Date("2026-08-15T15:00:00.000Z");
+    const now = new Date(NOW);
     await seedFailedRun({
       runId,
       companyId: randomUUID(),
@@ -218,7 +233,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     await upsertAdapterAccount({ adapterType: "claude_local", token: "sk-ant-oat01-only", label: "Main" });
 
     const runId = randomUUID();
-    const now = new Date("2026-08-15T15:00:00.000Z");
+    const now = new Date(NOW);
     await seedFailedRun({
       runId,
       companyId: randomUUID(),
@@ -235,7 +250,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     expect(retry?.scheduledRetryReason).toBe("plan_exhausted");
     // The whole point of reading the structured reset: the run wakes when the
     // window actually reopens, not two minutes from now.
-    expect(retry?.scheduledRetryAt?.toISOString()).toBe(AUG_17_RESET);
+    expect(retry?.scheduledRetryAt?.toISOString()).toBe(PLAN_RESET);
 
     const state = await readAdapterAccountState("claude_local");
     expect(state.activeSlot).toBe("1");
@@ -246,7 +261,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     await upsertAdapterAccount({ adapterType: "claude_local", token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
-    const now = new Date("2026-08-15T15:00:00.000Z");
+    const now = new Date(NOW);
     await seedFailedRun({
       runId,
       companyId: randomUUID(),
@@ -273,7 +288,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     await upsertAdapterAccount({ adapterType: "claude_local", token: "sk-ant-oat01-two", label: "Backup" });
 
     const runId = randomUUID();
-    const now = new Date("2026-08-15T15:00:00.000Z");
+    const now = new Date(NOW);
     await seedFailedRun({
       runId,
       companyId: randomUUID(),

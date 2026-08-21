@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordAccountExhausted,
   resolveActiveAccountEnv,
@@ -12,6 +12,20 @@ import {
   resetAdapterAccountCaches,
   upsertAdapterAccount,
 } from "../adapter-accounts.js";
+
+/**
+ * A fixed clock, so the reset below stays in the future however long after
+ * today the suite is run.
+ *
+ * Both the account list and the router hide a limit whose reset has already
+ * passed. With the real clock and a written-in reset date, these tests stopped
+ * checking that a reported reset is recorded and started checking that it had
+ * expired, which is a different thing and not what they say they do.
+ */
+const NOW = new Date("2026-08-15T15:00:00.000Z");
+
+/** What the provider reported: this account comes back 40 hours from now. */
+const PLAN_RESET = new Date(NOW.getTime() + 40 * 60 * 60 * 1_000).toISOString();
 
 /**
  * Clippy signs in through the chat path, not the agent-run path.
@@ -27,6 +41,8 @@ describe("chat account routing", () => {
   const priorMasterKey = process.env.PAPERCLIP_SECRETS_MASTER_KEY;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-chat-accounts-"));
     process.env.PAPERCLIP_HOME = homeDir;
     process.env.PAPERCLIP_SECRETS_MASTER_KEY = Buffer.alloc(32, 9).toString("base64");
@@ -34,6 +50,7 @@ describe("chat account routing", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetAdapterAccountCaches();
     if (priorHome === undefined) delete process.env.PAPERCLIP_HOME;
     else process.env.PAPERCLIP_HOME = priorHome;
@@ -63,7 +80,7 @@ describe("chat account routing", () => {
     await recordAccountExhausted({
       adapterType: "claude_local",
       slot: "1",
-      resultJson: { planResetsAt: "2026-08-17T07:00:00.000Z" },
+      resultJson: { planResetsAt: PLAN_RESET },
     });
 
     const resolved = await resolveActiveAccountEnv("claude_local");
@@ -89,14 +106,14 @@ describe("chat account routing", () => {
     await recordAccountExhausted({
       adapterType: "claude_local",
       slot: "1",
-      resultJson: { planResetsAt: "2026-08-17T07:00:00.000Z" },
+      resultJson: { planResetsAt: PLAN_RESET },
     });
 
     const state = await readAdapterAccountState("claude_local");
     expect(state.activeSlot).toBe("2");
-    expect(state.exhaustedUntil["1"]).toBe(Date.parse("2026-08-17T07:00:00.000Z"));
+    expect(state.exhaustedUntil["1"]).toBe(Date.parse(PLAN_RESET));
     expect(listAdapterAccounts("claude_local").find((a) => a.slot === "1")?.exhaustedUntil).toBe(
-      "2026-08-17T07:00:00.000Z",
+      PLAN_RESET,
     );
   });
 
