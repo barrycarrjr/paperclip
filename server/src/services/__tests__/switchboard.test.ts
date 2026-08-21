@@ -9,6 +9,7 @@ import {
   readRegisteredAccounts,
   resetSwitchboardCache,
   switchboardAccountEnv,
+  switchboardAccountFor,
   switchboardAccountsFile,
   switchboardOptedOut,
 } from "../switchboard.js";
@@ -121,13 +122,20 @@ describe("finding the switchboard cli", () => {
 });
 
 describe("reading switchboard's answer", () => {
-  it("reads the lane out of a reply that also carries other lines", () => {
+  /**
+   * The two names in one reply are the whole point of this shape. `harness` is
+   * the tool Paperclip cares about; `provider` is the vendor, which is what
+   * `dry-run --provider` filters on. Confusing them is what made an earlier
+   * version of this ask for `--provider claude` and be told, truthfully and
+   * uselessly, that no lane matched.
+   */
+  it("reads both the tool and the vendor out of a reply that carries other lines", () => {
     const stdout = [
       "Checking lanes...",
       JSON.stringify({
-        laneId: "lane-claude-2",
+        laneId: "lane-1787257318784",
         harness: "claude",
-        provider: "claude",
+        provider: "anthropic",
         accountId: "claude-account-2",
         billing: "subscription",
         reason: "Subscription has capacity",
@@ -135,21 +143,44 @@ describe("reading switchboard's answer", () => {
       }),
     ].join("\n");
     expect(parseSwitchboardLane(stdout)).toEqual({
-      laneId: "lane-claude-2",
-      provider: "claude",
+      laneId: "lane-1787257318784",
+      harness: "claude",
+      provider: "anthropic",
       accountId: "claude-account-2",
       reason: "Subscription has capacity",
     });
   });
 
+  it("leaves the tool empty for an older switchboard that does not report one", () => {
+    expect(
+      parseSwitchboardLane(
+        JSON.stringify({
+          laneId: "lane-1",
+          provider: "anthropic",
+          accountId: "claude-account-2",
+          available: true,
+        }),
+      ),
+    ).toMatchObject({ harness: "", provider: "anthropic" });
+  });
+
   /**
    * "No lane available" is a normal answer, not an error, and it arrives on a
    * non-zero exit. Reading it as an account would send the run to nowhere.
+   *
+   * Every flavour of it is listed because Switchboard distinguishes them and
+   * Paperclip deliberately does not: all of them mean "sign in the way you
+   * always did". Reading the prose to tell them apart would make this brittle
+   * to wording that has already changed once, and there is nothing Paperclip
+   * would do differently anyway.
    */
-  it("treats an unavailable answer as no answer", () => {
-    expect(
-      parseSwitchboardLane(JSON.stringify({ available: false, reason: "No configured lanes match the criteria." })),
-    ).toBeNull();
+  it.each([
+    "No lanes are configured.",
+    "No configured lanes match the criteria.",
+    "No lane is currently available.",
+    "some future wording nobody has written yet",
+  ])("treats an unavailable answer as no answer, whatever it says (%s)", (reason) => {
+    expect(parseSwitchboardLane(JSON.stringify({ available: false, reason }))).toBeNull();
   });
 
   it("ignores an answer missing the parts it needs", () => {
@@ -288,6 +319,91 @@ describe("the environment that puts a run on a chosen account", () => {
         reason: "Subscription has capacity",
       }),
     ).toEqual({ CODEX_HOME: "C:\\Users\\me\\.codex" });
+  });
+});
+
+/**
+ * Switchboard judges a lane's health from a live quota fetch and reports the
+ * lane unusable when that fetch merely fails, so the same signed-in account can
+ * read "has capacity" and "unknown or unreadable" minutes apart. When that hits
+ * every lane of a tool, the answer is "nothing available", which looks exactly
+ * like being genuinely out of allowance.
+ */
+describe("riding out a momentary no-answer", () => {
+  const account = {
+    accountId: "claude-account-2",
+    label: "Secondary",
+    home: "C:\\Users\\me\\.claude-account-2",
+    envVar: "CLAUDE_CONFIG_DIR",
+    envValue: "C:\\Users\\me\\.claude-account-2",
+    laneId: "lane-2",
+    reason: "Subscription has capacity",
+  };
+  const START = 1_000_000;
+  const priorApiKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+    resetSwitchboardCache();
+  });
+
+  afterEach(() => {
+    if (priorApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = priorApiKey;
+    resetSwitchboardCache();
+  });
+
+  it("reuses the account it was given when the next answer is nothing", async () => {
+    expect(await switchboardAccountFor("claude", { now: START, ask: async () => account })).toEqual(account);
+    // Past the ordinary answer cache, so this genuinely asks again.
+    const later = START + 5 * 60_000;
+    expect(await switchboardAccountFor("claude", { now: later, ask: async () => null })).toEqual(account);
+  });
+
+  it("stops reusing it once it is properly stale", async () => {
+    await switchboardAccountFor("claude", { now: START, ask: async () => account });
+    const muchLater = START + 31 * 60_000;
+    expect(await switchboardAccountFor("claude", { now: muchLater, ask: async () => null })).toBeNull();
+  });
+
+  it("prefers a fresh answer over the remembered one", async () => {
+    await switchboardAccountFor("claude", { now: START, ask: async () => account });
+    const other = { ...account, accountId: "claude-default", label: "Main Account", laneId: "lane-1" };
+    const later = START + 5 * 60_000;
+    expect(await switchboardAccountFor("claude", { now: later, ask: async () => other })).toEqual(other);
+  });
+
+  it("has nothing to reuse when it was never given an account", async () => {
+    expect(await switchboardAccountFor("claude", { now: START, ask: async () => null })).toBeNull();
+  });
+
+  it("answers from the cache rather than asking twice in a burst", async () => {
+    let asked = 0;
+    const ask = async () => {
+      asked += 1;
+      return account;
+    };
+    await switchboardAccountFor("claude", { now: START, ask });
+    await switchboardAccountFor("claude", { now: START + 1_000, ask });
+    expect(asked).toBe(1);
+  });
+
+  it("does not consult switchboard at all when an api key is set", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-deliberate";
+    let asked = 0;
+    const result = await switchboardAccountFor("claude", {
+      now: START,
+      ask: async () => {
+        asked += 1;
+        return account;
+      },
+    });
+    expect(result).toBeNull();
+    expect(asked).toBe(0);
+  });
+
+  it("knows nothing about a tool switchboard cannot move", async () => {
+    expect(await switchboardAccountFor("aider", { now: START, ask: async () => account })).toBeNull();
   });
 });
 

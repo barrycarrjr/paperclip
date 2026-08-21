@@ -60,21 +60,40 @@ const LANE_TIMEOUT_MS = 8000;
 const ANSWER_TTL_MS = 60_000;
 
 /**
- * The four tools Switchboard can move between folders, and how each one is
- * told which folder to use. Mirrors PROVIDERS in Switchboard's own
- * core/accounts.js; kept as data here so Paperclip needs no dependency on it.
+ * The four tools Switchboard can move between folders, how each one is told
+ * which folder to use, and the name its lanes are filed under. Mirrors
+ * PROVIDERS in Switchboard's own core/accounts.js; kept as data here so
+ * Paperclip needs no dependency on it.
  *
- * `envShape` is the wrinkle worth knowing: two of these variables name the
- * account folder itself and two name the folder ABOVE it, so Gemini's
+ * `envShape` is the first wrinkle: two of these variables name the account
+ * folder itself and two name the folder ABOVE it, so Gemini's
  * `GEMINI_CLI_HOME=C:\profiles\work` means the account lives in
  * `C:\profiles\work\.gemini`. Getting that backwards points a tool at a folder
  * it will never read, which fails exactly like being signed out.
+ *
+ * `vendor` is the second, and it is the one that silently returns nothing. A
+ * Switchboard lane records BOTH names: `harness` is the tool ("claude"), and
+ * `provider` is who sells the model ("anthropic"). In shipped Switchboard up to
+ * 0.10.3, `dry-run --provider` filters on the vendor name only, so asking for
+ * `--provider claude` matches no lane at all and reads as "nothing has
+ * capacity". Verified against a real three-lane setup on 2026-08-21: `anthropic`
+ * selects the Claude lane, `openai` the Codex lane, and `claude` and `codex`
+ * select nothing. The mapping is Switchboard's own, from the line in
+ * src/ui/index.html that builds a lane from an account.
+ *
+ * A later Switchboard accepts either name. The vendor name is still what gets
+ * sent, because it is the one that works against BOTH: sending the tool name
+ * would break on every copy already installed.
  */
-const PROVIDER_ENV: Record<string, { envVar: string; envShape: "home" | "parent" }> = {
-  claude: { envVar: "CLAUDE_CONFIG_DIR", envShape: "home" },
-  codex: { envVar: "CODEX_HOME", envShape: "home" },
-  gemini: { envVar: "GEMINI_CLI_HOME", envShape: "parent" },
-  qwen: { envVar: "QWEN_HOME", envShape: "home" },
+const PROVIDER_ENV: Record<
+  string,
+  { envVar: string; envShape: "home" | "parent"; vendor: string }
+> = {
+  claude: { envVar: "CLAUDE_CONFIG_DIR", envShape: "home", vendor: "anthropic" },
+  codex: { envVar: "CODEX_HOME", envShape: "home", vendor: "openai" },
+  gemini: { envVar: "GEMINI_CLI_HOME", envShape: "parent", vendor: "google" },
+  // Switchboard has no vendor alias for Qwen; the account provider is used as-is.
+  qwen: { envVar: "QWEN_HOME", envShape: "home", vendor: "qwen" },
 };
 
 /**
@@ -315,6 +334,9 @@ export function readRegisteredAccounts(
  */
 export function parseSwitchboardLane(stdout: string): {
   laneId: string;
+  /** The tool the lane runs, e.g. "claude". This is what Paperclip matches on. */
+  harness: string;
+  /** Who sells the model, e.g. "anthropic". What `--provider` filters on. */
   provider: string;
   accountId: string;
   reason: string;
@@ -331,6 +353,7 @@ export function parseSwitchboardLane(stdout: string): {
       if (!laneId || !provider || !accountId) continue;
       return {
         laneId,
+        harness: typeof parsed.harness === "string" ? parsed.harness : "",
         provider,
         accountId,
         reason: typeof parsed.reason === "string" ? parsed.reason : "",
@@ -345,10 +368,39 @@ export function parseSwitchboardLane(stdout: string): {
 /** Cached answers per provider, so a burst of wake-ups asks once. */
 const answerCache = new Map<string, { at: number; account: SwitchboardAccount | null }>();
 
+/**
+ * The last account Switchboard actually named for each tool, kept longer than
+ * the ordinary answer.
+ *
+ * Switchboard decides a lane's health from a live quota fetch, and reports a
+ * lane as unusable when that fetch merely fails: the same signed-in account can
+ * read "Subscription has capacity" and "Quota state is unknown or unreadable"
+ * two minutes apart. When that happens for every lane of a tool, Switchboard
+ * says nothing is available, which is indistinguishable from every account
+ * being genuinely spent.
+ *
+ * Falling all the way back to the machine's inherited sign-in on that answer is
+ * the worst of the options, because that sign-in is exactly the one that may be
+ * dead - it is what caused the outage this module exists to prevent. Reusing the
+ * account Switchboard named a few minutes ago is strictly better: if it really
+ * has run out, the run fails as plan_exhausted, which Paperclip already handles
+ * by moving or parking the work, rather than as a signed-out failure, which it
+ * does not.
+ */
+const lastGoodAnswer = new Map<string, { at: number; account: SwitchboardAccount }>();
+
+/**
+ * How long a previously-named account stands in for a momentary "nothing
+ * available". Long enough to ride out a failed quota fetch, short enough that a
+ * real change of circumstances is picked up within the hour.
+ */
+const LAST_GOOD_TTL_MS = 30 * 60_000;
+
 /** Forget the memoised CLI path and every cached answer. Tests only. */
 export function resetSwitchboardCache(): void {
   resolvedCli = undefined;
   answerCache.clear();
+  lastGoodAnswer.clear();
 }
 
 /**
@@ -359,10 +411,28 @@ export function resetSwitchboardCache(): void {
  * timeout, a crash, an account it names that is not registered. All of them
  * mean the same thing to the caller, which is "sign in the way you always did",
  * and none of them may take a run down. That is why nothing here throws.
+ *
+ * The one exception is a tool Switchboard has named an account for recently:
+ * see lastGoodAnswer above for why a momentary "nothing available" is answered
+ * with that account rather than with nothing.
  */
 export async function switchboardAccountFor(
   provider: string,
-  { now = Date.now(), cwd }: { now?: number; cwd?: string } = {},
+  {
+    now = Date.now(),
+    cwd,
+    // Injected so the caching and fall-back-to-last-good rules can be tested
+    // without a Switchboard on the machine running the suite.
+    ask = askSwitchboard,
+  }: {
+    now?: number;
+    cwd?: string;
+    ask?: (
+      provider: string,
+      providerEnv: { envVar: string; envShape: "home" | "parent"; vendor: string },
+      cwd: string | undefined,
+    ) => Promise<SwitchboardAccount | null>;
+  } = {},
 ): Promise<SwitchboardAccount | null> {
   const providerEnv = PROVIDER_ENV[provider];
   if (!providerEnv) return null;
@@ -373,14 +443,27 @@ export async function switchboardAccountFor(
   const cached = answerCache.get(provider);
   if (cached && now - cached.at < ANSWER_TTL_MS) return cached.account;
 
-  const account = await askSwitchboard(provider, providerEnv, cwd);
+  const account = await ask(provider, providerEnv, cwd);
   answerCache.set(provider, { at: now, account });
-  return account;
+  if (account) {
+    lastGoodAnswer.set(provider, { at: now, account });
+    return account;
+  }
+
+  const previous = lastGoodAnswer.get(provider);
+  if (previous && now - previous.at < LAST_GOOD_TTL_MS) {
+    log.debug(
+      { provider, account: previous.account.label, agedMs: now - previous.at },
+      "Switchboard named no account this time; reusing the one it named a few minutes ago",
+    );
+    return previous.account;
+  }
+  return null;
 }
 
 async function askSwitchboard(
   provider: string,
-  providerEnv: { envVar: string; envShape: "home" | "parent" },
+  providerEnv: { envVar: string; envShape: "home" | "parent"; vendor: string },
   cwd: string | undefined,
 ): Promise<SwitchboardAccount | null> {
   const cli = switchboardCli();
@@ -388,7 +471,9 @@ async function askSwitchboard(
 
   let stdout = "";
   try {
-    const result = await exec(cli.bin, [...cli.prefixArgs, "dry-run", "--provider", provider, "--json"], {
+    // The vendor name, not the tool name: see PROVIDER_ENV. Asking for the tool
+    // name matches no lane and comes back looking like "nothing has capacity".
+    const result = await exec(cli.bin, [...cli.prefixArgs, "dry-run", "--provider", providerEnv.vendor, "--json"], {
       cwd,
       env: { ...process.env, ...cli.env },
       timeout: LANE_TIMEOUT_MS,
@@ -413,11 +498,17 @@ async function askSwitchboard(
 
   const lane = parseSwitchboardLane(stdout);
   if (!lane) return null;
-  if (lane.provider !== provider) {
-    // Asked for one tool and told about another. Paperclip does not move work
+  // Matched on the TOOL, not the vendor. The vendor filter above narrows the
+  // pool, but this is the check that actually keeps a run on the tool it was
+  // set up for, and it still holds if Switchboard ever widens what --provider
+  // accepts. An older Switchboard that does not report a harness is judged on
+  // the vendor instead rather than being refused outright.
+  const laneTool = lane.harness || (lane.provider === providerEnv.vendor ? provider : lane.provider);
+  if (laneTool !== provider) {
+    // Asked about one tool and told about another. Paperclip does not move work
     // between tools, so this is declined rather than acted on.
     log.debug(
-      { asked: provider, offered: lane.provider, laneId: lane.laneId },
+      { asked: provider, offered: laneTool, laneId: lane.laneId },
       "Switchboard offered a different tool than the one asked about; declining",
     );
     return null;
