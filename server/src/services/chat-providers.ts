@@ -12,7 +12,7 @@ import {
   forgetExpiredAccountLimits,
 } from "./adapter-account-router.js";
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
-import { resolveActiveAccount } from "./active-account.js";
+import { resolveAdapterAccountEnv } from "./active-account.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
 
 /**
@@ -923,16 +923,22 @@ const ADAPTER_PREFIX = "adapter:";
 /**
  * The environment holding the account this adapter should sign in with.
  *
- * Null when the adapter has no account list, which leaves it on whatever
- * sign-in the machine already had. Nothing here is provider-specific: the
- * adapter names the variable, and the account supplies the value.
+ * Null when the adapter has no account list AND the machine has no Switchboard
+ * to ask, which leaves it on whatever sign-in the machine already had. Nothing
+ * here is provider-specific: the adapter names the variable, and the account
+ * supplies the value.
+ *
+ * `slot` is null when Switchboard chose, because the account is registered on
+ * the machine rather than in Paperclip's own list, so there is no local slot to
+ * mark spent. Callers must treat that as "nothing to record" rather than
+ * inventing a name for it.
  */
 export async function resolveActiveAccountEnv(
   adapterType: string,
-): Promise<{ slot: string; env: Record<string, string> } | null> {
-  const account = await resolveActiveAccount(adapterType);
-  if (!account) return null;
-  return { slot: account.slot, env: { [account.envVar]: account.credential } };
+): Promise<{ slot: string | null; env: Record<string, string> } | null> {
+  const resolved = await resolveAdapterAccountEnv(adapterType);
+  if (!resolved) return null;
+  return { slot: resolved.slot, env: resolved.env };
 }
 
 /**
@@ -1334,7 +1340,7 @@ class AdapterExecuteProvider implements ChatProvider {
     // active account on, so the operator's next message lands on one with
     // room. This turn is not retried: it has already streamed its output, and
     // replaying it would duplicate what the reader has just seen.
-    if (accountEnv && result.errorFamily === "plan_exhausted") {
+    if (accountEnv?.slot && result.errorFamily === "plan_exhausted") {
       await recordAccountExhausted({
         adapterType: decoded.adapterType,
         slot: accountEnv.slot,

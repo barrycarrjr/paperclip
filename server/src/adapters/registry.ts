@@ -591,6 +591,9 @@ const claudeLocalAdapter: ServerAdapterModule = {
   // Opts this adapter into holding several accounts. A run whose subscription
   // reports its weekly window spent moves to the next account with room.
   accountCredentialEnvVar: "CLAUDE_CODE_OAUTH_TOKEN",
+  // And, when no account has been added here, lets a run ask Switchboard which
+  // of the machine's Claude sign-ins is actually usable.
+  switchboardProvider: "claude",
 };
 
 async function codexGetAuthStatus(): Promise<AdapterAuthStatus | null> {
@@ -652,6 +655,7 @@ const codexLocalAdapter: ServerAdapterModule = {
   getQuotaWindows: codexGetQuotaWindows,
   getAuthStatus: codexGetAuthStatus,
   authenticate: codexAuthenticate,
+  switchboardProvider: "codex",
 };
 
 const cursorLocalAdapter: ServerAdapterModule = {
@@ -689,6 +693,7 @@ const geminiLocalAdapter: ServerAdapterModule = {
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
   agentConfigurationDoc: geminiAgentConfigurationDoc,
+  switchboardProvider: "gemini",
 };
 
 async function aiderGetAuthStatus(): Promise<AdapterAuthStatus | null> {

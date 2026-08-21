@@ -471,6 +471,21 @@ export interface ServerAdapterModule {
    * it undefined and the adapter keeps its existing single sign-in untouched.
    */
   accountCredentialEnvVar?: string;
+
+  /**
+   * The name Switchboard, the machine's account broker, knows this tool by:
+   * "claude", "codex", "gemini" or "qwen".
+   *
+   * Declaring it lets a run with no account of its own ask Switchboard which
+   * of the machine's registered accounts for this tool is signed in and still
+   * has allowance, instead of always using whichever one the server happened
+   * to inherit at launch. Switchboard chooses only between accounts of THIS
+   * tool; work is never moved to a different tool.
+   *
+   * Leave it undefined, or have no Switchboard installed, and the adapter
+   * keeps whatever sign-in the machine already had.
+   */
+  switchboardProvider?: string;
 }
 
 // ---------------------------------------------------------------------------

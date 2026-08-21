@@ -17,6 +17,7 @@
 import { getServerAdapter } from "../adapters/index.js";
 import { activeAccount, forgetExpiredAccountLimits } from "./adapter-account-router.js";
 import { readAdapterAccountState } from "./adapter-accounts.js";
+import { switchboardAccountEnv, switchboardAccountFor } from "./switchboard.js";
 
 /**
  * The environment variable this adapter's credential travels in, or null when
@@ -54,4 +55,84 @@ export async function resolveActiveAccountCredential(
   adapterType: string,
 ): Promise<string | undefined> {
   return (await resolveActiveAccount(adapterType))?.credential;
+}
+
+/**
+ * The name Switchboard knows this adapter's tool by, or null when the adapter
+ * has not opted in.
+ */
+export function switchboardProviderFor(adapterType: string): string | null {
+  try {
+    const provider = getServerAdapter(adapterType).switchboardProvider;
+    return typeof provider === "string" && provider.trim().length > 0 ? provider.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a run's sign-in comes from, said once so the run path, the chat path
+ * and the Adapters page cannot disagree.
+ *
+ * `source` is what actually decided it, which the run log records so an
+ * operator can tell "used the account I added" from "used the one Switchboard
+ * picked" without guessing.
+ */
+export interface ResolvedAccountEnv {
+  source: "paperclip" | "switchboard";
+  /** Environment additions to put on the child. */
+  env: Record<string, string>;
+  /** Paperclip's own slot name, when this came from Paperclip's list. */
+  slot: string | null;
+  /** A human label for the run log. */
+  label: string;
+  /** Switchboard's own words for why, when it chose. */
+  reason: string | null;
+}
+
+/**
+ * Which account signs this adapter's next run in, and the environment that
+ * puts the run on it.
+ *
+ * Precedence, and the reasoning for it:
+ *   1. An account in Paperclip's own list. The operator added it here and
+ *      expects it used; Paperclip's failover already moves between these when
+ *      one runs out.
+ *   2. Switchboard's answer. Only reached when Paperclip has no list of its
+ *      own, so this never overrules an explicit local choice - it fills the
+ *      case where Paperclip would otherwise use whichever sign-in the server
+ *      inherited at launch, healthy or not.
+ *   3. Null, meaning change nothing, which is how an install with neither
+ *      keeps working exactly as before.
+ *
+ * A credential pinned onto the agent itself outranks all of this, and is
+ * checked by the caller, which is the only place that knows the agent.
+ */
+export async function resolveAdapterAccountEnv(
+  adapterType: string,
+  now = Date.now(),
+): Promise<ResolvedAccountEnv | null> {
+  const own = await resolveActiveAccount(adapterType, now);
+  if (own) {
+    return {
+      source: "paperclip",
+      env: { [own.envVar]: own.credential },
+      slot: own.slot,
+      label: own.label,
+      reason: null,
+    };
+  }
+
+  const provider = switchboardProviderFor(adapterType);
+  if (!provider) return null;
+  const chosen = await switchboardAccountFor(provider, { now });
+  if (!chosen) return null;
+
+  return {
+    source: "switchboard",
+    env: switchboardAccountEnv(chosen),
+    slot: null,
+    label: chosen.label,
+    reason: chosen.reason,
+  };
 }

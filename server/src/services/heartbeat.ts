@@ -112,14 +112,13 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-
 import { recoveryService } from "./recovery/service.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
 import {
-  activeAccount,
   applyAccountSwitch,
   accountSwitchDecision,
   describeAccounts,
   forgetExpiredAccountLimits,
 } from "./adapter-account-router.js";
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
-import { accountCredentialEnvVarFor } from "./active-account.js";
+import { accountCredentialEnvVarFor, resolveAdapterAccountEnv } from "./active-account.js";
 import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
@@ -5135,24 +5134,42 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // to a specific account on purpose and must never be re-routed. And with no
     // accounts configured this does nothing at all, which is what keeps an
     // install that has never seen this feature on its existing sign-in.
+    //
+    // Second source, reached only when Paperclip has no account of its own:
+    // Switchboard, the machine's account broker, which knows which of the
+    // machine's sign-ins for this tool is actually usable. Without it the run
+    // uses whichever sign-in the server inherited when it started, and a dead
+    // one stays dead until a person notices - which is the twelve-hour outage
+    // recorded at the top of services/switchboard.ts.
     const accountEnvVar = accountCredentialEnvVarFor(agent.adapterType);
-    if (accountEnvVar && !agentHasOwnCredential(agent.adapterConfig, accountEnvVar)) {
-      const accountState = forgetExpiredAccountLimits(
-        await readAdapterAccountState(agent.adapterType),
-        Date.now(),
-      );
-      const account = activeAccount(accountState);
-      if (account) {
+    const agentPinsItsOwn = Boolean(
+      accountEnvVar && agentHasOwnCredential(agent.adapterConfig, accountEnvVar),
+    );
+    if (!agentPinsItsOwn) {
+      const resolved = await resolveAdapterAccountEnv(agent.adapterType);
+      if (resolved) {
         runtimeConfig = {
           ...runtimeConfig,
           env: {
             ...parseObject((runtimeConfig as Record<string, unknown>).env),
-            [accountEnvVar]: account.token,
+            ...resolved.env,
           },
         } as typeof runtimeConfig;
         // Recorded so the failover knows which account actually failed, and so
         // a crashed run still says which subscription it was spending.
-        context.adapterAccountSlot = account.slot;
+        if (resolved.slot) context.adapterAccountSlot = resolved.slot;
+        if (resolved.source === "switchboard") {
+          context.switchboardAccount = resolved.label;
+          logger.info(
+            {
+              agentId: agent.id,
+              adapterType: agent.adapterType,
+              account: resolved.label,
+              reason: resolved.reason,
+            },
+            "Switchboard chose the account for this run",
+          );
+        }
       }
     }
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
