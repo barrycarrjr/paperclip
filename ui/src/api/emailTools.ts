@@ -18,6 +18,23 @@ export interface MailHeader {
   unseen: boolean;
 }
 
+export interface EmailAttachmentMeta {
+  name: string;
+  mime: string;
+  size: number;
+  partId: string;
+  /** True for parts the HTML body already shows (cid images). Hidden from the
+   *  attachment list. Older plugin builds don't send the flag. */
+  inline?: boolean;
+}
+
+/** What the send actions accept per attached file. */
+export interface EmailSendAttachment {
+  name: string;
+  mime?: string;
+  contentBase64: string;
+}
+
 export interface ParsedEmailMessage {
   uid: number;
   messageId: string | null;
@@ -32,7 +49,7 @@ export interface ParsedEmailMessage {
   text: string;
   html: string;
   markdown: string;
-  attachments: Array<{ name: string; mime: string; size: number; partId: string }>;
+  attachments: EmailAttachmentMeta[];
 }
 
 export interface ListMessagesOptions {
@@ -112,6 +129,21 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    getAttachment: async (
+      mailbox: string,
+      folder: string,
+      uid: number,
+      partId: string,
+    ): Promise<{ name: string; mime: string; size: number; contentBase64: string }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "email.get-attachment",
+        { companyId, mailbox, folder, uid, partId },
+        companyId,
+      );
+      return extract(result);
+    },
+
     searchMessages: async (opts: SearchMessagesOptions): Promise<SearchMessagesResult> => {
       const result = await pluginsApi.bridgeGetData(
         pluginId,
@@ -186,7 +218,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       uid: number,
       folder: string,
       body: string,
-      opts?: { body_html?: string; replyAll?: boolean },
+      opts?: { body_html?: string; replyAll?: boolean; attachments?: EmailSendAttachment[] },
     ): Promise<{ ok: boolean; messageId: string }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,
@@ -202,7 +234,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       to: string | string[],
       subject: string,
       body: string,
-      opts?: { cc?: string; bcc?: string; body_html?: string },
+      opts?: { cc?: string; bcc?: string; body_html?: string; attachments?: EmailSendAttachment[] },
     ): Promise<{ ok: boolean; messageId: string }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,

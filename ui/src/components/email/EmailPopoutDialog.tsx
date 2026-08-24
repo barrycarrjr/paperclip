@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
-  FolderOpen,
   Forward,
   Loader2,
   Mail,
@@ -27,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { makeEmailToolsApi, type MailHeader } from "../../api/emailTools";
+import { AttachmentChipList } from "../attachments/AttachmentChipList";
+import { visibleEmailAttachments } from "../../lib/attachments";
 import { agentsApi } from "../../api/agents";
 import { useEmailMessageActions, type EmailMessageActionHooks } from "./useEmailMessageActions";
 import { usePrintEmail } from "./usePrintEmail";
@@ -336,15 +337,30 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
             </ScrollArea>
           )}
 
-          {message && message.attachments.length > 0 && (
+          {message && visibleEmailAttachments(message.attachments).length > 0 && (
             <div className="shrink-0 space-y-1 border-t border-border px-5 py-2">
               <div className="text-xs font-medium text-muted-foreground">Attachments</div>
-              {message.attachments.map((a) => (
-                <div key={a.partId} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <FolderOpen className="h-3 w-3" />
-                  {a.name} ({Math.round(a.size / 1024)}KB)
-                </div>
-              ))}
+              <AttachmentChipList
+                attachments={visibleEmailAttachments(message.attachments).map((a) => ({
+                  key: a.partId,
+                  name: a.name,
+                  mime: a.mime,
+                  size: a.size,
+                }))}
+                fetchContent={async (att) => {
+                  const fetched = await api!.getAttachment(
+                    request!.mailbox,
+                    request!.folder,
+                    request!.uid,
+                    att.key,
+                  );
+                  return {
+                    name: fetched.name,
+                    mime: fetched.mime,
+                    contentBase64: fetched.contentBase64,
+                  };
+                }}
+              />
             </div>
           )}
         </div>

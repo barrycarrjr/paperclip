@@ -49,10 +49,21 @@ import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { useHelpScoutPlugin } from "../hooks/useHelpScoutPlugin";
 import {
   makeEmailToolsApi,
+  type EmailSendAttachment,
   type MailHeader,
   type ParsedEmailMessage,
   type SearchHit as EmailSearchHit,
 } from "../api/emailTools";
+import { AttachmentChipList } from "../components/attachments/AttachmentChipList";
+import {
+  AttachmentComposer,
+  useComposeAttachments,
+} from "../components/attachments/AttachmentComposer";
+import {
+  EMAIL_ATTACHMENT_MAX_BYTES,
+  toEmailSendAttachments,
+  visibleEmailAttachments,
+} from "../lib/attachments";
 import { makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
 import { MailSearchBar } from "../components/MailSearchBar";
 import {
@@ -501,6 +512,9 @@ export function Email() {
   const [replyAll, setReplyAll] = useState(false);
   const [replyHasContent, setReplyHasContent] = useState(false);
   const replyComposerRef = useRef<DraftFieldHandle>(null);
+  // Files picked for the inline reply. Not persisted like the text drafts:
+  // file contents don't survive a refresh, and a stale chip would send nothing.
+  const replyAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
   // Steering text for AI Draft. Deliberately separate from the reply body: it
   // survives drafting so a second click refines rather than starting over.
   const [draftInstructions, setDraftInstructions] = useState("");
@@ -533,6 +547,7 @@ export function Email() {
   // Steering text for the compose dialog's AI Draft. Only offered for "new" —
   // rewriting a forward would mangle the message being forwarded.
   const [composeInstructions, setComposeInstructions] = useState("");
+  const composeAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
 
   // ── Available LLM models (for AI Draft picker) ────────────────────────────
 
@@ -783,6 +798,12 @@ export function Email() {
     enabled: !!emailApi && !!selectedMailbox && selectedUid !== null,
   });
 
+  // A different message means a different reply, so picked files must not
+  // ride along to the next recipient.
+  useEffect(() => {
+    replyAttachments.clear();
+  }, [selectedMailbox, selectedUid, replyAttachments.clear]);
+
   // Open helpers — consolidate the multiple entry points (row click, inline
   // detail-pane buttons, pencil "compose new") so each one consistently loads
   // any persisted draft instead of clobbering it. Each helper just pre-seeds
@@ -818,6 +839,17 @@ export function Email() {
     setComposeToHasContent(false);
     setComposeSubjectHasContent(fwdSubj.trim().length > 0);
     setComposeBodyHasContent(body.trim().length > 0);
+    composeAttachments.clear();
+    // A forward carries the original files along. They arrive as chips the
+    // operator can remove before sending; the bytes come from the mailbox,
+    // not from disk.
+    for (const a of visibleEmailAttachments(msg.attachments)) {
+      composeAttachments.addRemote({ name: a.name, mime: a.mime, size: a.size }, () =>
+        emailApi!
+          .getAttachment(selectedMailbox!, selectedFolder, msg.uid, a.partId)
+          .then((fetched) => fetched.contentBase64),
+      );
+    }
     setComposeOpen(true);
   }
 
@@ -832,6 +864,7 @@ export function Email() {
     setComposeSubjectHasContent(subject.trim().length > 0);
     setComposeBodyHasContent(body.trim().length > 0);
     setComposeInstructions("");
+    composeAttachments.clear();
     setComposeOpen(true);
   }
 
@@ -1062,8 +1095,21 @@ export function Email() {
   });
 
   const replyMutation = useMutation({
-    mutationFn: async ({ uid, body, rAll }: { uid: number; body: string; rAll: boolean }) => {
-      await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, { replyAll: rAll });
+    mutationFn: async ({
+      uid,
+      body,
+      rAll,
+      attachments,
+    }: {
+      uid: number;
+      body: string;
+      rAll: boolean;
+      attachments?: EmailSendAttachment[];
+    }) => {
+      await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, {
+        replyAll: rAll,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      });
       // Replied = taken care of. Mark read so it disappears from the unread view
       // (both here and in Outlook).
       try { await emailApi!.markRead(selectedMailbox!, uid, selectedFolder); } catch {}
@@ -1078,6 +1124,7 @@ export function Email() {
       setReplyOpen(false);
       setReplyHasContent(false);
       setDraftInstructions("");
+      replyAttachments.clear();
       showToast("Reply sent");
     },
   });
@@ -1157,8 +1204,20 @@ export function Email() {
   }
 
   const composeMutation = useMutation({
-    mutationFn: async ({ to, subject, body }: { to: string; subject: string; body: string }) => {
-      await emailApi!.sendNew(selectedMailbox!, to, subject, body);
+    mutationFn: async ({
+      to,
+      subject,
+      body,
+      attachments,
+    }: {
+      to: string;
+      subject: string;
+      body: string;
+      attachments?: EmailSendAttachment[];
+    }) => {
+      await emailApi!.sendNew(selectedMailbox!, to, subject, body, {
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      });
     },
     onSuccess: () => {
       if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
@@ -1175,6 +1234,7 @@ export function Email() {
       setComposeInstructions("");
       setComposeMode("new");
       setComposeSourceUid(null);
+      composeAttachments.clear();
       showToast("Message sent");
     },
   });
@@ -2371,18 +2431,31 @@ export function Email() {
                       </div>
                     </ScrollArea>
                   )}
-                  {fullMessage.attachments.length > 0 && (
+                  {visibleEmailAttachments(fullMessage.attachments).length > 0 && (
                     <div className="shrink-0 px-4 py-2 border-t border-border space-y-1">
                       <div className="text-xs font-medium text-muted-foreground">Attachments</div>
-                      {fullMessage.attachments.map((a) => (
-                        <div
-                          key={a.partId}
-                          className="text-xs text-muted-foreground flex items-center gap-1.5"
-                        >
-                          <FolderOpen className="h-3 w-3" />
-                          {a.name} ({Math.round(a.size / 1024)}KB)
-                        </div>
-                      ))}
+                      <AttachmentChipList
+                        attachments={visibleEmailAttachments(fullMessage.attachments).map((a) => ({
+                          key: a.partId,
+                          name: a.name,
+                          mime: a.mime,
+                          size: a.size,
+                        }))}
+                        fetchContent={async (att) => {
+                          const fetched = await emailApi!.getAttachment(
+                            selectedMailbox!,
+                            selectedFolder,
+                            fullMessage.uid,
+                            att.key,
+                          );
+                          return {
+                            name: fetched.name,
+                            mime: fetched.mime,
+                            contentBase64: fetched.contentBase64,
+                          };
+                        }}
+                        onError={(message) => showToast(message)}
+                      />
                     </div>
                   )}
                 </div>
@@ -2430,6 +2503,7 @@ export function Email() {
                       className="min-h-[100px] text-sm resize-none"
                       onContentChange={setReplyHasContent}
                     />
+                    <AttachmentComposer state={replyAttachments} />
                     <DraftInstructionsField
                       value={draftInstructions}
                       onChange={setDraftInstructions}
@@ -2467,11 +2541,20 @@ export function Email() {
                       </Tooltip>
                       <Button
                         size="sm"
-                        disabled={!replyHasContent || replyMutation.isPending}
+                        disabled={
+                          !replyHasContent ||
+                          replyMutation.isPending ||
+                          !replyAttachments.allReady
+                        }
                         onClick={() => {
                           const body = replyComposerRef.current?.getValue().trim() ?? "";
                           if (selectedUid && body) {
-                            replyMutation.mutate({ uid: selectedUid, body, rAll: replyAll });
+                            replyMutation.mutate({
+                              uid: selectedUid,
+                              body,
+                              rAll: replyAll,
+                              attachments: toEmailSendAttachments(replyAttachments.attachments),
+                            });
                           }
                         }}
                       >
@@ -2557,6 +2640,7 @@ export function Email() {
                 onContentChange={setComposeBodyHasContent}
               />
             </div>
+            <AttachmentComposer state={composeAttachments} />
             {composeMode === "new" && (
               <DraftInstructionsField
                 value={composeInstructions}
@@ -2607,14 +2691,20 @@ export function Email() {
                 !composeToHasContent ||
                 !composeSubjectHasContent ||
                 !composeBodyHasContent ||
-                composeMutation.isPending
+                composeMutation.isPending ||
+                !composeAttachments.allReady
               }
               onClick={() => {
                 const to = composeToRef.current?.getValue().trim() ?? "";
                 const subject = composeSubjectRef.current?.getValue().trim() ?? "";
                 const body = composeBodyRef.current?.getValue().trim() ?? "";
                 if (to && subject && body) {
-                  composeMutation.mutate({ to, subject, body });
+                  composeMutation.mutate({
+                    to,
+                    subject,
+                    body,
+                    attachments: toEmailSendAttachments(composeAttachments.attachments),
+                  });
                 }
               }}
             >

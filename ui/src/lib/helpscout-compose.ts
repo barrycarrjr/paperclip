@@ -2,6 +2,10 @@ export interface ComposeDraft {
   to: string;
   subject: string;
   body: string;
+  /** False while picked files are still being read into base64. Blocks send
+   *  so a half-read attachment can't be silently dropped from the message.
+   *  Omitted means there are no attachments in play. */
+  attachmentsReady?: boolean;
 }
 
 /**
@@ -17,6 +21,7 @@ export function isComposeReady(draft: ComposeDraft): boolean {
   return (
     EMAIL.test(draft.to.trim()) &&
     draft.subject.trim().length > 0 &&
-    draft.body.trim().length > 0
+    draft.body.trim().length > 0 &&
+    (draft.attachmentsReady ?? true)
   );
 }

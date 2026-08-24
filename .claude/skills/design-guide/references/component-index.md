@@ -318,6 +318,32 @@ All follow the property row pattern: `text-xs text-muted-foreground` label on le
 **File:** `AgentConfigForm.tsx`
 **Usage:** Full agent creation/editing form with adapter type selection.
 
+### AttachmentChipList
+
+**File:** `attachments/AttachmentChipList.tsx`
+**Props:** `attachments: ReceivedAttachment[]`, `fetchContent`, `onError?`, `className?`
+**Usage:** Received-attachment chips with click-to-download. Fetches the file bytes through the given bridge call on click, shows a per-chip spinner, and turns the chip destructive on failure. Used by the Email page, the email pop-out, and the Help Scout thread view.
+
+```tsx
+<AttachmentChipList
+  attachments={[{ key: "2", name: "invoice.pdf", mime: "application/pdf", size: 20480 }]}
+  fetchContent={async (att) => api.getAttachment(...)}
+  onError={showToast}
+/>
+```
+
+### AttachmentComposer (+ useComposeAttachments)
+
+**File:** `attachments/AttachmentComposer.tsx`
+**Props:** `state: ComposeAttachmentsState` (from `useComposeAttachments(maxBytes)`), `disabled?`, `className?`
+**Usage:** "Attach files" control for outgoing mail: multi-file picker plus a chip per file with read status, size, and a remove button. Files are read to base64 on pick; over-limit files become error chips and are never sent. Gate the send button on `state.allReady`. Pure state transitions live in `ui/src/lib/attachments.ts`.
+
+```tsx
+const attachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
+<AttachmentComposer state={attachments} />
+<Button disabled={!attachments.allReady} onClick={() => send(toEmailSendAttachments(attachments.attachments))} />
+```
+
 ---
 
 ## Utilities & Hooks

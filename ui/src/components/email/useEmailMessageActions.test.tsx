@@ -14,6 +14,7 @@ const mockApi = vi.hoisted(() => ({
   moveMessage: vi.fn(),
   sendReply: vi.fn(),
   sendNew: vi.fn(),
+  getAttachment: vi.fn(),
 }));
 
 vi.mock("../../api/emailTools", () => ({
@@ -106,6 +107,12 @@ beforeEach(() => {
   mockApi.moveMessage.mockResolvedValue({ ok: true, movedCount: 1 });
   mockApi.sendReply.mockResolvedValue({ ok: true, messageId: "<r1>" });
   mockApi.sendNew.mockResolvedValue({ ok: true, messageId: "<f1>" });
+  mockApi.getAttachment.mockResolvedValue({
+    name: "numbers.pdf",
+    mime: "application/pdf",
+    size: 5,
+    contentBase64: "aGVsbG8=",
+  });
 });
 
 afterEach(() => {
@@ -205,6 +212,52 @@ describe("useEmailMessageActions", () => {
     await settle();
 
     expect(mockApi.sendNew.mock.calls[0][2]).toBe("Fwd: Quarterly numbers");
+    // No attachments on the original means none are fetched or sent.
+    expect(mockApi.getAttachment).not.toHaveBeenCalled();
+    expect(mockApi.sendNew.mock.calls[0][4]).toBeUndefined();
+  });
+
+  it("carries the original attachments along on a forward, skipping inline parts", async () => {
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+    const msg = parsed({
+      attachments: [
+        { name: "numbers.pdf", mime: "application/pdf", size: 5, partId: "att-0" },
+        { name: "logo.png", mime: "image/png", size: 3, partId: "att-1", inline: true },
+      ],
+    });
+
+    await act(async () => {
+      actions.current!.forward.mutate({ msg, to: "c@example.com", note: "" });
+    });
+    await settle();
+
+    expect(mockApi.getAttachment).toHaveBeenCalledTimes(1);
+    expect(mockApi.getAttachment).toHaveBeenCalledWith("personal", "INBOX", 42, "att-0");
+    expect(mockApi.sendNew.mock.calls[0][4]).toEqual({
+      attachments: [
+        { name: "numbers.pdf", mime: "application/pdf", contentBase64: "aGVsbG8=" },
+      ],
+    });
+    expect(onToast).toHaveBeenCalledWith("Forwarded with 1 attachment");
+  });
+
+  it("fails the forward instead of sending without a file it could not fetch", async () => {
+    mockApi.getAttachment.mockRejectedValue(new Error("imap down"));
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+    const msg = parsed({
+      attachments: [{ name: "numbers.pdf", mime: "application/pdf", size: 5, partId: "att-0" }],
+    });
+
+    await act(async () => {
+      actions.current!.forward.mutate({ msg, to: "c@example.com", note: "" });
+    });
+    await settle();
+
+    expect(mockApi.sendNew).not.toHaveBeenCalled();
+    expect(actions.current!.forward.isError).toBe(true);
+    expect(onToast).toHaveBeenCalledWith('Could not fetch attachment "numbers.pdf": imap down');
   });
 
   it("creates an issue, wakes the agent and marks read when handing off", async () => {

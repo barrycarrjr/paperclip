@@ -30,6 +30,17 @@ export interface HSConversationSummary {
   preview?: string | null;
 }
 
+/** Raw attachment row as Help Scout embeds it on a thread. Kept loose, since
+ *  the payload is theirs; `threadAttachments` in lib/helpscout-attachments.ts
+ *  normalizes it for rendering. */
+export interface HSThreadAttachment {
+  id?: number | string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  [key: string]: unknown;
+}
+
 export interface HSThread {
   id: number;
   type: string;
@@ -43,6 +54,14 @@ export interface HSThread {
    *  assigned, moved) and carry no body. `text` is Help Scout's own readable
    *  summary; `type` is an internal slug like `changed-ticket-status`. */
   action?: { type?: string; text?: string };
+  _embedded?: { attachments?: HSThreadAttachment[] };
+}
+
+/** What the send-reply and create-conversation actions accept per file. */
+export interface HSSendAttachment {
+  fileName: string;
+  mimeType: string;
+  contentBase64: string;
 }
 
 /** Full conversation as Help Scout returns it; we keep this loose because the
@@ -140,6 +159,20 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    getAttachment: async (
+      accountKey: string,
+      conversationId: string,
+      attachmentId: string,
+    ): Promise<{ fileName: string | null; mimeType: string | null; contentBase64: string }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "helpscout.get-attachment",
+        { companyId, accountKey, conversationId, attachmentId },
+        companyId,
+      );
+      return extract(result);
+    },
+
     /** Start a brand new conversation — the mail view's "compose". Needs
      *  help-scout plugin >= 0.5.16; older builds have no such action. */
     createConversation: async (
@@ -151,6 +184,7 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
         body: string;
         firstName?: string;
         lastName?: string;
+        attachments?: HSSendAttachment[];
       },
     ): Promise<{ ok: true; id: string | null }> => {
       const result = await pluginsApi.bridgePerformAction(
@@ -167,6 +201,9 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
             firstName: input.firstName,
             lastName: input.lastName,
           },
+          ...(input.attachments && input.attachments.length > 0
+            ? { attachments: input.attachments }
+            : {}),
         },
         companyId,
       );
@@ -177,7 +214,13 @@ export function makeHelpScoutBridgeApi(pluginId: string, companyId: string) {
       accountKey: string,
       conversationId: string,
       body: string,
-      opts?: { customerEmail?: string; cc?: string[]; bcc?: string[]; imported?: boolean },
+      opts?: {
+        customerEmail?: string;
+        cc?: string[];
+        bcc?: string[];
+        imported?: boolean;
+        attachments?: HSSendAttachment[];
+      },
     ): Promise<{ ok: true }> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,

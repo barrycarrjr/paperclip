@@ -126,6 +126,12 @@ import { DraftInstructionsField } from "@/components/DraftInstructionsField";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
 import { IssueReferencePill } from "@/components/IssueReferencePill";
+import { AttachmentChipList } from "@/components/attachments/AttachmentChipList";
+import {
+  AttachmentComposer,
+  useComposeAttachments,
+} from "@/components/attachments/AttachmentComposer";
+import { EMAIL_ATTACHMENT_MAX_BYTES } from "@/lib/attachments";
 
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
@@ -193,6 +199,7 @@ export function DesignGuide() {
   ]);
   const [mailSearch, setMailSearch] = useState("");
   const [mailSearchSummary, setMailSearchSummary] = useState<string | null>(null);
+  const demoAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
 
   return (
     <div className="space-y-10 max-w-4xl">
@@ -231,7 +238,8 @@ export function DesignGuide() {
                 "StatusBadge", "StatusIcon", "PriorityIcon", "EntityRow", "EmptyState", "MetricCard",
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
-                "ActivityRow", "PageTabBar", "ApprovalCard",
+                "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
+                "AttachmentComposer",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -584,6 +592,39 @@ export function DesignGuide() {
                 />
               </div>
             </div>
+          </SubSection>
+        </div>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  ATTACHMENTS                                                  */}
+      {/* ============================================================ */}
+      <Section title="Attachments">
+        <div className="grid gap-6 md:grid-cols-2">
+          <SubSection title="AttachmentChipList (received, click to download)">
+            <AttachmentChipList
+              attachments={[
+                { key: "1", name: "invoice-1042.pdf", mime: "application/pdf", size: 204800 },
+                { key: "2", name: "artwork-final.png", mime: "image/png", size: 3 * 1024 * 1024 },
+              ]}
+              fetchContent={async (att) => ({
+                name: att.name,
+                mime: "text/plain",
+                // "Sample attachment content", since the showcase has no bridge to fetch from.
+                contentBase64: "U2FtcGxlIGF0dGFjaG1lbnQgY29udGVudA==",
+              })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Fetches the bytes through a bridge call on click; spinner per chip, destructive
+              styling on failure.
+            </p>
+          </SubSection>
+          <SubSection title="AttachmentComposer (outgoing, pick and remove)">
+            <AttachmentComposer state={demoAttachments} />
+            <p className="text-xs text-muted-foreground">
+              Multi-file picker with per-file read status. Over-limit files become error chips
+              and are never sent; gate send on <code className="font-mono">state.allReady</code>.
+            </p>
           </SubSection>
         </div>
       </Section>

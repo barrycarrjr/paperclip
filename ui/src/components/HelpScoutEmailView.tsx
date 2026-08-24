@@ -26,9 +26,14 @@ import {
   makeHelpScoutBridgeApi,
   type HSConversationSummary,
   type HSConversationFull,
+  type HSSendAttachment,
   type HSStatusFilter,
   type HSThread,
 } from "../api/helpScoutBridge";
+import { AttachmentChipList } from "./attachments/AttachmentChipList";
+import { AttachmentComposer, useComposeAttachments } from "./attachments/AttachmentComposer";
+import { HELPSCOUT_ATTACHMENT_MAX_BYTES, toHelpScoutSendAttachments } from "../lib/attachments";
+import { threadAttachments } from "../lib/helpscout-attachments";
 import { emailDraftsApi } from "../api/emailDrafts";
 import type { AvailableModel } from "../api/chat";
 import { DraftModelSelect } from "./DraftModelSelect";
@@ -157,6 +162,8 @@ export function HelpScoutEmailView({
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [composeInstructions, setComposeInstructions] = useState("");
+  const replyAttachments = useComposeAttachments(HELPSCOUT_ATTACHMENT_MAX_BYTES);
+  const composeAttachments = useComposeAttachments(HELPSCOUT_ATTACHMENT_MAX_BYTES);
 
   function showToast(t: string) {
     setToast(t);
@@ -372,20 +379,31 @@ export function HelpScoutEmailView({
     }
   }, [full, pendingReplyOnOpen]);
 
-  // Draft instructions belong to one conversation — "tell them Q3 for guest
-  // checkout" must never carry over to the next customer.
+  // Draft instructions and picked files belong to one conversation: "tell
+  // them Q3 for guest checkout" (or its attachment) must never carry over to
+  // the next customer.
   useEffect(() => {
     setDraftInstructions("");
-  }, [selectedConvId]);
+    replyAttachments.clear();
+  }, [selectedConvId, replyAttachments.clear]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   const replyMutation = useMutation({
-    mutationFn: (body: string) => api.sendReply(accountKey, selectedConvId!, body),
+    mutationFn: (input: { body: string; attachments?: HSSendAttachment[] }) =>
+      api.sendReply(
+        accountKey,
+        selectedConvId!,
+        input.body,
+        input.attachments && input.attachments.length > 0
+          ? { attachments: input.attachments }
+          : undefined,
+      ),
     onSuccess: () => {
       setReplyOpen(false);
       setReplyBody("");
       setDraftInstructions("");
+      replyAttachments.clear();
       showToast("Reply sent.");
       invalidateFull();
       invalidateList();
@@ -425,14 +443,19 @@ export function HelpScoutEmailView({
   }
 
   const composeMutation = useMutation({
-    mutationFn: (input: { to: string; subject: string; body: string }) =>
-      api.createConversation(accountKey, { ...input, mailboxId }),
+    mutationFn: (input: {
+      to: string;
+      subject: string;
+      body: string;
+      attachments?: HSSendAttachment[];
+    }) => api.createConversation(accountKey, { ...input, mailboxId }),
     onSuccess: (result) => {
       setComposeOpen(false);
       setComposeTo("");
       setComposeSubject("");
       setComposeBody("");
       setComposeInstructions("");
+      composeAttachments.clear();
       showToast("Message sent.");
       invalidateList();
       // Help Scout files a new conversation as "active"; jump straight to it so
@@ -473,6 +496,7 @@ export function HelpScoutEmailView({
     setComposeSubject("");
     setComposeBody("");
     setComposeInstructions("");
+    composeAttachments.clear();
     setComposeOpen(true);
   }
 
@@ -480,6 +504,7 @@ export function HelpScoutEmailView({
     to: composeTo,
     subject: composeSubject,
     body: composeBody,
+    attachmentsReady: composeAttachments.allReady,
   });
 
   const noteMutation = useMutation({
@@ -998,7 +1023,13 @@ export function HelpScoutEmailView({
                 </div>
 
                 <ScrollArea className="flex-1 min-h-0">
-                  <ThreadList full={full} />
+                  <ThreadList
+                    full={full}
+                    fetchAttachment={(attachmentId) =>
+                      api.getAttachment(accountKey, selectedConvId!, attachmentId)
+                    }
+                    onAttachmentError={showToast}
+                  />
                 </ScrollArea>
 
                 {replyOpen && (
@@ -1018,6 +1049,7 @@ export function HelpScoutEmailView({
                         className="text-sm resize-none field-sizing-fixed"
                         style={{ height: composerHeight }}
                       />
+                      <AttachmentComposer state={replyAttachments} />
                       <DraftInstructionsField
                         value={draftInstructions}
                         onChange={setDraftInstructions}
@@ -1064,8 +1096,19 @@ export function HelpScoutEmailView({
                         </Button>
                         <Button
                           size="sm"
-                          disabled={!replyBody.trim() || replyMutation.isPending}
-                          onClick={() => replyMutation.mutate(replyBody)}
+                          disabled={
+                            !replyBody.trim() ||
+                            replyMutation.isPending ||
+                            !replyAttachments.allReady
+                          }
+                          onClick={() =>
+                            replyMutation.mutate({
+                              body: replyBody,
+                              attachments: toHelpScoutSendAttachments(
+                                replyAttachments.attachments,
+                              ),
+                            })
+                          }
                         >
                           {replyMutation.isPending ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1162,6 +1205,7 @@ export function HelpScoutEmailView({
                 className="min-h-[180px] max-h-[400px] text-sm resize-none overflow-y-auto"
               />
             </div>
+            <AttachmentComposer state={composeAttachments} />
             <DraftInstructionsField
               value={composeInstructions}
               onChange={setComposeInstructions}
@@ -1208,6 +1252,7 @@ export function HelpScoutEmailView({
                   to: composeTo.trim(),
                   subject: composeSubject.trim(),
                   body: composeBody.trim(),
+                  attachments: toHelpScoutSendAttachments(composeAttachments.attachments),
                 })
               }
             >
@@ -1351,7 +1396,20 @@ function ConversationListColumn({
   );
 }
 
-function ThreadList({ full }: { full: HSConversationFull }) {
+/** Bridge fetch for one thread attachment's bytes, wired by the parent view. */
+type FetchThreadAttachment = (
+  attachmentId: string,
+) => Promise<{ fileName: string | null; mimeType: string | null; contentBase64: string }>;
+
+function ThreadList({
+  full,
+  fetchAttachment,
+  onAttachmentError,
+}: {
+  full: HSConversationFull;
+  fetchAttachment: FetchThreadAttachment;
+  onAttachmentError: (message: string) => void;
+}) {
   const threads = (full._embedded?.threads ?? []) as HSThread[];
   if (threads.length === 0) {
     return (
@@ -1364,19 +1422,33 @@ function ThreadList({ full }: { full: HSConversationFull }) {
   return (
     <div className="p-4 space-y-4">
       {threads.map((t) => (
-        <ThreadCard key={t.id} thread={t} />
+        <ThreadCard
+          key={t.id}
+          thread={t}
+          fetchAttachment={fetchAttachment}
+          onAttachmentError={onAttachmentError}
+        />
       ))}
     </div>
   );
 }
 
-function ThreadCard({ thread }: { thread: HSThread }) {
+function ThreadCard({
+  thread,
+  fetchAttachment,
+  onAttachmentError,
+}: {
+  thread: HSThread;
+  fetchAttachment: FetchThreadAttachment;
+  onAttachmentError: (message: string) => void;
+}) {
   const kind = thread.type;
   const author = formatAuthor(thread);
   const ts = thread.createdAt ? new Date(thread.createdAt) : null;
   const body = thread.body || thread.text || "";
   const isNote = kind === "note";
   const isReply = kind === "reply" || kind === "message";
+  const attachments = threadAttachments(thread);
 
   // A lineitem is a state change, not a message — it has no body by design.
   // Render it the way Help Scout does: a thin timeline marker, not a card.
@@ -1417,6 +1489,26 @@ function ThreadCard({ thread }: { thread: HSThread }) {
         className="rounded bg-white text-zinc-900 [color-scheme:light] p-2 text-xs whitespace-pre-wrap break-words overflow-x-auto"
         dangerouslySetInnerHTML={renderThreadBody(body)}
       />
+      {attachments.length > 0 && (
+        <AttachmentChipList
+          className="mt-2"
+          attachments={attachments.map((a) => ({
+            key: a.id,
+            name: a.filename,
+            mime: a.mimeType,
+            size: a.size,
+          }))}
+          fetchContent={async (att) => {
+            const fetched = await fetchAttachment(att.key);
+            return {
+              name: fetched.fileName ?? att.name,
+              mime: fetched.mimeType ?? att.mime ?? "application/octet-stream",
+              contentBase64: fetched.contentBase64,
+            };
+          }}
+          onError={onAttachmentError}
+        />
+      )}
     </div>
   );
 }

@@ -31,4 +31,12 @@ describe("isComposeReady", () => {
   it("requires a body", () => {
     expect(isComposeReady({ ...ok, body: "" })).toBe(false);
   });
+
+  it("blocks send while attachments are still reading", () => {
+    expect(isComposeReady({ ...ok, attachmentsReady: false })).toBe(false);
+  });
+
+  it("allows send once attachments are settled", () => {
+    expect(isComposeReady({ ...ok, attachmentsReady: true })).toBe(true);
+  });
 });

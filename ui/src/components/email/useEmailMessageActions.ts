@@ -1,6 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { makeEmailToolsApi, type MailHeader, type ParsedEmailMessage } from "../../api/emailTools";
+import {
+  makeEmailToolsApi,
+  type EmailSendAttachment,
+  type MailHeader,
+  type ParsedEmailMessage,
+} from "../../api/emailTools";
+import { visibleEmailAttachments } from "../../lib/attachments";
 import { issuesApi } from "../../api/issues";
 import { agentsApi } from "../../api/agents";
 
@@ -177,11 +183,40 @@ export function useEmailMessageActions(
         .filter((line) => line !== null)
         .join("\n");
       const subject = /^fwd:/i.test(msg.subject) ? msg.subject : `Fwd: ${msg.subject}`;
-      return api.sendNew(target.mailbox, to, subject, quoted);
+      // A forward carries the original files along, so fetch each one from
+      // the mailbox first. A failed fetch fails the whole forward: sending
+      // the message without a file it claims to carry is worse than an error
+      // the operator can retry.
+      const attachments: EmailSendAttachment[] = [];
+      for (const meta of visibleEmailAttachments(msg.attachments)) {
+        let fetched;
+        try {
+          fetched = await api.getAttachment(target.mailbox, target.folder, msg.uid, meta.partId);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          throw new Error(`Could not fetch attachment "${meta.name}": ${reason}`);
+        }
+        attachments.push({
+          name: fetched.name || meta.name,
+          mime: fetched.mime || meta.mime,
+          contentBase64: fetched.contentBase64,
+        });
+      }
+      return api.sendNew(
+        target.mailbox,
+        to,
+        subject,
+        quoted,
+        attachments.length > 0 ? { attachments } : undefined,
+      );
     },
-    onSuccess: () => {
+    onSuccess: (_r, { msg }) => {
       hooks.onSettled?.();
-      hooks.onToast?.("Forwarded");
+      const count = visibleEmailAttachments(msg.attachments).length;
+      hooks.onToast?.(count > 0 ? `Forwarded with ${count} attachment${count === 1 ? "" : "s"}` : "Forwarded");
+    },
+    onError: (err) => {
+      hooks.onToast?.(err instanceof Error ? err.message : "Forward failed");
     },
   });
 
