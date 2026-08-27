@@ -1209,6 +1209,10 @@ class AdapterExecuteProvider implements ChatProvider {
     // using an account the operator had already moved off and would report a
     // limit that the configured accounts do not have. Resolved out here so the
     // result handler below knows which account was actually spent.
+    //
+    // No remote-target handling here, unlike the agent-run path: the execute
+    // call below carries no execution target, so a Clippy turn always runs on
+    // this machine and a lane token never reaches an ssh command line.
     const accountEnv = await resolveActiveAccountEnv(decoded.adapterType);
     const executePromise = (async () => {
       const authToken = adapter.supportsLocalAgentJwt

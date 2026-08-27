@@ -136,3 +136,49 @@ export async function resolveAdapterAccountEnv(
     reason: chosen.reason,
   };
 }
+
+/**
+ * The fields the "Switchboard chose the account for this run" log line may
+ * carry, and nothing else.
+ *
+ * `resolved.env` stays out on purpose: when the lane carries a token, the env
+ * holds a live credential, and a log line gets copied into log files, log
+ * shippers and support pastes that a credential must never reach. Label and
+ * reason are everything the line exists to say. The pinning test on this
+ * helper is what keeps a later "just log the whole resolved object" edit from
+ * quietly shipping the secret.
+ */
+export function switchboardChoiceLogFields(
+  agentId: string,
+  adapterType: string,
+  resolved: ResolvedAccountEnv,
+): { agentId: string; adapterType: string; account: string; reason: string | null } {
+  return { agentId, adapterType, account: resolved.label, reason: resolved.reason };
+}
+
+/**
+ * The resolved environment as a run's execution target may safely receive it.
+ *
+ * A remote target puts the run's environment in plain sight: the ssh
+ * transport writes every entry as `env KEY=value` inside the `sh -lc` script
+ * it builds (buildSshSpawnTarget in adapter-utils/ssh), so anything in here
+ * shows up in process listings on both machines. A Switchboard lane token is
+ * a live credential, so on a remote target it is forced back to the empty
+ * string, which restores exactly the pre-token Switchboard environment: the
+ * folder pointer with every token variable blanked. A Switchboard answer
+ * describes accounts on THIS machine anyway, so the remote run loses nothing
+ * it could have used. Carrying the token to a remote host without printing it
+ * is a transport fix for another day.
+ *
+ * An account from Paperclip's own list is left alone even on a remote target:
+ * the operator added that credential for runs to use, remote runs included,
+ * and that is exactly how it behaved before lane tokens existed.
+ */
+export function resolvedEnvForExecution(
+  resolved: ResolvedAccountEnv,
+  isRemoteTarget: boolean,
+): Record<string, string> {
+  if (!isRemoteTarget || resolved.source !== "switchboard") return resolved.env;
+  if (resolved.env.CLAUDE_CODE_OAUTH_TOKEN === undefined) return resolved.env;
+  return { ...resolved.env, CLAUDE_CODE_OAUTH_TOKEN: "" };
+}

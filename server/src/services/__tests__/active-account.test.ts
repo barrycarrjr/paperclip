@@ -7,7 +7,10 @@ import {
   resolveActiveAccount,
   resolveActiveAccountCredential,
   resolveAdapterAccountEnv,
+  resolvedEnvForExecution,
+  switchboardChoiceLogFields,
   switchboardProviderFor,
+  type ResolvedAccountEnv,
 } from "../active-account.js";
 import { resetSwitchboardCache } from "../switchboard.js";
 import {
@@ -147,5 +150,90 @@ describe("choosing where a run's sign-in comes from", () => {
   it("changes nothing for an adapter with neither accounts nor a switchboard tool", async () => {
     expect(await resolveAdapterAccountEnv("cursor")).toBeNull();
     expect(await resolveAdapterAccountEnv("not_a_real_adapter")).toBeNull();
+  });
+});
+
+const laneToken = "sk-ant-oat01-FAKE-lane-secret-that-must-never-surface";
+
+/** A Switchboard answer whose lane carried a token, as heartbeat receives it. */
+const switchboardResolved: ResolvedAccountEnv = {
+  source: "switchboard",
+  env: {
+    CLAUDE_CONFIG_DIR: "C:\\Users\\me\\.claude-two",
+    CLAUDE_CODE_OAUTH_TOKEN: laneToken,
+    CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "",
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "",
+    CCR_OAUTH_TOKEN_FILE: "",
+  },
+  slot: null,
+  label: "Account 2",
+  reason: "Subscription has capacity",
+};
+
+/**
+ * The run log says which account Switchboard chose; it must never say how to
+ * sign in as it. The lane token travels inside resolved.env, so the log line
+ * is built from this helper's fixed field list rather than from the resolved
+ * object, and this test pins that list so a later edit cannot widen it into
+ * the secret.
+ */
+describe("the switchboard choice log line", () => {
+  it("carries label and reason only, never the environment", () => {
+    const fields = switchboardChoiceLogFields("agent-1", "claude_local", switchboardResolved);
+    expect(Object.keys(fields)).toEqual(["agentId", "adapterType", "account", "reason"]);
+    expect(JSON.stringify(fields)).not.toContain(laneToken);
+    expect(fields).toEqual({
+      agentId: "agent-1",
+      adapterType: "claude_local",
+      account: "Account 2",
+      reason: "Subscription has capacity",
+    });
+  });
+});
+
+/**
+ * Where the run executes decides whether the lane token may ride along. The
+ * ssh transport writes the run's environment into the command line it sends,
+ * so a remote target gets the pre-token Switchboard environment back: the
+ * folder pointer with the token blanked, exactly what every remote run got
+ * before lane tokens existed. Local runs keep the token, and an account from
+ * Paperclip's own list is never touched.
+ */
+describe("what a run's execution target may receive", () => {
+  it("hands a local target the environment untouched", () => {
+    expect(resolvedEnvForExecution(switchboardResolved, false)).toBe(switchboardResolved.env);
+  });
+
+  it("blanks only the token for a remote target", () => {
+    expect(resolvedEnvForExecution(switchboardResolved, true)).toEqual({
+      CLAUDE_CONFIG_DIR: "C:\\Users\\me\\.claude-two",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "",
+      CCR_OAUTH_TOKEN_FILE: "",
+    });
+    // The original is not mutated: the local merge already used it.
+    expect(switchboardResolved.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(laneToken);
+  });
+
+  it("changes nothing for a remote target when the lane had no token", () => {
+    const tokenless: ResolvedAccountEnv = {
+      ...switchboardResolved,
+      env: { ...switchboardResolved.env, CLAUDE_CODE_OAUTH_TOKEN: "" },
+    };
+    expect(resolvedEnvForExecution(tokenless, true)).toEqual(tokenless.env);
+  });
+
+  it("leaves an account from Paperclip's own list alone even on a remote target", () => {
+    const own: ResolvedAccountEnv = {
+      source: "paperclip",
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "token-one" },
+      slot: "1",
+      label: "Main",
+      reason: null,
+    };
+    // The operator added this credential for runs to use, remote runs
+    // included, and that is how it behaved before lane tokens existed.
+    expect(resolvedEnvForExecution(own, true)).toBe(own.env);
   });
 });

@@ -118,7 +118,13 @@ import {
   forgetExpiredAccountLimits,
 } from "./adapter-account-router.js";
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
-import { accountCredentialEnvVarFor, resolveAdapterAccountEnv } from "./active-account.js";
+import {
+  accountCredentialEnvVarFor,
+  resolveAdapterAccountEnv,
+  resolvedEnvForExecution,
+  switchboardChoiceLogFields,
+  type ResolvedAccountEnv,
+} from "./active-account.js";
 import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
@@ -130,6 +136,7 @@ import {
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
+import { adapterExecutionTargetIsRemote } from "@paperclipai/adapter-utils/execution-target";
 import { extractSkillMentionIds, isUuidLike } from "@paperclipai/shared";
 import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
@@ -5145,9 +5152,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const agentPinsItsOwn = Boolean(
       accountEnvVar && agentHasOwnCredential(agent.adapterConfig, accountEnvVar),
     );
+    // Held onto past this block because the execution target is not known yet
+    // here, and a remote target must get this environment re-merged with the
+    // lane token blanked once it is: see resolvedEnvForExecution.
+    let resolvedAccountEnv: ResolvedAccountEnv | null = null;
     if (!agentPinsItsOwn) {
       const resolved = await resolveAdapterAccountEnv(agent.adapterType);
       if (resolved) {
+        resolvedAccountEnv = resolved;
         runtimeConfig = {
           ...runtimeConfig,
           env: {
@@ -5161,12 +5173,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (resolved.source === "switchboard") {
           context.switchboardAccount = resolved.label;
           logger.info(
-            {
-              agentId: agent.id,
-              adapterType: agent.adapterType,
-              account: resolved.label,
-              reason: resolved.reason,
-            },
+            switchboardChoiceLogFields(agent.id, agent.adapterType, resolved),
             "Switchboard chose the account for this run",
           );
         }
@@ -5377,6 +5384,22 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const workspaceRealization = realizationResult.workspaceRealization;
     const executionTarget = realizationResult.executionTarget;
     const remoteExecution = realizationResult.remoteExecution;
+    // A remote target must not receive a Switchboard lane token: the ssh
+    // transport writes the run's environment into the command line it sends,
+    // where the token would sit in process listings on both machines. This is
+    // re-merged here rather than where the account was chosen because this is
+    // the first point that knows where the run will actually execute. For a
+    // local target, and for an account from Paperclip's own list, this
+    // re-applies the same values and changes nothing.
+    if (resolvedAccountEnv) {
+      runtimeConfig = {
+        ...runtimeConfig,
+        env: {
+          ...parseObject((runtimeConfig as Record<string, unknown>).env),
+          ...resolvedEnvForExecution(resolvedAccountEnv, adapterExecutionTargetIsRemote(executionTarget)),
+        },
+      } as typeof runtimeConfig;
+    }
     context.paperclipEnvironment = {
       id: selectedEnvironment.id,
       name: selectedEnvironment.name,

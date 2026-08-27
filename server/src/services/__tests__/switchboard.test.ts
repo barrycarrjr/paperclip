@@ -148,7 +148,34 @@ describe("reading switchboard's answer", () => {
       provider: "anthropic",
       accountId: "claude-account-2",
       reason: "Subscription has capacity",
+      token: null,
     });
+  });
+
+  /**
+   * The token check is on content, not presence. A reply serialised with
+   * `token: null` would pass a presence check and put the literal text "null"
+   * into the child environment, signing the run in as nobody, which is the
+   * exact outage this module exists to prevent. So everything that is not a
+   * real string with visible content reads as "no token", which is folder
+   * mode, which is today's working behaviour.
+   */
+  it("carries a token only when it is a real non-empty string", () => {
+    const base = {
+      laneId: "lane-1",
+      harness: "claude",
+      provider: "anthropic",
+      accountId: "claude-account-2",
+      available: true,
+    };
+    expect(parseSwitchboardLane(JSON.stringify({ ...base, token: "sk-ant-oat01-lane" }))?.token).toBe(
+      "sk-ant-oat01-lane",
+    );
+    expect(parseSwitchboardLane(JSON.stringify(base))?.token).toBeNull();
+    expect(parseSwitchboardLane(JSON.stringify({ ...base, token: null }))?.token).toBeNull();
+    expect(parseSwitchboardLane(JSON.stringify({ ...base, token: "" }))?.token).toBeNull();
+    expect(parseSwitchboardLane(JSON.stringify({ ...base, token: "   " }))?.token).toBeNull();
+    expect(parseSwitchboardLane(JSON.stringify({ ...base, token: 42 }))?.token).toBeNull();
   });
 
   it("leaves the tool empty for an older switchboard that does not report one", () => {
@@ -279,6 +306,17 @@ describe("the environment that puts a run on a chosen account", () => {
     envValue: "C:\\Users\\me\\.claude-two",
     laneId: "lane-2",
     reason: "Subscription has capacity",
+    token: null,
+  };
+  const codexAccount = {
+    accountId: "codex-default",
+    label: "Default",
+    home: "C:\\Users\\me\\.codex",
+    envVar: "CODEX_HOME",
+    envValue: "C:\\Users\\me\\.codex",
+    laneId: "lane-codex",
+    reason: "Subscription has capacity",
+    token: null,
   };
 
   /**
@@ -308,17 +346,47 @@ describe("the environment that puts a run on a chosen account", () => {
   });
 
   it("sets only the folder variable for a tool with no competing tokens", () => {
-    expect(
-      switchboardAccountEnv({
-        accountId: "codex-default",
-        label: "Default",
-        home: "C:\\Users\\me\\.codex",
-        envVar: "CODEX_HOME",
-        envValue: "C:\\Users\\me\\.codex",
-        laneId: "lane-codex",
-        reason: "Subscription has capacity",
-      }),
-    ).toEqual({ CODEX_HOME: "C:\\Users\\me\\.codex" });
+    expect(switchboardAccountEnv(codexAccount)).toEqual({ CODEX_HOME: "C:\\Users\\me\\.codex" });
+  });
+
+  /**
+   * The fallback guarantee, written out literally. Every path that ends with
+   * "no token" (Switchboard too old, token dead, feature never set up) has to
+   * produce this exact object, because this object is the behaviour that was
+   * already working before lane tokens existed. A drift here would not fail
+   * loudly; it would quietly change how every tokenless run signs in.
+   */
+  it("builds byte-for-byte today's environment when the lane has no token", () => {
+    expect(switchboardAccountEnv(claudeAccount)).toEqual({
+      CLAUDE_CONFIG_DIR: "C:\\Users\\me\\.claude-two",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "",
+      CCR_OAUTH_TOKEN_FILE: "",
+    });
+  });
+
+  /**
+   * With a token the run authenticates on the token alone, so the folder's
+   * OAuth login is never opened, but everything else stays exactly as it was:
+   * the folder variable still points config and trust at the lane folder, and
+   * the other credential variables are still forced off so nothing inherited
+   * from the machine can outrank the choice.
+   */
+  it("puts a lane token in the child environment, still blanking everything else", () => {
+    expect(switchboardAccountEnv({ ...claudeAccount, token: "sk-ant-oat01-lane" })).toEqual({
+      CLAUDE_CONFIG_DIR: "C:\\Users\\me\\.claude-two",
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-lane",
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "",
+      CCR_OAUTH_TOKEN_FILE: "",
+    });
+  });
+
+  it("ignores a stray token for a tool with no claude credential variables", () => {
+    expect(switchboardAccountEnv({ ...codexAccount, token: "stray-token" })).toEqual({
+      CODEX_HOME: "C:\\Users\\me\\.codex",
+    });
   });
 });
 
@@ -338,6 +406,7 @@ describe("riding out a momentary no-answer", () => {
     envValue: "C:\\Users\\me\\.claude-account-2",
     laneId: "lane-2",
     reason: "Subscription has capacity",
+    token: null,
   };
   const START = 1_000_000;
   const priorApiKey = process.env.ANTHROPIC_API_KEY;
@@ -360,10 +429,52 @@ describe("riding out a momentary no-answer", () => {
     expect(await switchboardAccountFor("claude", { now: later, ask: async () => null })).toEqual(account);
   });
 
+  /**
+   * A replayed answer can be up to thirty minutes old, and a token that old
+   * may have been rotated or revoked in between. Replaying it would hard-fail
+   * the very run the replay was meant to save, while replaying just the folder
+   * pointer falls back to the file sign-in, which is the behaviour that was
+   * already working before tokens existed. The fresh answer keeps its token;
+   * only the remembered copy is stripped.
+   */
+  it("replays a remembered answer with its token stripped", async () => {
+    const withToken = { ...account, token: "sk-ant-oat01-stale" };
+    expect(
+      await switchboardAccountFor("claude", { now: START, ask: async () => withToken }),
+    ).toEqual(withToken);
+    // Past the ordinary answer cache, so this genuinely asks again and falls
+    // back to the remembered answer.
+    const later = START + 5 * 60_000;
+    const replayed = await switchboardAccountFor("claude", { now: later, ask: async () => null });
+    expect(replayed).toEqual({ ...account, token: null });
+    // And the environment built from the replay blanks the variable rather
+    // than carrying the stale secret.
+    expect(switchboardAccountEnv(replayed!).CLAUDE_CODE_OAUTH_TOKEN).toBe("");
+  });
+
   it("stops reusing it once it is properly stale", async () => {
     await switchboardAccountFor("claude", { now: START, ask: async () => account });
     const muchLater = START + 31 * 60_000;
     expect(await switchboardAccountFor("claude", { now: muchLater, ask: async () => null })).toBeNull();
+  });
+
+  it("gives a cached nothing the same courtesy instead of shadowing the remembered answer", async () => {
+    expect(await switchboardAccountFor("claude", { now: START, ask: async () => account })).toEqual(account);
+    // Past the ordinary answer cache, so this genuinely asks again, gets nothing,
+    // caches that nothing, and falls back to the remembered answer.
+    const later = START + 5 * 60_000;
+    expect(await switchboardAccountFor("claude", { now: later, ask: async () => null })).toEqual(account);
+    // Half a minute on, the cached nothing is consulted first. It must defer to
+    // the remembered answer the same way the fresh nothing did, without asking
+    // again; a cached null used to shadow the fallback for its whole minute.
+    let askedAgain = false;
+    const withinCache = later + 30_000;
+    const answer = await switchboardAccountFor("claude", {
+      now: withinCache,
+      ask: async () => { askedAgain = true; return null; },
+    });
+    expect(answer).toEqual(account);
+    expect(askedAgain).toBe(false);
   });
 
   it("prefers a fresh answer over the remembered one", async () => {
@@ -404,6 +515,81 @@ describe("riding out a momentary no-answer", () => {
 
   it("knows nothing about a tool switchboard cannot move", async () => {
     expect(await switchboardAccountFor("aider", { now: START, ask: async () => account })).toBeNull();
+  });
+});
+
+/**
+ * The one place the real argv is visible is a real spawn, because the exec in
+ * askSwitchboard is deliberately not injectable. So this points SWITCHBOARD_BIN
+ * at a stand-in CLI script that echoes its argv back as the lane's reason, and
+ * reads the answer through the whole pipeline: find the cli, spawn it, parse
+ * the reply, look the account up in the accounts file. What it proves is that
+ * dry-run is asked with --with-token (opt-in on Switchboard's side, so
+ * forgetting the flag would silently lose the whole feature while everything
+ * still passed), and that a token in the reply survives the trip.
+ */
+describe("asking a stand-in switchboard for real", () => {
+  let dir: string;
+  const prior = {
+    SWITCHBOARD_BIN: process.env.SWITCHBOARD_BIN,
+    APPDATA: process.env.APPDATA,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+    SWITCHBOARD_ENABLED: process.env.SWITCHBOARD_ENABLED,
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-switchboard-cli-"));
+    resetSwitchboardCache();
+  });
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    resetSwitchboardCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("sends --with-token and carries the answered token home", async () => {
+    const home = path.join(dir, "lane-home");
+    fs.mkdirSync(home, { recursive: true });
+    const script = path.join(dir, "fake-switchboard-cli.js");
+    fs.writeFileSync(
+      script,
+      [
+        "// Echoes the argv it was called with as the lane's reason, so the",
+        "// test on the other side can see exactly what Paperclip sent.",
+        "process.stdout.write(JSON.stringify({",
+        "  available: true,",
+        "  laneId: 'lane-echo',",
+        "  harness: 'claude',",
+        "  provider: 'anthropic',",
+        "  accountId: 'claude-echo',",
+        "  reason: process.argv.slice(2).join(' '),",
+        "  token: 'tok-from-cli',",
+        "}) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(dir, "Switchboard"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "Switchboard", "accounts.json"),
+      JSON.stringify({ accounts: [{ id: "claude-echo", provider: "claude", label: "Echo", home }] }),
+      "utf8",
+    );
+    process.env.SWITCHBOARD_BIN = script;
+    process.env.APPDATA = dir;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.SWITCHBOARD_ENABLED;
+    resetSwitchboardCache();
+
+    const chosen = await switchboardAccountFor("claude", {});
+    expect(chosen?.reason).toBe("dry-run --provider anthropic --json --with-token");
+    expect(chosen?.token).toBe("tok-from-cli");
+    expect(chosen?.accountId).toBe("claude-echo");
   });
 });
 

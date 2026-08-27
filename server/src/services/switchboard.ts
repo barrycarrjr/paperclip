@@ -270,6 +270,13 @@ export interface SwitchboardAccount {
   laneId: string;
   /** Switchboard's own words for why, for the run log. */
   reason: string;
+  /**
+   * A long-lived token minted for this lane, for automation to authenticate
+   * with instead of opening the folder's own sign-in. Null means run in folder
+   * mode, which is exactly what every run did before tokens existed. Never
+   * logged and never kept past the short answer cache: see lastGoodAnswer.
+   */
+  token: string | null;
 }
 
 /** One registered account, as Switchboard's own data file records it. */
@@ -329,8 +336,9 @@ export function readRegisteredAccounts(
 
 /**
  * What Switchboard's `dry-run --json` says. Only the fields Paperclip reads
- * are named; the rest of the reply is deliberately ignored so a later
- * Switchboard can add to it without breaking this.
+ * are named (laneId, harness, provider, accountId, reason, and the optional
+ * token); the rest of the reply is deliberately ignored so a later Switchboard
+ * can add to it without breaking this.
  */
 export function parseSwitchboardLane(stdout: string): {
   laneId: string;
@@ -340,6 +348,8 @@ export function parseSwitchboardLane(stdout: string): {
   provider: string;
   accountId: string;
   reason: string;
+  /** The lane's token, when the reply carries a usable one. See SwitchboardAccount. */
+  token: string | null;
 } | null {
   for (const line of String(stdout || "").split(/\r?\n/)) {
     const text = line.trim();
@@ -351,12 +361,18 @@ export function parseSwitchboardLane(stdout: string): {
       const provider = typeof parsed.provider === "string" ? parsed.provider : "";
       const accountId = typeof parsed.accountId === "string" ? parsed.accountId : "";
       if (!laneId || !provider || !accountId) continue;
+      // The token is accepted on content, not presence. A reply serialised
+      // with `token: null`, or with an empty or blank string, means the same
+      // as no token at all; a presence check here would put the literal text
+      // "null" into the child environment and sign the run in as nobody.
+      const token = parsed.token;
       return {
         laneId,
         harness: typeof parsed.harness === "string" ? parsed.harness : "",
         provider,
         accountId,
         reason: typeof parsed.reason === "string" ? parsed.reason : "",
+        token: typeof token === "string" && token.trim().length > 0 ? token : null,
       };
     } catch {
       // Not the JSON line; keep looking.
@@ -386,6 +402,13 @@ const answerCache = new Map<string, { at: number; account: SwitchboardAccount | 
  * has run out, the run fails as plan_exhausted, which Paperclip already handles
  * by moving or parking the work, rather than as a signed-out failure, which it
  * does not.
+ *
+ * What is remembered here never includes a lane token. A replayed answer can
+ * be up to thirty minutes old, and replaying a possibly rotated or revoked
+ * secret hard-fails the run it was meant to save, while replaying just the
+ * folder pointer falls back to the well-understood file sign-in. The token is
+ * stripped when the answer is stored, not when it is replayed, so no future
+ * reader of this map can forget to.
  */
 const lastGoodAnswer = new Map<string, { at: number; account: SwitchboardAccount }>();
 
@@ -441,15 +464,29 @@ export async function switchboardAccountFor(
   if (provider === "claude" && hasDeliberateApiKey()) return null;
 
   const cached = answerCache.get(provider);
-  if (cached && now - cached.at < ANSWER_TTL_MS) return cached.account;
+  if (cached && now - cached.at < ANSWER_TTL_MS) {
+    if (cached.account) return cached.account;
+    // A cached null gets the same last-good courtesy a fresh null gets below.
+    // Without this, the first null of a Switchboard hiccup shadowed the
+    // fallback for a full minute: the null was cached, the cache was consulted
+    // first, and the still-valid last good answer sat unused.
+    return lastGoodWithinTtl(provider, now);
+  }
 
   const account = await ask(provider, providerEnv, cwd);
   answerCache.set(provider, { at: now, account });
   if (account) {
-    lastGoodAnswer.set(provider, { at: now, account });
+    // Remembered without its token: see lastGoodAnswer above for why a stale
+    // replay must run in folder mode rather than on a possibly dead secret.
+    lastGoodAnswer.set(provider, { at: now, account: { ...account, token: null } });
     return account;
   }
 
+  return lastGoodWithinTtl(provider, now);
+}
+
+/** The shared tail of both null paths: the last good answer, while it is still fresh. */
+function lastGoodWithinTtl(provider: string, now: number): SwitchboardAccount | null {
   const previous = lastGoodAnswer.get(provider);
   if (previous && now - previous.at < LAST_GOOD_TTL_MS) {
     log.debug(
@@ -473,7 +510,13 @@ async function askSwitchboard(
   try {
     // The vendor name, not the tool name: see PROVIDER_ENV. Asking for the tool
     // name matches no lane and comes back looking like "nothing has capacity".
-    const result = await exec(cli.bin, [...cli.prefixArgs, "dry-run", "--provider", providerEnv.vendor, "--json"], {
+    //
+    // --with-token asks for the lane's token in the reply. It is opt-in on
+    // Switchboard's side because other callers parse the same stdout and must
+    // not start receiving secrets they never asked for. Safe to send always:
+    // a Switchboard without the feature parses unknown flags as trailing
+    // command arguments, which dry-run ignores, so the answer is unchanged.
+    const result = await exec(cli.bin, [...cli.prefixArgs, "dry-run", "--provider", providerEnv.vendor, "--json", "--with-token"], {
       cwd,
       env: { ...process.env, ...cli.env },
       timeout: LANE_TIMEOUT_MS,
@@ -532,6 +575,7 @@ async function askSwitchboard(
     envValue: providerEnv.envShape === "parent" ? path.dirname(home) : home,
     laneId: lane.laneId,
     reason: lane.reason,
+    token: lane.token,
   };
 }
 
@@ -543,11 +587,23 @@ async function askSwitchboard(
  * explicitly supplied empty value as "force this off for this spawn", which is
  * the only way to stop a machine-wide token from quietly signing the run in as
  * a different account than the one chosen here.
+ *
+ * When the lane carries a token, CLAUDE_CODE_OAUTH_TOKEN carries it instead of
+ * being blanked. The token authenticates the run by itself, so the folder's
+ * OAuth login is never opened, which is what stops a fleet of concurrent runs
+ * refreshing the same login and wiping .credentials.json out from under each
+ * other. The folder variable is still set either way, because it is what
+ * points config, plugins, and workspace trust at the lane's folder; the token
+ * only replaces the sign-in, not the home. Without a token the output is
+ * exactly what it always was, which is the fallback the whole design leans on.
  */
 export function switchboardAccountEnv(account: SwitchboardAccount): Record<string, string> {
   const env: Record<string, string> = { [account.envVar]: account.envValue };
   if (account.envVar === "CLAUDE_CONFIG_DIR") {
     for (const name of CLAUDE_SUBSCRIPTION_TOKEN_VARS) env[name] = "";
+    if (typeof account.token === "string" && account.token.length > 0) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = account.token;
+    }
   }
   return env;
 }
