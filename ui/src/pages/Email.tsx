@@ -76,6 +76,7 @@ import {
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
 import { usePrintEmail } from "../components/email/usePrintEmail";
+import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
@@ -451,7 +452,9 @@ export function Email() {
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
   const [moveDropdownSender, setMoveDropdownSender] = useState<string | null>(null);
-  const [actionToast, setActionToast] = useState<{ text: string; issueId?: string } | null>(null);
+  const [actionToast, setActionToast] = useState<
+    { text: string; issueId?: string; failed?: boolean } | null
+  >(null);
   const [groupBySender, setGroupBySender] = useState(() => {
     try { return localStorage.getItem("email-groupBySender") === "true"; } catch { return false; }
   });
@@ -850,6 +853,7 @@ export function Email() {
           .then((fetched) => fetched.contentBase64),
       );
     }
+    composeMutation.reset();
     setComposeOpen(true);
   }
 
@@ -865,6 +869,7 @@ export function Email() {
     setComposeBodyHasContent(body.trim().length > 0);
     setComposeInstructions("");
     composeAttachments.clear();
+    composeMutation.reset();
     setComposeOpen(true);
   }
 
@@ -899,6 +904,18 @@ export function Email() {
   const activeAgents = (agents ?? []).filter((a) => a.status !== "terminated");
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /**
+   * Say out loud that an action failed. Several of these mutations used to
+   * only undo their own optimistic hide, and the compose dialog reported
+   * nothing at all: a send the mail server rejected left the dialog open with
+   * the message still in it, so it read as a dead Send button and got clicked
+   * again.
+   */
+  function showFailure(action: string, err: unknown) {
+    setActionToast({ text: actionFailureText(action, err), failed: true });
+    setTimeout(() => setActionToast(null), 6000);
+  }
 
   function showToast(text: string, issueId?: string) {
     setActionToast({ text, issueId });
@@ -956,7 +973,7 @@ export function Email() {
     onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
-      showToast(`Auto-triage failed: ${(err as Error).message}`);
+      showFailure("Auto-triage", err);
     },
   });
 
@@ -969,7 +986,7 @@ export function Email() {
       invalidateRules();
       showToast(`Keep always: ${extractSender(msg)}`);
     },
-    onError: (err) => showToast(`Keep always failed: ${(err as Error).message}`),
+    onError: (err) => showFailure("Keep always", err),
   });
 
   const markReadMutation = useMutation({
@@ -983,8 +1000,9 @@ export function Email() {
       invalidateMessageLists();
       showToast(`Marked read: ${msg.subject || "(no subject)"}`);
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
+      showFailure("Mark read", err);
     },
   });
 
@@ -997,9 +1015,10 @@ export function Email() {
       invalidateMessageLists();
       showToast(`Marked unread: ${msg.subject || "(no subject)"}`);
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      showFailure("Mark unread", err);
     },
   });
 
@@ -1013,9 +1032,10 @@ export function Email() {
       invalidateMessageLists();
       showToast("Deleted");
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      showFailure("Delete", err);
     },
   });
 
@@ -1025,9 +1045,10 @@ export function Email() {
       await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
     },
     onSuccess: () => invalidateMessageLists(),
-    onError: (_err, { msg }) => {
+    onError: (err, { msg }) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      showFailure("Move", err);
     },
   });
 
@@ -1092,6 +1113,7 @@ export function Email() {
       setHandoffAgentId(null);
       showToast("Handed off — issue created", issueId);
     },
+    onError: (err) => showFailure("Hand-off", err),
   });
 
   const replyMutation = useMutation({
@@ -1127,6 +1149,7 @@ export function Email() {
       replyAttachments.clear();
       showToast("Reply sent");
     },
+    onError: (err) => showFailure("Reply", err),
   });
 
   // The instructions field steers the model ("ask about timeline", "decline
@@ -1155,10 +1178,7 @@ export function Email() {
       replyComposerRef.current?.setValue(result.draft);
       setTimeout(() => replyComposerRef.current?.focus(), 50);
     },
-    onError: (err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      showToast(`Draft failed: ${message}`);
-    },
+    onError: (err) => showFailure("Draft", err),
   });
 
   // AI draft for a brand new message — no incoming email, so the operator's
@@ -1178,10 +1198,7 @@ export function Email() {
       composeBodyRef.current?.setValue(result.draft);
       setTimeout(() => composeBodyRef.current?.focus(), 50);
     },
-    onError: (err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      showToast(`Draft failed: ${message}`);
-    },
+    onError: (err) => showFailure("Draft", err),
   });
 
   function runComposeDraft() {
@@ -1237,6 +1254,9 @@ export function Email() {
       composeAttachments.clear();
       showToast("Message sent");
     },
+    // The dialog stays open on a failure so the message is not lost, and the
+    // reason is shown inside it as well as in the toast.
+    onError: (err) => showFailure(composeMode === "forward" ? "Forward" : "Send", err),
   });
 
   // ── Early exits ───────────────────────────────────────────────────────────
@@ -2583,8 +2603,20 @@ export function Email() {
 
       {/* ── Toast ──────────────────────────────────────────────────────────── */}
       {actionToast && (
-        <div className="fixed bottom-4 right-4 z-50 bg-foreground text-background text-sm px-4 py-2 rounded shadow-lg flex items-center gap-2">
-          <Check className="h-4 w-4" />
+        <div
+          role={actionToast.failed ? "alert" : "status"}
+          className={cn(
+            "fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            actionToast.failed
+              ? "bg-destructive text-destructive-foreground"
+              : "bg-foreground text-background",
+          )}
+        >
+          {actionToast.failed ? (
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          ) : (
+            <Check className="mt-0.5 h-4 w-4 shrink-0" />
+          )}
           {actionToast.text}
         </div>
       )}
@@ -2641,6 +2673,11 @@ export function Email() {
               />
             </div>
             <AttachmentComposer state={composeAttachments} />
+            {composeMutation.isError && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {inlineFailureText(composeMutation.error)}
+              </p>
+            )}
             {composeMode === "new" && (
               <DraftInstructionsField
                 value={composeInstructions}

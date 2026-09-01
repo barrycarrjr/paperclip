@@ -409,6 +409,16 @@ export function PortfolioEmail() {
   // company-switching navigation that `openInCompany` performs.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
 
+  // What the last email action did, shown bottom-right for a few seconds. This
+  // page used to pass the pop-out no `onToast` at all, so every action here was
+  // silent: a delete that the mailbox refused, or a forward the server would
+  // not send, looked exactly like a click that never registered.
+  const [actionToast, setActionToast] = useState<string | null>(null);
+  function showActionToast(text: string) {
+    setActionToast(text);
+    setTimeout(() => setActionToast(null), 4000);
+  }
+
   const [showAll, setShowAll] = useState(() => {
     try {
       return localStorage.getItem("portfolio-email-showAll") === "true";
@@ -707,8 +717,18 @@ export function PortfolioEmail() {
             void queryClient.invalidateQueries({ queryKey: ["portfolio-email"] });
             void queryClient.invalidateQueries({ queryKey: ["email"] });
           },
+          onToast: (text) => showActionToast(text),
         }}
       />
+
+      {actionToast && (
+        <div
+          role="status"
+          className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded bg-foreground px-4 py-2 text-sm text-background shadow-lg"
+        >
+          {actionToast}
+        </div>
+      )}
     </div>
   );
 }

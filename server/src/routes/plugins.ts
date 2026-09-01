@@ -2096,6 +2096,20 @@ export function pluginRoutes(
       res.json({ data: result });
     } catch (err) {
       const bridgeError = mapRpcErrorToBridgeError(err);
+      // The reason lives only in the response body, which the request log does
+      // not capture: a rejected send used to appear in the log as a bare 502
+      // next to the whole outgoing email, with nothing saying what the plugin
+      // objected to. Record it so a failure is diagnosable after the fact.
+      log.error(
+        {
+          pluginId: plugin.id,
+          actionKey: key,
+          companyId: body?.companyId,
+          code: bridgeError.code,
+          reason: bridgeError.message,
+        },
+        "plugin action failed",
+      );
       res.status(502).json(bridgeError);
     }
   });

@@ -153,6 +153,76 @@ describe("useEmailMessageActions", () => {
     expect(onRevert).toHaveBeenCalledWith(42);
   });
 
+  it("tells the operator when a send fails instead of failing silently", async () => {
+    // The bug this covers: a rejected forward left the composer exactly as it
+    // was, so the operator read a failed send as a dead button.
+    mockApi.sendNew.mockRejectedValue(new Error("Sending is disabled."));
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.forward.mutate({ msg: parsed(), to: "c@example.com", note: "" });
+    });
+    await settle();
+
+    expect(actions.current!.forward.isError).toBe(true);
+    expect(onToast).toHaveBeenCalledWith("Forward failed: Sending is disabled.");
+  });
+
+  it("tells the operator when a reply fails", async () => {
+    mockApi.sendReply.mockRejectedValue(new Error("smtp refused"));
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.reply.mutate({ msg: header(), body: "Thanks", replyAll: false });
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith("Reply failed: smtp refused");
+  });
+
+  it("tells the operator when a hand-off fails", async () => {
+    mockIssuesApi.create.mockRejectedValue(new Error("board unreachable"));
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.handOff.mutate({ msg: parsed(), agentId: "agent-1", note: "" });
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith("Hand-off failed: board unreachable");
+  });
+
+  it("names the action when the failure carries no message of its own", async () => {
+    mockApi.deleteMessage.mockRejectedValue(new Error(""));
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.remove.mutate(header());
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith("Delete failed");
+  });
+
+  it("reports a failed move as well as putting the row back", async () => {
+    mockApi.moveMessage.mockRejectedValue(new Error("no such folder"));
+    const onRevert = vi.fn();
+    const onToast = vi.fn();
+    const actions = mountActions({ onRevert, onToast });
+
+    await act(async () => {
+      actions.current!.moveToFolder.mutate({ msg: header(), targetFolder: "Archive" });
+    });
+    await settle();
+
+    expect(onRevert).toHaveBeenCalledWith(42);
+    expect(onToast).toHaveBeenCalledWith("Move failed: no such folder");
+  });
+
   it("marks a replied message read so it leaves the unread view", async () => {
     const actions = mountActions();
 
@@ -257,7 +327,9 @@ describe("useEmailMessageActions", () => {
 
     expect(mockApi.sendNew).not.toHaveBeenCalled();
     expect(actions.current!.forward.isError).toBe(true);
-    expect(onToast).toHaveBeenCalledWith('Could not fetch attachment "numbers.pdf": imap down');
+    expect(onToast).toHaveBeenCalledWith(
+      'Forward failed: Could not fetch attachment "numbers.pdf": imap down',
+    );
   });
 
   it("creates an issue, wakes the agent and marks read when handing off", async () => {

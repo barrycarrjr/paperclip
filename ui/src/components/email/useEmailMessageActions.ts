@@ -7,6 +7,7 @@ import {
   type ParsedEmailMessage,
 } from "../../api/emailTools";
 import { visibleEmailAttachments } from "../../lib/attachments";
+import { actionFailureText } from "./actionFailure";
 import { issuesApi } from "../../api/issues";
 import { agentsApi } from "../../api/agents";
 
@@ -37,6 +38,19 @@ export interface EmailMessageActionHooks {
    * surfaces can leave it undone.
    */
   onSenderEngaged?: (msg: MailHeader) => Promise<void> | void;
+}
+
+/**
+ * Say out loud that an action failed, through the same channel its success
+ * would have used.
+ *
+ * Only the forward used to report a failure, and only the bare message. Every
+ * other action failed in complete silence, which reads to the operator as the
+ * click not registering: on a failed forward the composer stays open with the
+ * recipient and the note still in it, exactly as it looked before the click.
+ */
+function reportFailure(hooks: EmailMessageActionHooks, action: string, err: unknown): void {
+  hooks.onToast?.(actionFailureText(action, err));
 }
 
 /**
@@ -78,7 +92,10 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.(`Marked read: ${msg.subject || "(no subject)"}`);
     },
-    onError: (_e, msg) => hooks.onRevert?.(msg.uid),
+    onError: (err, msg) => {
+      hooks.onRevert?.(msg.uid);
+      reportFailure(hooks, "Mark read", err);
+    },
   });
 
   const markUnread = useMutation({
@@ -91,9 +108,10 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.(`Marked unread: ${msg.subject || "(no subject)"}`);
     },
-    onError: (_e, msg) => {
+    onError: (err, msg) => {
       hooks.onRevert?.(msg.uid);
       hooks.onSettled?.();
+      reportFailure(hooks, "Mark unread", err);
     },
   });
 
@@ -107,9 +125,10 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.("Deleted");
     },
-    onError: (_e, msg) => {
+    onError: (err, msg) => {
       hooks.onRevert?.(msg.uid);
       hooks.onSettled?.();
+      reportFailure(hooks, "Delete", err);
     },
   });
 
@@ -123,9 +142,10 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.(`Moved to ${targetFolder}`);
     },
-    onError: (_e, { msg }) => {
+    onError: (err, { msg }) => {
       hooks.onRevert?.(msg.uid);
       hooks.onSettled?.();
+      reportFailure(hooks, "Move", err);
     },
   });
 
@@ -156,6 +176,7 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.("Reply sent");
     },
+    onError: (err) => reportFailure(hooks, "Reply", err),
   });
 
   const forward = useMutation({
@@ -215,9 +236,7 @@ export function useEmailMessageActions(
       const count = visibleEmailAttachments(msg.attachments).length;
       hooks.onToast?.(count > 0 ? `Forwarded with ${count} attachment${count === 1 ? "" : "s"}` : "Forwarded");
     },
-    onError: (err) => {
-      hooks.onToast?.(err instanceof Error ? err.message : "Forward failed");
-    },
+    onError: (err) => reportFailure(hooks, "Forward", err),
   });
 
   const handOff = useMutation({
@@ -278,6 +297,7 @@ export function useEmailMessageActions(
       hooks.onSettled?.();
       hooks.onToast?.("Handed off, issue created", issueId);
     },
+    onError: (err) => reportFailure(hooks, "Hand-off", err),
   });
 
   return { markRead, markUnread, remove, moveToFolder, reply, forward, handOff };

@@ -17,6 +17,7 @@ const mockApi = vi.hoisted(() => ({
   moveMessage: vi.fn(),
   sendReply: vi.fn(),
   sendNew: vi.fn(),
+  getAttachment: vi.fn(),
 }));
 
 vi.mock("../../api/emailTools", () => ({ makeEmailToolsApi: () => mockApi }));
@@ -57,7 +58,11 @@ function request(overrides: Partial<EmailPopoutRequest> = {}): EmailPopoutReques
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 
-async function mountDialog(req: EmailPopoutRequest, onClose = vi.fn()) {
+async function mountDialog(
+  req: EmailPopoutRequest,
+  onClose = vi.fn(),
+  actionHooks?: React.ComponentProps<typeof EmailPopoutDialog>["actionHooks"],
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -69,7 +74,7 @@ async function mountDialog(req: EmailPopoutRequest, onClose = vi.fn()) {
       <QueryClientProvider client={queryClient}>
         {/* main.tsx wraps the whole app in one; the dialog inherits it. */}
         <TooltipProvider>
-          <EmailPopoutDialog request={req} onClose={onClose} />
+          <EmailPopoutDialog request={req} onClose={onClose} actionHooks={actionHooks} />
         </TooltipProvider>
       </QueryClientProvider>,
     );
@@ -178,5 +183,127 @@ describe("EmailPopoutDialog read/unread toggle", () => {
     await settle();
 
     expect(readToggle().getAttribute("aria-label")).toBe("Mark as read");
+  });
+});
+
+/** Click a toolbar button by the label its tooltip announces. */
+async function clickToolbar(label: string) {
+  const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  if (!button) throw new Error(`toolbar button "${label}" not rendered`);
+  await act(async () => {
+    button.click();
+  });
+  await settle();
+}
+
+/** Click the button whose visible text is `text`. */
+async function clickByText(text: string) {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === text,
+  );
+  if (!button) throw new Error(`button "${text}" not rendered`);
+  await act(async () => {
+    button.click();
+  });
+  await settle();
+}
+
+/** Type into a text input the way React's onChange expects. */
+async function typeInto(selector: string, value: string) {
+  const input = document.querySelector<HTMLInputElement>(selector);
+  if (!input) throw new Error(`input "${selector}" not rendered`);
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+describe("EmailPopoutDialog failure reporting", () => {
+  // The bug: the operator filled in a forward, clicked send, the server
+  // rejected it, and the dialog showed nothing at all. The composer stayed
+  // open with the recipient still in it, which is what a dead button looks
+  // like, so the message was assumed sent when it never left.
+  it("shows why a forward was rejected instead of looking like nothing happened", async () => {
+    mockApi.sendNew.mockRejectedValue(new Error("Sending is disabled."));
+    await mountDialog(request());
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Send forward");
+
+    const alert = document.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Sending is disabled.");
+    // Still there to retry: a rejected send must not lose what was typed.
+    expect(
+      document.querySelector<HTMLInputElement>('input[placeholder="to@example.com"]')?.value,
+    ).toBe("accounting@example.com");
+  });
+
+  it("says something even when the rejection carried no message", async () => {
+    mockApi.sendNew.mockRejectedValue(new Error(""));
+    await mountDialog(request());
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Send forward");
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "That did not go through. Try again.",
+    );
+  });
+
+  it("clears the notice when the composer is reopened for a fresh attempt", async () => {
+    mockApi.sendNew.mockRejectedValue(new Error("Sending is disabled."));
+    await mountDialog(request());
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Send forward");
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+
+    await clickToolbar("Forward"); // close
+    await clickToolbar("Forward"); // and open again
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("closes the composer and keeps quiet when the forward goes out", async () => {
+    mockApi.sendNew.mockResolvedValue({ ok: true, messageId: "<f1>" });
+    const onToast = vi.fn();
+    await mountDialog(request(), vi.fn(), { onToast });
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Send forward");
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('input[placeholder="to@example.com"]')).toBeNull();
+    expect(onToast).toHaveBeenCalledWith("Forwarded");
+  });
+
+  it("shows why a reply was rejected", async () => {
+    mockApi.sendReply.mockRejectedValue(new Error("smtp refused"));
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    const textarea = document.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("reply box not rendered");
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(textarea, "Thanks");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+    await clickByText("Send reply");
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("smtp refused");
   });
 });

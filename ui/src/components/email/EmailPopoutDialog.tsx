@@ -32,6 +32,7 @@ import { agentsApi } from "../../api/agents";
 import { useEmailMessageActions, type EmailMessageActionHooks } from "./useEmailMessageActions";
 import { usePrintEmail } from "./usePrintEmail";
 import { resolveActionHeader } from "./emailActionHeader";
+import { inlineFailureText } from "./actionFailure";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -55,6 +56,22 @@ interface EmailPopoutDialogProps {
 }
 
 type Composer = { kind: "reply"; replyAll: boolean } | { kind: "forward" } | null;
+
+/**
+ * Inline failure notice for a composer, styled as an error rather than a hint.
+ *
+ * The dialog used to have no error surface of its own and relied entirely on
+ * the page that opened it wiring `onToast`. The portfolio list does not, so a
+ * forward that the server rejected left the composer sitting there unchanged,
+ * which is indistinguishable from the button not working.
+ */
+function ComposerError({ error }: { error: unknown }) {
+  return (
+    <p role="alert" className="text-xs font-medium text-destructive">
+      {inlineFailureText(error)}
+    </p>
+  );
+}
 
 /**
  * An email opened at full size, on top of wherever the operator already was.
@@ -155,6 +172,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   function runAndClose(run: () => void) {
     run();
     onClose();
+  }
+
+  // Opening or closing a composer starts a fresh attempt, so the notice from
+  // the last failed one must not be sitting above the new draft.
+  function clearComposerErrors() {
+    actions.reply.reset();
+    actions.forward.reset();
+    actions.handOff.reset();
   }
 
   const isUnread = readStateChange ?? request?.header?.unseen ?? false;
@@ -260,13 +285,18 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               label="Hand off to agent"
               icon={<Bot className="h-3.5 w-3.5" />}
               active={handOffOpen}
-              onClick={() => { setHandOffOpen((v) => !v); setComposer(null); }}
+              onClick={() => {
+                clearComposerErrors();
+                setHandOffOpen((v) => !v);
+                setComposer(null);
+              }}
             />
             <ToolbarButton
               label="Forward"
               icon={<Forward className="h-3.5 w-3.5" />}
               active={composer?.kind === "forward"}
               onClick={() => {
+                clearComposerErrors();
                 setHandOffOpen(false);
                 setComposer((c) => (c?.kind === "forward" ? null : { kind: "forward" }));
                 setBody("");
@@ -277,6 +307,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               icon={<Reply className="h-3.5 w-3.5" />}
               active={composer?.kind === "reply"}
               onClick={() => {
+                clearComposerErrors();
                 setHandOffOpen(false);
                 setComposer((c) => (c?.kind === "reply" ? null : { kind: "reply", replyAll: false }));
                 setBody("");
@@ -388,6 +419,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               placeholder="Write a reply..."
               autoFocus
             />
+            {actions.reply.isError && <ComposerError error={actions.reply.error} />}
             <div className="flex justify-end">
               <Button
                 size="sm"
@@ -432,6 +464,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               rows={4}
               placeholder="Add a note (optional)"
             />
+            {actions.forward.isError && <ComposerError error={actions.forward.error} />}
             <div className="flex justify-end">
               <Button
                 size="sm"
@@ -480,6 +513,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               rows={3}
               placeholder="Note for the agent (optional)"
             />
+            {actions.handOff.isError && <ComposerError error={actions.handOff.error} />}
             <div className="flex justify-end">
               <Button
                 size="sm"
