@@ -440,7 +440,10 @@ const broadcastDirectiveTool: ChatToolDefinition<{
   inputSchema: z.object({
     intent: z.string().min(1).max(4000),
     title: z.string().max(200).optional(),
-    companyIds: z.array(z.string()).max(500).optional(),
+    // Omit entirely to target every accessible company; an explicit but
+    // empty array is rejected rather than silently treated the same as
+    // omitted (P4 audit, 2026-09-03 — see portfolio-directive.ts).
+    companyIds: z.array(z.string()).min(1).max(500).optional(),
     includePortfolioRoot: z.boolean().optional(),
   }),
   spec: {

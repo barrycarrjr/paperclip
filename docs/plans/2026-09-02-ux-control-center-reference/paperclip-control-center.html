@@ -1,0 +1,788 @@
+<div id="paperclip-ops-mockup">
+  <style>
+    #paperclip-ops-mockup {
+      color-scheme: light dark;
+      color: light-dark(#17201d, #e8efec);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 100%;
+    }
+    #paperclip-ops-mockup * { box-sizing: border-box; }
+    #paperclip-ops-mockup button,
+    #paperclip-ops-mockup input,
+    #paperclip-ops-mockup textarea,
+    #paperclip-ops-mockup select { font: inherit; }
+    #paperclip-ops-mockup button { color: inherit; }
+    #paperclip-ops-mockup .pc-shell {
+      background: light-dark(#f4f6f4, #101513);
+      border: 1px solid light-dark(#d9dfdc, #2c3531);
+      border-radius: 14px;
+      overflow: hidden;
+      min-height: 760px;
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      box-shadow: 0 14px 42px light-dark(rgba(21, 32, 29, .10), rgba(0, 0, 0, .30));
+      position: relative;
+    }
+    #paperclip-ops-mockup .pc-sidebar {
+      background: light-dark(#17201d, #151c19);
+      color: #eef5f2;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #paperclip-ops-mockup .pc-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 2px 8px 8px;
+      font-weight: 500;
+      letter-spacing: -.01em;
+    }
+    #paperclip-ops-mockup .pc-logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: #b8e986;
+      color: #17201d;
+      display: grid;
+      place-items: center;
+    }
+    #paperclip-ops-mockup .pc-scope-button {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.07);
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+    #paperclip-ops-mockup .pc-scope-button:hover { background: rgba(255,255,255,.11); }
+    #paperclip-ops-mockup .pc-scope-mark,
+    #paperclip-ops-mockup .pc-company-logo {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: #32443d;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    #paperclip-ops-mockup .pc-scope-copy { min-width: 0; flex: 1; }
+    #paperclip-ops-mockup .pc-scope-name,
+    #paperclip-ops-mockup .pc-scope-meta { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #paperclip-ops-mockup .pc-scope-name { font-size: 13px; font-weight: 500; }
+    #paperclip-ops-mockup .pc-scope-meta { color: rgba(255,255,255,.58); font-size: 11px; margin-top: 2px; }
+    #paperclip-ops-mockup .pc-nav { display: grid; gap: 3px; }
+    #paperclip-ops-mockup .pc-nav-label {
+      color: rgba(255,255,255,.42);
+      font-size: 10px;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+      padding: 8px 9px 5px;
+    }
+    #paperclip-ops-mockup .pc-nav button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: rgba(255,255,255,.72);
+      border-radius: 8px;
+      min-height: 38px;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      text-align: left;
+      font-size: 13px;
+    }
+    #paperclip-ops-mockup .pc-nav button:hover { background: rgba(255,255,255,.06); color: #fff; }
+    #paperclip-ops-mockup .pc-nav button.pc-nav-active { background: rgba(255,255,255,.11); color: #fff; }
+    #paperclip-ops-mockup .pc-nav svg { width: 16px; height: 16px; }
+    #paperclip-ops-mockup .pc-nav-count {
+      margin-left: auto;
+      background: #d27668;
+      color: #fff;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+    }
+    #paperclip-ops-mockup .pc-sidebar-bottom { margin-top: auto; }
+    #paperclip-ops-mockup .pc-secondary-link {
+      border: 0;
+      background: transparent;
+      color: rgba(255,255,255,.52);
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      padding: 8px 10px;
+      width: 100%;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #paperclip-ops-mockup .pc-main { min-width: 0; }
+    #paperclip-ops-mockup .pc-topbar {
+      background: light-dark(#ffffff, #171e1b);
+      border-bottom: 1px solid light-dark(#dde3e0, #2a3430);
+      min-height: 66px;
+      padding: 12px 22px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    #paperclip-ops-mockup .pc-mobile-scope { display: none; }
+    #paperclip-ops-mockup .pc-heading { min-width: 0; flex: 1; }
+    #paperclip-ops-mockup .pc-context-line {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      color: light-dark(#6a7872, #9daba5);
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+    #paperclip-ops-mockup .pc-context-dot { width: 6px; height: 6px; border-radius: 50%; background: #71a660; }
+    #paperclip-ops-mockup h1,
+    #paperclip-ops-mockup h2,
+    #paperclip-ops-mockup h3,
+    #paperclip-ops-mockup p { margin: 0; }
+    #paperclip-ops-mockup h1 { font-size: 20px; line-height: 1.2; font-weight: 500; letter-spacing: -.02em; }
+    #paperclip-ops-mockup h2 { font-size: 15px; line-height: 1.3; font-weight: 500; }
+    #paperclip-ops-mockup h3 { font-size: 13px; line-height: 1.3; font-weight: 500; }
+    #paperclip-ops-mockup .pc-start-button {
+      border: 0;
+      border-radius: 9px;
+      background: light-dark(#17201d, #e5ece9);
+      color: light-dark(#ffffff, #17201d);
+      padding: 10px 14px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    #paperclip-ops-mockup .pc-body { padding: 22px; }
+    #paperclip-ops-mockup .pc-status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      background: light-dark(#dce2df, #2c3531);
+      border: 1px solid light-dark(#dce2df, #2c3531);
+      border-radius: 11px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    #paperclip-ops-mockup .pc-status-cell {
+      background: light-dark(#ffffff, #18201d);
+      padding: 14px 15px;
+      min-width: 0;
+    }
+    #paperclip-ops-mockup .pc-stat-label { color: light-dark(#6d7974, #9aa7a1); font-size: 11px; }
+    #paperclip-ops-mockup .pc-stat-value { font-size: 20px; font-weight: 500; margin-top: 4px; }
+    #paperclip-ops-mockup .pc-stat-note { color: light-dark(#7a8580, #8e9c96); font-size: 10px; margin-top: 2px; }
+    #paperclip-ops-mockup .pc-emphasis { color: light-dark(#a94436, #ef9a8d); }
+    #paperclip-ops-mockup .pc-layout-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(280px, .92fr);
+      gap: 18px;
+      align-items: start;
+    }
+    #paperclip-ops-mockup .pc-section {
+      background: light-dark(#ffffff, #18201d);
+      border: 1px solid light-dark(#dce2df, #2d3733);
+      border-radius: 11px;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+    #paperclip-ops-mockup .pc-section-header {
+      padding: 14px 15px;
+      border-bottom: 1px solid light-dark(#e4e8e6, #2b3531);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #paperclip-ops-mockup .pc-section-header h2 { flex: 1; }
+    #paperclip-ops-mockup .pc-section-action {
+      border: 0;
+      background: transparent;
+      color: light-dark(#476258, #b2c6bd);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #paperclip-ops-mockup .pc-row {
+      padding: 13px 15px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 11px;
+      align-items: start;
+      border-bottom: 1px solid light-dark(#edf0ee, #252e2a);
+    }
+    #paperclip-ops-mockup .pc-row:last-child { border-bottom: 0; }
+    #paperclip-ops-mockup .pc-row-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: light-dark(#edf3ef, #26312c);
+      color: light-dark(#476258, #b3c8be);
+    }
+    #paperclip-ops-mockup .pc-row-icon.pc-row-icon-alert { background: light-dark(#f8e8e4, #3a2522); color: light-dark(#a94436, #efa295); }
+    #paperclip-ops-mockup .pc-row-title { font-size: 12px; font-weight: 500; line-height: 1.35; }
+    #paperclip-ops-mockup .pc-row-meta { color: light-dark(#727e79, #91a099); font-size: 10px; margin-top: 4px; line-height: 1.4; }
+    #paperclip-ops-mockup .pc-row-action {
+      border: 1px solid light-dark(#d6ddda, #36423d);
+      background: transparent;
+      border-radius: 7px;
+      padding: 6px 8px;
+      font-size: 10px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #paperclip-ops-mockup .pc-agent-state { display: flex; align-items: center; gap: 6px; }
+    #paperclip-ops-mockup .pc-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #68a35b; box-shadow: 0 0 0 3px light-dark(#e8f1e4, #233621); }
+    #paperclip-ops-mockup .pc-live-dot.pc-warn { background: #d49b4b; box-shadow: 0 0 0 3px light-dark(#f8f0e2, #382f20); }
+    #paperclip-ops-mockup .pc-agent-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: light-dark(#dfe8e3, #2b3732);
+      display: grid;
+      place-items: center;
+      color: light-dark(#3f574e, #c2d3cc);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    #paperclip-ops-mockup .pc-company-list { padding: 5px 15px 9px; }
+    #paperclip-ops-mockup .pc-company-row {
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid light-dark(#edf0ee, #252e2a);
+      background: transparent;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    #paperclip-ops-mockup .pc-company-row:last-child { border-bottom: 0; }
+    #paperclip-ops-mockup .pc-company-row:hover .pc-company-name { text-decoration: underline; }
+    #paperclip-ops-mockup .pc-company-name { font-size: 12px; font-weight: 500; }
+    #paperclip-ops-mockup .pc-company-health { font-size: 10px; color: light-dark(#77837e, #92a199); margin-top: 2px; }
+    #paperclip-ops-mockup .pc-company-metrics { text-align: right; font-size: 10px; color: light-dark(#65716c, #a1aea8); }
+    #paperclip-ops-mockup .pc-company-metrics strong { display: block; color: light-dark(#27332f, #dce5e1); font-size: 11px; font-weight: 500; }
+    #paperclip-ops-mockup .pc-progress {
+      height: 4px;
+      background: light-dark(#e6ebe8, #2a332f);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    #paperclip-ops-mockup .pc-progress span { display: block; height: 100%; background: #6e9a74; }
+    #paperclip-ops-mockup .pc-team-table { width: 100%; border-collapse: collapse; }
+    #paperclip-ops-mockup .pc-team-table th,
+    #paperclip-ops-mockup .pc-team-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid light-dark(#e7ebe9, #28312d); vertical-align: middle; }
+    #paperclip-ops-mockup .pc-team-table th { color: light-dark(#74807b, #93a19b); font-size: 10px; font-weight: 500; }
+    #paperclip-ops-mockup .pc-team-table td { font-size: 11px; }
+    #paperclip-ops-mockup .pc-team-table tr:last-child td { border-bottom: 0; }
+    #paperclip-ops-mockup .pc-table-agent { display: flex; align-items: center; gap: 9px; min-width: 150px; }
+    #paperclip-ops-mockup .pc-team-name { font-weight: 500; }
+    #paperclip-ops-mockup .pc-team-role { color: light-dark(#75817c, #90a099); font-size: 10px; margin-top: 2px; }
+    #paperclip-ops-mockup .pc-state-label { white-space: nowrap; display: flex; align-items: center; gap: 7px; }
+    #paperclip-ops-mockup .pc-screen[hidden] { display: none; }
+    #paperclip-ops-mockup .pc-scope-menu {
+      position: absolute;
+      z-index: 8;
+      left: 14px;
+      top: 112px;
+      width: 300px;
+      background: light-dark(#ffffff, #1c2421);
+      color: light-dark(#17201d, #e7efeb);
+      border: 1px solid light-dark(#d8dfdc, #35403b);
+      border-radius: 12px;
+      box-shadow: 0 18px 48px rgba(0,0,0,.22);
+      padding: 10px;
+    }
+    #paperclip-ops-mockup .pc-scope-menu[hidden] { display: none; }
+    #paperclip-ops-mockup .pc-picker-title { font-size: 10px; color: light-dark(#738079, #95a29c); padding: 5px 7px 7px; text-transform: uppercase; letter-spacing: .06em; }
+    #paperclip-ops-mockup .pc-picker-option {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 9px 8px;
+      border-radius: 8px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      text-align: left;
+      cursor: pointer;
+    }
+    #paperclip-ops-mockup .pc-picker-option:hover { background: light-dark(#f0f4f2, #27312d); }
+    #paperclip-ops-mockup .pc-picker-main { font-size: 12px; font-weight: 500; }
+    #paperclip-ops-mockup .pc-picker-sub { font-size: 10px; color: light-dark(#76827c, #93a29b); margin-top: 2px; }
+    #paperclip-ops-mockup .pc-picker-number { font-size: 10px; color: light-dark(#6b7771, #9ba9a3); text-align: right; }
+    #paperclip-ops-mockup .pc-dialog-backdrop {
+      position: absolute;
+      inset: 0;
+      z-index: 12;
+      background: rgba(8, 13, 11, .55);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    #paperclip-ops-mockup .pc-dialog-backdrop[hidden] { display: none; }
+    #paperclip-ops-mockup .pc-dialog {
+      width: min(600px, 100%);
+      background: light-dark(#ffffff, #1b2320);
+      color: light-dark(#17201d, #e8efec);
+      border: 1px solid light-dark(#dce2df, #34403a);
+      border-radius: 14px;
+      box-shadow: 0 22px 70px rgba(0,0,0,.32);
+      overflow: hidden;
+    }
+    #paperclip-ops-mockup .pc-dialog-header { padding: 18px 20px 12px; display: flex; gap: 12px; align-items: start; }
+    #paperclip-ops-mockup .pc-dialog-title { flex: 1; }
+    #paperclip-ops-mockup .pc-dialog-title p { color: light-dark(#6e7a75, #99a7a1); font-size: 11px; margin-top: 4px; }
+    #paperclip-ops-mockup .pc-icon-button { border: 0; background: transparent; cursor: pointer; padding: 4px; color: light-dark(#69756f, #9aa9a1); }
+    #paperclip-ops-mockup .pc-dialog-body { padding: 4px 20px 18px; }
+    #paperclip-ops-mockup .pc-outcome-label { display: block; font-size: 11px; font-weight: 500; margin-bottom: 7px; }
+    #paperclip-ops-mockup .pc-outcome {
+      width: 100%;
+      min-height: 110px;
+      resize: vertical;
+      border: 1px solid light-dark(#cfd8d4, #3a4741);
+      border-radius: 10px;
+      background: light-dark(#fbfcfb, #151c19);
+      color: inherit;
+      padding: 12px;
+      font-size: 14px;
+    }
+    #paperclip-ops-mockup .pc-work-options {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    #paperclip-ops-mockup .pc-option-block label { display: block; font-size: 10px; color: light-dark(#6f7b75, #94a39b); margin-bottom: 5px; }
+    #paperclip-ops-mockup .pc-option-block select {
+      width: 100%;
+      border: 1px solid light-dark(#d1d9d5, #3a4741);
+      border-radius: 8px;
+      background: light-dark(#ffffff, #151c19);
+      color: inherit;
+      padding: 9px 10px;
+      font-size: 11px;
+    }
+    #paperclip-ops-mockup .pc-advanced {
+      margin-top: 12px;
+      border-top: 1px solid light-dark(#e4e9e6, #2c3631);
+      padding-top: 12px;
+    }
+    #paperclip-ops-mockup .pc-advanced summary { cursor: pointer; font-size: 11px; color: light-dark(#5e6d66, #a8b7b0); }
+    #paperclip-ops-mockup .pc-advanced-copy { margin-top: 9px; color: light-dark(#75817b, #91a098); font-size: 10px; }
+    #paperclip-ops-mockup .pc-dialog-footer {
+      padding: 13px 20px;
+      border-top: 1px solid light-dark(#e1e6e3, #2d3732);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #paperclip-ops-mockup .pc-safety { flex: 1; font-size: 10px; color: light-dark(#6e7b75, #93a29a); display: flex; gap: 7px; align-items: center; }
+    #paperclip-ops-mockup .pc-cancel,
+    #paperclip-ops-mockup .pc-submit {
+      border-radius: 8px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #paperclip-ops-mockup .pc-cancel { border: 1px solid light-dark(#d3dbd7, #3a4640); background: transparent; }
+    #paperclip-ops-mockup .pc-submit { border: 0; background: light-dark(#17201d, #e5ece9); color: light-dark(#ffffff, #17201d); }
+    #paperclip-ops-mockup .pc-feedback {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      z-index: 15;
+      background: light-dark(#17201d, #e5ece9);
+      color: light-dark(#fff, #17201d);
+      border-radius: 9px;
+      padding: 10px 13px;
+      font-size: 11px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.22);
+    }
+    #paperclip-ops-mockup .pc-feedback[hidden] { display: none; }
+    @media (max-width: 760px) {
+      #paperclip-ops-mockup .pc-shell { grid-template-columns: 74px minmax(0, 1fr); }
+      #paperclip-ops-mockup .pc-sidebar { padding: 15px 10px; align-items: center; }
+      #paperclip-ops-mockup .pc-brand span,
+      #paperclip-ops-mockup .pc-scope-button .pc-scope-copy,
+      #paperclip-ops-mockup .pc-scope-button > svg,
+      #paperclip-ops-mockup .pc-nav span:not(.pc-nav-count),
+      #paperclip-ops-mockup .pc-nav-label,
+      #paperclip-ops-mockup .pc-sidebar-bottom { display: none; }
+      #paperclip-ops-mockup .pc-scope-button { justify-content: center; padding: 7px; }
+      #paperclip-ops-mockup .pc-nav button { justify-content: center; padding: 9px; }
+      #paperclip-ops-mockup .pc-nav-count { position: absolute; transform: translate(13px,-11px); }
+      #paperclip-ops-mockup .pc-layout-grid { grid-template-columns: 1fr; }
+      #paperclip-ops-mockup .pc-status-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      #paperclip-ops-mockup .pc-scope-menu { left: 78px; top: 72px; }
+      #paperclip-ops-mockup .pc-body { padding: 16px; }
+      #paperclip-ops-mockup .pc-topbar { padding: 11px 16px; }
+    }
+    @media (max-width: 500px) {
+      #paperclip-ops-mockup .pc-shell { display: block; min-height: 0; }
+      #paperclip-ops-mockup .pc-sidebar { display: none; }
+      #paperclip-ops-mockup .pc-mobile-scope { display: inline-flex; border: 0; background: transparent; padding: 0; cursor: pointer; color: light-dark(#526159, #afbeb7); }
+      #paperclip-ops-mockup .pc-start-button span { display: none; }
+      #paperclip-ops-mockup .pc-start-button { padding: 10px; }
+      #paperclip-ops-mockup .pc-body { padding: 13px; }
+      #paperclip-ops-mockup .pc-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #paperclip-ops-mockup .pc-status-cell { padding: 11px; }
+      #paperclip-ops-mockup .pc-stat-value { font-size: 17px; }
+      #paperclip-ops-mockup .pc-row { grid-template-columns: auto minmax(0,1fr); }
+      #paperclip-ops-mockup .pc-row-action { grid-column: 2; justify-self: start; }
+      #paperclip-ops-mockup .pc-scope-menu { left: 10px; right: 10px; top: 65px; width: auto; }
+      #paperclip-ops-mockup .pc-work-options { grid-template-columns: 1fr; }
+      #paperclip-ops-mockup .pc-dialog-backdrop { padding: 10px; }
+      #paperclip-ops-mockup .pc-dialog-footer { flex-wrap: wrap; }
+      #paperclip-ops-mockup .pc-safety { flex-basis: 100%; }
+      #paperclip-ops-mockup .pc-team-table th:nth-child(3),
+      #paperclip-ops-mockup .pc-team-table td:nth-child(3) { display: none; }
+    }
+  </style>
+
+  <div class="pc-shell">
+    <aside class="pc-sidebar" aria-label="Paperclip navigation">
+      <div class="pc-brand"><span class="pc-logo"><i data-lucide="paperclip" aria-hidden="true"></i></span><span>Paperclip</span></div>
+      <button class="pc-scope-button" id="pc-scope-toggle" type="button" aria-expanded="false">
+        <span class="pc-scope-mark" id="pc-sidebar-mark"><i data-lucide="building-2" aria-hidden="true"></i></span>
+        <span class="pc-scope-copy"><span class="pc-scope-name" id="pc-sidebar-scope">Portfolio</span><span class="pc-scope-meta" id="pc-sidebar-meta">8 companies</span></span>
+        <i data-lucide="chevrons-up-down" aria-hidden="true"></i>
+      </button>
+      <nav class="pc-nav" id="pc-primary-nav" aria-label="Primary"></nav>
+      <div class="pc-sidebar-bottom">
+        <button class="pc-secondary-link" type="button"><i data-lucide="search" aria-hidden="true"></i>Search and commands</button>
+        <button class="pc-secondary-link" type="button"><i data-lucide="settings" aria-hidden="true"></i>Settings</button>
+      </div>
+    </aside>
+
+    <main class="pc-main">
+      <header class="pc-topbar">
+        <button class="pc-mobile-scope" id="pc-mobile-toggle" type="button" aria-label="Change operating scope"><i data-lucide="panels-top-left" aria-hidden="true"></i></button>
+        <div class="pc-heading">
+          <div class="pc-context-line"><span class="pc-context-dot"></span><span id="pc-context">Portfolio · 8 companies</span></div>
+          <h1 id="pc-page-title">Overview</h1>
+        </div>
+        <button class="pc-start-button" id="pc-open-start" type="button"><i data-lucide="sparkles" aria-hidden="true"></i><span>Start work</span></button>
+      </header>
+
+      <div class="pc-body">
+        <section class="pc-screen" id="pc-portfolio-overview">
+          <div class="pc-status-strip" aria-label="Portfolio status">
+            <div class="pc-status-cell"><div class="pc-stat-label">Needs you now</div><div class="pc-stat-value pc-emphasis">3</div><div class="pc-stat-note">2 decisions · 1 failure</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Agents working</div><div class="pc-stat-value">6</div><div class="pc-stat-note">across 4 companies</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Operational risk</div><div class="pc-stat-value">2</div><div class="pc-stat-note">companies need review</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Changed today</div><div class="pc-stat-value">14</div><div class="pc-stat-note">outcomes and decisions</div></div>
+          </div>
+          <div class="pc-layout-grid">
+            <div>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Needs your attention</h2><button class="pc-section-action" type="button" data-screen="attention">Open attention queue →</button></header>
+                <div class="pc-row">
+                  <span class="pc-row-icon pc-row-icon-alert"><i data-lucide="triangle-alert" aria-hidden="true"></i></span>
+                  <div><div class="pc-row-title">COO process failed to start after 9 consecutive attempts</div><div class="pc-row-meta">Industry Bureau · Chief Operating Officer · 12 minutes ago</div></div>
+                  <button class="pc-row-action" type="button">Review failure</button>
+                </div>
+                <div class="pc-row">
+                  <span class="pc-row-icon"><i data-lucide="circle-help" aria-hidden="true"></i></span>
+                  <div><div class="pc-row-title">Approve the proposed Q4 lead-generation budget</div><div class="pc-row-meta">M3 Media · CMO is waiting · $4,500 monthly commitment</div></div>
+                  <button class="pc-row-action" type="button">Make decision</button>
+                </div>
+                <div class="pc-row">
+                  <span class="pc-row-icon"><i data-lucide="message-square-text" aria-hidden="true"></i></span>
+                  <div><div class="pc-row-title">Choose which property should receive the vendor quote</div><div class="pc-row-meta">Carr Rock Holdings · Operations Assistant · 41 minutes ago</div></div>
+                  <button class="pc-row-action" type="button">Answer</button>
+                </div>
+              </section>
+
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Agents working now</h2><button class="pc-section-action" type="button" data-screen="teams">View all teams →</button></header>
+                <div class="pc-row">
+                  <span class="pc-agent-avatar">COO</span>
+                  <div><div class="pc-row-title pc-agent-state"><span class="pc-live-dot"></span>Triaging today’s Help Scout conversations</div><div class="pc-row-meta">Industry Bureau · Chief Operating Officer · Working for 7 minutes<br>Last update: grouped 18 conversations; drafting response priorities</div></div>
+                  <button class="pc-row-action" type="button">Open</button>
+                </div>
+                <div class="pc-row">
+                  <span class="pc-agent-avatar">COS</span>
+                  <div><div class="pc-row-title pc-agent-state"><span class="pc-live-dot"></span>Preparing Barry’s end-of-day operating brief</div><div class="pc-row-meta">Personal · Chief of Staff · Working for 3 minutes<br>Next update expected in about 6 minutes</div></div>
+                  <button class="pc-row-action" type="button">Open</button>
+                </div>
+                <div class="pc-row">
+                  <span class="pc-agent-avatar">CMO</span>
+                  <div><div class="pc-row-title pc-agent-state"><span class="pc-live-dot pc-warn"></span>Campaign launch paused for budget approval</div><div class="pc-row-meta">M3 Media · Chief Marketing Officer · Waiting for you<br>No work is currently consuming budget</div></div>
+                  <button class="pc-row-action" type="button">Review</button>
+                </div>
+              </section>
+            </div>
+
+            <div>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Companies</h2><button class="pc-section-action" type="button">Compare all →</button></header>
+                <div class="pc-company-list">
+                  <button class="pc-company-row" type="button" data-company="M3 Media LLC"><span class="pc-company-logo">M3</span><span><span class="pc-company-name">M3 Media LLC</span><span class="pc-company-health pc-emphasis">1 agent error · 1 decision</span></span><span class="pc-company-metrics"><strong>1 working</strong>6 open</span></button>
+                  <button class="pc-company-row" type="button" data-company="Industry Bureau LLC"><span class="pc-company-logo">IB</span><span><span class="pc-company-name">Industry Bureau LLC</span><span class="pc-company-health">7 blocked · 1 working</span></span><span class="pc-company-metrics"><strong>6 agents</strong>16 open</span></button>
+                  <button class="pc-company-row" type="button" data-company="Personal"><span class="pc-company-logo">P</span><span><span class="pc-company-name">Personal</span><span class="pc-company-health">Healthy · brief in progress</span></span><span class="pc-company-metrics"><strong>1 working</strong>3 open</span></button>
+                  <button class="pc-company-row" type="button" data-company="Carr Rock Holdings"><span class="pc-company-logo">CR</span><span><span class="pc-company-name">Carr Rock Holdings</span><span class="pc-company-health">1 question waiting</span></span><span class="pc-company-metrics"><strong>2 active</strong>8 open</span></button>
+                </div>
+              </section>
+
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Changed today</h2><button class="pc-section-action" type="button">Open history →</button></header>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="check" aria-hidden="true"></i></span><div><div class="pc-row-title">Support queue triage completed</div><div class="pc-row-meta">Industry Bureau · 18 conversations categorized · 9:42 AM</div></div></div>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="check" aria-hidden="true"></i></span><div><div class="pc-row-title">Property receipt packet reconciled</div><div class="pc-row-meta">440-44 Brown St LLC · 12 receipts · 8:18 AM</div></div></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="pc-screen" id="pc-company-overview" hidden>
+          <div class="pc-status-strip" aria-label="Company status">
+            <div class="pc-status-cell"><div class="pc-stat-label">Needs you now</div><div class="pc-stat-value pc-emphasis">1</div><div class="pc-stat-note">agent process failure</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Agents working</div><div class="pc-stat-value">1</div><div class="pc-stat-note">of 6 agents</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Operational health</div><div class="pc-stat-value">7 blocked</div><div class="pc-stat-note">2 are older than 7 days</div></div>
+            <div class="pc-status-cell"><div class="pc-stat-label">Completed today</div><div class="pc-stat-value">4</div><div class="pc-stat-note">3 support · 1 finance</div></div>
+          </div>
+          <div class="pc-layout-grid">
+            <div>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Working now</h2><button class="pc-section-action" type="button" data-screen="team">Open team →</button></header>
+                <div class="pc-row"><span class="pc-agent-avatar">COO</span><div><div class="pc-row-title pc-agent-state"><span class="pc-live-dot"></span>Triaging today’s Help Scout conversations</div><div class="pc-row-meta">Chief Operating Officer · Working for 7 minutes<br>18 conversations grouped; response priorities are being drafted</div><div class="pc-progress"><span style="width:64%"></span></div></div><button class="pc-row-action" type="button">View live</button></div>
+                <div class="pc-row"><span class="pc-agent-avatar">CEO</span><div><div class="pc-row-title">Next scheduled: review company operating brief</div><div class="pc-row-meta">Chief Executive Officer · Wakes at 4:00 PM</div></div><button class="pc-row-action" type="button">Assign work</button></div>
+              </section>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Needs attention</h2><button class="pc-section-action" type="button" data-screen="attention">See all →</button></header>
+                <div class="pc-row"><span class="pc-row-icon pc-row-icon-alert"><i data-lucide="triangle-alert" aria-hidden="true"></i></span><div><div class="pc-row-title">COO process failed to start after 9 attempts</div><div class="pc-row-meta">Automatic retry paused · No new cost incurred · 12 minutes ago</div></div><button class="pc-row-action" type="button">Review failure</button></div>
+              </section>
+            </div>
+            <div>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>This week’s focus</h2><button class="pc-section-action" type="button">View all work →</button></header>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="target" aria-hidden="true"></i></span><div><div class="pc-row-title">Improve customer response time</div><div class="pc-row-meta">3 of 5 outcomes completed · Owned by COO</div><div class="pc-progress"><span style="width:60%"></span></div></div></div>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="target" aria-hidden="true"></i></span><div><div class="pc-row-title">Close September financial records</div><div class="pc-row-meta">2 of 4 outcomes completed · Owned by CFO</div><div class="pc-progress"><span style="width:50%"></span></div></div></div>
+              </section>
+              <section class="pc-section">
+                <header class="pc-section-header"><h2>Recent outcomes</h2><button class="pc-section-action" type="button">Open history →</button></header>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="check" aria-hidden="true"></i></span><div><div class="pc-row-title">18 support conversations categorized</div><div class="pc-row-meta">COO · 22 minutes ago</div></div></div>
+                <div class="pc-row"><span class="pc-row-icon"><i data-lucide="check" aria-hidden="true"></i></span><div><div class="pc-row-title">Daily PBX report posted</div><div class="pc-row-meta">Operations Assistant · 1 hour ago</div></div></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="pc-screen" id="pc-team-screen" hidden>
+          <section class="pc-section">
+            <header class="pc-section-header"><h2 id="pc-team-title">All agent teams</h2><button class="pc-section-action" type="button">Org chart view</button></header>
+            <div style="overflow-x:auto">
+              <table class="pc-team-table">
+                <thead><tr><th>Agent</th><th>Current objective</th><th>Last meaningful update</th><th>State</th></tr></thead>
+                <tbody id="pc-team-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="pc-screen" id="pc-attention-screen" hidden>
+          <section class="pc-section">
+            <header class="pc-section-header"><h2>Needs action</h2><span class="pc-stat-label">Sorted by impact and urgency</span></header>
+            <div class="pc-row"><span class="pc-row-icon pc-row-icon-alert"><i data-lucide="triangle-alert" aria-hidden="true"></i></span><div><div class="pc-row-title">Restore the Industry Bureau COO process</div><div class="pc-row-meta">Blocks today’s support triage · Automatic retry paused · No cost being incurred</div></div><button class="pc-row-action" type="button">Review failure</button></div>
+            <div class="pc-row"><span class="pc-row-icon"><i data-lucide="circle-help" aria-hidden="true"></i></span><div><div class="pc-row-title">Approve M3 Media’s Q4 lead-generation budget</div><div class="pc-row-meta">CMO is waiting · $4,500 monthly commitment · Campaign has not launched</div></div><button class="pc-row-action" type="button">Make decision</button></div>
+            <div class="pc-row"><span class="pc-row-icon"><i data-lucide="message-square-text" aria-hidden="true"></i></span><div><div class="pc-row-title">Choose a property for the vendor quote</div><div class="pc-row-meta">Carr Rock Holdings · Operations Assistant · Waiting 41 minutes</div></div><button class="pc-row-action" type="button">Answer</button></div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <div class="pc-scope-menu" id="pc-scope-menu" hidden>
+      <div class="pc-picker-title">Operating scope</div>
+      <button class="pc-picker-option" type="button" data-pick-scope="portfolio"><span class="pc-company-logo"><i data-lucide="building-2" aria-hidden="true"></i></span><span><span class="pc-picker-main">Portfolio</span><span class="pc-picker-sub">See across all 8 companies</span></span><span class="pc-picker-number">3 need you<br>6 working</span></button>
+      <div class="pc-picker-title">Companies</div>
+      <button class="pc-picker-option" type="button" data-pick-company="Industry Bureau LLC"><span class="pc-company-logo">IB</span><span><span class="pc-picker-main">Industry Bureau LLC</span><span class="pc-picker-sub">7 blocked · 1 working</span></span><span class="pc-picker-number pc-emphasis">1 needs you</span></button>
+      <button class="pc-picker-option" type="button" data-pick-company="M3 Media LLC"><span class="pc-company-logo">M3</span><span><span class="pc-picker-main">M3 Media LLC</span><span class="pc-picker-sub">1 agent error</span></span><span class="pc-picker-number pc-emphasis">1 needs you</span></button>
+      <button class="pc-picker-option" type="button" data-pick-company="Personal"><span class="pc-company-logo">P</span><span><span class="pc-picker-main">Personal</span><span class="pc-picker-sub">Healthy · 1 working</span></span><span class="pc-picker-number">0 need you</span></button>
+      <button class="pc-picker-option" type="button" data-pick-company="Carr Rock Holdings"><span class="pc-company-logo">CR</span><span><span class="pc-picker-main">Carr Rock Holdings</span><span class="pc-picker-sub">1 question waiting</span></span><span class="pc-picker-number pc-emphasis">1 needs you</span></button>
+    </div>
+
+    <div class="pc-dialog-backdrop" id="pc-start-dialog" hidden>
+      <section class="pc-dialog" role="dialog" aria-modal="true" aria-labelledby="pc-start-title">
+        <header class="pc-dialog-header"><div class="pc-dialog-title"><h2 id="pc-start-title">Start work</h2><p>Describe the outcome. Paperclip will organize the work underneath.</p></div><button class="pc-icon-button" id="pc-close-start" type="button" aria-label="Close"><i data-lucide="x" aria-hidden="true"></i></button></header>
+        <div class="pc-dialog-body">
+          <label class="pc-outcome-label" for="pc-outcome">What outcome do you want?</label>
+          <textarea class="pc-outcome" id="pc-outcome" placeholder="Type it however you’d say it out loud…">Review today’s new support conversations, identify anything urgent, and prepare replies for my approval.</textarea>
+          <div class="pc-work-options">
+            <div class="pc-option-block"><label for="pc-work-scope">Where</label><select id="pc-work-scope"><option>Industry Bureau LLC</option><option>Selected companies…</option><option>All companies</option></select></div>
+            <div class="pc-option-block"><label for="pc-work-time">When</label><select id="pc-work-time"><option>Start now</option><option>Schedule once…</option><option>Make this recurring…</option></select></div>
+            <div class="pc-option-block"><label for="pc-work-owner">Who should handle it</label><select id="pc-work-owner"><option>Let Paperclip choose</option><option>Chief Operating Officer</option><option>Chief Executive Officer</option><option>Operations Assistant</option></select></div>
+            <div class="pc-option-block"><label for="pc-work-review">Before external actions</label><select id="pc-work-review"><option>Ask for my approval</option><option>Follow company policy</option><option>Do not take external actions</option></select></div>
+          </div>
+          <details class="pc-advanced"><summary>Advanced options</summary><div class="pc-advanced-copy">Add a project, priority, budget limit, specific reviewers, or technical execution instructions.</div></details>
+        </div>
+        <footer class="pc-dialog-footer"><div class="pc-safety"><i data-lucide="shield-check" aria-hidden="true"></i>Paperclip will show the plan before governed actions.</div><button class="pc-cancel" id="pc-cancel-start" type="button">Cancel</button><button class="pc-submit" id="pc-submit-start" type="button">Review plan</button></footer>
+      </section>
+    </div>
+    <div class="pc-feedback" id="pc-feedback" aria-live="polite" hidden>Plan ready for review — no work was started.</div>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('paperclip-ops-mockup');
+      const shell = root.querySelector('.pc-shell');
+      const scopeToggle = root.querySelector('#pc-scope-toggle');
+      const mobileToggle = root.querySelector('#pc-mobile-toggle');
+      const scopeMenu = root.querySelector('#pc-scope-menu');
+      const nav = root.querySelector('#pc-primary-nav');
+      const context = root.querySelector('#pc-context');
+      const pageTitle = root.querySelector('#pc-page-title');
+      const sidebarScope = root.querySelector('#pc-sidebar-scope');
+      const sidebarMeta = root.querySelector('#pc-sidebar-meta');
+      const sidebarMark = root.querySelector('#pc-sidebar-mark');
+      const screens = [...root.querySelectorAll('.pc-screen')];
+      const dialog = root.querySelector('#pc-start-dialog');
+      const feedback = root.querySelector('#pc-feedback');
+      let currentScope = 'portfolio';
+      let currentCompany = 'Industry Bureau LLC';
+      let currentScreen = 'overview';
+
+      const portfolioNav = [
+        ['overview', 'Overview', 'layout-dashboard'],
+        ['attention', 'Attention', 'circle-alert', '3'],
+        ['companies', 'Companies', 'building-2'],
+        ['work', 'Work', 'list-checks'],
+        ['teams', 'Teams', 'users'],
+        ['operations', 'Operations', 'workflow']
+      ];
+      const companyNav = [
+        ['overview', 'Overview', 'layout-dashboard'],
+        ['attention', 'Attention', 'circle-alert', '1'],
+        ['work', 'Work', 'list-checks'],
+        ['team', 'Team', 'users'],
+        ['operations', 'Operations', 'workflow'],
+        ['history', 'History', 'history']
+      ];
+
+      const portfolioAgents = [
+        ['COO', 'Chief Operating Officer', 'Industry Bureau', 'Triaging today’s Help Scout conversations', 'Grouped 18 conversations; drafting priorities', 'Working · 7m'],
+        ['COS', 'Chief of Staff', 'Personal', 'Preparing Barry’s end-of-day operating brief', 'Collected changes from 4 companies', 'Working · 3m'],
+        ['CMO', 'Chief Marketing Officer', 'M3 Media', 'Launch the Q4 lead-generation campaign', 'Campaign plan ready; waiting for budget', 'Waiting for you'],
+        ['OPS', 'Operations Assistant', 'Carr Rock Holdings', 'Collect vendor quotes for the portfolio', 'Needs a target property selected', 'Waiting for you'],
+        ['CFO', 'Chief Financial Officer', 'Industry Bureau', 'Close September financial records', 'Reconciled 86% of transactions', 'Scheduled · 2h']
+      ];
+      const companyAgents = [
+        ['COO', 'Chief Operating Officer', '', 'Triaging today’s Help Scout conversations', 'Grouped 18 conversations; drafting priorities', 'Working · 7m'],
+        ['CEO', 'Chief Executive Officer', '', 'Review the company operating brief', 'Next scheduled wake at 4:00 PM', 'Scheduled'],
+        ['CFO', 'Chief Financial Officer', '', 'Close September financial records', 'Reconciled 86% of transactions', 'Scheduled · 2h'],
+        ['CMO', 'Chief Marketing Officer', '', 'Prepare October campaign plan', 'Draft ready for CEO review', 'Idle'],
+        ['CTO', 'Chief Technology Officer', '', 'Monitor production reliability', 'No new incidents detected', 'Idle'],
+        ['BM', 'Brandon Monitor', '', 'Watch support and operational alerts', 'Last check completed 18 minutes ago', 'Scheduled · 12m']
+      ];
+
+      function icon(name) { return `<i data-lucide="${name}" aria-hidden="true"></i>`; }
+      function refreshIcons() {
+        if (typeof lucide !== 'undefined') lucide.createIcons({ attrs: { width: 16, height: 16 } });
+      }
+      function renderNav() {
+        const items = currentScope === 'portfolio' ? portfolioNav : companyNav;
+        nav.innerHTML = '<div class="pc-nav-label">Operate</div>' + items.map(item => `<button type="button" data-nav="${item[0]}" class="${currentScreen === item[0] ? 'pc-nav-active' : ''}">${icon(item[2])}<span>${item[1]}</span>${item[3] ? `<span class="pc-nav-count">${item[3]}</span>` : ''}</button>`).join('');
+        refreshIcons();
+      }
+      function showScreen(screen) {
+        currentScreen = screen;
+        let target = currentScope === 'portfolio' ? 'pc-portfolio-overview' : 'pc-company-overview';
+        if (screen === 'attention') target = 'pc-attention-screen';
+        if (screen === 'teams' || screen === 'team') target = 'pc-team-screen';
+        screens.forEach(el => { el.hidden = el.id !== target; });
+        const labelMap = { overview: 'Overview', attention: 'Attention', companies: 'Companies', work: 'Work', teams: 'Teams', team: 'Team', operations: 'Operations', history: 'History' };
+        pageTitle.textContent = labelMap[screen] || 'Overview';
+        if (target === 'pc-team-screen') renderTeam();
+        renderNav();
+      }
+      function renderTeam() {
+        const rows = currentScope === 'portfolio' ? portfolioAgents : companyAgents;
+        root.querySelector('#pc-team-title').textContent = currentScope === 'portfolio' ? 'All agent teams' : `${currentCompany} team`;
+        root.querySelector('#pc-team-rows').innerHTML = rows.map(agent => `<tr><td><div class="pc-table-agent"><span class="pc-agent-avatar">${agent[0]}</span><span><span class="pc-team-name">${agent[1]}</span><span class="pc-team-role">${agent[2] || currentCompany}</span></span></div></td><td>${agent[3]}</td><td>${agent[4]}</td><td><span class="pc-state-label"><span class="pc-live-dot${agent[5].includes('Waiting') ? ' pc-warn' : ''}"></span>${agent[5]}</span></td></tr>`).join('');
+      }
+      function setScope(scope, company) {
+        currentScope = scope;
+        if (company) currentCompany = company;
+        currentScreen = 'overview';
+        const isPortfolio = scope === 'portfolio';
+        sidebarScope.textContent = isPortfolio ? 'Portfolio' : currentCompany;
+        sidebarMeta.textContent = isPortfolio ? '8 companies' : 'Company';
+        sidebarMark.innerHTML = isPortfolio ? icon('building-2') : currentCompany.split(/\s+/).map(x => x[0]).slice(0,2).join('');
+        context.textContent = isPortfolio ? 'Portfolio · 8 companies' : `${currentCompany} · Company`;
+        root.querySelector('#pc-work-scope').options[0].textContent = isPortfolio ? 'All companies' : currentCompany;
+        scopeMenu.hidden = true;
+        scopeToggle.setAttribute('aria-expanded', 'false');
+        showScreen('overview');
+        refreshIcons();
+      }
+      function toggleScopeMenu() {
+        scopeMenu.hidden = !scopeMenu.hidden;
+        scopeToggle.setAttribute('aria-expanded', String(!scopeMenu.hidden));
+      }
+      function openDialog() {
+        dialog.hidden = false;
+        root.querySelector('#pc-outcome').focus();
+      }
+      function closeDialog() { dialog.hidden = true; }
+
+      scopeToggle.addEventListener('click', toggleScopeMenu);
+      mobileToggle.addEventListener('click', toggleScopeMenu);
+      root.querySelector('#pc-open-start').addEventListener('click', openDialog);
+      root.querySelector('#pc-close-start').addEventListener('click', closeDialog);
+      root.querySelector('#pc-cancel-start').addEventListener('click', closeDialog);
+      root.querySelector('#pc-submit-start').addEventListener('click', () => {
+        closeDialog();
+        feedback.hidden = false;
+        window.setTimeout(() => { feedback.hidden = true; }, 2800);
+      });
+      dialog.addEventListener('click', event => { if (event.target === dialog) closeDialog(); });
+      nav.addEventListener('click', event => {
+        const button = event.target.closest('[data-nav]');
+        if (!button) return;
+        const requested = button.dataset.nav;
+        if (['overview', 'attention', 'teams', 'team'].includes(requested)) showScreen(requested);
+      });
+      shell.addEventListener('click', event => {
+        const company = event.target.closest('[data-company]');
+        const pickedCompany = event.target.closest('[data-pick-company]');
+        const portfolio = event.target.closest('[data-pick-scope="portfolio"]');
+        const shortcut = event.target.closest('[data-screen]');
+        if (company) setScope('company', company.dataset.company);
+        if (pickedCompany) setScope('company', pickedCompany.dataset.pickCompany);
+        if (portfolio) setScope('portfolio');
+        if (shortcut) showScreen(shortcut.dataset.screen);
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          if (!dialog.hidden) closeDialog();
+          else if (!scopeMenu.hidden) toggleScopeMenu();
+        }
+      });
+      setScope('portfolio');
+    })();
+  </script>
+</div>

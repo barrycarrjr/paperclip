@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
@@ -27,7 +27,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
-import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useToast } from "@/context/ToastContext";
 
 const memoriesQueryKey = (companyId: string, filter: Record<string, unknown>) =>
@@ -73,7 +73,10 @@ function formatDate(value: Date | string) {
 }
 
 export function Memories() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (memoriesApi.create) — see Calendar.tsx's/NewAgent.tsx's
+  // identical fix.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
@@ -85,6 +88,21 @@ export function Memories() {
   const [kindFilter, setKindFilter] = useState<MemoryKind | "">("");
   const [agentFilter, setAgentFilter] = useState("");
   const [search, setSearch] = useState("");
+
+  // This page doesn't remount on a company switch, so these otherwise
+  // survive it — agentFilter is the one that actually breaks: it holds an
+  // agent id scoped to the previous company, which the new company's query
+  // (correctly company-scoped already) just won't match, silently returning
+  // no results instead of an obviously-wrong error.
+  const prevMemoriesCompanyIdRef = useRef(selectedCompanyId);
+  useEffect(() => {
+    if (prevMemoriesCompanyIdRef.current !== selectedCompanyId) {
+      prevMemoriesCompanyIdRef.current = selectedCompanyId;
+      setKindFilter("");
+      setAgentFilter("");
+      setSearch("");
+    }
+  }, [selectedCompanyId]);
 
   const filter = useMemo(
     () => ({

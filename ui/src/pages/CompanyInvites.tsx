@@ -6,6 +6,7 @@ import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useToast } from "@/context/ToastContext";
 import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
@@ -45,7 +46,12 @@ function isInviteHistoryRow(value: unknown): value is Awaited<ReturnType<typeof 
 }
 
 export function CompanyInvites() {
-  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { companies } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES (createCompanyInvite) — see
+  // Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();

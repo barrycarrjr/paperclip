@@ -1,5 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Link } from "../lib/router";
+import { buildEmailHandoffOriginId, EMAIL_HANDOFF_ORIGIN_KIND } from "@paperclipai/shared";
 import {
   Mail,
   MailOpen,
@@ -105,9 +107,14 @@ const LEFT_PANE_COLLAPSED_WIDTH = 44;
 // Draft persistence — keep operator's typed text across page refreshes and
 // component remounts. Same pattern used by CommentThread / IssueChatThread.
 const DRAFT_DEBOUNCE_MS = 800;
-const COMPOSE_TO_KEY = "email-draft-compose-to";
-const COMPOSE_SUBJECT_KEY = "email-draft-compose-subject";
-const COMPOSE_BODY_KEY = "email-draft-compose-body";
+
+// Company-scoped: an unscoped key would let a draft typed for one company's
+// mailbox come back after switching companies and get sent from a different
+// one (the send path uses whatever mailbox is selected when Send is clicked,
+// not the company the draft was written under).
+export function composeDraftKey(companyId: string | null, field: "to" | "subject" | "body"): string {
+  return `email-draft-compose-${field}:${companyId ?? "none"}`;
+}
 
 function replyDraftKey(mailbox: string, uid: number): string {
   return `email-draft-reply:${mailbox}:${uid}`;
@@ -582,6 +589,37 @@ export function Email() {
     }
   }, [mailboxes, selectedMailbox, selectedHelpScoutRef]);
 
+  // This page doesn't remount on a company switch (same route, same
+  // component instance — see App.tsx's :companyPrefix routing), so a mailbox
+  // selected under the previous company otherwise survives untouched. That
+  // mailbox key belongs to the old company's plugin config and the new
+  // company will reject it, so the operator lands on an error/empty state
+  // instead of the new company's inbox. Clear the selection so the auto-select
+  // effect above picks the new company's first mailbox once it loads. Skip
+  // the very first run so a deep-linked ?mailbox=/?account= on initial load
+  // isn't wiped before it's ever used.
+  //
+  // Also clears the search box (P2 audit, 2026-09-03): the search query is
+  // scoped by company id in its own query key (so results were never wrong),
+  // but leaving the old company's typed term active silently re-ran it
+  // against the new company the moment its mailbox list loaded — the same
+  // stale-search-term issue already fixed for Issues/Inbox in the earlier
+  // bullet-7 pass, missed here because Email wasn't part of that pass.
+  const prevEmailCompanyIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevEmailCompanyIdRef.current === null) {
+      prevEmailCompanyIdRef.current = selectedCompanyId;
+      return;
+    }
+    if (prevEmailCompanyIdRef.current === selectedCompanyId) return;
+    prevEmailCompanyIdRef.current = selectedCompanyId;
+    setSelectedMailbox(null);
+    setSelectedHelpScoutRef(null);
+    setSelectedFolder("INBOX");
+    setSearchInput("");
+    setSearchQuery("");
+  }, [selectedCompanyId]);
+
   // Once the help-scout plugin config has loaded, re-resolve the URL-derived
   // HS ref with the real pluginId and account metadata. This avoids storing
   // the bridge call's payload before the plugin has been discovered.
@@ -858,9 +896,9 @@ export function Email() {
   }
 
   function openNewCompose() {
-    const to = loadDraft(COMPOSE_TO_KEY);
-    const subject = loadDraft(COMPOSE_SUBJECT_KEY);
-    const body = loadDraft(COMPOSE_BODY_KEY);
+    const to = loadDraft(composeDraftKey(selectedCompanyId, "to"));
+    const subject = loadDraft(composeDraftKey(selectedCompanyId, "subject"));
+    const body = loadDraft(composeDraftKey(selectedCompanyId, "body"));
     setComposeMode("new");
     setComposeSourceUid(null);
     setComposeInitial({ to, subject, body });
@@ -1071,15 +1109,29 @@ export function Email() {
         `**From:** ${msg.from}\n` +
         `**Subject:** ${msg.subject}\n` +
         `**Date:** ${msg.date}`;
+      // Durable link back to the source message (P5a) — same key format as
+      // the shared handoff path in useEmailMessageActions.ts, so an issue
+      // created from either surface is identifiable the same way.
+      const originId = buildEmailHandoffOriginId({
+        pluginId: pluginId!,
+        mailbox: selectedMailbox!,
+        messageId: msg.messageId,
+        folder: selectedFolder,
+        uid: msg.uid,
+      });
       const issue = await issuesApi.create(selectedCompanyId!, {
         title: `Email from ${msg.from}: ${msg.subject}`.slice(0, 200),
         description,
         assigneeAgentId: agentId,
+        ...(originId ? { origin: { kind: EMAIL_HANDOFF_ORIGIN_KIND, id: originId } } : {}),
       });
       // Wake the agent so it actually picks the issue up. Creating the issue
       // alone just assigns it — the agent won't run until its next scheduled
       // tick (or never, if it isn't on a routine). source: "assignment" tells
-      // the agent it should look at its inbox for new work.
+      // the agent it should look at its inbox for new work. The issue exists
+      // and is assigned either way, so a failed wake is reported to the
+      // operator (via wakeFailed below) rather than failing the hand-off.
+      let wakeFailed = false;
       try {
         await agentsApi.wakeup(
           agentId,
@@ -1093,7 +1145,7 @@ export function Email() {
           selectedCompanyId!,
         );
       } catch (err) {
-        // Issue exists; agent didn't wake. Surface but don't fail the handoff.
+        wakeFailed = true;
         console.error("Failed to wake agent after handoff", err);
       }
       // Issue tracks it now — mark read so it leaves the unread view.
@@ -1102,16 +1154,24 @@ export function Email() {
       // promote to keep-always so future mail from them isn't auto-triaged.
       const header = messages.find((m) => m.uid === msg.uid);
       if (header) await maybeAddImplicitKeepAlways(header);
-      return { issueId: issue.id, uid: msg.uid };
+      // Prefer the human-readable identifier (e.g. "IND-42") over the raw
+      // UUID for the link the operator sees, matching every other issue link
+      // in the app (see PortfolioBrief.tsx).
+      return { issueId: issue.identifier ?? issue.id, uid: msg.uid, wakeFailed };
     },
-    onSuccess: ({ issueId, uid }) => {
+    onSuccess: ({ issueId, uid, wakeFailed }) => {
       noteOverride(uid, "read");
       invalidateRules();
       invalidateMessageLists();
       setHandoffDialogOpen(false);
       setHandoffNote("");
       setHandoffAgentId(null);
-      showToast("Handed off — issue created", issueId);
+      showToast(
+        wakeFailed
+          ? "Handed off — issue created, but the agent couldn't be woken and may not start until its next scheduled check"
+          : "Handed off — issue created",
+        issueId,
+      );
     },
     onError: (err) => showFailure("Hand-off", err),
   });
@@ -1240,9 +1300,9 @@ export function Email() {
       if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
         clearDraft(forwardDraftKey(selectedMailbox, composeSourceUid));
       } else {
-        clearDraft(COMPOSE_TO_KEY);
-        clearDraft(COMPOSE_SUBJECT_KEY);
-        clearDraft(COMPOSE_BODY_KEY);
+        clearDraft(composeDraftKey(selectedCompanyId, "to"));
+        clearDraft(composeDraftKey(selectedCompanyId, "subject"));
+        clearDraft(composeDraftKey(selectedCompanyId, "body"));
       }
       setComposeOpen(false);
       setComposeToHasContent(false);
@@ -2617,7 +2677,17 @@ export function Email() {
           ) : (
             <Check className="mt-0.5 h-4 w-4 shrink-0" />
           )}
-          {actionToast.text}
+          <span>
+            {actionToast.text}
+            {actionToast.issueId && (
+              <>
+                {" — "}
+                <Link to={`/issues/${actionToast.issueId}`} className="underline underline-offset-2">
+                  View issue
+                </Link>
+              </>
+            )}
+          </span>
         </div>
       )}
 
@@ -2633,10 +2703,10 @@ export function Email() {
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
               <DraftInput
-                key={`to:${composeMode}:${composeSourceUid ?? "none"}`}
+                key={`to:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                 ref={composeToRef}
                 initialValue={composeInitial.to}
-                draftKey={composeMode === "new" ? COMPOSE_TO_KEY : null}
+                draftKey={composeMode === "new" ? composeDraftKey(selectedCompanyId, "to") : null}
                 placeholder="recipient@example.com"
                 className="text-sm"
                 onContentChange={setComposeToHasContent}
@@ -2645,10 +2715,10 @@ export function Email() {
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Subject</label>
               <DraftInput
-                key={`subject:${composeMode}:${composeSourceUid ?? "none"}`}
+                key={`subject:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                 ref={composeSubjectRef}
                 initialValue={composeInitial.subject}
-                draftKey={composeMode === "new" ? COMPOSE_SUBJECT_KEY : null}
+                draftKey={composeMode === "new" ? composeDraftKey(selectedCompanyId, "subject") : null}
                 placeholder="Subject"
                 className="text-sm"
                 onContentChange={setComposeSubjectHasContent}
@@ -2657,14 +2727,14 @@ export function Email() {
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Message</label>
               <DraftTextarea
-                key={`body:${composeMode}:${composeSourceUid ?? "none"}`}
+                key={`body:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                 ref={composeBodyRef}
                 initialValue={composeInitial.body}
                 draftKey={
                   composeMode === "forward" && selectedMailbox && composeSourceUid !== null
                     ? forwardDraftKey(selectedMailbox, composeSourceUid)
                     : composeMode === "new"
-                      ? COMPOSE_BODY_KEY
+                      ? composeDraftKey(selectedCompanyId, "body")
                       : null
                 }
                 placeholder="Write your message…"

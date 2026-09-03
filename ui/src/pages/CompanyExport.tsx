@@ -10,6 +10,7 @@ import type {
 } from "@paperclipai/shared";
 import { useNavigate, useLocation } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { agentsApi } from "../api/agents";
@@ -578,7 +579,13 @@ function expandAncestors(filePath: string): string[] {
 }
 
 export function CompanyExport() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { companies } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES/exports (exportPreview/exportBundle could
+  // export the wrong company's data) — see Calendar.tsx's/NewAgent.tsx's
+  // identical fix.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const navigate = useNavigate();

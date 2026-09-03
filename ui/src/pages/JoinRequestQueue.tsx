@@ -7,11 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useToast } from "@/context/ToastContext";
 import { queryKeys } from "@/lib/queryKeys";
 
 export function JoinRequestQueue() {
-  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { companies } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES (approve/reject join request) — see
+  // Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRouteCompanyId } from "./useRouteCompany";
+import { resolveRouteCompanyId, resolveIsActiveCompanyPortfolioRoot } from "./useRouteCompany";
 
 const COMPANIES = [
   { id: "hq-id", issuePrefix: "HQ" },
@@ -35,5 +35,36 @@ describe("resolveRouteCompanyId", () => {
     const resolved = resolveRouteCompanyId({ companyPrefix: "IND", companies: COMPANIES });
     expect(resolved).not.toBe("hq-id");
     expect(resolved).not.toBe("c3-id");
+  });
+});
+
+const PORTFOLIO_COMPANIES = [
+  { id: "hq-id", isPortfolioRoot: true },
+  { id: "ind-id", isPortfolioRoot: false },
+];
+
+describe("resolveIsActiveCompanyPortfolioRoot", () => {
+  it("is true for the portfolio root company", () => {
+    expect(
+      resolveIsActiveCompanyPortfolioRoot({ activeCompanyId: "hq-id", companies: PORTFOLIO_COMPANIES }),
+    ).toBe(true);
+  });
+
+  it("is false for a normal company", () => {
+    expect(
+      resolveIsActiveCompanyPortfolioRoot({ activeCompanyId: "ind-id", companies: PORTFOLIO_COMPANIES }),
+    ).toBe(false);
+  });
+
+  it("is false when nothing is active yet", () => {
+    expect(
+      resolveIsActiveCompanyPortfolioRoot({ activeCompanyId: null, companies: PORTFOLIO_COMPANIES }),
+    ).toBe(false);
+  });
+
+  it("is false for an id that matches no known company", () => {
+    expect(
+      resolveIsActiveCompanyPortfolioRoot({ activeCompanyId: "ghost-id", companies: PORTFOLIO_COMPANIES }),
+    ).toBe(false);
   });
 });

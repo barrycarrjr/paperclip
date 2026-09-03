@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Inbox, Plus, X } from "lucide-react";
+import { ExternalLink, Inbox, Plus, X } from "lucide-react";
 import type { WorkQueue, WorkQueueItem, WorkQueueItemStatus } from "@paperclipai/shared";
 import { WORK_QUEUE_ITEM_STATUSES } from "@paperclipai/shared";
 import { workQueuesApi } from "@/api/work-queues";
+import { Link } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,7 +29,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
-import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useToast } from "@/context/ToastContext";
 
 const queueListKey = (companyId: string) => ["work-queues", companyId] as const;
@@ -62,7 +63,10 @@ function tryParseJson(text: string): { ok: true; value: Record<string, unknown> 
 }
 
 export function WorkQueues() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (workQueuesApi.create) — see Calendar.tsx's/
+  // NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
@@ -388,6 +392,7 @@ export function WorkQueues() {
                         <tr>
                           <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
                           <th className="text-left px-3 py-2 font-medium text-muted-foreground">Source</th>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Linked work</th>
                           <th className="text-left px-3 py-2 font-medium text-muted-foreground">Priority</th>
                           <th className="text-left px-3 py-2 font-medium text-muted-foreground">Created</th>
                           <th className="text-left px-3 py-2 font-medium text-muted-foreground">Updated</th>
@@ -608,6 +613,19 @@ function ItemRow({ item, onCancel, cancelling }: ItemRowProps) {
             {expanded ? "Hide payload" : "Show payload"}
           </Button>
         </td>
+        <td className="px-3 py-2 text-xs">
+          {item.issueId ? (
+            <Link
+              to={`/issues/${item.issueId}`}
+              className="inline-flex items-center gap-1 text-foreground underline underline-offset-2 hover:text-muted-foreground"
+            >
+              View issue
+              <ExternalLink className="h-3 w-3" />
+            </Link>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </td>
         <td className="px-3 py-2 text-xs text-muted-foreground">{item.priority}</td>
         <td className="px-3 py-2 text-xs text-muted-foreground">
           {formatDate(item.createdAt)}
@@ -631,7 +649,7 @@ function ItemRow({ item, onCancel, cancelling }: ItemRowProps) {
       </tr>
       {expanded && (
         <tr className="border-b border-border last:border-b-0 bg-muted/20">
-          <td colSpan={6} className="px-3 py-2">
+          <td colSpan={7} className="px-3 py-2">
             <pre className="text-xs bg-muted/40 rounded-md p-3 overflow-x-auto">
               {JSON.stringify(item.payload, null, 2)}
             </pre>

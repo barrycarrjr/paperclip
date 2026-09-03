@@ -46,3 +46,29 @@ export function useActiveCompanyId(): string | null {
     [companyPrefix, companies, selectedCompanyId],
   );
 }
+
+/**
+ * Is the page's active company (per `useActiveCompanyId`, not the possibly
+ * one-render-stale `useCompany()` selection) the portfolio root?
+ *
+ * Exists so an HQ-only gate — deciding whether to show portfolio-wide
+ * aggregate content — reads the same render-synchronous source everywhere,
+ * rather than each page re-deriving it from `useCompany()` directly and
+ * risking the exact stale-render bug this file documents (found once in
+ * `Everything.tsx`, then again in `PortfolioEmail.tsx`, both 2026-09-03).
+ */
+export function resolveIsActiveCompanyPortfolioRoot(input: {
+  activeCompanyId: string | null;
+  companies: { id: string; isPortfolioRoot: boolean }[];
+}): boolean {
+  return input.companies.find((c) => c.id === input.activeCompanyId)?.isPortfolioRoot ?? false;
+}
+
+export function useIsActiveCompanyPortfolioRoot(): boolean {
+  const activeCompanyId = useActiveCompanyId();
+  const { companies } = useCompany();
+  return useMemo(
+    () => resolveIsActiveCompanyPortfolioRoot({ activeCompanyId, companies }),
+    [activeCompanyId, companies],
+  );
+}

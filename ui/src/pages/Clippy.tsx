@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import {
   chatApi,
   type ChatSession,
@@ -35,6 +36,7 @@ import {
 } from "../api/chat";
 import { ClippyConversation } from "../components/ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
+import { resolveActiveClippySessionId } from "../lib/clippy-company-scope";
 import { cn } from "../lib/utils";
 
 type LastActivity = "1d" | "7d" | "30d" | "all";
@@ -119,7 +121,11 @@ const COMPANY_SCOPE_LABEL: Record<CompanyScope, string> = {
 
 export function Clippy() {
   const qc = useQueryClient();
-  const { selectedCompanyId, companies } = useCompany();
+  const { companies } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (a new chat session is tagged with this companyId on
+  // create) — see Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
   const [filters, setFilters] = useState<Filters>(() => readFilters());
 
   // Persist filter state across reloads so the user doesn't re-tune on every visit.
@@ -158,9 +164,13 @@ export function Clippy() {
   const [sessionListOpen, setSessionListOpen] = useState(false);
 
   useEffect(() => {
-    if (activeId) return;
-    if (sessions.length > 0) setActiveId(sessions[0].id);
-  }, [activeId, sessions]);
+    const resolved = resolveActiveClippySessionId({
+      companyScope: filters.companyScope,
+      activeId,
+      sessionIds: sessions.map((s) => s.id),
+    });
+    if (resolved !== activeId) setActiveId(resolved);
+  }, [activeId, sessions, filters.companyScope]);
 
   const createMutation = useMutation({
     mutationFn: () =>

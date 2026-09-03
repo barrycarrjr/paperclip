@@ -1,16 +1,17 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ExternalLink, Plus, Check, Tag } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Plus, Check, Tag, Globe2 } from "lucide-react";
 import type { Agent, Company, Issue, IssueLabel, IssuePriority, IssueStatus } from "@paperclipai/shared";
 import { ISSUE_STATUSES, ISSUE_PRIORITIES } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialog } from "../context/DialogContext";
 import { AssigneePicker } from "../components/AssigneePicker";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { EmptyState } from "../components/EmptyState";
 import { FilterPopover } from "../components/FilterPopover";
 import { PriorityIcon } from "../components/PriorityIcon";
 import { StatusIcon } from "../components/StatusIcon";
@@ -529,7 +530,12 @@ function BulkActionsBar({
 }
 
 export function PortfolioIssues() {
-  const { selectedCompanyId } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03) — same shape as Everything.tsx/PortfolioEmail.tsx. This page
+  // also had no HQ-only gate at all, unlike every sibling Portfolio* page —
+  // added below (same gap already found and fixed in PortfolioApprovals.tsx).
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { openNewIssue } = useDialog();
   const queryClient = useQueryClient();
@@ -567,7 +573,7 @@ export function PortfolioIssues() {
         priorities: priorityFilter.length > 0 ? priorityFilter : undefined,
         companyIds: companyIdFilter.length > 0 ? companyIdFilter : undefined,
       }),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
   const issues = data?.issues ?? [];
@@ -633,7 +639,7 @@ export function PortfolioIssues() {
   const { data: portfolioAgentsData } = useQuery({
     queryKey: ["portfolio-issues", "agents", selectedCompanyId],
     queryFn: () => agentsApi.listPortfolio(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && isPortfolioRoot,
     staleTime: 60_000,
   });
   const agentNameById = useMemo(() => {
@@ -750,6 +756,18 @@ export function PortfolioIssues() {
     statusFilter.length < DEFAULT_STATUS_FILTER.length ||
     priorityFilter.length > 0 ||
     companyIdFilter.length > 0;
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={Globe2} message="Select a company to view its portfolio issues." />;
+  }
+  if (!isPortfolioRoot) {
+    return (
+      <EmptyState
+        icon={Globe2}
+        message="Portfolio Issues is only available on the HQ (portfolio root) company."
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0">

@@ -159,9 +159,17 @@ function buildAssigneeAdapterOverrides(input: {
   return Object.keys(overrides).length > 0 ? overrides : null;
 }
 
-function loadDraft(): IssueDraft | null {
+// Company-scoped: the draft carries company-specific entity ids (project,
+// assignee, execution workspace). An unscoped key would restore Company A's
+// ids under Company B, where they're either meaningless or point at the
+// wrong company's records.
+export function draftStorageKey(companyId: string | null): string {
+  return `${DRAFT_KEY}:${companyId ?? "none"}`;
+}
+
+function loadDraft(companyId: string | null): IssueDraft | null {
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const raw = localStorage.getItem(draftStorageKey(companyId));
     if (!raw) return null;
     return JSON.parse(raw) as IssueDraft;
   } catch {
@@ -169,12 +177,12 @@ function loadDraft(): IssueDraft | null {
   }
 }
 
-function saveDraft(draft: IssueDraft) {
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+function saveDraft(companyId: string | null, draft: IssueDraft) {
+  localStorage.setItem(draftStorageKey(companyId), JSON.stringify(draft));
 }
 
-function clearDraft() {
-  localStorage.removeItem(DRAFT_KEY);
+function clearDraft(companyId: string | null) {
+  localStorage.removeItem(draftStorageKey(companyId));
 }
 
 function isTextDocumentFile(file: File) {
@@ -459,7 +467,7 @@ export function NewIssueDialog() {
             : undefined,
         });
       }
-      clearDraft();
+      clearDraft(companyId);
       reset();
       closeNewIssue();
     },
@@ -474,10 +482,10 @@ export function NewIssueDialog() {
 
   // Debounced draft saving
   const scheduleSave = useCallback(
-    (draft: IssueDraft) => {
+    (companyId: string | null, draft: IssueDraft) => {
       if (draftTimer.current) clearTimeout(draftTimer.current);
       draftTimer.current = setTimeout(() => {
-        if (draft.title.trim()) saveDraft(draft);
+        if (draft.title.trim()) saveDraft(companyId, draft);
       }, DEBOUNCE_MS);
     },
     [],
@@ -486,7 +494,7 @@ export function NewIssueDialog() {
   // Save draft on meaningful changes
   useEffect(() => {
     if (!newIssueOpen) return;
-    scheduleSave({
+    scheduleSave(effectiveCompanyId, {
       title,
       description,
       status,
@@ -519,6 +527,7 @@ export function NewIssueDialog() {
     selectedExecutionWorkspaceId,
     newIssueOpen,
     scheduleSave,
+    effectiveCompanyId,
   ]);
 
   // Restore draft or apply defaults when dialog opens
@@ -533,7 +542,9 @@ export function NewIssueDialog() {
     }
     executionWorkspaceDefaultProjectId.current = null;
 
-    const draft = loadDraft();
+    // Matches the dialogCompanyId assignment above — dialogCompanyId itself
+    // isn't readable yet this render (the setState above hasn't committed).
+    const draft = loadDraft(newIssueDefaults.companyId ?? selectedCompanyId);
     if (newIssueDefaults.parentId) {
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
@@ -695,7 +706,7 @@ export function NewIssueDialog() {
   }
 
   function discardDraft() {
-    clearDraft();
+    clearDraft(effectiveCompanyId);
     reset();
     closeNewIssue();
   }
@@ -900,7 +911,7 @@ export function NewIssueDialog() {
       })),
     [orderedProjects],
   );
-  const savedDraft = loadDraft();
+  const savedDraft = loadDraft(effectiveCompanyId);
   const hasSavedDraft = Boolean(savedDraft?.title.trim() || savedDraft?.description.trim());
   const canDiscardDraft = hasDraft || hasSavedDraft;
   const createIssueErrorMessage =

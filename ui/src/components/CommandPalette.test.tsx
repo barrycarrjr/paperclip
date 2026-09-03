@@ -8,7 +8,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "./CommandPalette";
 
 const companyState = vi.hoisted(() => ({
-  selectedCompanyId: "company-1",
+  selectedCompanyId: "company-1" as string | null,
+  selectedCompany: null as { isPortfolioRoot: boolean } | null,
+}));
+
+const pluginSlotsState = vi.hoisted(() => ({
+  slots: [] as Array<{
+    id: string;
+    displayName: string;
+    routePath?: string;
+    pluginKey: string;
+    pluginDisplayName: string;
+  }>,
 }));
 
 const dialogState = vi.hoisted(() => ({
@@ -35,6 +46,10 @@ const mockProjectsApi = vi.hoisted(() => ({
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => companyState,
+}));
+
+vi.mock("@/plugins/slots", () => ({
+  usePluginSlots: () => ({ slots: pluginSlotsState.slots, isLoading: false, errorMessage: null }),
 }));
 
 vi.mock("../context/DialogContext", () => ({
@@ -155,7 +170,20 @@ describe("CommandPalette", () => {
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
     mockProjectsApi.list.mockResolvedValue([]);
+    companyState.selectedCompanyId = "company-1";
+    companyState.selectedCompany = { isPortfolioRoot: false };
+    pluginSlotsState.slots = [];
   });
+
+  function open() {
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+  }
+
+  function itemLabels(): string[] {
+    return Array.from(container.querySelectorAll("button")).map((el) => el.textContent ?? "");
+  }
 
   afterEach(() => {
     container.remove();
@@ -182,6 +210,105 @@ describe("CommandPalette", () => {
         includeRoutineExecutions: true,
       });
     });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("lists Email, Clippy and the other pages the audit found missing (B06)", async () => {
+    // Regression for docs/plans/2026-09-02-ux-control-center-preservation.md
+    // B06: the palette's navigation catalog used to be a separate
+    // hand-copied list that never included Email, Clippy, Routines,
+    // Work queues, Assistants, Memories, Approvals or Receipts. Labels here
+    // must match SidebarMenu.tsx's existing names, not a proposed future
+    // rename (see workspace-catalog.ts's file comment) — a first version of
+    // this test asserted "Automations"/"Intake queues", which would have
+    // pinned exactly that mismatch as if it were correct.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const labels = itemLabels().join(" | ");
+    for (const expected of ["Email", "Clippy", "Routines", "Work queues", "Assistants", "Memories", "Approvals", "Receipts"]) {
+      expect(labels).toContain(expected);
+    }
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("only shows the Portfolio group for the portfolio-root company", async () => {
+    const { root: nonRootRoot } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+    expect(itemLabels().join(" | ")).not.toContain("Portfolio Email");
+    act(() => {
+      nonRootRoot.unmount();
+    });
+
+    const rootContainer = document.createElement("div");
+    document.body.appendChild(rootContainer);
+    companyState.selectedCompany = { isPortfolioRoot: true };
+    const { root: portfolioRoot } = renderWithQueryClient(<CommandPalette />, rootContainer);
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+    await flush();
+    // Regression: portfolio-approvals/portfolio-activity/portfolio-receipts
+    // were previously in company-routes.ts's route-root list but never
+    // surfaced here even for HQ.
+    const portfolioLabels = Array.from(rootContainer.querySelectorAll("button")).map((el) => el.textContent ?? "").join(" | ");
+    expect(portfolioLabels).toContain("Portfolio Email");
+    expect(portfolioLabels).toContain("Portfolio Approvals");
+    expect(portfolioLabels).toContain("Portfolio Activity");
+    expect(portfolioLabels).toContain("Portfolio Receipts");
+
+    act(() => {
+      portfolioRoot.unmount();
+    });
+    rootContainer.remove();
+  });
+
+  it("lists installed plugin pages by their real display name and navigates to their real route", async () => {
+    pluginSlotsState.slots = [
+      { id: "slot-1", displayName: "Notepad", routePath: "notepad", pluginKey: "notepad", pluginDisplayName: "Notepad" },
+    ];
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const notepadButton = Array.from(container.querySelectorAll("button")).find((el) =>
+      (el.textContent ?? "").includes("Notepad"),
+    );
+    expect(notepadButton).toBeTruthy();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("does not render a page slot with no routePath as a navigable item (code review, 2026-09-02)", async () => {
+    // A "page" slot type can legally omit routePath (e.g. a page meant to be
+    // embedded elsewhere, not top-level navigable). The Plugins group's
+    // visibility guard used to check the unfiltered slot count, so a
+    // routePath-less-only install would show an empty "Plugins" heading with
+    // nothing clickable under it — fixed by filtering before both the guard
+    // and the render. This asserts the item itself never renders; it can't
+    // assert the heading is absent too, since CommandGroup is mocked here
+    // without its `heading` prop.
+    pluginSlotsState.slots = [
+      { id: "slot-1", displayName: "Embedded Widget", routePath: undefined, pluginKey: "widget-plugin", pluginDisplayName: "Widget Plugin" },
+    ];
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const widgetButton = Array.from(container.querySelectorAll("button")).find((el) =>
+      (el.textContent ?? "").includes("Embedded Widget"),
+    );
+    expect(widgetButton).toBeUndefined();
 
     act(() => {
       root.unmount();

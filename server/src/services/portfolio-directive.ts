@@ -123,7 +123,20 @@ export function portfolioDirectiveService(db: Db) {
     const skipped: DirectiveSkip[] = [];
 
     let rows: { id: string; name: string; status: string; isPortfolioRoot: boolean }[];
-    if (companyIds && companyIds.length > 0) {
+    if (companyIds !== undefined) {
+      // An explicit, empty selection means "target nothing" — it must not
+      // fall through to the omitted-companyIds branch below, which targets
+      // every accessible company. (P4 audit, 2026-09-03: the previous
+      // `companyIds && companyIds.length > 0` check treated `[]` the same as
+      // "omitted" by accident, since `[] && anything` is truthy but the
+      // length check then failed, sending it to the all-companies branch —
+      // reachable via the `broadcast_directive` Clippy tool, not just the
+      // one first-party form that happens to disable submit on an empty
+      // pick.) The route/tool schemas now also reject an explicit empty
+      // array outright; this is defense in depth for any other caller.
+      if (companyIds.length === 0) {
+        return { targets: [], skipped };
+      }
       rows = await db
         .select({
           id: companies.id,

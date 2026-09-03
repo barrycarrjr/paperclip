@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
+import { goalsApi } from "../api/goals";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -240,6 +241,15 @@ export function IssueProperties({
     queryKey: queryKeys.projects.list(companyId!),
     queryFn: () => projectsApi.list(companyId!),
     enabled: !!companyId,
+  });
+  // Read-only: `goalId` is derived server-side from the issue's project, not
+  // an independently editable field here. Added 2026-09-03 (P4 audit) — an
+  // issue contributing to a goal had no visible trace of that anywhere in
+  // this panel, despite Goals.tsx's own help text promising it.
+  const { data: issueGoal } = useQuery({
+    queryKey: ["goal", issue.goalId ?? ""],
+    queryFn: () => goalsApi.get(issue.goalId!),
+    enabled: !!issue.goalId,
   });
   const activeProjects = useMemo(
     () => (projects ?? []).filter((p) => !p.archivedAt || p.id === issue.projectId),
@@ -913,6 +923,18 @@ export function IssueProperties({
         >
           {projectContent}
         </PropertyPicker>
+
+        {issue.goalId && (
+          <PropertyRow label="Goal">
+            <Link
+              to={`/goals/${issue.goalId}`}
+              className="inline-flex items-center gap-1 min-w-0 text-sm hover:text-foreground text-muted-foreground"
+            >
+              <span className="truncate">{issueGoal?.title ?? "Loading…"}</span>
+              <ArrowUpRight className="h-3 w-3 shrink-0" />
+            </Link>
+          </PropertyRow>
+        )}
 
         <PropertyPicker
           inline={inline}

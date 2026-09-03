@@ -5,7 +5,7 @@ import type { Agent, AgentRole, AgentStatus, Company } from "@paperclipai/shared
 import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -330,7 +330,9 @@ function BulkActionsBar({ count, onPause, onResume, onClear, isPending }: BulkAc
 }
 
 export function PortfolioAgents() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 

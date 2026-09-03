@@ -34,6 +34,7 @@ import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
@@ -110,7 +111,6 @@ function groupByCompany<T extends { companyId: string }>(
 
 export function PortfolioBrief() {
   const {
-    selectedCompanyId,
     selectedCompany,
     setSelectedCompanyId,
     companies: allAccessibleCompanies,
@@ -122,20 +122,26 @@ export function PortfolioBrief() {
     setBreadcrumbs([{ label: "Portfolio Brief" }]);
   }, [setBreadcrumbs]);
 
-  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
+  // Both URL-derived, not useCompany()'s selection state (P3 audit,
+  // 2026-09-03) — the identical bug already found and fixed in
+  // Everything.tsx/PortfolioEmail.tsx (useRouteCompany.ts documents it).
+  // `selectedCompany` above is kept from context for the unrelated email-
+  // config resolution further down, which the audit didn't flag.
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
 
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
 
-  const { data: dashboardData, isLoading: dashLoading } = useQuery({
+  const { data: dashboardData, isLoading: dashLoading, error: dashError } = useQuery({
     queryKey: ["portfolio-dashboard", selectedCompanyId],
     queryFn: () => dashboardApi.listPortfolio(selectedCompanyId!),
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
-  const { data: activityData } = useQuery({
+  const { data: activityData, isLoading: activityLoading } = useQuery({
     queryKey: ["portfolio-activity", "brief", selectedCompanyId, OUTCOMES_LIMIT],
     queryFn: () =>
       activityApi.listPortfolio(selectedCompanyId!, { limit: OUTCOMES_LIMIT }),
@@ -148,7 +154,7 @@ export function PortfolioBrief() {
   // Held-back rows are a portfolio-wide fact, so the toggle sits with the
   // section rather than inside any one company's block.
   const [showSetAside, setShowSetAside] = useState(false);
-  const { data: attentionData } = useQuery({
+  const { data: attentionData, isLoading: attentionLoading } = useQuery({
     queryKey: [...queryKeys.portfolioAttention(selectedCompanyId!), showSetAside],
     queryFn: () => attentionApi.listPortfolio(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId && isPortfolioRoot,
@@ -156,7 +162,7 @@ export function PortfolioBrief() {
     refetchInterval: 15_000,
   });
 
-  const { data: issuesData } = useQuery({
+  const { data: issuesData, isLoading: issuesLoading } = useQuery({
     queryKey: ["portfolio-issues", "brief", selectedCompanyId],
     queryFn: () =>
       issuesApi.listPortfolio(selectedCompanyId!, {
@@ -637,8 +643,26 @@ export function PortfolioBrief() {
       />
     );
   }
-  if (dashLoading) {
+  // P3 audit, 2026-09-03: this used to gate only on `dashLoading`, so the
+  // hero ("all clear") and the outcome/issue/review sections below could all
+  // render past the skeleton while activity/attention/issues were still in
+  // flight — each defaults to an empty list/0 while loading, indistinguishable
+  // from "genuinely nothing here". Same fix as MorningBrief.tsx.
+  if (dashLoading || activityLoading || attentionLoading || issuesLoading) {
     return <PageSkeleton variant="dashboard" />;
+  }
+
+  if (dashError) {
+    // Previously fell through silently: `totals`/`allClear` below default to
+    // 0/true when `dashboardData` is undefined, so a failed fetch rendered as
+    // an "all clear" hero — actively misrepresenting a fetch failure as
+    // healthy, same bug as MorningBrief.tsx.
+    return (
+      <EmptyState
+        icon={Sunrise}
+        message="Couldn't load the portfolio brief. Check your connection and try reloading."
+      />
+    );
   }
 
   const now = new Date();

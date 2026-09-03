@@ -29,7 +29,11 @@ import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { systemApi } from "../api/system";
-import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
+import {
+  shouldClearTransientSelectionSource,
+  shouldSyncCompanySelectionFromRoute,
+} from "../lib/company-selection";
+import { isInstanceSettingsPath } from "../lib/scope-kind";
 import {
   DEFAULT_INSTANCE_SETTINGS_PATH,
   normalizeRememberedInstanceSettingsPath,
@@ -70,7 +74,11 @@ export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const navigationType = useNavigationType();
-  const isInstanceSettingsRoute = location.pathname.startsWith("/instance/");
+  // Reused from scope-kind.ts rather than kept as this file's own inline
+  // check (code-reviewed 2026-09-02: the two had quietly diverged — this
+  // one didn't match the bare "/instance" case, and neither lowercased
+  // before comparing, both fixed in the shared version).
+  const isInstanceSettingsRoute = isInstanceSettingsPath(location.pathname);
   const isCompanySettingsRoute = location.pathname.includes("/company/settings");
   const onboardingTriggered = useRef(false);
   const lastMainScrollTop = useRef(0);
@@ -149,16 +157,21 @@ export function Layout() {
       return;
     }
 
-    // URL has settled at selectedCompanyId — the "manual" sidebar-click guard
-    // in shouldSyncCompanySelectionFromRoute exists to protect the brief race
-    // window between setSelectedCompanyId(id, manual) and useCompanyPageMemory
-    // navigating to the remembered path. Once the URL catches up to the
-    // selected company, the guard is no longer load-bearing and a sticky
-    // "manual" source breaks subsequent cross-company `<Link>` clicks (e.g.
-    // PortfolioBrief's email-row link to /M3/email — the URL navigates but
-    // the company stays HQ, rendering "Email not configured" until refresh).
-    // Flip to "route_sync" so future URL-driven nav can pull the company.
-    if (selectionSource === "manual") {
+    // URL has settled at selectedCompanyId — the "manual"/"shortcut"
+    // sidebar-click guard in shouldSyncCompanySelectionFromRoute exists to
+    // protect the brief race window between setSelectedCompanyId(id, ...)
+    // and useCompanyPageMemory navigating to the (remembered, or for
+    // "shortcut", the click's own explicit) destination. Once the URL
+    // catches up to the selected company, the guard is no longer load-bearing
+    // and a sticky non-"route_sync" source breaks subsequent cross-company
+    // `<Link>` clicks (e.g. PortfolioBrief's email-row link to /M3/email —
+    // the URL navigates but the company stays HQ, rendering "Email not
+    // configured" until refresh). Flip to "route_sync" so future URL-driven
+    // nav can pull the company. "shortcut" needs this exactly as much as
+    // "manual" does — leaving it sticky was the missing piece the first time
+    // this fix was attempted (see the comment above CompanySelectionSource in
+    // ../lib/company-selection.ts).
+    if (shouldClearTransientSelectionSource(selectionSource)) {
       setSelectedCompanyId(matchedCompany.id, { source: "route_sync" });
     }
   }, [

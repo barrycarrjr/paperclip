@@ -66,6 +66,13 @@ export function ClippyConversation({ sessionId, onOpenSessionList }: Props) {
         lastEventAt={lastEventAt}
       />
       <ClippyComposer
+        // Remount on a chat switch: the composer's draft text and pending
+        // attachment uploads are local state that otherwise survives across
+        // sessionId changes (this component doesn't unmount between chats),
+        // so an unsent draft or in-flight upload for one chat could get sent
+        // to a different one after switching (F11's "independent chat scope
+        // and drafts").
+        key={sessionId}
         sessionId={sessionId}
         permissionMode={session?.permissionMode ?? "ask"}
         effort={session?.effort ?? "auto"}

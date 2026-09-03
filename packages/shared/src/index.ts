@@ -138,6 +138,7 @@ export {
   PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_UI_SLOT_TYPES,
   PLUGIN_UI_SLOT_ENTITY_TYPES,
+  PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS,
   PLUGIN_LAUNCHER_PLACEMENT_ZONES,
   PLUGIN_LAUNCHER_ACTIONS,
   PLUGIN_LAUNCHER_BOUNDS,
@@ -240,6 +241,7 @@ export {
   type PluginConnectorSurface,
   type PluginUiSlotType,
   type PluginUiSlotEntityType,
+  type PluginReservedCompanyRouteSegment,
   type PluginLauncherPlacementZone,
   type PluginLauncherAction,
   type PluginLauncherBounds,
@@ -1035,6 +1037,13 @@ export type {
 export { API_PREFIX, API } from "./api.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
 export { deriveProjectUrlKey, normalizeProjectUrlKey, hasNonAsciiContent } from "./project-url-key.js";
+export {
+  EMAIL_HANDOFF_ORIGIN_KIND,
+  buildEmailHandoffOriginId,
+  parseEmailHandoffOriginId,
+  isEmailHandoffOriginKind,
+  type EmailHandoffSourceRef,
+} from "./email-handoff-origin.js";
 export {
   AGENT_MENTION_SCHEME,
   PROJECT_MENTION_SCHEME,

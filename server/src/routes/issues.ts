@@ -1112,7 +1112,10 @@ export function issueRoutes(
   const broadcastDirectiveSchema = z.object({
     intent: z.string().trim().min(1).max(4000),
     title: z.string().trim().max(200).optional(),
-    companyIds: z.array(z.string()).max(500).optional(),
+    // Omit entirely to target every accessible company; an explicit but
+    // empty array is rejected rather than silently treated the same as
+    // omitted (P4 audit, 2026-09-03 — see portfolio-directive.ts).
+    companyIds: z.array(z.string()).min(1).max(500).optional(),
     includePortfolioRoot: z.boolean().optional(),
   });
   router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
@@ -1970,8 +1973,15 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    // `origin` is the client-declarable subset (email handoff only — see
+    // clientDeclarableIssueOriginSchema). Map it onto the real columns and
+    // drop the wrapper: issueService.create spreads whatever is left straight
+    // into the insert, so an unmapped `origin` key would reach Drizzle as an
+    // unknown column.
+    const { origin, ...createBody } = req.body;
     const issue = await svc.create(companyId, {
-      ...req.body,
+      ...createBody,
+      ...(origin ? { originKind: origin.kind, originId: origin.id } : {}),
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,

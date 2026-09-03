@@ -5,6 +5,7 @@ import {
   CircleDot,
   Target,
   DollarSign,
+  LayoutGrid,
   Mail,
   Network,
   Receipt,
@@ -14,6 +15,7 @@ import {
   MessageSquare,
   Globe2,
   Bot,
+  UserCog,
   ShieldCheck,
   Sunrise,
   FolderKanban,
@@ -204,6 +206,17 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
             info="View and triage your inbox. Triage actions move mail immediately and update your rules so future messages follow automatically."
           />
         )}
+        {/* Pinned up here with Email/Inbox/Clippy rather than left inside
+            Work below, matching docs/plans/2026-09-02-ux-control-center-scope.md's
+            "small primary navigation" table (Email, Calendar, Pinned tools,
+            Overview, Attention, Team, Work, All workspaces) — Calendar is a
+            daily-use destination, not one more Work sub-type. */}
+        <SidebarNavItem
+          to="/calendar"
+          label="Calendar"
+          icon={CalendarClock}
+          info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
+        />
       </div>
 
       <SidebarSection
@@ -221,12 +234,6 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           label="Routines"
           icon={Repeat}
           info="Recurring work that runs on a schedule or trigger. Use routines for anything that should happen repeatedly without you asking each time."
-        />
-        <SidebarNavItem
-          to="/calendar"
-          label="Calendar"
-          icon={CalendarClock}
-          info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
         />
         <SidebarNavItem
           to="/goals"
@@ -301,6 +308,26 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           }
           info="Visualise how agents in this company report to each other — who delegates to whom, and where the CEO sits."
         />
+        {/* Added 2026-09-03 (P3 audit): the filterable All/Active/Paused/
+            Error list existed (mobile already links to it) but had no
+            desktop sidebar entry — Org chart is a different view (structure,
+            not status), not a substitute for it. */}
+        <SidebarNavItem
+          to="/agents/all"
+          label="All agents"
+          icon={Bot}
+          info="The full roster with status filters — active, paused, error, and terminated."
+        />
+        {/* This section's own info text above promises assistants are "listed
+            here for quick access" — added 2026-09-03 (P3 audit) after finding
+            no Assistants entry existed anywhere in the desktop sidebar, only
+            reachable via Command Palette search or a direct URL. */}
+        <SidebarNavItem
+          to="/assistants"
+          label="Assistants"
+          icon={UserCog}
+          info="Agents built as a persona to talk to directly — phone, chat, or both — distinct from agents doing background work."
+        />
       </SidebarSection>
 
       <PluginSlotOutlet
@@ -318,6 +345,18 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
         itemClassName="rounded-lg border border-border p-3"
         missingBehavior="placeholder"
       />
+
+      {/* "All workspaces" from scope.md's primary nav table — complete
+          discovery, last in the list on purpose: everything above is a
+          pinned daily shortcut, this is the catch-all for the rest. */}
+      <div className="flex flex-col gap-0.5">
+        <SidebarNavItem
+          to="/everything"
+          label="Everything"
+          icon={LayoutGrid}
+          info="Every workspace this company can reach, including ones not pinned above — the same list Command Palette search uses."
+        />
+      </div>
     </>
   );
 

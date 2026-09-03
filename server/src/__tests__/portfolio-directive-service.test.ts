@@ -153,4 +153,31 @@ describe("portfolioDirectiveService.broadcast", () => {
       },
     ]);
   });
+
+  it("targets nothing for an explicit empty company selection, rather than falling through to every accessible company", async () => {
+    // Regression (P4 audit, 2026-09-03): `companyIds: []` used to be treated
+    // identically to "omitted" (`companyIds && companyIds.length > 0` is
+    // false either way), so an explicit empty selection silently broadcast
+    // to every accessible company instead of targeting none — reachable via
+    // the `broadcast_directive` Clippy tool, not just the one first-party
+    // form that happens to disable submit on an empty pick.
+    const db = makeDb({
+      companies: [
+        { id: "c1", name: "Acme", status: "active", isPortfolioRoot: false },
+        { id: "c2", name: "Globex", status: "active", isPortfolioRoot: false },
+      ],
+      ceo: [{ id: "ceo-1", name: "Chief" }],
+      roster: [{ id: "ceo-1", name: "Chief", reportsTo: null }],
+    });
+
+    const result = await portfolioDirectiveService(db).broadcast({
+      actor: ADMIN,
+      intent: "Do the thing",
+      companyIds: [],
+    });
+
+    expect(result.dispatched).toHaveLength(0);
+    expect(result.skipped).toHaveLength(0);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
 });

@@ -95,6 +95,17 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
+// useActiveCompanyId (P4 sweep, 2026-09-03) reads useParams from @/lib/router;
+// this page also uses its Link directly (dead-link fix, same slice).
+vi.mock("@/lib/router", () => ({
+  useParams: () => ({}),
+  Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 

@@ -807,26 +807,95 @@ export type PluginUiSlotType = (typeof PLUGIN_UI_SLOT_TYPES)[number];
 /**
  * Reserved company-scoped route segments that plugin page routes may not claim.
  *
- * These map to first-class host pages under `/:companyPrefix/...`.
+ * These map to first-class host pages under `/:companyPrefix/...`. This is
+ * the single source of truth for "what is a real host route root under a
+ * company prefix" — `ui/src/lib/company-routes.ts`'s `BOARD_ROUTE_ROOTS`
+ * builds directly from this list rather than keeping its own copy.
+ *
+ * Keep this in exact sync with every top-level path segment registered
+ * inside `boardRoutes()` in `ui/src/App.tsx`. Before this list was unified
+ * (2026-09-02), it and the UI's separate copy had already drifted in both
+ * directions — this one was missing "settings"/"plugins"/"assistants" (real
+ * routes a plugin could have silently collided with), and the UI's copy was
+ * separately missing "onboarding"/"assistants" (which broke prefix-stripping
+ * for those pages, the same bug class as B01 in
+ * docs/plans/2026-09-02-ux-control-center-preservation.md). A plugin's own
+ * dynamically-installed `routePath` values can never be listed here at
+ * compile time — those are handled separately via a runtime registry on the
+ * client (`ui/src/lib/plugin-route-registry.ts`), populated from the same
+ * `listUiContributions()` data this validator itself checks incoming
+ * manifests against.
+ *
+ * Code-review pass, same day: found two more gaps against a fresh diff of
+ * boardRoutes() against this list. "instance" was missing — App.tsx also
+ * registers "instance/settings/adapters" *inside* boardRoutes() (in addition
+ * to the real, actually-linked, unprefixed "/instance/settings/..." route
+ * outside it), so it's real, if likely redundant with the unprefixed one
+ * (nothing in ui/src links to the company-prefixed form; worth a look in
+ * P4). "usage" is not a current boardRoutes() entry at all — it was a real
+ * page once, later folded into "/costs", and the pre-unification UI-only
+ * list had kept it long after the route itself was gone. It's kept here
+ * anyway: an old bookmark to "/IND/usage" would otherwise reproduce this
+ * project's whole double-prefix bug class the first time useCompanyPageMemory
+ * saved it un-stripped, even though the destination 404s regardless of
+ * prefix depth. Keeping a dead name recognized costs nothing and forecloses
+ * that failure mode; dropping it doesn't buy anything back.
+ *
+ * Increasing this list is not purely additive to plugin authors: it's also
+ * what server/src/services/plugin-loader.ts's manifest validator checks a
+ * plugin's routePath against on every install/reinstall/upgrade (not on a
+ * plain server restart, which reads the already-validated manifest back from
+ * the database). A plugin whose routePath happens to match a name newly
+ * added here will fail that check going forward, even though its own
+ * manifest hasn't changed. No currently-installed plugin collides with
+ * anything added in this pass (checked 2026-09-02), but this is a real
+ * behavior change for third-party or future plugins, not a no-op.
  */
 export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
+  "brief",
   "dashboard",
   "onboarding",
   "companies",
   "company",
   "settings",
   "plugins",
+  "skills",
   "org",
+  "clippy",
   "agents",
   "assistants",
   "projects",
+  "workspaces",
+  "execution-workspaces",
+  "instance",
+  "usage",
+  "portfolio-brief",
+  "portfolio-receipts",
+  "portfolio-issues",
+  "portfolio-directives",
+  "portfolio-agents",
+  "portfolio-approvals",
+  "portfolio-activity",
+  "portfolio-routines",
+  "portfolio-calendar",
+  "portfolio-costs",
+  "portfolio-dashboard",
+  "portfolio-email",
   "issues",
+  "routines",
+  "calendar",
   "goals",
+  "memories",
+  "work-queues",
   "approvals",
   "costs",
   "activity",
+  "email",
+  "receipts",
   "inbox",
+  "u",
   "design-guide",
+  "everything",
   "tests",
 ] as const;
 export type PluginReservedCompanyRouteSegment =

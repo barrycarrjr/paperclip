@@ -1,42 +1,17 @@
-const BOARD_ROUTE_ROOTS = new Set([
-  "brief",
-  "receipts",
-  "dashboard",
-  "companies",
-  "company",
-  "skills",
-  "org",
-  "agents",
-  "projects",
-  "workspaces",
-  "execution-workspaces",
-  "issues",
-  "portfolio-brief",
-  "portfolio-receipts",
-  "portfolio-issues",
-  "portfolio-directives",
-  "portfolio-agents",
-  "portfolio-approvals",
-  "portfolio-activity",
-  "portfolio-routines",
-  "portfolio-calendar",
-  "portfolio-costs",
-  "portfolio-dashboard",
-  "portfolio-email",
-  "routines",
-  "calendar",
-  "goals",
-  "memories",
-  "work-queues",
-  "approvals",
-  "costs",
-  "usage",
-  "activity",
-  "inbox",
-  "email",
-  "u",
-  "design-guide",
-]);
+import { PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS } from "@paperclipai/shared";
+import { isKnownPluginRouteRoot } from "./plugin-route-registry";
+
+// The set of valid company-scoped route roots (what may legally follow
+// /:companyPrefix/) comes from the same shared constant the server uses to
+// stop a plugin manifest from claiming one of these names — see its comment
+// in packages/shared/src/constants.ts for why these two concerns share one
+// list, and docs/plans/2026-09-02-ux-control-center-preservation.md (B01)
+// for the drift/double-prefix bugs that motivated unifying them. Keep it in
+// sync with every top-level path segment registered inside boardRoutes() in
+// App.tsx. Plugin-contributed routePath values (notepad, campaigns, ...)
+// can never be listed here at compile time; those are recognized separately
+// via plugin-route-registry.ts's runtime registry.
+const BOARD_ROUTE_ROOTS = new Set<string>(PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS);
 
 const GLOBAL_ROUTE_ROOTS = new Set([
   "auth",
@@ -88,7 +63,15 @@ export function extractCompanyPrefixFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return null;
   const first = segments[0]!.toLowerCase();
-  if (GLOBAL_ROUTE_ROOTS.has(first) || BOARD_ROUTE_ROOTS.has(first)) {
+  // A bare (unprefixed) plugin route, e.g. "/notepad", must be recognized
+  // here too — code-reviewed 2026-09-02: without this, applyCompanyPrefix
+  // (which calls this function to check whether a path already has a
+  // prefix) mistakes the plugin's own route slug for an unrecognized
+  // company code and refuses to prepend the real one, so every link this
+  // app generates to a plugin page (e.g. the Command Palette's "Plugins"
+  // group) lands on a 404 instead of the page. toCompanyRelativePath below
+  // got this same fix already; this function needed it just as much.
+  if (GLOBAL_ROUTE_ROOTS.has(first) || BOARD_ROUTE_ROOTS.has(first) || isKnownPluginRouteRoot(first)) {
     return null;
   }
   return normalizeCompanyPrefix(segments[0]!);
@@ -113,7 +96,8 @@ export function toCompanyRelativePath(path: string): string {
 
   if (segments.length >= 2) {
     const second = segments[1]!.toLowerCase();
-    if (!GLOBAL_ROUTE_ROOTS.has(segments[0]!.toLowerCase()) && BOARD_ROUTE_ROOTS.has(second)) {
+    const looksLikeKnownRoute = BOARD_ROUTE_ROOTS.has(second) || isKnownPluginRouteRoot(second);
+    if (!GLOBAL_ROUTE_ROOTS.has(segments[0]!.toLowerCase()) && looksLikeKnownRoute) {
       return `/${segments.slice(1).join("/")}${search}${hash}`;
     }
   }

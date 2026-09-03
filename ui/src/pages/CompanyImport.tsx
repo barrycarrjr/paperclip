@@ -8,6 +8,7 @@ import type {
   CompanyPortabilityAdapterOverride,
 } from "@paperclipai/shared";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { authApi } from "../api/auth";
@@ -645,11 +646,12 @@ async function readLocalPackageZip(file: File): Promise<{
 // ── Main page ─────────────────────────────────────────────────────────
 
 export function CompanyImport() {
-  const {
-    selectedCompanyId,
-    selectedCompany,
-    setSelectedCompanyId,
-  } = useCompany();
+  const { companies, setSelectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (imports a whole company package into this id) — see
+  // Calendar.tsx's/NewAgent.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();

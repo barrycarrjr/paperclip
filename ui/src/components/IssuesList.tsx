@@ -9,6 +9,7 @@ import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
+import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import {
   shouldBlurPageSearchOnEnter,
   shouldBlurPageSearchOnEscape,
@@ -589,6 +590,20 @@ export function IssuesList({
     }
   }, [scopedKey]);
 
+  // Unlike viewState/kanban-fields/columns above, a typed search term has no
+  // per-company persistence to reload — it just needs to not survive a
+  // company switch. Left unreset, Company A's search stays in the box after
+  // switching to Company B, and (combined with placeholderData below) can
+  // show Company A's matching rows under Company B's board while the new
+  // search result is still loading.
+  const prevSearchScopedKey = useRef(scopedKey);
+  useEffect(() => {
+    if (prevSearchScopedKey.current !== scopedKey) {
+      prevSearchScopedKey.current = scopedKey;
+      setIssueSearch(initialSearch ?? "");
+    }
+  }, [scopedKey, initialSearch]);
+
   const updateView = useCallback((patch: Partial<IssueViewState>) => {
     setViewState((prev) => {
       const next = { ...prev, ...patch };
@@ -615,6 +630,7 @@ export function IssuesList({
       searchFilters ?? {},
       ISSUE_SEARCH_RESULT_LIMIT,
       enableRoutineVisibilityFilter ? "with-routine-executions" : "without-routine-executions",
+      selectedCompanyId ?? "__no-company__",
     ],
     queryFn: () =>
       issuesApi.list(selectedCompanyId!, {
@@ -625,7 +641,12 @@ export function IssuesList({
         ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
       }),
     enabled: !!selectedCompanyId && normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues,
-    placeholderData: (previousData) => previousData,
+    // Company-gated: this page doesn't remount on a company switch, so a
+    // naive `(previousData) => previousData` would paint the previous
+    // company's search results under the newly-selected company for as long
+    // as its fetch is in flight. Only reuse placeholder data when the tail
+    // (the company id) actually matches the previous query's.
+    placeholderData: keepPreviousDataForSameQueryTail<Issue[]>(selectedCompanyId ?? "__no-company__"),
   });
   const boardIssueQueries = useQueries({
     queries: boardIssueStatuses.map((status) => ({
@@ -638,6 +659,7 @@ export function IssuesList({
         searchFilters ?? {},
         ISSUE_BOARD_COLUMN_RESULT_LIMIT,
         enableRoutineVisibilityFilter ? "with-routine-executions" : "without-routine-executions",
+        selectedCompanyId ?? "__no-company__",
       ],
       queryFn: () =>
         issuesApi.list(selectedCompanyId!, {
@@ -649,7 +671,10 @@ export function IssuesList({
           ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
         }),
       enabled: !!selectedCompanyId && viewState.viewMode === "board" && !searchWithinLoadedIssues,
-      placeholderData: (previousData: Issue[] | undefined) => previousData,
+      // Same company-gating as searchedIssues above — a board column's
+      // previous-company rows must not paint under the new company while its
+      // fetch is in flight.
+      placeholderData: keepPreviousDataForSameQueryTail<Issue[]>(selectedCompanyId ?? "__no-company__"),
     })),
   });
   const { data: executionWorkspaces = [] } = useQuery({

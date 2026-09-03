@@ -1,12 +1,13 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, ClipboardCheck } from "lucide-react";
 import type { Approval, Company } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { EmptyState } from "../components/EmptyState";
 import { FilterPopover } from "../components/FilterPopover";
 import { Link } from "@/lib/router";
 import { timeAgo } from "../lib/timeAgo";
@@ -128,7 +129,13 @@ function BulkActionsBar({ count, onApprove, onReject, onClear, isPending }: { co
 }
 
 export function PortfolioApprovals() {
-  const { selectedCompanyId } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P3 audit,
+  // 2026-09-03) — see Calendar.tsx's identical fix for the general pattern.
+  // This page also had no HQ-only gate at all, unlike every sibling
+  // Portfolio* page (PortfolioBrief/PortfolioEmail/PortfolioDirectives/
+  // PortfolioReceipts) — added below.
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
@@ -139,13 +146,27 @@ export function PortfolioApprovals() {
   const [statusFilter, setStatusFilter] = useState("pending");
   const [companyIdFilter, setCompanyIdFilter] = useState<string[]>([]);
 
+  // This page doesn't remount on a company switch, so a filter/selection
+  // picked under one company otherwise survives it (P3 audit, 2026-09-03) —
+  // same class of gap bullet 7 fixed for Issues/Inbox/Memories, not applied
+  // here at the time.
+  const prevCompanyIdRef = useRef(selectedCompanyId);
+  useEffect(() => {
+    if (prevCompanyIdRef.current === selectedCompanyId) return;
+    prevCompanyIdRef.current = selectedCompanyId;
+    setSelectedIds(new Set());
+    setCollapsedIds(new Set());
+    setStatusFilter("pending");
+    setCompanyIdFilter([]);
+  }, [selectedCompanyId]);
+
   const { data, isLoading } = useQuery({
     queryKey: ["portfolio-approvals", selectedCompanyId, statusFilter, companyIdFilter],
     queryFn: () => approvalsApi.listPortfolio(selectedCompanyId!, {
       status: statusFilter,
       companyIds: companyIdFilter.length > 0 ? companyIdFilter : undefined,
     }),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && isPortfolioRoot,
     refetchInterval: 30_000,
   });
 
@@ -199,6 +220,18 @@ export function PortfolioApprovals() {
     await Promise.all(Array.from(selectedIds).map((id) => approvalsApi.reject(id)));
     queryClient.invalidateQueries({ queryKey: ["portfolio-approvals", selectedCompanyId] });
     setSelectedIds(new Set());
+  }
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={ClipboardCheck} message="Select a company to view its approvals." />;
+  }
+  if (!isPortfolioRoot) {
+    return (
+      <EmptyState
+        icon={ClipboardCheck}
+        message="Portfolio Approvals is only available on the HQ (portfolio root) company."
+      />
+    );
   }
 
   return (

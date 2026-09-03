@@ -6,12 +6,26 @@ import {
   SquarePen,
   Users,
   Inbox,
+  Mail,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { CORE_WORKSPACE_CATALOG } from "@/lib/workspace-catalog";
+
+// Code-reviewed 2026-09-02: three independent review passes flagged that the
+// Email entry below was hand-typed (label/icon/route) right next to
+// workspace-catalog.ts, the file this same diff introduced specifically so
+// destinations like this stop being hand-copied — see its own comment.
+// Sourced from there instead so a later label or icon change can't silently
+// disagree between the mobile nav and everywhere else that reads the catalog.
+// Falls back to a plain Mail icon/label rather than throwing if the entry is
+// ever removed from the catalog — that's a real regression
+// workspace-catalog.test.ts should catch, not something worth crashing the
+// whole mobile shell over.
+const emailCatalogEntry = CORE_WORKSPACE_CATALOG.find((entry) => entry.id === "email");
 
 interface MobileBottomNavProps {
   visible: boolean;
@@ -53,6 +67,17 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
         icon: Inbox,
         badge: inboxBadge.inbox,
       },
+      // Added 2026-09-02 (docs/plans/2026-09-02-ux-control-center-preservation.md
+      // B06): Email is the stated #1 daily workflow
+      // (2026-09-02-ux-control-center-scope.md) but was completely absent
+      // from mobile navigation. Appended rather than swapped in for an
+      // existing item, so no current one-tap destination is lost.
+      {
+        type: "link",
+        to: `/${emailCatalogEntry?.routeRoot ?? "email"}`,
+        label: emailCatalogEntry?.label ?? "Email",
+        icon: emailCatalogEntry?.icon ?? Mail,
+      },
     ],
     [openNewIssue, inboxBadge.inbox],
   );
@@ -65,7 +90,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
       )}
       aria-label="Mobile navigation"
     >
-      <div className="grid h-16 grid-cols-5 px-1">
+      <div className="grid h-16 grid-cols-6 px-1">
         {items.map((item) => {
           if (item.type === "action") {
             const Icon = item.icon;

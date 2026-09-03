@@ -1841,7 +1841,6 @@ function PromptsTab({
   onSavingChange: (saving: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const { selectedCompanyId } = useCompany();
   const { isMobile } = useSidebar();
   const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
@@ -1971,8 +1970,13 @@ function PromptsTab({
 
   const uploadMarkdownImage = useMutation({
     mutationFn: async ({ file, namespace }: { file: File; namespace: string }) => {
-      if (!selectedCompanyId) throw new Error("Select a company to upload images");
-      return assetsApi.uploadImage(selectedCompanyId, file, namespace);
+      // Use the prop, not a fresh useCompany() read (P4 sweep, 2026-09-03):
+      // the parent already resolves this from the fetched agent's own
+      // companyId, which is safe against the stale-context-selection race
+      // this session found and fixed everywhere else — re-reading
+      // useCompany() here directly would reintroduce it for this one upload.
+      if (!companyId) throw new Error("Select a company to upload images");
+      return assetsApi.uploadImage(companyId, file, namespace);
     },
   });
 

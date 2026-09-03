@@ -166,6 +166,7 @@ vi.mock("../api/instanceSettings", () => ({
 
 vi.mock("../lib/company-selection", () => ({
   shouldSyncCompanySelectionFromRoute: () => false,
+  shouldClearTransientSelectionSource: () => false,
 }));
 
 vi.mock("../lib/instance-settings", () => ({

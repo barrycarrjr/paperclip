@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2, Megaphone, Plus } from "lucide-react";
 import type { Company } from "@paperclipai/shared";
 import { issuesApi, type PortfolioDirective } from "../api/issues";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -251,7 +251,12 @@ function NewDirectiveDialog({ open, onOpenChange, companies, isSubmitting, onSub
 }
 
 export function PortfolioDirectives() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES (broadcastDirective fans a directive out
+  // to every targeted company) — see Calendar.tsx's/NewAgent.tsx's identical
+  // fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
@@ -259,8 +264,6 @@ export function PortfolioDirectives() {
   useEffect(() => {
     setBreadcrumbs([{ label: "Portfolio Directives" }]);
   }, [setBreadcrumbs]);
-
-  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
 
   const { data, isLoading } = useQuery({
     queryKey: ["portfolio-directives", selectedCompanyId],

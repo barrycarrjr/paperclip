@@ -13,6 +13,7 @@ const listMock = vi.fn();
 vi.mock("@/lib/router", () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
   useNavigate: () => navigateMock,
+  useParams: () => ({}),
 }));
 
 vi.mock("../context/CompanyContext", () => ({

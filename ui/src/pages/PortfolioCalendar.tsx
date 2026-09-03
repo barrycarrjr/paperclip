@@ -5,6 +5,7 @@ import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus } from "luci
 import type { CalendarEvent, CalendarOccurrence, Company } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
@@ -115,7 +116,10 @@ function CompanyBadge({ company }: { company: Company | undefined }) {
 }
 
 export function PortfolioCalendar() {
-  const { selectedCompanyId, companies: allCompanies } = useCompany();
+  const { companies: allCompanies } = useCompany();
+  // URL-derived, not useCompany()'s selection state — see Calendar.tsx's
+  // identical fix (P3 audit, 2026-09-03) for why.
+  const selectedCompanyId = useActiveCompanyId();
   /**
    * Prefix lookup for building links out to a company's own pages.
    *

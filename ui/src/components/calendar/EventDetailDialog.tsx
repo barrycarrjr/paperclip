@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { channelLabel, describeCadence, sourceMeta } from "./calendar-utils";
+import { channelLabel, describeCadence, resolveNotificationTime, sourceMeta } from "./calendar-utils";
 
 interface EventDetailDialogProps {
   open: boolean;
@@ -111,6 +111,25 @@ export function EventDetailDialog({
             <DetailRow label="Next">
               {event.nextRunAt ? formatDateTime(event.nextRunAt) : "—"}
             </DetailRow>
+            {event.notify && (() => {
+              // A10/F13: the notification time is distinct from the
+              // occurrence time above whenever a lead time is set — say so
+              // explicitly rather than leaving the reader to assume they
+              // match, and skip the row entirely when there's nothing to
+              // notify at yet (no next occurrence) rather than showing "—".
+              const notification = resolveNotificationTime(event);
+              if (!notification) return null;
+              return (
+                <DetailRow label="Notifies">
+                  {formatDateTime(notification.notifyAt)}
+                  {notification.leadsEvent && (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      ({event.leadTimeMinutes}m before)
+                    </span>
+                  )}
+                </DetailRow>
+              );
+            })()}
             <DetailRow label="Last fired">
               {event.lastFiredAt ? formatDateTime(event.lastFiredAt) : "Never"}
             </DetailRow>

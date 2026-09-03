@@ -43,8 +43,13 @@ vi.mock("@/api/issues", () => ({
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", name: "Paperclip" },
+    companies: [{ id: "company-1", name: "Paperclip" }],
   }),
+}));
+
+// useActiveCompanyId (P4 sweep, 2026-09-03) reads useParams from @/lib/router.
+vi.mock("@/lib/router", () => ({
+  useParams: () => ({}),
 }));
 
 vi.mock("@/context/BreadcrumbContext", () => ({

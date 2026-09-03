@@ -10,7 +10,26 @@ import {
   ISSUE_THREAD_INTERACTION_KINDS,
   ISSUE_THREAD_INTERACTION_STATUSES,
 } from "../constants.js";
+import { EMAIL_HANDOFF_ORIGIN_KIND } from "../email-handoff-origin.js";
 import { multilineTextSchema } from "./text.js";
+
+/**
+ * The only issue origin a CLIENT is allowed to declare (P5a).
+ *
+ * Deliberately a literal, not `z.enum(ISSUE_ORIGIN_KINDS)` or a free string:
+ * origin kinds drive real partial unique indexes and recovery classification
+ * (`issues_open_routine_execution_uq`, `issues_active_liveness_recovery_uq`,
+ * server's `recovery/origins.ts`). A client that could claim
+ * `routine_execution` or `harness_liveness_escalation` could collide with
+ * those indexes or confuse the recovery sweeps. Every other origin kind stays
+ * server-set-only, exactly as it is today.
+ */
+export const clientDeclarableIssueOriginSchema = z.object({
+  kind: z.literal(EMAIL_HANDOFF_ORIGIN_KIND),
+  id: z.string().trim().min(1).max(500),
+});
+
+export type ClientDeclarableIssueOrigin = z.infer<typeof clientDeclarableIssueOriginSchema>;
 
 export const ISSUE_EXECUTION_WORKSPACE_PREFERENCES = [
   "inherit",
@@ -146,6 +165,8 @@ export const createIssueSchema = z.object({
   labelIds: z.array(z.string().uuid()).optional(),
   startDate: z.coerce.date().optional().nullable(),
   dueDate: z.coerce.date().optional().nullable(),
+  /** See `clientDeclarableIssueOriginSchema` for why this is so narrow. */
+  origin: clientDeclarableIssueOriginSchema.optional(),
 });
 
 export type CreateIssue = z.infer<typeof createIssueSchema>;

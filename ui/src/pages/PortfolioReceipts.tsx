@@ -5,7 +5,7 @@ import { History, Sparkles } from "lucide-react";
 import type { ActivityEvent, Agent, Company } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
 import { agentsApi } from "../api/agents";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -67,7 +67,10 @@ function dayHeaderLabel(d: Date): string {
 }
 
 export function PortfolioReceipts() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03) — same shape as Everything.tsx/PortfolioEmail.tsx.
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [companyFilter, setCompanyFilter] = useState<string | null>(null);
@@ -75,8 +78,6 @@ export function PortfolioReceipts() {
   useEffect(() => {
     setBreadcrumbs([{ label: "Portfolio Receipts" }]);
   }, [setBreadcrumbs]);
-
-  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["portfolio-activity", "receipts", selectedCompanyId, PORTFOLIO_RECEIPTS_LIMIT],

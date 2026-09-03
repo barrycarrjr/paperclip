@@ -17,6 +17,12 @@ import { useCompany } from "../context/CompanyContext";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
+import {
+  reconcileClippyDrawerSession,
+  shouldReconcileClippyDrawerSession,
+  INITIAL_CLIPPY_DRAWER_RECONCILE_GATE,
+  type ClippyDrawerReconcileGate,
+} from "../lib/clippy-company-scope";
 import { cn } from "../lib/utils";
 
 const ACTIVE_SESSION_KEY = "paperclip.clippy.activeSessionId";
@@ -162,16 +168,37 @@ export function ClippyDrawer() {
     return () => window.clearTimeout(id);
   }, [renaming]);
 
-  // When opened, ensure an active session exists.
+  // See clippy-company-scope.ts's shouldReconcileClippyDrawerSession for why
+  // this drawer needs a gate at all, not just a plain "run on every change"
+  // effect: the "Recent chats" dropdown below deliberately allows picking a
+  // different company's chat, and that pick must not be immediately undone.
+  const reconcileGateRef = useRef<ClippyDrawerReconcileGate>(INITIAL_CLIPPY_DRAWER_RECONCILE_GATE);
+
+  // When opened, ensure an active session exists and belongs to the current
+  // company — but only when the company actually just changed (or no valid
+  // session is selected yet), not on every incidental re-render.
   useEffect(() => {
     if (!open) return;
-    if (activeSessionId) return;
     if (!sessionsQuery.data) return;
-    if (sessions.length > 0) {
-      setActiveSessionId(sessions[0].id);
-    } else if (!createMutation.isPending) {
-      createMutation.mutate(selectedCompanyId);
-    }
+
+    const { run, nextGate } = shouldReconcileClippyDrawerSession({
+      gate: reconcileGateRef.current,
+      selectedCompanyId,
+      activeSessionId,
+      sessions,
+    });
+    reconcileGateRef.current = nextGate;
+    if (!run) return;
+
+    const result = reconcileClippyDrawerSession({
+      activeSessionId,
+      sessions,
+      selectedCompanyId,
+      isCreating: createMutation.isPending,
+    });
+    if (result.action === "select") setActiveSessionId(result.id);
+    else if (result.action === "create") createMutation.mutate(selectedCompanyId);
+    else if (result.action === "clear") setActiveSessionId(null);
   }, [open, activeSessionId, sessionsQuery.data, sessions, createMutation, selectedCompanyId]);
 
   // Resize handle: pointer-driven drag on the left edge of the drawer.
@@ -323,7 +350,10 @@ export function ClippyDrawer() {
                   {sessions.slice(0, 12).map((s) => (
                     <DropdownMenuItem
                       key={s.id}
-                      onSelect={() => setActiveSessionId(s.id)}
+                      onSelect={() => {
+                        reconcileGateRef.current = { ...reconcileGateRef.current, skip: true };
+                        setActiveSessionId(s.id);
+                      }}
                       className={cn("flex flex-col items-start gap-0", s.id === activeSessionId && "bg-accent")}
                     >
                       <span className="w-full truncate text-sm">{s.title}</span>

@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@/lib/router";
 import {
   AGENT_ADAPTER_TYPES,
   getAdapterEnvironmentSupport,
@@ -8,6 +9,7 @@ import {
   type JsonSchema,
 } from "@paperclipai/shared";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
 import { companiesApi } from "../api/companies";
@@ -170,12 +172,12 @@ function SupportMark({ supported }: { supported: boolean }) {
 }
 
 export function CompanySettings() {
-  const {
-    companies,
-    selectedCompany,
-    selectedCompanyId,
-    setSelectedCompanyId
-  } = useCompany();
+  const { companies, setSelectedCompanyId } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES (company profile, logo, environments,
+  // archive/unarchive) — see Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
@@ -1232,10 +1234,10 @@ export function CompanySettings() {
           </p>
           <div className="mt-3">
             <Button size="sm" variant="outline" asChild>
-              <a href="/activity">
+              <Link to="/activity">
                 <History className="mr-1.5 h-3.5 w-3.5" />
                 View activity
-              </a>
+              </Link>
             </Button>
           </div>
         </div>
@@ -1249,20 +1251,20 @@ export function CompanySettings() {
         <div className="rounded-md border border-border px-4 py-4">
           <p className="text-sm text-muted-foreground">
             Import and export have moved to dedicated pages accessible from the{" "}
-            <a href="/org" className="underline hover:text-foreground">Org Chart</a> header.
+            <Link to="/org" className="underline hover:text-foreground">Org Chart</Link> header.
           </p>
           <div className="mt-3 flex items-center gap-2">
             <Button size="sm" variant="outline" asChild>
-              <a href="/company/export">
+              <Link to="/company/export">
                 <Download className="mr-1.5 h-3.5 w-3.5" />
                 Export
-              </a>
+              </Link>
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <a href="/company/import">
+              <Link to="/company/import">
                 <Upload className="mr-1.5 h-3.5 w-3.5" />
                 Import
-              </a>
+              </Link>
             </Button>
           </div>
         </div>

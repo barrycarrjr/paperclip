@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useSidebar } from "../context/SidebarContext";
@@ -56,7 +56,9 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean
 }
 
 export function Agents() {
-  const { selectedCompanyId, companies } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { openNewAgent } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
@@ -82,8 +84,7 @@ export function Agents() {
     enabled: !!selectedCompanyId && effectiveView === "org",
   });
 
-  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
-  const isHq = selectedCompany?.isPortfolioRoot ?? false;
+  const isHq = useIsActiveCompanyPortfolioRoot();
 
   const { data: runs } = useQuery({
     queryKey: [...queryKeys.liveRuns(selectedCompanyId!), "agents-page"],

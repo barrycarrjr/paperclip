@@ -1,10 +1,10 @@
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import type { CalendarEvent, CalendarOccurrence } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { useCurrentUserId } from "../hooks/useCurrentUserId";
@@ -38,7 +38,13 @@ function startOfMonth(date: Date): Date {
 }
 
 export function Calendar() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  // URL-derived, not useCompany()'s selection state: that selection is
+  // synced from the route by an effect in Layout that runs one render late.
+  // Found reachable here the same way as Email/Everything/PortfolioEmail
+  // (P3 audit, 2026-09-03): Calendar is a pinned top-level page and doesn't
+  // remount on a company switch, so a stale-company render is one ordinary
+  // company switch away, not a theoretical edge case.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
@@ -68,6 +74,29 @@ export function Calendar() {
   }, [setBreadcrumbs]);
 
   useEffect(() => writeLsFilter(LS_HIDDEN_SOURCES_KEY, [...hiddenSources]), [hiddenSources]);
+
+  // This page doesn't remount on a company switch, and EventDialog's
+  // `companyId` prop is passed live (not snapshotted) — so a create/edit
+  // dialog left open across a switch would submit its draft to whichever
+  // company is active at Send time, not the one the operator opened it
+  // under (P3 audit, 2026-09-03; same class of bug already fixed for
+  // Email's compose draft and NewIssueDialog's draft). Closing any open
+  // dialog on a real company change is simpler and safer than trying to
+  // keep the draft and re-target it.
+  const prevCalendarCompanyIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevCalendarCompanyIdRef.current === null) {
+      prevCalendarCompanyIdRef.current = selectedCompanyId;
+      return;
+    }
+    if (prevCalendarCompanyIdRef.current === selectedCompanyId) return;
+    prevCalendarCompanyIdRef.current = selectedCompanyId;
+    setDialogOpen(false);
+    setEditingEvent(null);
+    setCreateOnDay(null);
+    setDetailOpen(false);
+    setDetailEventId(null);
+  }, [selectedCompanyId]);
 
   const range = useMemo(() => monthRange(viewMonth), [viewMonth]);
 
@@ -153,7 +182,10 @@ export function Calendar() {
    */
   function openOccurrence(occ: CalendarOccurrence) {
     if (isRoutineOccurrence(occ.source)) {
-      navigate(`/${selectedCompany?.issuePrefix ?? ""}/routines/${occ.eventId}`);
+      // Relative: the app's own Link/navigate wrapper (@/lib/router) already
+      // applies the active company's prefix from the URL, so there's no need
+      // to build it from a (possibly stale) company object.
+      navigate(`/routines/${occ.eventId}`);
       return;
     }
     openDetail(occ.eventId);

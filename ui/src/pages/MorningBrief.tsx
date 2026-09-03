@@ -24,6 +24,7 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -82,7 +83,12 @@ function greeting(now: Date): { word: string; icon: typeof Sun } {
 }
 
 export function MorningBrief() {
-  const { selectedCompanyId, companies } = useCompany();
+  const { companies } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03):
+  // Brief is the app's default landing route and doesn't remount on a
+  // company switch, so this is reachable in ordinary use — see Calendar.tsx's
+  // identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
 
@@ -95,13 +101,13 @@ export function MorningBrief() {
     queryFn: () => authApi.getSession(),
   });
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: queryKeys.dashboard(selectedCompanyId!),
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
-  const { data: activity } = useQuery({
+  const { data: activity, isLoading: activityLoading } = useQuery({
     queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: OUTCOMES_LIMIT }],
     queryFn: () => activityApi.list(selectedCompanyId!, { limit: OUTCOMES_LIMIT }),
     enabled: !!selectedCompanyId,
@@ -113,7 +119,7 @@ export function MorningBrief() {
   // Rows that have gone quiet are held back until asked for, so months-old
   // sediment does not sit next to a live outage.
   const [showSetAside, setShowSetAside] = useState(false);
-  const { data: attention } = useQuery({
+  const { data: attention, isLoading: attentionLoading } = useQuery({
     queryKey: [...queryKeys.attention(selectedCompanyId!), showSetAside],
     queryFn: () => attentionApi.list(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId,
@@ -125,13 +131,13 @@ export function MorningBrief() {
   const attentionRows = attention?.rows ?? [];
   const { snooze: snoozeAttentionRow, dismiss: dismissAttentionRow } = useAttentionRowActions();
 
-  const { data: issues } = useQuery({
+  const { data: issues, isLoading: issuesLoading } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
     queryFn: () => issuesApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
-  const { data: agents } = useQuery({
+  const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
@@ -376,8 +382,27 @@ export function MorningBrief() {
     );
   }
 
-  if (summaryLoading) {
+  // P3 audit, 2026-09-03: this used to gate only on `summaryLoading`, so the
+  // hero ("All systems green.") and the Awaiting/Overnight/Today sections
+  // below could all render past the skeleton while activity/attention/
+  // issues/agents were still in flight — each defaults to `[]`/0 while
+  // loading, which reads identically to "genuinely nothing here" rather than
+  // "still loading". `Inbox.tsx` already gets this right by aggregating
+  // every relevant query's isLoading; this does the same.
+  if (summaryLoading || activityLoading || attentionLoading || issuesLoading || agentsLoading) {
     return <PageSkeleton variant="dashboard" />;
+  }
+
+  if (summaryError) {
+    // Previously fell through silently: `errors`/`allClear` below default to
+    // 0/true when `summary` is undefined, so a failed fetch rendered as "All
+    // systems green." — actively misrepresenting a fetch failure as healthy.
+    return (
+      <EmptyState
+        icon={AlertCircle}
+        message="Couldn't load the morning brief. Check your connection and try reloading."
+      />
+    );
   }
 
   const now = new Date();

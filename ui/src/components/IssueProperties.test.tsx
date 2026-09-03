@@ -38,6 +38,10 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
 }));
 
+const mockGoalsApi = vi.hoisted(() => ({
+  get: vi.fn(),
+}));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
@@ -62,6 +66,10 @@ vi.mock("../api/auth", () => ({
 
 vi.mock("../api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
+}));
+
+vi.mock("../api/goals", () => ({
+  goalsApi: mockGoalsApi,
 }));
 
 vi.mock("../hooks/useProjectOrder", () => ({
@@ -365,6 +373,7 @@ describe("IssueProperties", () => {
     }));
     mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-1" } });
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    mockGoalsApi.get.mockReset();
   });
 
   afterEach(() => {
@@ -393,6 +402,54 @@ describe("IssueProperties", () => {
     });
 
     expect(onAddSubIssue).toHaveBeenCalledTimes(1);
+
+    act(() => root.unmount());
+  });
+
+  // Regression (P4 audit, 2026-09-03): Goals.tsx's own help text promises
+  // "Open an issue and you'll see which goal(s) it contributes to", but
+  // nothing rendered a goal reference here at all.
+  it("links an issue to the goal it contributes to, once loaded", async () => {
+    mockGoalsApi.get.mockResolvedValue({
+      id: "goal-1",
+      companyId: "company-1",
+      title: "Grow revenue 20%",
+      description: null,
+      level: "company",
+      status: "active",
+      parentId: null,
+      ownerAgentId: null,
+      createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-01T00:00:00.000Z"),
+    });
+    const root = renderProperties(container, {
+      issue: createIssue({ goalId: "goal-1" }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+    await flush();
+
+    expect(mockGoalsApi.get).toHaveBeenCalledWith("goal-1");
+    expect(container.textContent).toContain("Grow revenue 20%");
+    const goalLink = Array.from(container.querySelectorAll("a")).find(
+      (a) => a.getAttribute("href") === "/goals/goal-1",
+    );
+    expect(goalLink).not.toBeUndefined();
+
+    act(() => root.unmount());
+  });
+
+  it("shows no goal row when the issue isn't linked to one", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({ goalId: null }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+
+    expect(mockGoalsApi.get).not.toHaveBeenCalled();
+    expect(container.querySelector('a[href^="/goals/"]')).toBeNull();
 
     act(() => root.unmount());
   });

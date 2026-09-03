@@ -20,6 +20,7 @@ vi.mock("@/lib/router", () => ({
   useNavigate: () => navigateMock,
   useLocation: () => ({ pathname: "/routines", search: currentSearch ? `?${currentSearch}` : "", hash: "" }),
   useSearchParams: () => [new URLSearchParams(currentSearch), vi.fn()],
+  useParams: () => ({}),
 }));
 
 vi.mock("../context/CompanyContext", () => ({

@@ -17,24 +17,11 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import {
-  CircleDot,
-  Bot,
-  Hexagon,
-  Target,
-  Sunrise,
-  Inbox,
-  DollarSign,
-  History,
-  SquarePen,
-  Plus,
-  Globe2,
-  Megaphone,
-  Repeat,
-  CalendarClock,
-} from "lucide-react";
+import { CircleDot, Bot, Hexagon, SquarePen, Plus, PlugZap } from "lucide-react";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
+import { usePluginSlots } from "@/plugins/slots";
+import { CORE_WORKSPACE_CATALOG } from "@/lib/workspace-catalog";
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -88,6 +75,39 @@ export function CommandPalette() {
   const projects = useMemo(
     () => allProjects.filter((p) => !p.archivedAt),
     [allProjects],
+  );
+
+  // Real installed plugin pages (Notepad, To-dos, Phone, ...), not a
+  // hand-copied list — see workspace-catalog.ts's file comment for why core
+  // and plugin destinations are combined from two different sources instead
+  // of one hand-maintained list covering both.
+  const { slots: pluginPageSlots } = usePluginSlots({
+    slotTypes: ["page"],
+    companyId: selectedCompanyId,
+    enabled: open,
+  });
+  // A "page" slot can omit routePath (e.g. a page meant to be embedded
+  // elsewhere, not top-level navigable — see packages/shared/src/types/plugin.ts).
+  // Memoized and filtered up front, code-reviewed 2026-09-02: the group's
+  // render guard below must check THIS count, not pluginPageSlots.length —
+  // checking the unfiltered count let a "Plugins" heading with zero items
+  // under it render whenever every installed page slot happened to lack a
+  // routePath.
+  const routablePluginSlots = useMemo(
+    () => pluginPageSlots.filter((slot) => slot.routePath),
+    [pluginPageSlots],
+  );
+  // corePages/portfolioPages only ever depend on the static catalog, not on
+  // isPortfolioRoot — visibility of the Portfolio group is gated at the JSX
+  // call site below instead, so neither list is recomputed on a dependency
+  // that was never actually relevant to computing it.
+  const corePages = useMemo(
+    () => CORE_WORKSPACE_CATALOG.filter((entry) => !entry.portfolioRootOnly),
+    [],
+  );
+  const portfolioPages = useMemo(
+    () => CORE_WORKSPACE_CATALOG.filter((entry) => entry.portfolioRootOnly),
+    [],
   );
 
   function go(path: string) {
@@ -147,76 +167,47 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Pages">
-          <CommandItem onSelect={() => go("/brief")}>
-            <Sunrise className="mr-2 h-4 w-4" />
-            Brief
-          </CommandItem>
-          <CommandItem onSelect={() => go("/inbox")}>
-            <Inbox className="mr-2 h-4 w-4" />
-            Inbox
-          </CommandItem>
-          <CommandItem onSelect={() => go("/issues")}>
-            <CircleDot className="mr-2 h-4 w-4" />
-            Issues
-          </CommandItem>
-          <CommandItem onSelect={() => go("/projects")}>
-            <Hexagon className="mr-2 h-4 w-4" />
-            Projects
-          </CommandItem>
-          <CommandItem onSelect={() => go("/goals")}>
-            <Target className="mr-2 h-4 w-4" />
-            Goals
-          </CommandItem>
-          <CommandItem onSelect={() => go("/calendar")}>
-            <CalendarClock className="mr-2 h-4 w-4" />
-            Calendar
-          </CommandItem>
-          <CommandItem onSelect={() => go("/agents")}>
-            <Bot className="mr-2 h-4 w-4" />
-            Agents
-          </CommandItem>
-          <CommandItem onSelect={() => go("/costs")}>
-            <DollarSign className="mr-2 h-4 w-4" />
-            Costs
-          </CommandItem>
-          <CommandItem onSelect={() => go("/activity")}>
-            <History className="mr-2 h-4 w-4" />
-            Activity
-          </CommandItem>
+          {corePages.map((entry) => (
+            <CommandItem key={entry.id} onSelect={() => go(`/${entry.routeRoot}`)}>
+              <entry.icon className="mr-2 h-4 w-4" />
+              {entry.label}
+            </CommandItem>
+          ))}
         </CommandGroup>
 
-        {isPortfolioRoot && (
+        {routablePluginSlots.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Plugins">
+              {routablePluginSlots.map((slot) => (
+                <CommandItem
+                  key={`${slot.pluginKey}:${slot.id}`}
+                  value={`${slot.pluginDisplayName} ${slot.displayName}`}
+                  onSelect={() => go(`/${slot.routePath}`)}
+                >
+                  <PlugZap className="mr-2 h-4 w-4" />
+                  {slot.displayName}
+                  <span className="text-xs text-muted-foreground ml-2">{slot.pluginDisplayName}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
+
+        {isPortfolioRoot && portfolioPages.length > 0 && (
           <>
             <CommandSeparator />
             <CommandGroup heading="Portfolio">
-              <CommandItem value="portfolio brief" onSelect={() => go("/portfolio-brief")}>
-                <Sunrise className="mr-2 h-4 w-4" />
-                Portfolio Brief
-              </CommandItem>
-              <CommandItem value="portfolio issues" onSelect={() => go("/portfolio-issues")}>
-                <Globe2 className="mr-2 h-4 w-4" />
-                Portfolio Issues
-              </CommandItem>
-              <CommandItem value="portfolio directives" onSelect={() => go("/portfolio-directives")}>
-                <Megaphone className="mr-2 h-4 w-4" />
-                Portfolio Directives
-              </CommandItem>
-              <CommandItem value="portfolio agents" onSelect={() => go("/portfolio-agents")}>
-                <Bot className="mr-2 h-4 w-4" />
-                Portfolio Agents
-              </CommandItem>
-              <CommandItem value="portfolio routines" onSelect={() => go("/portfolio-routines")}>
-                <Repeat className="mr-2 h-4 w-4" />
-                Portfolio Routines
-              </CommandItem>
-              <CommandItem value="portfolio calendar" onSelect={() => go("/portfolio-calendar")}>
-                <CalendarClock className="mr-2 h-4 w-4" />
-                Portfolio Calendar
-              </CommandItem>
-              <CommandItem value="portfolio costs" onSelect={() => go("/portfolio-costs")}>
-                <DollarSign className="mr-2 h-4 w-4" />
-                Portfolio Costs
-              </CommandItem>
+              {portfolioPages.map((entry) => (
+                <CommandItem
+                  key={entry.id}
+                  value={entry.label.toLowerCase()}
+                  onSelect={() => go(`/${entry.routeRoot}`)}
+                >
+                  <entry.icon className="mr-2 h-4 w-4" />
+                  {entry.label}
+                </CommandItem>
+              ))}
             </CommandGroup>
           </>
         )}

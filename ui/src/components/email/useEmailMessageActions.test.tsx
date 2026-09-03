@@ -166,7 +166,7 @@ describe("useEmailMessageActions", () => {
     await settle();
 
     expect(actions.current!.forward.isError).toBe(true);
-    expect(onToast).toHaveBeenCalledWith("Forward failed: Sending is disabled.");
+    expect(onToast).toHaveBeenCalledWith("Forward failed: Sending is disabled.", undefined, true);
   });
 
   it("tells the operator when a reply fails", async () => {
@@ -179,7 +179,7 @@ describe("useEmailMessageActions", () => {
     });
     await settle();
 
-    expect(onToast).toHaveBeenCalledWith("Reply failed: smtp refused");
+    expect(onToast).toHaveBeenCalledWith("Reply failed: smtp refused", undefined, true);
   });
 
   it("tells the operator when a hand-off fails", async () => {
@@ -192,7 +192,7 @@ describe("useEmailMessageActions", () => {
     });
     await settle();
 
-    expect(onToast).toHaveBeenCalledWith("Hand-off failed: board unreachable");
+    expect(onToast).toHaveBeenCalledWith("Hand-off failed: board unreachable", undefined, true);
   });
 
   it("names the action when the failure carries no message of its own", async () => {
@@ -205,7 +205,7 @@ describe("useEmailMessageActions", () => {
     });
     await settle();
 
-    expect(onToast).toHaveBeenCalledWith("Delete failed");
+    expect(onToast).toHaveBeenCalledWith("Delete failed", undefined, true);
   });
 
   it("reports a failed move as well as putting the row back", async () => {
@@ -220,7 +220,7 @@ describe("useEmailMessageActions", () => {
     await settle();
 
     expect(onRevert).toHaveBeenCalledWith(42);
-    expect(onToast).toHaveBeenCalledWith("Move failed: no such folder");
+    expect(onToast).toHaveBeenCalledWith("Move failed: no such folder", undefined, true);
   });
 
   it("marks a replied message read so it leaves the unread view", async () => {
@@ -329,6 +329,8 @@ describe("useEmailMessageActions", () => {
     expect(actions.current!.forward.isError).toBe(true);
     expect(onToast).toHaveBeenCalledWith(
       'Forward failed: Could not fetch attachment "numbers.pdf": imap down',
+      undefined,
+      true,
     );
   });
 
@@ -368,6 +370,80 @@ describe("useEmailMessageActions", () => {
     // nothing happened when in fact the work was filed.
     expect(actions.current!.handOff.isError).toBe(false);
     expect(actions.current!.handOff.data?.issueId).toBe("issue-2");
+  });
+
+  it("tells the operator the agent couldn't be woken, rather than a plain success", async () => {
+    // Regression (P2 audit, 2026-09-03): a failed wake used to be invisible —
+    // console.error only, with the operator seeing an ordinary success toast.
+    mockIssuesApi.create.mockResolvedValue({ id: "issue-2" });
+    mockAgentsApi.wakeup.mockRejectedValue(new Error("agent offline"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.handOff.mutate({ msg: parsed(), agentId: "agent-1", note: "" });
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith(
+      "Handed off, issue created — the agent couldn't be woken and may not start until its next scheduled check",
+      "issue-2",
+    );
+  });
+
+  it("records a durable link back to the source email on the created issue", async () => {
+    // P5a: without this the only trace of which email an issue came from is
+    // the body text pasted into the description.
+    mockIssuesApi.create.mockResolvedValue({ id: "issue-1" });
+    mockAgentsApi.wakeup.mockResolvedValue({});
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.handOff.mutate({ msg: parsed(), agentId: "agent-1", note: "" });
+    });
+    await settle();
+
+    const [, createArg] = mockIssuesApi.create.mock.calls[0]!;
+    expect(createArg.origin).toEqual({
+      kind: "email_handoff",
+      // parsed() has messageId "<m1>", TARGET has pluginId "p1" / mailbox "personal".
+      id: "email:v1:msgid:p1:personal:%3Cm1%3E",
+    });
+  });
+
+  it("hands off without an origin rather than failing when the message has no id to key on", async () => {
+    mockIssuesApi.create.mockResolvedValue({ id: "issue-1" });
+    mockAgentsApi.wakeup.mockResolvedValue({});
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.handOff.mutate({
+        // No messageId and no uid to fall back to.
+        msg: parsed({ messageId: "", uid: Number.NaN }),
+        agentId: "agent-1",
+        note: "",
+      });
+    });
+    await settle();
+
+    expect(actions.current!.handOff.isError).toBe(false);
+    const [, createArg] = mockIssuesApi.create.mock.calls[0]!;
+    expect(createArg.origin).toBeUndefined();
+  });
+
+  it("prefers the human-readable issue identifier over the raw id for the toast link", async () => {
+    mockIssuesApi.create.mockResolvedValue({ id: "uuid-1", identifier: "IND-42" });
+    mockAgentsApi.wakeup.mockResolvedValue({});
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.handOff.mutate({ msg: parsed(), agentId: "agent-1", note: "" });
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith("Handed off, issue created", "IND-42");
   });
 
   it("omits the operator note block when no note was written", async () => {

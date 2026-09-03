@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from "@/lib/router";
+import { applyCompanyPrefix } from "@/lib/company-routes";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useSidebar } from "../context/SidebarContext";
@@ -38,7 +39,7 @@ export function SidebarNavItem({
 }: SidebarNavItemProps) {
   const { isMobile, setSidebarOpen } = useSidebar();
   const peek = useSidebarPeek();
-  const { setSelectedCompanyId } = useCompany();
+  const { companies, setSelectedCompanyId } = useCompany();
   const navigate = useNavigate();
 
   const baseClassName = cn(
@@ -99,14 +100,33 @@ export function SidebarNavItem({
   // bare path (`/brief`, `/inbox`) would render against the still-selected
   // company. Skip NavLink's active-state styling: no item is "active" from the
   // peeked company's perspective.
+  //
+  // Code-reviewed 2026-09-02: setSelectedCompanyId(...) then navigate(to)
+  // looked like it did this, but didn't. setSelectedCompanyId only queues a
+  // state update; the very next line's navigate(to) still runs with the
+  // *current* page's company prefix, because our navigate wrapper
+  // (lib/router.tsx's useNavigate) resolves that prefix from the URL/route
+  // params at the top of THIS render, not from peek.peekCompanyId — there is
+  // no synchronous link between the two. The comment above already named the
+  // exact risk ("otherwise the bare path would render against the
+  // still-selected company") without the fix actually closing it: clicking
+  // Clippy from a peeked company's flyout silently opened the CURRENT
+  // company's Clippy instead, with no visible error (the resulting URL is a
+  // normal, single-prefixed, working page, so it doesn't look broken at a
+  // glance — this is how it passed an earlier live check that only looked
+  // for the double-prefix symptom this same routing work fixed elsewhere).
+  // The fix is to resolve the peeked company's own prefix explicitly here
+  // and navigate to that exact path, instead of trusting the wrapper to
+  // infer it from ambient state that hasn't caught up yet.
   if (peek) {
     const link = (
       <a
         href={to}
         onClick={(e) => {
           e.preventDefault();
-          setSelectedCompanyId(peek.peekCompanyId, { source: "manual" });
-          navigate(to);
+          setSelectedCompanyId(peek.peekCompanyId, { source: "shortcut" });
+          const peekedCompany = companies.find((company) => company.id === peek.peekCompanyId);
+          navigate(peekedCompany ? applyCompanyPrefix(to, peekedCompany.issuePrefix) : to);
           peek.onItemClick?.();
           if (isMobile) setSidebarOpen(false);
         }}
