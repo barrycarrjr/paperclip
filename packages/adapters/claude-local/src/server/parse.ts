@@ -28,12 +28,17 @@ const CLAUDE_TRANSIENT_UPSTREAM_RE =
  * so a CLI downgrade does not silently reclassify. This is only the fallback:
  * the structured rate_limit_event is preferred wherever it is present, because
  * prose wording has already drifted once.
+ *
+ * The apostrophe class accepts both the straight `'` and the typographic `’`.
+ * The CLI renders the curly one, so matching only the straight form let a
+ * spent plan read as an ordinary failure and burn the backoff ladder instead
+ * of waiting for the window to reopen.
  */
 const CLAUDE_PLAN_EXHAUSTED_RE =
-  /(?:you'?ve\s+hit\s+your\s+[^\n]{0,40}limit|out\s+of\s+extra\s+usage|extra\s+usage\b|claude\s+usage\s+limit\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached|usage\s+limit\s+reached|usage\s+cap\s+reached)/i;
+  /(?:you['’]?ve\s+hit\s+your\s+[^\n]{0,40}limit|out\s+of\s+extra\s+usage|extra\s+usage\b|claude\s+usage\s+limit\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached|usage\s+limit\s+reached|usage\s+cap\s+reached)/i;
 
 const CLAUDE_EXTRA_USAGE_RESET_RE =
-  /(?:you'?ve\s+hit\s+your\s+[^\n]{0,40}limit|out\s+of\s+extra\s+usage|extra\s+usage|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached|claude\s+usage\s+limit\s+reached)[\s\S]{0,80}?\bresets?\s+(?:at\s+)?([^\n()]+?)(?:\s*\(([^)]+)\))?(?:[.!]|\n|$)/i;
+  /(?:you['’]?ve\s+hit\s+your\s+[^\n]{0,40}limit|out\s+of\s+extra\s+usage|extra\s+usage|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached|claude\s+usage\s+limit\s+reached)[\s\S]{0,80}?\bresets?\s+(?:at\s+)?([^\n()]+?)(?:\s*\(([^)]+)\))?(?:[.!]|\n|$)/i;
 
 /**
  * What the CLI reports on a `rate_limit_event` stream line.

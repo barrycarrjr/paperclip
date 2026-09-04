@@ -298,6 +298,45 @@ describe("classifyClaudeFailure against the real weekly-limit run", () => {
     ).toBe("2026-08-17T07:00:00.000Z");
   });
 
+  // The CLI prints a typographic apostrophe, so a matcher that only accepted
+  // the straight one read a spent plan as an ordinary failure and put it on
+  // the two-minute backoff ladder instead of waiting for the window to reopen.
+  // Both spellings must classify identically, and the prose path has to stand
+  // on its own because the structured rate_limit_event is not always present.
+  it("classifies a spent plan from prose alone with either apostrophe", () => {
+    const straight = "You've hit your weekly limit · resets Aug 17, 3am (America/New_York)";
+    const curly = "You’ve hit your weekly limit · resets Aug 17, 3am (America/New_York)";
+
+    const classify = (text: string) =>
+      classifyClaudeFailure({
+        parsed: { is_error: true, result: text },
+        stdout: text,
+        stderr: "",
+        errorMessage: `Claude run failed: subtype=success: ${text}`,
+      });
+
+    expect(classify(straight)?.family).toBe("plan_exhausted");
+    expect(classify(curly)?.family).toBe("plan_exhausted");
+    expect(classify(curly)).toEqual(classify(straight));
+  });
+
+  // Clock-only wording, because the prose path parses a time of day, not a
+  // calendar date; a dated reset arrives through the structured
+  // rate_limit_event instead and is covered above.
+  it("reads the reset time out of prose carrying a typographic apostrophe", () => {
+    const curly = "You’ve hit your weekly limit · resets 4pm (America/New_York)";
+    const straight = "You've hit your weekly limit · resets 4pm (America/New_York)";
+
+    const readReset = (text: string) =>
+      extractClaudeRetryNotBefore({
+        parsed: { is_error: true, result: text },
+        stdout: text,
+      });
+
+    expect(readReset(curly)).not.toBeNull();
+    expect(readReset(curly)?.toISOString()).toBe(readReset(straight)?.toISOString());
+  });
+
   it("keeps a genuine provider blip on the transient path", () => {
     expect(
       classifyClaudeFailure({
