@@ -60,6 +60,43 @@ Since then, and all pushed to `origin/ux-control-center`:
 - **Stale email handoffs join the attention queue**, per P5a's §4.5
   recommendation to extend it rather than build a second "stuck" list.
 
+### A real cross-company leak, found and fixed (2026-09-04)
+
+Worth reading even if nothing else here is. Going into the plugins repository
+for bullet 2's shared-service scope turned up a genuine data leak, not a
+labelling gap.
+
+The GBP Reviews dashboard listed **every configured location to every
+company**. Its handler looped the whole location list and never looked at the
+company the page was opened in, so an operator in one company saw another's
+locations, review counts, unreplied backlog and average rating. The dashboard
+widget made the identical unscoped call, so it leaked the same data anywhere
+it was placed.
+
+The information to prevent it was already there: every location records the
+company it belongs to, and that field was used when creating review issues but
+never when reading them. It is now used for both, it fails closed, and the
+portfolio root keeps the cross-company roll-up because that is the one place
+the view belongs.
+
+Two things follow from this for anyone picking the project up:
+
+- **The same class was swept for.** All 42 UI data handlers across the seven
+  plugins that have any were checked. One other looked unscoped
+  (`backup-tools` `dashboard.health`) and is correct — backup-tools has no
+  company column anywhere, because backups are instance-wide. Reviews was the
+  only real one.
+- **The fix is live on this machine but NOT released.** Both plugins were
+  reinstalled from source, so the running instance is fixed and verified.
+  Installed copies anywhere else stay vulnerable until someone cuts a release
+  with version bumps. That was left as an operator decision.
+
+Also on 2026-09-04, unrelated to the leak but in the same spirit: the
+repository's forbidden-token check was never wired into the commit hook, which
+only ran on TypeScript changes. A batch of documentation carrying absolute
+home-directory paths went in unnoticed because of it. The paths are fixed and
+the check now runs on every commit, against the lines a commit adds.
+
 Still open, and honestly named: P1 bullet 2's "Shared service/account" scope
 needs the Phone and Reviews plugins, which live in a repository this work is
 not to touch without separate coordination. P5b (freeform work entry) and P5c
@@ -78,11 +115,11 @@ during the run.
 |---|---|---|
 | Planning | Complete and validated | Seven documents, five reference snapshots, portable read-only checker |
 | P0 baseline/runtime | **Complete (2026-09-02)** | Done — see runbook's "P0 verification results" |
-| P1 scope/shell | **In progress (2026-09-03)** | Bullet 1 (regression cases + B01) **fully done**, Barry-confirmed live — though a code-review pass afterward found and fixed a second, unrelated bug (wrong-company navigation) in the same click handler, not caught by that confirmation; see the resume summary. Bullet 2 (explicit scope) **first slice done, not yet Barry-confirmed** — header label distinguishing Portfolio/HQ/company/personal/instance; still needed: "Shared service/account" scope, whether server authorization needs any change (none made — label only). Bullet 3 (centralize route/workspace resolution) **first slice done** — `workspace-catalog.ts` for core routes; full version (route resolver/availability/capability fields, one registry covering core+plugin together) still open. Bullet 4 (the new shell) **first slice done 2026-09-03, Barry-confirmed live** — the Everything page (renamed from "Catalog", his call) shows the right items with no Portfolio section outside HQ. Real gap still open: scope.md names a Knowledge page and a Company notes page — resolved 2026-09-03 as NOT a gap, both already exist under different names (Memories+Skills, and the Notepad plugin); see the resume summary. Bullet 5 (hover shortcuts) — covered by bullet 1's fix. Bullet 6 (search/catalog/pins) **fully done** (B06), including a code-review correction to two labels that had drifted from the rest of the app. Bullet 7 (unsupported companies, draft transitions, stale queries, navigation memory, back/forward) — **first slice done 2026-09-03, Barry-confirmed live**: the Email compose draft and Clippy transcript both now correctly clear on a company switch. A `/code-review max` pass covering all of P1's work through bullet 6 found 15 real issues, all fixed same-session — see implementation.md's "Code review pass" entry. |
+| P1 scope/shell | **In progress (2026-09-04)** | Bullet 1 (regression cases + B01) **fully done**, Barry-confirmed live — though a code-review pass afterward found and fixed a second, unrelated bug (wrong-company navigation) in the same click handler, not caught by that confirmation; see the resume summary. Bullet 2 (explicit scope) **done 2026-09-04** — header label distinguishing Portfolio/HQ/company/personal/instance, plus the "Shared service/account" scope that was the remaining gap: the phone pages now say when the PBX account behind them serves more than the company you are in, because every other page in Paperclip is company-bound and a shared account silently breaks that. Server authorization needed no change for the label work, but see the security note in the 2026-09-04 update: the reviews plugin turned out to need a real fix, not a label. Bullet 3 (centralize route/workspace resolution) **availability half done 2026-09-04** — the catalog now carries the conditions a workspace needs, and the sidebar, command palette and Everything all read them, so a destination one hides is not offered by the others; it also resolves core and plugin destinations together for pinning. Still open: per-workspace capability fields beyond availability. Bullet 4 (the new shell) **first slice done 2026-09-03, Barry-confirmed live** — the Everything page (renamed from "Catalog", his call) shows the right items with no Portfolio section outside HQ. Real gap still open: scope.md names a Knowledge page and a Company notes page — resolved 2026-09-03 as NOT a gap, both already exist under different names (Memories+Skills, and the Notepad plugin); see the resume summary. Bullet 5 (hover shortcuts) — covered by bullet 1's fix. Bullet 6 (search/catalog/pins) **fully done** — including pinning itself, built 2026-09-04, which had never existed despite being named twice in scope.md (B06), including a code-review correction to two labels that had drifted from the rest of the app. Bullet 7 (unsupported companies, draft transitions, stale queries, navigation memory, back/forward) — **first slice done 2026-09-03, Barry-confirmed live**: the Email compose draft and Clippy transcript both now correctly clear on a company switch. A `/code-review max` pass covering all of P1's work through bullet 6 found 15 real issues, all fixed same-session — see implementation.md's "Code review pass" entry. |
 | P2 Email/Clippy | **In progress (2026-09-03)** | First slice done: two parallel investigation agents audited Email and Clippy against the P2 checklist; found and fixed 4 real issues (1 high-severity Clippy regression, 3 medium), all with regression tests. 4 more pre-existing gaps were flagged for Barry — he said fix those too, and all 4 are now done (agent-wake failure visible, resulting-work link real, failure toasts added to two Help Scout/portfolio surfaces). See implementation.md's two P2 dated entries. Not yet Barry-confirmed live. |
 | P3 Calendar/Team/Attention | **Mostly done (2026-09-03)** | Three parallel audits (Calendar; Team/Agents/Assistants; Brief/Overview/Inbox/Approvals) found the stale-`useCompany()` bug in 11 more files (fixed, including one write-path case in `NewAgent.tsx`), two false "all clear" / false-empty-state bugs in Brief/Overview (fixed), a calendar create-dialog scoping gap (fixed), a missing notification-time display (a real standing gap, now built), and a sidebar Team-section gap (fixed). One thing intentionally left unbuilt: agent "objectives"/"next-action owner" don't map to a concrete field — flagged for a product decision, not invented. See implementation.md's P3 dated entry. Not yet Barry-confirmed live. |
 | P4 remaining workspaces/plugins | **Done (2026-09-03)** | Three parallel audits found the stale-`useCompany()` bug in ~30 more files (fixed — the most severe, `NewAgent.tsx`-class, being writes: hiring an agent, company secrets/settings/access, budgets, a new chat session, import/export). Separately found and fixed a real HIGH server-side bug: an explicit empty company list on a portfolio broadcast silently fanned out to every accessible company instead of targeting none (Clippy-tool-reachable, not just the one gated form). Also fixed: 4 dead links in Company Settings, 2 missing catalog entries (Org chart, Workspaces), Work Queue items not showing their linked issue, an issue's goal link never rendered. Phone/Reviews host-side reachability audited and confirmed intact, closing out the checklist. A few things flagged rather than built — see implementation.md's P4 entries. Not yet Barry-confirmed live. |
-| P5 behavioral additions | **Gated — P5a spec written, not implemented (2026-09-03)** | `docs/plans/2026-09-03-p5a-email-delegation-spec.md` specifies durable email delegation (source identity, lifecycle, failure/concurrency handling, and what needs a migration vs. what reuses existing data) per this phase's own gate — written for Barry's review, nothing implemented, no migration applied. Several concrete decisions are deliberately left open in the doc for him to make. P5b/P5c not started. |
+| P5 behavioral additions | **P5a done and live (2026-09-04); P5b/P5c not started** | P5a is implemented end to end and running on the live instance: the delegation table and lifecycle, resolve-and-reply through the same tool an agent would use by hand, a three-state approval setting for those replies, four routes, four agent tools, and a panel on the issue an email created. Migrations 0095 and 0096 applied. See the spec document for the decisions and how each open question was answered. P5b (freeform work entry) and P5c (richer Reviews) are not started and are net-new features needing Barry's product decisions rather than inference. |
 | P6 daily-use trial | Pending | Actual app checks and Barry's explicit satisfaction |
 | P7 publication | Not authorized | Separate approval to push and create PR |
 

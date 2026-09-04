@@ -5,6 +5,7 @@ const {
   resolveForbiddenTokens,
   runForbiddenTokenCheck,
   runStagedForbiddenTokenCheck,
+  looksLikeLeakContext,
 } = await import("../../../scripts/check-forbidden-tokens.mjs");
 
 describe("forbidden token check", () => {
@@ -144,5 +145,62 @@ describe("staged forbidden token check", () => {
       error: () => {},
     });
     expect(exitCode).toBe(0);
+  });
+});
+
+describe("leak-shaped context", () => {
+  const TOKEN = "sampleuser";
+  const BS = String.fromCharCode(92);
+
+  it("does not flag a document that simply names a person", () => {
+    // The username token is derived automatically and is usually also
+    // somebody's ordinary name. Blocking prose teaches people to commit with
+    // --no-verify, which costs more than it saves.
+    for (const line of [
+      `Confirmed live by ${TOKEN} on Tuesday.`,
+      `${TOKEN} asked for this to be reworded.`,
+      `the ${TOKEN}-confirmed behaviour`,
+    ]) {
+      expect(looksLikeLeakContext(line, TOKEN), line).toBe(false);
+    }
+  });
+
+  it("flags a machine-specific path", () => {
+    expect(looksLikeLeakContext(`/home/${TOKEN}/project`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`C:${BS}Users${BS}${TOKEN}${BS}project`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`cd C:${BS}Users${BS}${TOKEN}`, TOKEN)).toBe(true);
+  });
+
+  it("flags an address or a credential", () => {
+    expect(looksLikeLeakContext(`mail ${TOKEN}@example.com`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`https://${TOKEN}@host/repo`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`username = "${TOKEN}"`, TOKEN)).toBe(true);
+  });
+
+  it("still matches an explicitly listed token anywhere, not only in context", () => {
+    // A token an operator wrote into the tokens file is a deliberate
+    // statement that it must not appear at all, so it is matched plainly.
+    const errors: string[] = [];
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens: ["acme-internal"],
+      contextOnlyTokens: [],
+      exec: () => "+++ b/x.md\n+a mention of acme-internal in prose\n",
+      log: () => {},
+      error: (m: string) => errors.push(m),
+    });
+    expect(exitCode).toBe(1);
+  });
+
+  it("skips only when both lists are empty", () => {
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens: [],
+      contextOnlyTokens: [TOKEN],
+      exec: () => `+++ b/x.md\n+/home/${TOKEN}/project\n`,
+      log: () => {},
+      error: () => {},
+    });
+    expect(exitCode).toBe(1);
   });
 });
