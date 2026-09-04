@@ -36,6 +36,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SendingIdentityLine } from "@/components/email/SendingIdentityLine";
+import { describeSendingIdentity, findSelectedMailbox } from "@/components/email/sendingIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -577,6 +579,15 @@ export function Email() {
   });
 
   const mailboxes = mailboxData?.mailboxes ?? [];
+
+  // The identity a compose or reply will leave as, resolved from the mailbox
+  // the page has selected. Recomputed when the list changes, so a mailbox
+  // key left over from another company (which that company's list will not
+  // contain) resolves to "no mailbox" rather than to stale data.
+  const composeIdentity = useMemo(
+    () => describeSendingIdentity(findSelectedMailbox(mailboxes, selectedMailbox)),
+    [mailboxes, selectedMailbox],
+  );
 
   useEffect(() => {
     if (
@@ -2566,6 +2577,10 @@ export function Email() {
                         </Button>
                       </div>
                     </div>
+                    {/* Same From line as the compose dialog: a reply leaves
+                        as the selected mailbox, and that should be visible
+                        before Send, not discovered afterwards. */}
+                    <SendingIdentityLine identity={composeIdentity} className="px-0.5" />
                     <DraftTextarea
                       key={`reply:${selectedMailbox}:${selectedUid}`}
                       ref={replyComposerRef}
@@ -2700,6 +2715,13 @@ export function Email() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-1">
+            {/* Which identity this leaves as. With several mailboxes across
+                companies, sending from whichever one happened to be selected
+                in the sidebar is easy to get wrong and hard to notice until
+                the reply lands in the wrong inbox. Real configured address
+                where the plugin has one; the mailbox name otherwise; never a
+                guess. See sendingIdentity.ts. */}
+            <SendingIdentityLine identity={composeIdentity} />
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
               <DraftInput

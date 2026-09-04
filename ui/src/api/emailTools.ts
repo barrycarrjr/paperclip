@@ -6,6 +6,12 @@ export interface MailboxInfo {
   key: string;
   name: string;
   pollFolder: string;
+  /**
+   * The address mail actually leaves as, from the plugin's own resolver.
+   * Null when the mailbox has no sending address configured — show the
+   * mailbox name in that case rather than inventing one.
+   */
+  from?: string | null;
 }
 
 export interface MailHeader {
