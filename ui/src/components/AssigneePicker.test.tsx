@@ -20,7 +20,10 @@ const mockAuthApi = vi.hoisted(() => ({
 }));
 
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1" }),
+  useCompany: () => ({
+    selectedCompanyId: "company-1",
+    companies: [{ id: "company-1", issuePrefix: "PAP", isPortfolioRoot: false }],
+  }),
 }));
 
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -48,6 +51,9 @@ vi.mock("./AgentIconPicker", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
+  // These components resolve their company from the URL now, not the
+  // context selection, so the router mock has to answer useParams.
+  useParams: () => ({ companyPrefix: "PAP" }),
   Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 

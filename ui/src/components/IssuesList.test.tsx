@@ -11,7 +11,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 const companyState = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
+  companies: [
+    { id: "company-1", issuePrefix: "PAP", isPortfolioRoot: false },
+    { id: "company-2", issuePrefix: "ACME", isPortfolioRoot: false },
+  ],
 }));
+
+// The list resolves its company from the URL, so switching company in a test
+// means changing the prefix, which is what actually happens in the app.
+const routeState = vi.hoisted(() => ({ companyPrefix: "PAP" }));
 
 const dialogState = vi.hoisted(() => ({
   openNewIssue: vi.fn(),
@@ -51,6 +59,7 @@ vi.mock("../context/DialogContext", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
+  useParams: () => ({ companyPrefix: routeState.companyPrefix }),
   Link: ({
     children,
     to,
@@ -254,6 +263,7 @@ describe("IssuesList", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     companyState.selectedCompanyId = "company-1";
+    routeState.companyPrefix = "PAP";
     dialogState.openNewIssue.mockReset();
     mockKanbanBoard.mockReset();
     mockIssuesApi.list.mockReset();
@@ -1317,6 +1327,9 @@ describe("IssuesList", () => {
     // Simulate switching company via the sidebar — this component instance
     // stays mounted (App.tsx doesn't key the route on companyPrefix), so
     // only this effect's own reset logic can clear a stale search term.
+    // The URL prefix is what changes on a real switch, and what this list
+    // now reads.
+    routeState.companyPrefix = "ACME";
     companyState.selectedCompanyId = "company-2";
     act(() => {
       root.render(

@@ -18,10 +18,16 @@ vi.mock("@tanstack/react-query", async () => {
 });
 
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1" }),
+  useCompany: () => ({
+    selectedCompanyId: "company-1",
+    companies: [{ id: "company-1", issuePrefix: "PAP", isPortfolioRoot: false }],
+  }),
 }));
 
 vi.mock("@/lib/router", () => ({
+  // These components resolve their company from the URL now, not the
+  // context selection, so the router mock has to answer useParams.
+  useParams: () => ({ companyPrefix: "PAP" }),
   Link: ({ children, className, ...props }: ComponentProps<"a">) => (
     <a className={className} {...props}>{children}</a>
   ),

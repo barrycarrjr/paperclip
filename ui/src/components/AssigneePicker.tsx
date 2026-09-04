@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { ArrowUpRight, Bot, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { Link } from "@/lib/router";
-import { useCompany } from "../context/CompanyContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   buildCompanyUserInlineOptions,
@@ -68,8 +68,10 @@ export function AssigneePicker({
   showAgentLink,
   className,
 }: AssigneePickerProps) {
-  const { selectedCompanyId } = useCompany();
-  const companyId = companyIdProp ?? selectedCompanyId ?? null;
+  // Falls back to the URL's company rather than the context selection,
+  // which lags a render behind a company switch. See useRouteCompany.ts.
+  const activeCompanyId = useActiveCompanyId();
+  const companyId = companyIdProp ?? activeCompanyId ?? null;
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 

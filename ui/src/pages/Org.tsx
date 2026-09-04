@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { StatusBadge } from "../components/StatusBadge";
@@ -90,7 +90,9 @@ function OrgTreeNode({
 }
 
 export function Org() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, so a company switch cannot leave this page querying the
+  // company you just left for a render. See useRouteCompany.ts.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {

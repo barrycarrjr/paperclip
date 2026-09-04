@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { environmentsApi } from "../api/environments";
 import { instanceSettingsApi } from "../api/instanceSettings";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, projectWorkspaceUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -201,8 +201,10 @@ export function IssueWorkspaceCard({
   livePreview = false,
   onDraftChange,
 }: IssueWorkspaceCardProps) {
-  const { selectedCompanyId } = useCompany();
-  const companyId = issue.companyId ?? selectedCompanyId;
+  // The issue's own company wins; the fallback reads the URL rather than
+  // the context selection, which lags a render behind a switch.
+  const activeCompanyId = useActiveCompanyId();
+  const companyId = issue.companyId ?? activeCompanyId;
   const [editing, setEditing] = useState(initialEditing);
 
   const { data: experimentalSettings } = useQuery({

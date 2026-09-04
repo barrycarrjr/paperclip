@@ -9,7 +9,7 @@ import { goalsApi } from "../api/goals";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { resolveIssueFilterWorkspaceId } from "../lib/issue-filters";
 import { queryKeys } from "../lib/queryKeys";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap } from "../lib/company-members";
@@ -200,8 +200,10 @@ export function IssueProperties({
   onUpdate,
   inline,
 }: IssuePropertiesProps) {
-  const { selectedCompanyId } = useCompany();
-  const companyId = issue.companyId ?? selectedCompanyId;
+  // The issue's own company wins; the fallback reads the URL rather than
+  // the context selection, which lags a render behind a switch.
+  const activeCompanyId = useActiveCompanyId();
+  const companyId = issue.companyId ?? activeCompanyId;
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [blockedByOpen, setBlockedByOpen] = useState(false);

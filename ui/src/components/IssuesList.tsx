@@ -2,7 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useState, useCal
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
 import { useDialog } from "../context/DialogContext";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { Link } from "@/lib/router";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
@@ -523,7 +523,9 @@ export function IssuesList({
   onSearchChange,
   onUpdateIssue,
 }: IssuesListProps) {
-  const { selectedCompanyId } = useCompany();
+  // Was the context selection, so the user directory behind the assignee
+  // menu could briefly be the previous company's after a switch.
+  const selectedCompanyId = useActiveCompanyId();
   const { openNewIssue } = useDialog();
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
