@@ -495,6 +495,67 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       async ({ issueId }) => client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/release`, { body: {} }),
     ),
     makeTool(
+      "paperclipListEmailHandoffs",
+      "List the email handoffs on an issue. An issue created by someone handing you an email has one; anything else has none. Use it to get the handoff id, its current state, and its version before finishing or handing back.",
+      z.object({ companyId: companyIdOptional, issueId: issueIdSchema }),
+      async ({ companyId, issueId }) =>
+        client.requestJson(
+          "GET",
+          `/companies/${client.resolveCompanyId(companyId)}/issues/${encodeURIComponent(issueId)}/email-delegations`,
+        ),
+    ),
+    makeTool(
+      "paperclipAcknowledgeEmailHandoff",
+      "Say you have picked up an email that was handed to you. Do this when you start, so nobody has to wonder whether the handoff was seen.",
+      z.object({
+        companyId: companyIdOptional,
+        issueId: issueIdSchema,
+        delegationId: z.string().uuid(),
+        expectedVersion: z.number().int().min(0).optional(),
+      }),
+      async ({ companyId, issueId, delegationId, ...body }) =>
+        client.requestJson(
+          "POST",
+          `/companies/${client.resolveCompanyId(companyId)}/issues/${encodeURIComponent(issueId)}/email-delegations/${encodeURIComponent(delegationId)}/acknowledge`,
+          { body },
+        ),
+    ),
+    makeTool(
+      "paperclipResolveEmailHandoff",
+      "Finish an email handed to you. Anything in replyBody is SENT TO THE PERSON WHO SENT THE ORIGINAL EMAIL — write it to them, not as a status note, and leave it out when there is nothing to say outward. Depending on the operator's setting the reply may wait for their approval; the response says which happened, so do not tell anyone it has been sent unless replyState is \"sent\".",
+      z.object({
+        companyId: companyIdOptional,
+        issueId: issueIdSchema,
+        delegationId: z.string().uuid(),
+        replyBody: z.string().max(100000).optional(),
+        resolutionNote: z.string().trim().max(2000).optional(),
+        expectedVersion: z.number().int().min(0).optional(),
+      }),
+      async ({ companyId, issueId, delegationId, ...body }) =>
+        client.requestJson(
+          "POST",
+          `/companies/${client.resolveCompanyId(companyId)}/issues/${encodeURIComponent(issueId)}/email-delegations/${encodeURIComponent(delegationId)}/resolve`,
+          { body },
+        ),
+    ),
+    makeTool(
+      "paperclipHandBackEmailHandoff",
+      "Give an email back instead of finishing it, when you cannot or should not continue. Sends nothing to anyone outside. The reason is required and is what the next person has to work from, so say what is actually blocking you.",
+      z.object({
+        companyId: companyIdOptional,
+        issueId: issueIdSchema,
+        delegationId: z.string().uuid(),
+        reason: z.string().trim().min(1).max(2000),
+        expectedVersion: z.number().int().min(0).optional(),
+      }),
+      async ({ companyId, issueId, delegationId, ...body }) =>
+        client.requestJson(
+          "POST",
+          `/companies/${client.resolveCompanyId(companyId)}/issues/${encodeURIComponent(issueId)}/email-delegations/${encodeURIComponent(delegationId)}/hand-back`,
+          { body },
+        ),
+    ),
+    makeTool(
       "paperclipAddComment",
       "Add a comment to an issue; include resume=true when intentionally requesting follow-up on resumable closed work",
       addCommentToolSchema,

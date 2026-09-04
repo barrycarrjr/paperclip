@@ -248,6 +248,7 @@ export async function createApp(
   api.use(projectRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {
     pluginWorkerManager: workerManager,
+    getToolDispatcher: () => toolDispatcherRef.current,
   }));
   api.use(issueTreeControlRoutes(db));
   api.use(routineRoutes(db, { pluginWorkerManager: workerManager }));

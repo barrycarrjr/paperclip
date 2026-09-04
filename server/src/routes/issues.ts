@@ -27,6 +27,9 @@ import {
   isClosedIsolatedExecutionWorkspace,
   isEmailHandoffOriginKind,
   parseEmailHandoffOriginId,
+  acknowledgeEmailDelegationSchema,
+  handBackEmailDelegationSchema,
+  resolveEmailDelegationSchema,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
@@ -84,6 +87,7 @@ import {
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -390,6 +394,12 @@ export function issueRoutes(
   storage: StorageService,
   opts: {
     pluginWorkerManager?: PluginWorkerManager;
+    /**
+     * Late-bound, matching how the approval routes get it: the dispatcher is
+     * built after routes are mounted, so it can only be read at request time.
+     * Resolving an email handoff needs it to send the reply.
+     */
+    getToolDispatcher?: () => PluginToolDispatcher | null;
   } = {},
 ) {
   const router = Router();
@@ -3844,6 +3854,179 @@ export function issueRoutes(
     const attachments = await svc.listAttachments(issueId);
     res.json(attachments.map(withContentPath));
   });
+
+  // ---------------------------------------------------------------------
+  // Email handoffs (P5a)
+  //
+  // One set of routes for both callers: a person clicking in the interface
+  // and an agent using its own token reach the same handlers, so the rules
+  // about who may act, and what a state may become, are written once.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Resolve the caller's access to a delegation on this issue.
+   *
+   * Every check the issue itself gets, plus one more: the delegation must
+   * actually belong to the issue in the URL. Without that, a delegation id
+   * from another issue in the same company would be accepted, and the
+   * company check alone would not notice.
+   */
+  async function loadDelegationForIssue(
+    req: Request,
+    res: Response,
+  ): Promise<{ companyId: string; delegation: Awaited<ReturnType<typeof emailDelegationsSvc.findById>> } | null> {
+    const companyId = req.params.companyId as string;
+    const issueId = req.params.issueId as string;
+    const delegationId = req.params.delegationId as string;
+    assertCompanyAccess(req, companyId);
+
+    const issue = await svc.getById(issueId);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return null;
+    }
+    if (issue.companyId !== companyId) {
+      res.status(422).json({ error: "Issue does not belong to company" });
+      return null;
+    }
+    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return null;
+
+    const delegation = await emailDelegationsSvc.findById(companyId, delegationId);
+    if (!delegation || delegation.issueId !== issueId) {
+      res.status(404).json({ error: "Handoff not found on this issue" });
+      return null;
+    }
+    return { companyId, delegation };
+  }
+
+  router.get("/companies/:companyId/issues/:issueId/email-delegations", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const issueId = req.params.issueId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const issue = await svc.getById(issueId);
+    if (!issue || issue.companyId !== companyId) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    res.json(await emailDelegationsSvc.listForIssue(companyId, issueId));
+  });
+
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/acknowledge",
+    validate(acknowledgeEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await emailDelegationsSvc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation!.id,
+        to: "acknowledged",
+        expectedVersion: req.body.expectedVersion,
+      });
+      await logDelegationActivity(req, actor, loaded.companyId, updated.id, "acknowledged", null);
+      res.json(updated);
+    },
+  );
+
+  /**
+   * Finish the handover, and reply to whoever sent the email.
+   *
+   * Whether that reply waits for approval is the operator's setting, not this
+   * route's choice — see emailHandoffReplyNeedsApproval. The response carries
+   * what actually happened to the reply so the caller can say so, rather than
+   * assuming it went.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/resolve",
+    validate(resolveEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+
+      const dispatcher = opts.getToolDispatcher?.() ?? null;
+      if (!dispatcher) {
+        // Refuse rather than resolve-without-replying: the caller wrote a
+        // reply expecting it to be sent, and silently dropping it would
+        // leave a customer waiting on a message that is never coming.
+        if (req.body.replyBody?.trim()) {
+          res.status(503).json({
+            error: "Plugin tools are not ready yet, so the reply cannot be sent. Try again shortly.",
+          });
+          return;
+        }
+      }
+
+      const actor = getActorInfo(req);
+      const resolution = serviceIndex.emailHandoffResolutionService({
+        db,
+        dispatcher: dispatcher!,
+      });
+      const { delegation, reply } = await resolution.resolve({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation!.id,
+        replyBody: req.body.replyBody,
+        resolutionNote: req.body.resolutionNote,
+        expectedVersion: req.body.expectedVersion,
+        actor: { agentId: actor.agentId, runId: actor.runId, userId: actor.actorType === "user" ? actor.actorId : null },
+      });
+
+      await logDelegationActivity(req, actor, loaded.companyId, delegation.id, "resolved", reply.replyState);
+      res.json({ delegation, reply });
+    },
+  );
+
+  /**
+   * Give the work back instead of finishing it. Sends nothing.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/hand-back",
+    validate(handBackEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await emailDelegationsSvc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation!.id,
+        to: "handed_back",
+        handedBackReason: req.body.reason,
+        expectedVersion: req.body.expectedVersion,
+      });
+      await logDelegationActivity(req, actor, loaded.companyId, updated.id, "handed_back", null);
+      res.json(updated);
+    },
+  );
+
+  async function logDelegationActivity(
+    _req: Request,
+    actor: ReturnType<typeof getActorInfo>,
+    companyId: string,
+    delegationId: string,
+    state: string,
+    replyState: string | null,
+  ): Promise<void> {
+    try {
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "email_delegation.updated",
+        entityType: "issue",
+        entityId: delegationId,
+        details: { state, ...(replyState ? { replyState } : {}) },
+      });
+    } catch (err) {
+      // A missing audit line must not undo a state change that already
+      // happened, or a reply that has already gone out.
+      logger.warn({ err, delegationId }, "could not log the delegation change (non-fatal)");
+    }
+  }
 
   router.post("/companies/:companyId/issues/:issueId/attachments", async (req, res) => {
     const companyId = req.params.companyId as string;

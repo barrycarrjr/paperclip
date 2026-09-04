@@ -498,3 +498,41 @@ export const restoreIssueDocumentRevisionSchema = z.object({});
 export type IssueDocumentFormat = z.infer<typeof issueDocumentFormatSchema>;
 export type UpsertIssueDocument = z.infer<typeof upsertIssueDocumentSchema>;
 export type RestoreIssueDocumentRevision = z.infer<typeof restoreIssueDocumentRevisionSchema>;
+
+/**
+ * Finishing, or giving up on, an email handed to an agent
+ * (P5a — docs/plans/2026-09-03-p5a-email-delegation-spec.md).
+ */
+
+/**
+ * `replyBody` is what gets sent back to whoever sent the original email.
+ * Optional: plenty of handovers end with an internal answer and nothing to
+ * say outward, and an empty one resolves without sending anything.
+ *
+ * `expectedVersion` is the version last read. Sending it makes the request
+ * fail rather than overwrite a change someone else made in between; leaving
+ * it out is for callers that just read the record in the same breath.
+ */
+export const resolveEmailDelegationSchema = z.object({
+  replyBody: multilineTextSchema.pipe(z.string().max(100000)).nullable().optional(),
+  resolutionNote: z.string().trim().max(2000).nullable().optional(),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+/**
+ * A reason is required, not optional. The whole point of separating handback
+ * from resolution is that someone has to pick the work up again, and doing
+ * that without being told why leaves them guessing.
+ */
+export const handBackEmailDelegationSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+export const acknowledgeEmailDelegationSchema = z.object({
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+export type ResolveEmailDelegation = z.infer<typeof resolveEmailDelegationSchema>;
+export type HandBackEmailDelegation = z.infer<typeof handBackEmailDelegationSchema>;
+export type AcknowledgeEmailDelegation = z.infer<typeof acknowledgeEmailDelegationSchema>;

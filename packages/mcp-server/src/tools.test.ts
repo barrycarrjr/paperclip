@@ -316,3 +316,105 @@ describe("paperclip MCP tools", () => {
     expect(response.content[0]?.text).toContain("must not contain '..'");
   });
 });
+
+describe("email handoff tools", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const companyPath = "http://localhost:3100/api/companies/11111111-1111-1111-1111-111111111111";
+  const delegationId = "44444444-4444-4444-4444-444444444444";
+
+  it("lists the handoffs on an issue in the agent's own company", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse([{ id: delegationId }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTool("paperclipListEmailHandoffs").execute({ issueId: "PAP-1" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(`${companyPath}/issues/PAP-1/email-delegations`);
+    expect(init.method).toBe("GET");
+    expect(response.content[0]?.text).toContain(delegationId);
+  });
+
+  it("sends the reply body through to resolve", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ delegation: { status: "resolved" }, reply: { replyState: "queued" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTool("paperclipResolveEmailHandoff").execute({
+      issueId: "PAP-1",
+      delegationId,
+      replyBody: "Refund issued, sorry for the trouble.",
+      resolutionNote: "Refunded",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(
+      `${companyPath}/issues/PAP-1/email-delegations/${delegationId}/resolve`,
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      replyBody: "Refund issued, sorry for the trouble.",
+      resolutionNote: "Refunded",
+    });
+    // The agent has to be able to tell queued from sent, or it will report a
+    // message as delivered while it is still waiting for the operator.
+    expect(response.content[0]?.text).toContain("queued");
+  });
+
+  it("resolves with no reply when nothing needs to go outward", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ delegation: { status: "resolved" }, reply: { replyState: "none" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getTool("paperclipResolveEmailHandoff").execute({ issueId: "PAP-1", delegationId });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({});
+  });
+
+  it("refuses to hand back without a reason", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTool("paperclipHandBackEmailHandoff").execute({
+      issueId: "PAP-1",
+      delegationId,
+      reason: "   ",
+    });
+
+    // Rejected before it ever reaches the server, so the agent gets told why.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.content[0]?.text.toLowerCase()).toContain("error");
+  });
+
+  it("hands back with a reason", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ status: "handed_back" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getTool("paperclipHandBackEmailHandoff").execute({
+      issueId: "PAP-1",
+      delegationId,
+      reason: "Needs billing access I do not have",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(
+      `${companyPath}/issues/PAP-1/email-delegations/${delegationId}/hand-back`,
+    );
+    expect(JSON.parse(init.body as string)).toEqual({
+      reason: "Needs billing access I do not have",
+    });
+  });
+
+  it("tells the agent plainly that the reply goes to the original sender", async () => {
+    // The one thing an agent must not misread: replyBody is not a status note.
+    const tool = createToolDefinitions(makeClient()).find(
+      (candidate) => candidate.name === "paperclipResolveEmailHandoff",
+    );
+    expect(tool?.description).toMatch(/SENT TO THE PERSON WHO SENT THE ORIGINAL EMAIL/);
+  });
+});

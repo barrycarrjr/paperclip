@@ -198,13 +198,12 @@ export function issueEmailDelegationService(db: Db) {
     const current = await findById(input.companyId, input.delegationId);
     if (!current) throw notFound("Delegation not found");
 
-    const check = checkEmailDelegationTransition({
-      from: current.status,
-      to: input.to,
-      handedBackReason: input.handedBackReason,
-    });
-    if (!check.ok) throw unprocessable(check.reason);
-
+    // Staleness is checked first, and deliberately so. A caller that sent a
+    // version is telling us what it believed the world looked like; if that
+    // is out of date, "this changed while you were looking at it" is the
+    // useful answer. Checking the transition first would instead report
+    // whichever rule the stale request happened to break, which describes a
+    // symptom of the staleness rather than the staleness itself.
     if (
       typeof input.expectedVersion === "number" &&
       input.expectedVersion !== current.version
@@ -213,6 +212,13 @@ export function issueEmailDelegationService(db: Db) {
         "This delegation changed while you were looking at it. Reload and try again.",
       );
     }
+
+    const check = checkEmailDelegationTransition({
+      from: current.status,
+      to: input.to,
+      handedBackReason: input.handedBackReason,
+    });
+    if (!check.ok) throw unprocessable(check.reason);
 
     const now = new Date();
     const [updated] = await db
