@@ -70,6 +70,72 @@ export interface WorkspaceCatalogEntry {
   icon: LucideIcon;
   /** Only rendered when the selected company is the portfolio root (HQ). */
   portfolioRootOnly?: boolean;
+  /**
+   * A switch that has to be on before this workspace does anything.
+   *
+   * Only set where a real, checkable condition exists in the app today. Most
+   * core workspaces have none: they work for every company, and inventing a
+   * requirement for them would be guessing at product behaviour rather than
+   * describing it. Plugin-backed availability (a mailbox, a PBX account)
+   * is deliberately NOT modelled here — those pages already know their own
+   * setup rules and say so better than a generic flag could.
+   */
+  requires?: WorkspaceRequirement;
+}
+
+/**
+ * The conditions this catalog can actually check.
+ *
+ * A closed union rather than a free string, so a consumer that forgets to
+ * handle a new one fails to compile instead of silently treating the
+ * workspace as available.
+ */
+export type WorkspaceRequirement = "isolatedWorkspaces";
+
+export interface WorkspaceAvailabilityInput {
+  /** Instance experimental setting `enableIsolatedWorkspaces`. */
+  isolatedWorkspacesEnabled: boolean;
+}
+
+/**
+ * Whether a workspace can be used right now.
+ *
+ * Undefined input is treated as NOT available on purpose. The settings query
+ * is still in flight on a cold load, and briefly offering a destination that
+ * then turns out to be off is worse than briefly not offering one: the first
+ * sends someone somewhere that cannot help them, the second corrects itself
+ * a moment later.
+ */
+export function isWorkspaceAvailable(
+  entry: WorkspaceCatalogEntry,
+  input: Partial<WorkspaceAvailabilityInput> | null | undefined,
+): boolean {
+  if (!entry.requires) return true;
+  switch (entry.requires) {
+    case "isolatedWorkspaces":
+      return input?.isolatedWorkspacesEnabled === true;
+    default: {
+      // Exhaustiveness guard: a new requirement must be handled above rather
+      // than defaulting to "available".
+      const unhandled: never = entry.requires;
+      void unhandled;
+      return false;
+    }
+  }
+}
+
+/** Plain sentence for why a workspace is not usable, or null when it is. */
+export function workspaceUnavailableReason(
+  entry: WorkspaceCatalogEntry,
+  input: Partial<WorkspaceAvailabilityInput> | null | undefined,
+): string | null {
+  if (isWorkspaceAvailable(entry, input)) return null;
+  switch (entry.requires) {
+    case "isolatedWorkspaces":
+      return "Isolated workspaces are switched off for this instance.";
+    default:
+      return "This is not available here.";
+  }
 }
 
 export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
@@ -89,10 +155,17 @@ export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
   { id: "assistants", label: "Assistants", routeRoot: "assistants", icon: UserCog },
   // Added 2026-09-03 (P4 audit): the route is always registered, but had no
   // catalog/search presence even when the experimental flag that gates it
-  // (enableIsolatedWorkspaces) is on. Safe to list unconditionally — the page
-  // itself already redirects to /issues when the flag is off (Workspaces.tsx),
-  // rather than erroring or showing a broken state.
-  { id: "workspaces", label: "Workspaces", routeRoot: "workspaces", icon: GitBranch },
+  // (enableIsolatedWorkspaces) is on.
+  //
+  // Corrected 2026-09-04: it was listed unconditionally, on the reasoning
+  // that the page redirects to /issues when the flag is off so nothing
+  // breaks. Nothing breaks, but the sidebar hides this entry when the flag
+  // is off (SidebarMenu.tsx) while search and Everything kept offering it,
+  // and clicking it landed you on Issues with no explanation. Silently
+  // sending someone somewhere else is exactly what the scope document rules
+  // out ("Unsupported access shows a clear unavailable/setup/permission
+  // state"), so the requirement is declared here and every surface reads it.
+  { id: "workspaces", label: "Workspaces", routeRoot: "workspaces", icon: GitBranch, requires: "isolatedWorkspaces" },
   { id: "clippy", label: "Clippy", routeRoot: "clippy", icon: MessageSquare },
   { id: "memories", label: "Memories", routeRoot: "memories", icon: Brain },
   { id: "skills", label: "Skills", routeRoot: "skills", icon: Boxes },
@@ -113,6 +186,33 @@ export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
   { id: "portfolio-costs", label: "Portfolio Costs", routeRoot: "portfolio-costs", icon: DollarSign, portfolioRootOnly: true },
 ];
 
-export function visibleWorkspaceCatalog(params: { isPortfolioRoot: boolean }): WorkspaceCatalogEntry[] {
-  return CORE_WORKSPACE_CATALOG.filter((entry) => !entry.portfolioRootOnly || params.isPortfolioRoot);
+/**
+ * The workspaces worth offering right now.
+ *
+ * `availability` is optional so existing callers keep working, but passing it
+ * is what stops search and the Everything page offering a destination the
+ * sidebar has already hidden.
+ */
+export function visibleWorkspaceCatalog(params: {
+  isPortfolioRoot: boolean;
+  availability?: Partial<WorkspaceAvailabilityInput> | null;
+}): WorkspaceCatalogEntry[] {
+  return CORE_WORKSPACE_CATALOG.filter((entry) => {
+    if (entry.portfolioRootOnly && !params.isPortfolioRoot) return false;
+    // Entries with no requirement are unaffected, so omitting `availability`
+    // only ever leaves the gated ones out — never adds something new.
+    if (params.availability !== undefined && !isWorkspaceAvailable(entry, params.availability)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Look up a catalog entry by the first segment of a company-relative path. */
+export function workspaceCatalogEntryForRouteRoot(
+  routeRoot: string,
+): WorkspaceCatalogEntry | null {
+  const normalized = routeRoot.replace(/^\/+/, "").split("/")[0]?.toLowerCase();
+  if (!normalized) return null;
+  return CORE_WORKSPACE_CATALOG.find((entry) => entry.routeRoot === normalized) ?? null;
 }

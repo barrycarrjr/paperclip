@@ -2,6 +2,7 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Everything } from "./Everything";
 
@@ -47,8 +48,32 @@ vi.mock("@/plugins/slots", () => ({
   usePluginSlots: () => ({ slots: pluginSlotsState.slots, isLoading: false, errorMessage: null }),
 }));
 
+// The page reads the instance's experimental settings to know which
+// workspaces this company can actually open. Stubbed rather than mocked away
+// so a test can turn the isolated-workspaces switch off and see the page stop
+// offering that destination.
+const experimentalState: { enableIsolatedWorkspaces: boolean } = {
+  enableIsolatedWorkspaces: true,
+};
+vi.mock("@/api/instanceSettings", () => ({
+  instanceSettingsApi: {
+    getExperimental: async () => ({
+      enableIsolatedWorkspaces: experimentalState.enableIsolatedWorkspaces,
+    }),
+  },
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+function renderWithQueryClient() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Everything />
+    </QueryClientProvider>
+  );
+}
 
 describe("Everything", () => {
   let container: HTMLDivElement;
@@ -58,6 +83,7 @@ describe("Everything", () => {
     document.body.appendChild(container);
     pluginSlotsState.slots = [];
     activeCompanyIdState.value = "company-1";
+    experimentalState.enableIsolatedWorkspaces = true;
     setBreadcrumbs.mockClear();
   });
 
@@ -68,7 +94,7 @@ describe("Everything", () => {
   it("lists core pages but not portfolio-only pages for a non-root company", () => {
     const root = createRoot(container);
     act(() => {
-      root.render(<Everything />);
+      root.render(renderWithQueryClient());
     });
 
     const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
@@ -85,7 +111,7 @@ describe("Everything", () => {
     activeCompanyIdState.value = "hq";
     const root = createRoot(container);
     act(() => {
-      root.render(<Everything />);
+      root.render(renderWithQueryClient());
     });
 
     const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
@@ -103,7 +129,7 @@ describe("Everything", () => {
     ];
     const root = createRoot(container);
     act(() => {
-      root.render(<Everything />);
+      root.render(renderWithQueryClient());
     });
 
     const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
@@ -121,12 +147,53 @@ describe("Everything", () => {
   it("sets a single breadcrumb", () => {
     const root = createRoot(container);
     act(() => {
-      root.render(<Everything />);
+      root.render(renderWithQueryClient());
     });
 
     expect(setBreadcrumbs).toHaveBeenCalledWith([{ label: "Everything" }]);
 
     act(() => {
+      root.unmount();
+    });
+  });
+
+  it("stops offering Workspaces when the instance has it switched off", async () => {
+    // The sidebar already hid this entry in that case. Offering it here sent
+    // you to a page that silently redirected to Issues.
+    experimentalState.enableIsolatedWorkspaces = false;
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
+    expect(labels).not.toContain("Workspaces");
+    // Everything else is untouched.
+    expect(labels).toContain("Issues");
+    expect(labels).toContain("Email");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("offers Workspaces when it is switched on", async () => {
+    experimentalState.enableIsolatedWorkspaces = true;
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
+    expect(labels).toContain("Workspaces");
+
+    await act(async () => {
       root.unmount();
     });
   });

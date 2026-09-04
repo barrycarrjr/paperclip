@@ -21,7 +21,8 @@ import { CircleDot, Bot, Hexagon, SquarePen, Plus, PlugZap } from "lucide-react"
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
 import { usePluginSlots } from "@/plugins/slots";
-import { CORE_WORKSPACE_CATALOG } from "@/lib/workspace-catalog";
+import { CORE_WORKSPACE_CATALOG, isWorkspaceAvailable } from "@/lib/workspace-catalog";
+import { instanceSettingsApi } from "@/api/instanceSettings";
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -67,6 +68,14 @@ export function CommandPalette() {
     enabled: !!selectedCompanyId && open,
   });
 
+  // Instance-wide and shared with the sidebar's own copy through the query
+  // cache, so opening the palette does not refetch it.
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+    enabled: open,
+  });
+
   const { data: allProjects = [] } = useQuery({
     queryKey: queryKeys.projects.list(selectedCompanyId!),
     queryFn: () => projectsApi.list(selectedCompanyId!),
@@ -97,17 +106,29 @@ export function CommandPalette() {
     () => pluginPageSlots.filter((slot) => slot.routePath),
     [pluginPageSlots],
   );
-  // corePages/portfolioPages only ever depend on the static catalog, not on
-  // isPortfolioRoot — visibility of the Portfolio group is gated at the JSX
-  // call site below instead, so neither list is recomputed on a dependency
-  // that was never actually relevant to computing it.
+  // Visibility of the Portfolio group is gated at the JSX call site below, so
+  // neither list depends on isPortfolioRoot. Both DO depend on availability:
+  // offering a destination the sidebar has already hidden sends someone to a
+  // page that cannot help them, which is the whole point of the requirement.
+  const availability = useMemo(
+    () => ({
+      isolatedWorkspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
+    }),
+    [experimentalSettings?.enableIsolatedWorkspaces],
+  );
   const corePages = useMemo(
-    () => CORE_WORKSPACE_CATALOG.filter((entry) => !entry.portfolioRootOnly),
-    [],
+    () =>
+      CORE_WORKSPACE_CATALOG.filter(
+        (entry) => !entry.portfolioRootOnly && isWorkspaceAvailable(entry, availability),
+      ),
+    [availability],
   );
   const portfolioPages = useMemo(
-    () => CORE_WORKSPACE_CATALOG.filter((entry) => entry.portfolioRootOnly),
-    [],
+    () =>
+      CORE_WORKSPACE_CATALOG.filter(
+        (entry) => entry.portfolioRootOnly && isWorkspaceAvailable(entry, availability),
+      ),
+    [availability],
   );
 
   function go(path: string) {

@@ -1,8 +1,11 @@
 import { useEffect, useMemo } from "react";
-import { Link, Navigate } from "@/lib/router";
+import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
+import { GitBranch } from "lucide-react";
 import type { ExecutionWorkspace, Issue, Project } from "@paperclipai/shared";
+import { accessApi } from "../api/access";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
+import { WorkspaceUnavailable } from "../components/WorkspaceUnavailable";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -81,6 +84,18 @@ export function Workspaces() {
     queryFn: () => instanceSettingsApi.getExperimental(),
   });
   const isolatedWorkspacesEnabled = experimentalSettingsQuery.data?.enableIsolatedWorkspaces === true;
+  // Only fetched to decide whether to offer the settings link below. A local
+  // single-user install has no admin concept, so it counts as able to change
+  // instance settings — the same rule the rest of the app uses.
+  const boardAccessQuery = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    enabled: !isolatedWorkspacesEnabled && !experimentalSettingsQuery.isLoading,
+    retry: false,
+  });
+  const canChangeInstanceSettings =
+    boardAccessQuery.data?.isInstanceAdmin === true ||
+    boardAccessQuery.data?.source === "local_implicit";
 
   const { data: projects = [], isLoading: projectsLoading, error: projectsError } = useQuery({
     queryKey: selectedCompanyId ? queryKeys.projects.list(selectedCompanyId) : ["projects", "__workspaces__", "disabled"],
@@ -116,7 +131,26 @@ export function Workspaces() {
   const error = (projectsError ?? issuesError ?? executionWorkspacesError) as Error | null;
 
   if (experimentalSettingsQuery.isLoading) return <PageSkeleton variant="detail" />;
-  if (!isolatedWorkspacesEnabled) return <Navigate to="/issues" replace />;
+  if (!isolatedWorkspacesEnabled) {
+    // Was a silent `<Navigate to="/issues">`. That landed you on a normal
+    // working page with nothing to say your request had been ignored, which
+    // the scope document rules out. Say what happened instead, and offer the
+    // switch only to someone who can actually throw it.
+    return (
+      <WorkspaceUnavailable
+        title="Workspaces"
+        icon={GitBranch}
+        reason="Isolated workspaces are switched off for this instance."
+        whatToDo={
+          canChangeInstanceSettings
+            ? "Turn on isolated workspaces in the instance's experimental settings."
+            : "An instance administrator can turn this on in the experimental settings."
+        }
+        actionHref={canChangeInstanceSettings ? "/instance/settings/experimental" : undefined}
+        actionLabel={canChangeInstanceSettings ? "Open experimental settings" : undefined}
+      />
+    );
+  }
   if (dataLoading) return <PageSkeleton variant="list" />;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
 

@@ -1,6 +1,9 @@
 import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
 import { LayoutGrid, PlugZap } from "lucide-react";
+import { instanceSettingsApi } from "@/api/instanceSettings";
+import { queryKeys } from "@/lib/queryKeys";
 import { useCompany } from "@/context/CompanyContext";
 import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -49,9 +52,22 @@ export function Everything() {
     setBreadcrumbs([{ label: "Everything" }]);
   }, [setBreadcrumbs]);
 
+  // Same instance-wide query the sidebar and command palette read, so all
+  // three agree about what this company can actually open.
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+  });
+
   const catalogEntries = useMemo(
-    () => visibleWorkspaceCatalog({ isPortfolioRoot }),
-    [isPortfolioRoot],
+    () =>
+      visibleWorkspaceCatalog({
+        isPortfolioRoot,
+        availability: {
+          isolatedWorkspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
+        },
+      }),
+    [isPortfolioRoot, experimentalSettings?.enableIsolatedWorkspaces],
   );
   const corePages = useMemo(
     () => catalogEntries.filter((entry) => !entry.portfolioRootOnly),
