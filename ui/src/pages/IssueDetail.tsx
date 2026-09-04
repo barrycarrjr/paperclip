@@ -67,6 +67,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
+import { EmailHandoffPanel } from "../components/EmailHandoffPanel";
 import { PageSection } from "../components/PageSection";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
@@ -3080,6 +3081,9 @@ export function IssueDetail() {
           </Button>
         </div>
       )}
+
+      {/* Renders itself away on any issue that did not come from an email. */}
+      <EmailHandoffPanel companyId={issue.companyId} issueId={issue.id} />
 
       <IssueDocumentsSection
         issue={issue}
