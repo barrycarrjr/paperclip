@@ -71,6 +71,23 @@ export interface DraftGateInterceptResult {
   result?: ToolResult;
 }
 
+export interface DraftGateInterceptOptions {
+  /**
+   * Draft this call even if the instance-wide hold is off, and even if every
+   * recipient looks like the operator.
+   *
+   * For a caller whose own policy is stricter than the instance default. The
+   * self-notification bypass is overridden too, because a caller that has
+   * said "always ask me about these" has already answered the question that
+   * bypass exists to answer.
+   *
+   * The tool must still be one the gate knows how to draft: forcing does not
+   * make an arbitrary tool draftable, since nothing would know how to replay
+   * it after approval.
+   */
+  force?: boolean;
+}
+
 export interface DraftGate {
   /**
    * Check whether a given tool call should be drafted instead of executed.
@@ -84,6 +101,7 @@ export interface DraftGate {
     namespacedName: string,
     parameters: unknown,
     runContext: ToolRunContext,
+    options?: DraftGateInterceptOptions,
   ): Promise<DraftGateInterceptResult>;
 
   /**
@@ -328,18 +346,23 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       namespacedName: string,
       parameters: unknown,
       runContext: ToolRunContext,
+      options?: DraftGateInterceptOptions,
     ): Promise<DraftGateInterceptResult> {
       if (!GATED_TOOLS.has(namespacedName)) {
         return { intercepted: false };
       }
+      // A caller can hold a call the instance would have let through, but not
+      // the other way around: `bypassDraftGate` on the dispatcher is what
+      // lets something past, and it never reaches here.
+      const force = options?.force === true;
       const { enabled, selfNotify } = await readGateSettings();
-      if (!enabled) {
+      if (!enabled && !force) {
         return { intercepted: false };
       }
       // Self-notifications (every recipient is the operator) are the agent
       // talking TO its user, not acting outward on their behalf — approving
       // your own incoming message defeats the purpose of the notification.
-      if (isSelfAddressed(namespacedName, parameters, selfNotify)) {
+      if (!force && isSelfAddressed(namespacedName, parameters, selfNotify)) {
         log.info(
           {
             tool: namespacedName,

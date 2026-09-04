@@ -1049,6 +1049,18 @@ export {
   type EmailHandoffSourceRef,
 } from "./email-handoff-origin.js";
 export {
+  EMAIL_DELEGATION_STATES,
+  TERMINAL_EMAIL_DELEGATION_STATES,
+  checkEmailDelegationTransition,
+  delegationStateForIssueStatus,
+  isEmailDelegationState,
+  isTerminalEmailDelegationState,
+  type EmailDelegationState,
+  type EmailDelegationTransitionRequest,
+  type EmailDelegationTransitionResult,
+  type TerminalEmailDelegationState,
+} from "./email-delegation-state.js";
+export {
   AGENT_MENTION_SCHEME,
   PROJECT_MENTION_SCHEME,
   SKILL_MENTION_SCHEME,

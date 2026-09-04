@@ -1,5 +1,94 @@
 # P5a specification: durable email delegation and handback
 
+## Phase 2 is implemented (2026-09-03, later the same day)
+
+Barry approved the migration and the restart, so the table is live and the
+lifecycle is built. What exists now, beyond phase 1:
+
+- **The table**, `issue_email_delegations`, migration
+  `0095_issue_email_delegations.sql`. Applied to the running instance on
+  restart; the SQL was run and rolled back against the live database first to
+  confirm it parses and its references resolve.
+- **The state machine**, `packages/shared/src/email-delegation-state.ts`.
+  Pure and shared, so the server, the UI and the tests read one set of rules.
+  It allows skipping forward (an agent that finishes in one turn never passes
+  through the middle states), allows review to send work back, and forbids
+  everything else. `done` on the issue deliberately does NOT resolve the
+  delegation, because resolution can send a message to a real person and must
+  be an explicit act rather than a side effect of tidying a board.
+- **The service**, `server/src/services/issue-email-delegations.ts`. Answers
+  §4.2 (idempotent on the source email, not the issue, so a retried click
+  cannot hand the same message over twice — the partial unique index settles
+  genuine races), §4.3 (version check inside the UPDATE's own WHERE, so a
+  stale resolve cannot overwrite a fresher handback) and §4.6 (companyId on
+  every read and write, no unscoped lookup exists).
+- **Resolution**, `server/src/services/email-handoff-resolution.ts`, wired to
+  Barry's decision below. The delegation is marked resolved BEFORE the reply
+  is attempted, and the reply's outcome is recorded separately in
+  `replyState`, so a failed send is visible rather than silently undoing the
+  record that the work was finished.
+
+### The open questions, and how they were answered
+
+- **§2 source key**: Message-Id preferred, `(mailbox, folder, uid)` as the
+  documented fallback. Settled in phase 1.
+- **§3 what resolution causes**: option (c), auto-send, plus a control Barry
+  asked for afterwards (see below).
+- **§4.1 one transaction or two steps**: **two steps, with a sweep.** Making
+  issue creation fail because a tracking row could not be written would take
+  a reliable action and make it less reliable, and the issue is the thing
+  that carries the actual work. So the delegation is allowed to be missing,
+  and `listIssuesMissingDelegation` finds the gaps so they are visible
+  instead of silent — the same shape as the wake-failure fix one layer down.
+- **§4.5 stale delegations**: the recommendation was taken.
+  `listStale` returns open handovers nobody has picked up, for the existing
+  attention queue rather than a second "things are stuck" surface. Only
+  `delegated` counts: once an agent has acknowledged, slowness is the issue's
+  problem to report, not the handover's.
+
+### The approval control (Barry, 2026-09-03, correcting the note below)
+
+The note below reads his decision as "no new approval gate". He then
+corrected it: **"I didn't just mean the auto reply I meant the approval of
+the auto reply"** — the approval requirement for these replies should itself
+be controllable.
+
+Built as `emailHandoffReplyApproval`, three states, in instance general
+settings under the existing outbound toggle:
+
+- `inherit` (default) follows `outboundToolDraftMode`, so someone who turns
+  the outbound hold off does not find this one message still waiting with no
+  explanation.
+- `always` holds the reply even when nothing else is held.
+- `never` sends it even when everything else is held.
+
+Deliberately NOT a second approval mechanism. The existing draft gate still
+does all the holding; the only new thing is a `forceDraftGate` flag on the
+dispatcher, the mirror image of the `bypassDraftGate` that already existed,
+so a caller whose policy is stricter than the instance default can say so.
+Forcing does not make an ungated tool draftable, because nothing would know
+how to replay it after approval. Both reply tools are already in
+`OUTBOUND_TOOL_DRAFT_GATE`, and a test asserts they stay there — if one ever
+leaves, "always ask me first" would quietly stop holding these.
+
+Every unclear input resolves to requiring approval: a missing setting, an
+unrecognised value, or an unreadable settings row all hold the reply. The
+dangerous direction is a message reaching a customer that the operator
+expected to see first.
+
+### Still not built
+
+- No route or agent tool calls `resolve` yet, so nothing sends today. The
+  service is tested and ready; wiring it to a caller is the next step.
+- The attention queue does not yet read `listStale`, and no job calls
+  `listIssuesMissingDelegation`. Both are written and tested; neither is
+  scheduled.
+- §4.3(b), a human replying to the original email outside the app, remains
+  unsolved and still needs the plugin's own event model, which this work has
+  not gone into `paperclip-extensions` to inspect.
+
+---
+
 ## Decisions and progress (updated 2026-09-03)
 
 **Barry's decision, 2026-09-03: "Auto-send a reply, no new outbound approval

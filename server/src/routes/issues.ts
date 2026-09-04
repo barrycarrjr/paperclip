@@ -25,6 +25,8 @@ import {
   updateIssueSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
+  isEmailHandoffOriginKind,
+  parseEmailHandoffOriginId,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
@@ -404,6 +406,54 @@ export function issueRoutes(
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
+  const emailDelegationsSvc = serviceIndex.issueEmailDelegationService(db);
+
+  /**
+   * Start tracking the handover when an issue is created from an email.
+   *
+   * Server-side rather than in the client, because there are two independent
+   * handoff code paths in the UI and this way neither can forget. Everything
+   * the delegation row needs is already inside the origin key, so the client
+   * does not have to send the same facts twice and cannot send a set that
+   * disagrees with itself.
+   *
+   * Deliberately non-fatal (spec §4.1): the issue carries the actual work and
+   * creating it is reliable today, so a failure to write the tracking row must
+   * not turn a working handoff into an error. The gap is findable afterwards
+   * through `listIssuesMissingDelegation`, which is the point of allowing it.
+   */
+  async function recordEmailDelegationIfHandoff(args: {
+    companyId: string;
+    issue: { id: string; assigneeAgentId?: string | null };
+    origin?: { kind: string; id: string } | null;
+    actor: { actorType: string; actorId: string };
+  }): Promise<void> {
+    const { companyId, issue, origin, actor } = args;
+    if (!origin || !isEmailHandoffOriginKind(origin.kind)) return;
+
+    const source = parseEmailHandoffOriginId(origin.id);
+    if (!source) return;
+
+    try {
+      await emailDelegationsSvc.create({
+        issueId: issue.id,
+        companyId,
+        pluginId: source.pluginId,
+        sourceKey: origin.id,
+        mailbox: source.mailbox,
+        folder: source.kind === "uid" ? source.folder : null,
+        messageId: source.kind === "msgid" ? source.messageId : null,
+        delegatedByUserId: actor.actorType === "user" ? actor.actorId : null,
+        delegatedToAgentId: issue.assigneeAgentId ?? null,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, issueId: issue.id, companyId },
+        "could not record the email delegation; the issue stands and the gap is findable",
+      );
+    }
+  }
+
   const routinesSvc = routineService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -1986,6 +2036,7 @@ export function issueRoutes(
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
     });
+    await recordEmailDelegationIfHandoff({ companyId, issue, origin, actor });
     await issueReferencesSvc.syncIssue(issue.id);
     const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const referenceDiff = issueReferencesSvc.diffIssueReferenceSummary(

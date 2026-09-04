@@ -361,4 +361,68 @@ describe("tool draft gate — self-notification bypass", () => {
     expect(result.intercepted).toBe(false);
     expect(mockApprovalService.create).not.toHaveBeenCalled();
   });
+
+  describe("force", () => {
+    it("drafts anyway when the instance-wide hold is off", async () => {
+      mockInstanceSettingsService.getGeneral.mockResolvedValue(
+        generalSettings({ skipApproval: false }, false),
+      );
+      const gate = await loadDraftGate();
+      const result = await gate.intercept(
+        "email-tools:email_reply",
+        { mailbox: "personal", messageId: "<a@b>", body: "hi" },
+        ctx({}),
+        { force: true },
+      );
+
+      expect(result.intercepted).toBe(true);
+      expect(mockApprovalService.create).toHaveBeenCalled();
+    });
+
+    it("drafts anyway when the message is addressed to the operator", async () => {
+      // A caller that has said "always ask me about these" has already
+      // answered the question the self-notification bypass exists to answer.
+      mockInstanceSettingsService.getGeneral.mockResolvedValue(
+        generalSettings({ skipApproval: true, emails: ["barry@example.com"] }),
+      );
+      const gate = await loadDraftGate();
+      const result = await gate.intercept(
+        "email-tools:email_send",
+        { to: "barry@example.com", subject: "s", body: "b" },
+        ctx({}),
+        { force: true },
+      );
+
+      expect(result.intercepted).toBe(true);
+    });
+
+    it("does not make an ungated tool draftable", async () => {
+      // Nothing would know how to replay it after approval, so forcing must
+      // not widen what the gate covers.
+      const gate = await loadDraftGate();
+      const result = await gate.intercept(
+        "email-tools:email_search",
+        { query: "invoice" },
+        ctx({}),
+        { force: true },
+      );
+
+      expect(result.intercepted).toBe(false);
+      expect(mockApprovalService.create).not.toHaveBeenCalled();
+    });
+
+    it("changes nothing when it is not asked for", async () => {
+      mockInstanceSettingsService.getGeneral.mockResolvedValue(
+        generalSettings({ skipApproval: false }, false),
+      );
+      const gate = await loadDraftGate();
+      const result = await gate.intercept(
+        "email-tools:email_reply",
+        { mailbox: "personal", messageId: "<a@b>", body: "hi" },
+        ctx({}),
+      );
+
+      expect(result.intercepted).toBe(false);
+    });
+  });
 });
