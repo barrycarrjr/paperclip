@@ -216,3 +216,79 @@ export function workspaceCatalogEntryForRouteRoot(
   if (!normalized) return null;
   return CORE_WORKSPACE_CATALOG.find((entry) => entry.routeRoot === normalized) ?? null;
 }
+
+export interface PinnedWorkspaceItem {
+  id: string;
+  label: string;
+  /** Company-relative; the router adds the company prefix. */
+  to: string;
+  icon: LucideIcon;
+  info?: string;
+}
+
+/**
+ * Turn a person's pinned ids into the items a company can actually show.
+ *
+ * Pins are stored per user, so the same list is asked about in every company.
+ * Three things are therefore dropped rather than rendered: a portfolio-only
+ * page outside HQ, a workspace whose requirement is not met, and a plugin page
+ * this company does not have. Dropping is right and un-pinning would not be —
+ * the pin is still correct for the companies where it works, and silently
+ * editing someone's saved list because they visited a different company would
+ * lose a setting they never changed.
+ *
+ * Order follows the person's list, not the catalog's, because they chose it.
+ * Anything unrecognised is skipped, so a stale pin left by a removed plugin
+ * disappears quietly instead of rendering a dead link.
+ */
+export function resolvePinnedWorkspaceItems(params: {
+  pinned: string[];
+  isPortfolioRoot: boolean;
+  availability?: Partial<WorkspaceAvailabilityInput> | null;
+  pluginSlots: { routePath: string | null; displayName: string }[];
+}): PinnedWorkspaceItem[] {
+  const { pinned, isPortfolioRoot, availability, pluginSlots } = params;
+  if (pinned.length === 0) return [];
+
+  const coreById = new Map(CORE_WORKSPACE_CATALOG.map((entry) => [entry.id, entry]));
+  const pluginByRoute = new Map(
+    pluginSlots
+      .filter((slot): slot is { routePath: string; displayName: string } => Boolean(slot.routePath))
+      .map((slot) => [slot.routePath, slot]),
+  );
+
+  const items: PinnedWorkspaceItem[] = [];
+  const seen = new Set<string>();
+
+  for (const id of pinned) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const core = coreById.get(id);
+    if (core) {
+      if (core.portfolioRootOnly && !isPortfolioRoot) continue;
+      if (!isWorkspaceAvailable(core, availability)) continue;
+      items.push({
+        id: core.id,
+        label: core.label,
+        to: `/${core.routeRoot}`,
+        icon: core.icon,
+        info: `Pinned. ${core.label} for this company.`,
+      });
+      continue;
+    }
+
+    const plugin = pluginByRoute.get(id);
+    if (plugin) {
+      items.push({
+        id,
+        label: plugin.displayName,
+        to: `/${id}`,
+        icon: Boxes,
+        info: `Pinned. Provided by a plugin.`,
+      });
+    }
+  }
+
+  return items;
+}

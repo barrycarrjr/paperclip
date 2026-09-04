@@ -150,6 +150,45 @@ export function sidebarPreferenceService(db: Db) {
       return toPreference(row?.portfolioNavOrder ?? normalized, row?.updatedAt ?? now);
     },
 
+    /**
+     * The workspaces this person pinned, in their chosen order.
+     *
+     * Stored per user rather than per company: a pin says "this is a tool I
+     * use", which does not change per company, and re-pinning the same tools
+     * in every company is exactly the repeated setup this project exists to
+     * remove. A pin the current company cannot open is simply not shown there.
+     */
+    async getPinnedWorkspaces(userId: string): Promise<SidebarOrderPreference> {
+      const row = await db.query.userSidebarPreferences.findFirst({
+        where: eq(userSidebarPreferences.userId, userId),
+      });
+      return toPreference(row?.pinnedWorkspaces ?? [], row?.updatedAt ?? null);
+    },
+
+    async upsertPinnedWorkspaces(
+      userId: string,
+      orderedIds: string[],
+    ): Promise<SidebarOrderPreference> {
+      const now = new Date();
+      const normalized = normalizeOrderedIds(orderedIds);
+      const [row] = await db
+        .insert(userSidebarPreferences)
+        .values({
+          userId,
+          pinnedWorkspaces: normalized,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [userSidebarPreferences.userId],
+          set: {
+            pinnedWorkspaces: normalized,
+            updatedAt: now,
+          },
+        })
+        .returning();
+      return toPreference(row?.pinnedWorkspaces ?? normalized, row?.updatedAt ?? now);
+    },
+
     async getPageSectionOrder(
       userId: string,
       pageKey: string,

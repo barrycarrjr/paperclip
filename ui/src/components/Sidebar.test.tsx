@@ -74,6 +74,22 @@ vi.mock("../hooks/useInboxBadge", () => ({
 
 vi.mock("@/plugins/slots", () => ({
   PluginSlotOutlet: () => null,
+  usePluginSlots: () => ({ slots: [], isLoading: false, errorMessage: null }),
+}));
+
+// Pinning is a per-user preference; the sidebar only reads it to render the
+// "Pinned tools" block. Nothing pinned means that block renders nothing, which
+// is the state every other assertion in this file assumes.
+const pinnedState: { value: string[] } = { value: [] };
+vi.mock("../hooks/usePinnedWorkspaces", () => ({
+  usePinnedWorkspaces: () => ({
+    pinned: pinnedState.value,
+    isPinned: (id: string) => pinnedState.value.includes(id),
+    toggle: () => {},
+    canPin: true,
+    isLoading: false,
+    isSaving: false,
+  }),
 }));
 
 vi.mock("./SidebarCompanyMenu", () => ({
@@ -98,6 +114,7 @@ describe("Sidebar", () => {
     document.body.appendChild(container);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
+    pinnedState.value = [];
   });
 
   afterEach(() => {
@@ -149,6 +166,78 @@ describe("Sidebar", () => {
       (anchor) => anchor.textContent?.trim() === "Projects",
     );
     expect(projectsLink?.getAttribute("href")).toBe("/projects");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("renders nothing extra when nothing is pinned", async () => {
+    pinnedState.value = [];
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Sidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    // Exactly one Goals link, i.e. the sidebar is unchanged for anyone who has
+    // never pinned anything.
+    const goals = [...container.querySelectorAll("a")].filter((a) => a.textContent === "Goals");
+    expect(goals).toHaveLength(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("shows a pinned workspace near the top, above the grouped sections", async () => {
+    pinnedState.value = ["goals"];
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Sidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const links = [...container.querySelectorAll("a")];
+    const goalsLinks = links.filter((a) => a.textContent === "Goals");
+    // Twice: once pinned near the top, once in its usual Work section.
+    expect(goalsLinks).toHaveLength(2);
+
+    const calendarIndex = links.findIndex((a) => a.textContent === "Calendar");
+    const firstGoalsIndex = links.indexOf(goalsLinks[0]);
+    expect(firstGoalsIndex).toBeGreaterThan(calendarIndex);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("does not show a pinned workspace the instance has switched off", async () => {
+    pinnedState.value = ["workspaces"];
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Sidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const links = [...container.querySelectorAll("a")].filter((a) => a.textContent === "Workspaces");
+    expect(links).toHaveLength(0);
 
     await act(async () => {
       root.unmount();

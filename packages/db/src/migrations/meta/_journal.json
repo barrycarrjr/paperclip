@@ -673,6 +673,13 @@
       "when": 1780120004000,
       "tag": "0095_issue_email_delegations",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1780120005000,
+      "tag": "0096_pinned_workspaces",
+      "breakpoints": true
     }
   ]
 }

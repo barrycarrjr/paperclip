@@ -1,13 +1,14 @@
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
-import { LayoutGrid, PlugZap } from "lucide-react";
+import { LayoutGrid, Pin, PinOff, PlugZap } from "lucide-react";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { queryKeys } from "@/lib/queryKeys";
 import { useCompany } from "@/context/CompanyContext";
 import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { usePluginSlots } from "@/plugins/slots";
+import { usePinnedWorkspaces } from "@/hooks/usePinnedWorkspaces";
 import { visibleWorkspaceCatalog } from "@/lib/workspace-catalog";
 
 /**
@@ -87,6 +88,8 @@ export function Everything() {
     [pluginPageSlots],
   );
 
+  const { isPinned, toggle: togglePin, canPin } = usePinnedWorkspaces();
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6">
       <div className="mb-8 flex items-center gap-3">
@@ -103,7 +106,15 @@ export function Everything() {
 
       <EverythingSection title="Pages">
         {corePages.map((entry) => (
-          <EverythingCard key={entry.id} to={`/${entry.routeRoot}`} label={entry.label} icon={entry.icon} />
+          <EverythingCard
+            key={entry.id}
+            to={`/${entry.routeRoot}`}
+            label={entry.label}
+            icon={entry.icon}
+            pinId={canPin ? entry.id : undefined}
+            isPinned={isPinned(entry.id)}
+            onTogglePin={togglePin}
+          />
         ))}
       </EverythingSection>
 
@@ -116,6 +127,9 @@ export function Everything() {
               label={slot.displayName}
               sublabel={slot.pluginDisplayName}
               icon={PlugZap}
+              pinId={canPin ? slot.routePath : undefined}
+              isPinned={isPinned(slot.routePath!)}
+              onTogglePin={togglePin}
             />
           ))}
         </EverythingSection>
@@ -124,7 +138,15 @@ export function Everything() {
       {portfolioPages.length > 0 && (
         <EverythingSection title="Portfolio">
           {portfolioPages.map((entry) => (
-            <EverythingCard key={entry.id} to={`/${entry.routeRoot}`} label={entry.label} icon={entry.icon} />
+            <EverythingCard
+              key={entry.id}
+              to={`/${entry.routeRoot}`}
+              label={entry.label}
+              icon={entry.icon}
+              pinId={canPin ? entry.id : undefined}
+              isPinned={isPinned(entry.id)}
+              onTogglePin={togglePin}
+            />
           ))}
         </EverythingSection>
       )}
@@ -146,22 +168,54 @@ function EverythingCard({
   label,
   sublabel,
   icon: Icon,
+  pinId,
+  isPinned,
+  onTogglePin,
 }: {
   to: string;
   label: string;
   sublabel?: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Omitted when pinning is unavailable, which hides the control entirely. */
+  pinId?: string;
+  isPinned?: boolean;
+  onTogglePin?: (id: string) => void;
 }) {
   return (
-    <Link
-      to={to}
-      className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2.5 text-sm transition-colors hover:bg-accent/50 hover:border-accent-foreground/20"
-    >
-      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{label}</span>
-        {sublabel && <span className="block truncate text-xs text-muted-foreground">{sublabel}</span>}
-      </span>
-    </Link>
+    <div className="group relative">
+      <Link
+        to={to}
+        className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2.5 pr-9 text-sm transition-colors hover:bg-accent/50 hover:border-accent-foreground/20"
+      >
+        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{label}</span>
+          {sublabel && <span className="block truncate text-xs text-muted-foreground">{sublabel}</span>}
+        </span>
+      </Link>
+      {pinId && onTogglePin && (
+        <button
+          type="button"
+          // Outside the Link rather than inside it, so clicking the star never
+          // navigates. Always rendered once pinned, and on hover or keyboard
+          // focus otherwise, so a pinned item is visible at a glance and an
+          // unpinned one does not clutter the grid.
+          className={
+            "absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1.5 text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 " +
+            (isPinned ? "opacity-100 text-foreground" : "opacity-0 group-hover:opacity-100")
+          }
+          aria-pressed={isPinned}
+          aria-label={isPinned ? `Unpin ${label}` : `Pin ${label}`}
+          title={isPinned ? "Unpin from the sidebar" : "Pin to the sidebar"}
+          onClick={() => onTogglePin(pinId)}
+        >
+          {isPinned ? (
+            <PinOff className="h-3.5 w-3.5" />
+          ) : (
+            <Pin className="h-3.5 w-3.5" />
+          )}
+        </button>
+      )}
+    </div>
   );
 }

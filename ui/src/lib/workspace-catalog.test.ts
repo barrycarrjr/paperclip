@@ -5,6 +5,7 @@ import {
   visibleWorkspaceCatalog,
   workspaceCatalogEntryForRouteRoot,
   workspaceUnavailableReason,
+  resolvePinnedWorkspaceItems,
 } from "./workspace-catalog";
 import { isBoardPathWithoutPrefix } from "./company-routes";
 
@@ -126,5 +127,102 @@ describe("workspaceCatalogEntryForRouteRoot", () => {
     expect(workspaceCatalogEntryForRouteRoot("plugins")).toBeNull();
     expect(workspaceCatalogEntryForRouteRoot("")).toBeNull();
     expect(workspaceCatalogEntryForRouteRoot("/")).toBeNull();
+  });
+});
+
+describe("resolvePinnedWorkspaceItems", () => {
+  const noPlugins: { routePath: string | null; displayName: string }[] = [];
+  const available = { isolatedWorkspacesEnabled: true };
+
+  it("returns nothing when nothing is pinned", () => {
+    expect(
+      resolvePinnedWorkspaceItems({
+        pinned: [],
+        isPortfolioRoot: true,
+        availability: available,
+        pluginSlots: noPlugins,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the person's own order, not the catalog's", () => {
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["goals", "email", "issues"],
+      isPortfolioRoot: false,
+      availability: available,
+      pluginSlots: noPlugins,
+    });
+    expect(items.map((i) => i.id)).toEqual(["goals", "email", "issues"]);
+    expect(items.map((i) => i.to)).toEqual(["/goals", "/email", "/issues"]);
+  });
+
+  it("hides a portfolio page outside HQ without dropping the pin", () => {
+    const args = {
+      pinned: ["portfolio-brief", "issues"],
+      availability: available,
+      pluginSlots: noPlugins,
+    };
+    expect(
+      resolvePinnedWorkspaceItems({ ...args, isPortfolioRoot: false }).map((i) => i.id),
+    ).toEqual(["issues"]);
+    // The same saved list still shows it at HQ, which is why hiding rather
+    // than un-pinning is the right behaviour.
+    expect(
+      resolvePinnedWorkspaceItems({ ...args, isPortfolioRoot: true }).map((i) => i.id),
+    ).toEqual(["portfolio-brief", "issues"]);
+  });
+
+  it("hides a pinned workspace whose requirement is not met", () => {
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["workspaces", "issues"],
+      isPortfolioRoot: false,
+      availability: { isolatedWorkspacesEnabled: false },
+      pluginSlots: noPlugins,
+    });
+    expect(items.map((i) => i.id)).toEqual(["issues"]);
+  });
+
+  it("resolves a pinned plugin page by its route path", () => {
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["notepad"],
+      isPortfolioRoot: false,
+      availability: available,
+      pluginSlots: [{ routePath: "notepad", displayName: "Notepad" }],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].label).toBe("Notepad");
+    expect(items[0].to).toBe("/notepad");
+  });
+
+  it("skips a pinned plugin this company does not have", () => {
+    // Pins are per person and asked about in every company, so a plugin that
+    // is not installed here is simply not shown here.
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["notepad", "issues"],
+      isPortfolioRoot: false,
+      availability: available,
+      pluginSlots: noPlugins,
+    });
+    expect(items.map((i) => i.id)).toEqual(["issues"]);
+  });
+
+  it("skips an id that means nothing rather than rendering a dead link", () => {
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["a-plugin-that-was-removed", "issues"],
+      isPortfolioRoot: false,
+      availability: available,
+      pluginSlots: noPlugins,
+    });
+    expect(items.map((i) => i.id)).toEqual(["issues"]);
+  });
+
+  it("does not render the same pin twice", () => {
+    const items = resolvePinnedWorkspaceItems({
+      pinned: ["issues", "issues"],
+      isPortfolioRoot: false,
+      availability: available,
+      pluginSlots: noPlugins,
+    });
+    expect(items).toHaveLength(1);
   });
 });

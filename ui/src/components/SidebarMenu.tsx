@@ -21,6 +21,7 @@ import {
   FolderKanban,
   Megaphone,
 } from "lucide-react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@paperclipai/shared";
 import { SidebarSection } from "./SidebarSection";
@@ -32,6 +33,9 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { usePinnedWorkspaces } from "../hooks/usePinnedWorkspaces";
+import { usePluginSlots } from "../plugins/slots";
+import { resolvePinnedWorkspaceItems } from "../lib/workspace-catalog";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarPeekProvider } from "../context/SidebarPeekContext";
@@ -74,6 +78,37 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
     useEmailToolsPlugin(company.id);
   const showPortfolioEmailNav = company.isPortfolioRoot === true && !!emailPluginId;
+
+  // The person's pinned tools, resolved against what this company can
+  // actually open. A pin is per user (Phone is a tool you use, not a fact
+  // about a company), so the same pin can be shown here and hidden in a
+  // company whose plugin is not installed — hiding it is right, dropping the
+  // pin would not be.
+  const { pinned } = usePinnedWorkspaces();
+  const { slots: pinnablePluginSlots } = usePluginSlots({
+    slotTypes: ["page"],
+    companyId: company.id,
+  });
+  const pinnedItems = useMemo(
+    () =>
+      resolvePinnedWorkspaceItems({
+        pinned,
+        isPortfolioRoot: company.isPortfolioRoot === true,
+        availability: {
+          isolatedWorkspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
+        },
+        pluginSlots: pinnablePluginSlots.map((slot) => ({
+          routePath: slot.routePath ?? null,
+          displayName: slot.displayName,
+        })),
+      }),
+    [
+      pinned,
+      company.isPortfolioRoot,
+      experimentalSettings?.enableIsolatedWorkspaces,
+      pinnablePluginSlots,
+    ],
+  );
 
   const pluginContext = {
     companyId: company.id,
@@ -217,6 +252,19 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           icon={CalendarClock}
           info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
         />
+        {/* "Pinned tools" from the scope document's primary navigation table,
+            between Calendar and the grouped sections. Renders nothing at all
+            when nothing is pinned, so the sidebar is unchanged for anyone who
+            has not used it. Pin from the Everything page. */}
+        {pinnedItems.map((item) => (
+          <SidebarNavItem
+            key={item.id}
+            to={item.to}
+            label={item.label}
+            icon={item.icon}
+            info={item.info}
+          />
+        ))}
       </div>
 
       <SidebarSection

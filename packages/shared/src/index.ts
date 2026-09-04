@@ -616,9 +616,11 @@ export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
   upsertSidebarSlugOrderPreferenceSchema,
+  upsertPinnedWorkspacesSchema,
   pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
   type UpsertSidebarSlugOrderPreference,
+  type UpsertPinnedWorkspaces,
 } from "./validators/sidebar-preferences.js";
 
 export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";

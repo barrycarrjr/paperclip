@@ -18,6 +18,10 @@ export const sidebarPreferencesApi = {
     api.get<SidebarOrderPreference>("/sidebar-preferences/me/portfolio-nav"),
   updatePortfolioNavOrder: (data: UpsertSidebarSlugOrderPreference) =>
     api.put<SidebarOrderPreference>("/sidebar-preferences/me/portfolio-nav", data),
+  getPinnedWorkspaces: () =>
+    api.get<SidebarOrderPreference>("/sidebar-preferences/me/pinned-workspaces"),
+  updatePinnedWorkspaces: (data: UpsertSidebarSlugOrderPreference) =>
+    api.put<SidebarOrderPreference>("/sidebar-preferences/me/pinned-workspaces", data),
   getPageSectionOrder: (pageKey: string) =>
     api.get<PageSectionOrderPreference>(
       `/sidebar-preferences/me/sections/${encodeURIComponent(pageKey)}`,

@@ -46,9 +46,11 @@ export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
   upsertSidebarSlugOrderPreferenceSchema,
+  upsertPinnedWorkspacesSchema,
   pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
   type UpsertSidebarSlugOrderPreference,
+  type UpsertPinnedWorkspaces,
 } from "./sidebar-preferences.js";
 export {
   companySkillSourceTypeSchema,

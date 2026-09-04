@@ -129,6 +129,8 @@ export const queryKeys = {
       ["sidebar-preferences", "portfolio-nav-order", userId] as const,
     pageSectionOrder: (userId: string, pageKey: string) =>
       ["sidebar-preferences", "page-section-order", userId, pageKey] as const,
+    pinnedWorkspaces: (userId: string) =>
+      ["sidebar-preferences", "pinned-workspaces", userId] as const,
   },
   instance: {
     generalSettings: ["instance", "general-settings"] as const,
