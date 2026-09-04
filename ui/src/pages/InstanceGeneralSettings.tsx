@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PatchInstanceGeneralSettings, BackupRetentionPolicy, SelfNotifySettings } from "@paperclipai/shared";
+import type {
+  PatchInstanceGeneralSettings,
+  BackupRetentionPolicy,
+  EmailHandoffReplyApproval,
+  SelfNotifySettings,
+} from "@paperclipai/shared";
 import {
   DAILY_RETENTION_PRESETS,
   WEEKLY_RETENTION_PRESETS,
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
   DEFAULT_SELF_NOTIFY_SETTINGS,
 } from "@paperclipai/shared";
 import { LogOut, Power, RefreshCw, SlidersHorizontal } from "lucide-react";
@@ -29,6 +35,34 @@ function parseAddressList(value: string): string[] {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
 }
+
+/**
+ * Labels for the handoff-reply approval choice. Kept beside the page rather
+ * than in shared because the wording is UI copy; the values themselves come
+ * from EmailHandoffReplyApproval so a new state cannot be added without this
+ * list failing to typecheck.
+ */
+const EMAIL_HANDOFF_REPLY_APPROVAL_OPTIONS: {
+  value: EmailHandoffReplyApproval;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "inherit",
+    label: "Same as above",
+    hint: "Follows the outbound approval setting.",
+  },
+  {
+    value: "always",
+    label: "Always ask me first",
+    hint: "Waits in Approvals even if nothing else does.",
+  },
+  {
+    value: "never",
+    label: "Send without asking",
+    hint: "Sends straight away even if everything else waits.",
+  },
+];
 
 interface SelfAddressDraft {
   slackUserIds: string;
@@ -141,6 +175,8 @@ export function InstanceGeneralSettings() {
   const keyboardShortcuts = generalQuery.data?.keyboardShortcuts === true;
   const backupRetention: BackupRetentionPolicy = generalQuery.data?.backupRetention ?? DEFAULT_BACKUP_RETENTION;
   const outboundToolDraftMode = generalQuery.data?.outboundToolDraftMode !== false;
+  const emailHandoffReplyApproval =
+    generalQuery.data?.emailHandoffReplyApproval ?? DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL;
   const selfNotify: SelfNotifySettings = generalQuery.data?.selfNotify ?? DEFAULT_SELF_NOTIFY_SETTINGS;
 
   const saveSelfNotify = (patch: Partial<SelfNotifySettings>) => {
@@ -263,6 +299,49 @@ export function InstanceGeneralSettings() {
               disabled={updateGeneralMutation.isPending}
               aria-label="Toggle outbound message approvals"
             />
+          </div>
+
+          <div className="space-y-3 border-t border-border pt-4">
+            <div className="space-y-1.5">
+              <h2 className="text-sm font-semibold">Replies when an email handoff is finished</h2>
+              <p className="max-w-2xl text-sm text-muted-foreground">
+                When you hand an email to an agent and it finishes the job, Paperclip can reply to
+                whoever sent the email. This chooses whether that reply waits for you first. It
+                goes to a real person who is waiting on an answer, so you can treat it differently
+                from everything else.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {EMAIL_HANDOFF_REPLY_APPROVAL_OPTIONS.map((option) => {
+                const active = emailHandoffReplyApproval === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={updateGeneralMutation.isPending}
+                    aria-pressed={active}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                      active
+                        ? "border-foreground bg-accent text-foreground"
+                        : "border-border bg-background hover:bg-accent/50",
+                    )}
+                    onClick={() =>
+                      updateGeneralMutation.mutate({ emailHandoffReplyApproval: option.value })
+                    }
+                  >
+                    <div className="text-sm font-medium">{option.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {option.value === "inherit"
+                        ? outboundToolDraftMode
+                          ? "Right now that means it waits for you."
+                          : "Right now that means it sends straight away."
+                        : option.hint}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex items-start justify-between gap-4 border-t border-border pt-4">

@@ -4,8 +4,10 @@ import {
   WEEKLY_RETENTION_PRESETS,
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   DEFAULT_SELF_NOTIFY_SETTINGS,
+  EMAIL_HANDOFF_REPLY_APPROVAL_VALUES,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "../types/instance.js";
@@ -35,6 +37,9 @@ export const instanceGeneralSettingsSchema = z.object({
   keyboardShortcuts: z.boolean().default(false),
   backupRetention: backupRetentionPolicySchema.default(DEFAULT_BACKUP_RETENTION),
   outboundToolDraftMode: z.boolean().default(true),
+  emailHandoffReplyApproval: z
+    .enum(EMAIL_HANDOFF_REPLY_APPROVAL_VALUES)
+    .default(DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL),
   selfNotify: selfNotifySettingsSchema.default(DEFAULT_SELF_NOTIFY_SETTINGS),
 }).strict();
 
