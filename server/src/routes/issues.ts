@@ -88,6 +88,10 @@ import {
 } from "../services/issue-execution-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
+import type {
+  IssueEmailDelegationRow,
+  IssueEmailDelegationService,
+} from "../services/issue-email-delegations.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -416,7 +420,19 @@ export function issueRoutes(
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
-  const emailDelegationsSvc = serviceIndex.issueEmailDelegationService(db);
+  // Resolved defensively, matching what issueTreeControlFactory below already
+   // does: many route tests replace ../services/index.js with a partial mock,
+   // and constructing an unmocked service eagerly would make this whole router
+   // fail to build for tests that have nothing to do with email handoffs.
+   // Returns null when the service is unavailable; every caller treats that as
+   // "no handoff tracking", which is the same non-fatal path a write failure
+   // already takes.
+  const emailDelegationsSvc = Object.prototype.hasOwnProperty.call(
+    serviceIndex,
+    "issueEmailDelegationService",
+  )
+    ? serviceIndex.issueEmailDelegationService(db)
+    : null;
 
   /**
    * Start tracking the handover when an issue is created from an email.
@@ -443,6 +459,7 @@ export function issueRoutes(
 
     const source = parseEmailHandoffOriginId(origin.id);
     if (!source) return;
+    if (!emailDelegationsSvc) return;
 
     try {
       await emailDelegationsSvc.create({
@@ -3874,11 +3891,19 @@ export function issueRoutes(
   async function loadDelegationForIssue(
     req: Request,
     res: Response,
-  ): Promise<{ companyId: string; delegation: Awaited<ReturnType<typeof emailDelegationsSvc.findById>> } | null> {
+  ): Promise<{
+    companyId: string;
+    delegation: IssueEmailDelegationRow;
+    svc: IssueEmailDelegationService;
+  } | null> {
     const companyId = req.params.companyId as string;
     const issueId = req.params.issueId as string;
     const delegationId = req.params.delegationId as string;
     assertCompanyAccess(req, companyId);
+    if (!emailDelegationsSvc) {
+      res.status(503).json({ error: "Email handoff tracking is unavailable." });
+      return null;
+    }
 
     const issue = await svc.getById(issueId);
     if (!issue) {
@@ -3896,7 +3921,9 @@ export function issueRoutes(
       res.status(404).json({ error: "Handoff not found on this issue" });
       return null;
     }
-    return { companyId, delegation };
+    // Handed back so callers get a service the compiler knows is present,
+    // rather than re-checking a nullable one this function already proved.
+    return { companyId, delegation, svc: emailDelegationsSvc };
   }
 
   router.get("/companies/:companyId/issues/:issueId/email-delegations", async (req, res) => {
@@ -3909,7 +3936,7 @@ export function issueRoutes(
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    res.json(await emailDelegationsSvc.listForIssue(companyId, issueId));
+    res.json(emailDelegationsSvc ? await emailDelegationsSvc.listForIssue(companyId, issueId) : []);
   });
 
   router.post(
@@ -3920,9 +3947,9 @@ export function issueRoutes(
       if (!loaded) return;
       const actor = getActorInfo(req);
 
-      const updated = await emailDelegationsSvc.transition({
+      const updated = await loaded.svc.transition({
         companyId: loaded.companyId,
-        delegationId: loaded.delegation!.id,
+        delegationId: loaded.delegation.id,
         to: "acknowledged",
         expectedVersion: req.body.expectedVersion,
       });
@@ -3966,7 +3993,7 @@ export function issueRoutes(
       });
       const { delegation, reply } = await resolution.resolve({
         companyId: loaded.companyId,
-        delegationId: loaded.delegation!.id,
+        delegationId: loaded.delegation.id,
         replyBody: req.body.replyBody,
         resolutionNote: req.body.resolutionNote,
         expectedVersion: req.body.expectedVersion,
@@ -3989,9 +4016,9 @@ export function issueRoutes(
       if (!loaded) return;
       const actor = getActorInfo(req);
 
-      const updated = await emailDelegationsSvc.transition({
+      const updated = await loaded.svc.transition({
         companyId: loaded.companyId,
-        delegationId: loaded.delegation!.id,
+        delegationId: loaded.delegation.id,
         to: "handed_back",
         handedBackReason: req.body.reason,
         expectedVersion: req.body.expectedVersion,
