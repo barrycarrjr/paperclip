@@ -8,8 +8,8 @@ import {
   Inbox,
   Mail,
 } from "lucide-react";
-import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useInboxBadge } from "../hooks/useInboxBadge";
@@ -50,7 +50,12 @@ type MobileNavItem = MobileNavLinkItem | MobileNavActionItem;
 
 export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const location = useLocation();
-  const { selectedCompanyId } = useCompany();
+  // The URL's company, not the context selection, which is synced from the
+  // route by an effect that runs a render late. The links here are relative
+  // and get prefixed by the router, so they were always right; the badge was
+  // not, and briefly showed the previous company's count after a switch. Same
+  // fix as the rest of the app — see useRouteCompany.ts.
+  const selectedCompanyId = useActiveCompanyId();
   const { openNewIssue } = useDialog();
   const inboxBadge = useInboxBadge(selectedCompanyId);
 
