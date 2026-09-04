@@ -2,6 +2,7 @@ import {
   ClipboardCheck,
   HelpCircle,
   Mail,
+  MailQuestion,
   MoreHorizontal,
   ShieldCheck,
   TriangleAlert,
@@ -49,6 +50,7 @@ const DISMISS_LABEL: Record<AttentionKind, string> = {
   budget_stop: "Take off my list (work stays paused)",
   join_request: "Take off my list (nobody is let in)",
   email_sender: "Take off my list (nothing is sent)",
+  email_handoff_stale: "Take off my list (nobody picks it up)",
 };
 
 const KIND_PRESENTATION: Record<
@@ -62,6 +64,11 @@ const KIND_PRESENTATION: Record<
   budget_stop: { icon: Wallet, cta: "Open budgets", tint: "text-red-600 dark:text-red-400" },
   join_request: { icon: UserPlus, cta: "Decide", tint: "text-sky-600 dark:text-sky-400" },
   email_sender: { icon: Mail, cta: "Set a rule", tint: "text-sky-600 dark:text-sky-400" },
+  email_handoff_stale: {
+    icon: MailQuestion,
+    cta: "Open the issue",
+    tint: "text-amber-600 dark:text-amber-400",
+  },
 };
 
 /**

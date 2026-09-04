@@ -1,10 +1,11 @@
-import { and, desc, eq, inArray, isNull, not } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, not } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
   approvals,
   budgetIncidents,
   heartbeatRuns,
+  issueEmailDelegations,
   issues,
   joinRequests,
 } from "@paperclipai/db";
@@ -36,6 +37,14 @@ const ACTIONABLE_APPROVAL_STATUSES = ["pending", "revision_requested"];
 const FAILED_RUN_STATUSES = ["failed", "timed_out"];
 /** How far back to look for still-unaddressed run failures. */
 const RUN_FAILURE_LOOKBACK = 400;
+
+/**
+ * How long a handed-over email may sit untouched before it needs a person.
+ *
+ * An hour, because agents wake on their own schedule and a few minutes of
+ * delay is normal operation, not a problem worth interrupting anyone about.
+ */
+export const STALE_EMAIL_HANDOFF_AFTER_MS = 60 * 60 * 1000;
 
 function ms(value: Date | string | null | undefined): number | null {
   if (!value) return null;
@@ -450,6 +459,62 @@ export function attentionQueueService(db: Db) {
     }));
   }
 
+  /**
+   * Emails handed to an agent that nobody has picked up.
+   *
+   * The P5a specification's §4.5 recommends extending this queue rather than
+   * inventing a second "things are stuck" list, and this is that. Only the
+   * `delegated` state counts: once an agent has acknowledged, the work being
+   * slow is the issue's problem to report, not the handover's, and reporting
+   * both would put the same thing in front of you twice.
+   *
+   * "waiting" rather than "stopped": nothing is frozen, but a real person
+   * emailed and nobody has started. The threshold is deliberately generous —
+   * an agent that has not woken within an hour is not merely busy.
+   */
+  async function staleEmailHandoffRows(companyId: string): Promise<AttentionRow[]> {
+    const cutoff = new Date(Date.now() - STALE_EMAIL_HANDOFF_AFTER_MS);
+    const rows = await db
+      .select({
+        id: issueEmailDelegations.id,
+        issueId: issueEmailDelegations.issueId,
+        mailbox: issueEmailDelegations.mailbox,
+        delegatedAt: issueEmailDelegations.delegatedAt,
+        updatedAt: issueEmailDelegations.updatedAt,
+        issueTitle: issues.title,
+        issueIdentifier: issues.identifier,
+      })
+      .from(issueEmailDelegations)
+      .innerJoin(issues, eq(issues.id, issueEmailDelegations.issueId))
+      .where(
+        and(
+          eq(issueEmailDelegations.companyId, companyId),
+          eq(issueEmailDelegations.status, "delegated"),
+          lt(issueEmailDelegations.delegatedAt, cutoff),
+        ),
+      )
+      .orderBy(issueEmailDelegations.delegatedAt)
+      .limit(50);
+
+    return rows.map((row) => ({
+      key: `email-handoff:${row.id}`,
+      kind: "email_handoff_stale" as AttentionKind,
+      companyId,
+      title: `An email handed over has not been picked up`,
+      detail: row.issueTitle,
+      askedBy: null,
+      blocking: "waiting" as const,
+      blockedSinceMs: ms(row.delegatedAt),
+      count: 1,
+      consequence: "Whoever sent it is still waiting for an answer.",
+      deadlineAtMs: null,
+      deadlineOutcome: null,
+      href: `/issues/${row.issueIdentifier ?? row.issueId}`,
+      createdAtMs: ms(row.delegatedAt) ?? 0,
+      updatedAtMs: ms(row.updatedAt) ?? ms(row.delegatedAt) ?? 0,
+    }));
+  }
+
   return {
     /**
      * Every open decision for one company, newest wait first, with stopped
@@ -460,7 +525,7 @@ export function attentionQueueService(db: Db) {
       actor: AttentionQueueActor,
       options: { includeSetAside?: boolean } = {},
     ): Promise<AttentionQueueResult> => {
-      const [approvalsList, questions, signOffs, runFailures, budgetStops, joins] =
+      const [approvalsList, questions, signOffs, runFailures, budgetStops, joins, staleHandoffs] =
         await Promise.all([
           approvalRows(companyId),
           questionRows(companyId),
@@ -468,6 +533,7 @@ export function attentionQueueService(db: Db) {
           runFailureRows(companyId),
           budgetStopRows(companyId),
           joinRequestRows(companyId, actor),
+          staleEmailHandoffRows(companyId),
         ]);
 
       const all = [
@@ -477,6 +543,7 @@ export function attentionQueueService(db: Db) {
         ...runFailures,
         ...budgetStops,
         ...joins,
+        ...staleHandoffs,
       ];
       const nowMs = Date.now();
       const visible = all.filter(

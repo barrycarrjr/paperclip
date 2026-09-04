@@ -33,6 +33,45 @@ The package remains uncommitted: the local `commit-review` skill prohibits stagi
 
 Recheck all of this at takeover; this table is a dated handoff, not live system state.
 
+## 2026-09-04 update
+
+Barry read the session's output and said he had expected to see UI changes.
+That was fair: the day had gone server-side at his direction (the P5a spec
+review, the migration, the resolve caller), so little of it was visible. He
+then said to go autonomously and not stop, committing after each phase.
+
+Since then, and all pushed to `origin/ux-control-center`:
+
+- **P5a is finished and live.** The delegation table, lifecycle, resolve
+  path, four routes, four agent tools, and a panel on the issue an email
+  created. Resolving replies to the original sender through the same tool an
+  agent would use by hand, and obeys a new three-state setting that decides
+  whether that reply waits for approval. Migrations 0095 and 0096 applied to
+  the running instance.
+- **P1 bullet 3's availability half.** The workspace list now carries the
+  conditions a workspace needs, and the sidebar, search and Everything all
+  read them. Opening Workspaces with the switch off used to redirect silently
+  to Issues; it now says so. Same for a plugin with no page of its own, which
+  used to open that plugin's settings without a word.
+- **P1's "Pinned tools", which had never been built.** Pin from the Everything
+  page; pinned workspaces appear in the sidebar under Calendar. Pins are per
+  person, and one that a company cannot open is hidden there rather than
+  removed from the saved list.
+- **Stale email handoffs join the attention queue**, per P5a's §4.5
+  recommendation to extend it rather than build a second "stuck" list.
+
+Still open, and honestly named: P1 bullet 2's "Shared service/account" scope
+needs the Phone and Reviews plugins, which live in a repository this work is
+not to touch without separate coordination. P5b (freeform work entry) and P5c
+(richer Reviews) have not started and are net-new features needing Barry's
+product decisions, not inference. P6 is his own trial and cannot be done for
+him.
+
+Three pre-existing test failures remain, none from this work: two assume a
+machine with no Switchboard accounts, and one is in the Claude adapter's
+plan-exhausted parsing, which another session was editing on this same branch
+during the run.
+
 ## Phase status
 
 | Phase | Status | Next evidence needed |
