@@ -1,6 +1,6 @@
 # Paperclip: operator workspace / information architecture audit
 
-Reviewed September 2, 2026. Scope: the running customized fork at `paperclip.local:3100`, `C:\Users\barry\paperclip\ui`, and the installed plugin implementations in `C:\Users\barry\paperclip-extensions`.
+Reviewed September 2, 2026. Scope: the running customized fork at `paperclip.local:3100`, `~/paperclip/ui`, and the installed plugin implementations in `~/paperclip-extensions`.
 
 ## Conclusion
 

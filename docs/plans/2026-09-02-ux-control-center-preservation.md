@@ -41,7 +41,7 @@ Status for every feature below: inventoried, not yet implementation-verified. Th
 
 ## Installed plugin families
 
-Audit-time source location: sibling repository `C:\Users\barry\paperclip-extensions`. Its presence and installed-runtime wiring must be rechecked. A Paperclip branch does not branch or deploy that repository. No extension changes/releases are authorized by creating this plan.
+Audit-time source location: sibling repository `~/paperclip-extensions`. Its presence and installed-runtime wiring must be rechecked. A Paperclip branch does not branch or deploy that repository. No extension changes/releases are authorized by creating this plan.
 
 | ID | Plugin | Preserve / placement |
 |---|---|---|

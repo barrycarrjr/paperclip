@@ -4,7 +4,7 @@ Created: 2026-09-02. [Project entry point](2026-09-02-ux-control-center.md).
 
 ## Known checkout state
 
-- Main checkout: `C:\Users\barry\paperclip`.
+- Main checkout: `~/paperclip`.
 - User's fork: `barrycarrjr/paperclip`.
 - Local branch created for this work: `ux-control-center`.
 - Baseline commit: `558f0096faa8fbb1caee01dede0de231568f7ee5`.
@@ -29,7 +29,7 @@ Confirmed live, read-only, before any change was made. See the handoff ledger fo
 **Migration status — checked read-only, applied nothing.** Called the server's own `inspectMigrations()` (exported from `@paperclipai/db`) directly against the live embedded DB with no follow-up mutating call. Result: **`status: "upToDate"`**, 92 tables, all 95 migrations (`0000`…`0094`) applied. Zero pending migrations as of this check. Reusable read-only check (safe to rerun any time, touches nothing):
 
 ```powershell
-pnpm --filter @paperclipai/server exec tsx <path-to-a-throwaway-.mjs-that-imports-inspectMigrations-from-'file:///C:/Users/barry/paperclip/packages/db/src/index.ts'-and-prints-the-JSON-result>
+pnpm --filter @paperclipai/server exec tsx <path-to-a-throwaway-.mjs-that-imports-inspectMigrations-from-'file:///~/paperclip/packages/db/src/index.ts'-and-prints-the-JSON-result>
 ```
 
 **The actual restart risk, found by reading the code, not documentation:** both `pnpm dev` and `pnpm dev:once` run through `scripts/dev-runner.ts`, which sets `PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true"` and `PAPERCLIP_MIGRATION_PROMPT ??= "never"` — so either command **silently applies any pending migration** on that restart, no confirmation possible, by design. Separately, even outside dev-runner, the server's own `promptApplyMigrations()` (`server/src/index.ts`) defaults to **auto-apply when stdin/stdout is not a TTY** — and no tool-driven shell here presents a real TTY, so *any* agent-initiated restart against a database with pending migrations would apply them by default unless `PAPERCLIP_MIGRATION_PROMPT=never` is explicitly set first (which makes it refuse to start instead, the safe failure mode). **Rule going forward: before any restart, always rerun the read-only `inspectMigrations` check above first. If it is not `upToDate`, do not restart via `pnpm dev`/`dev:once`/`run` without first setting `PAPERCLIP_MIGRATION_PROMPT=never` and getting Barry's explicit approval for the specific pending migration list.**
@@ -63,7 +63,7 @@ Net: the `@paperclipai/server` baseline anyone should trust going forward is **1
 ## Before continuing
 
 ```powershell
-Set-Location 'C:\Users\barry\paperclip'
+Set-Location '~/paperclip'
 git status --short
 git branch --show-current
 git log -1 --oneline

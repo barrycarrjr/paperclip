@@ -17,7 +17,7 @@ This is an information architecture and interaction project, not a theme-only re
 - Use provider-neutral names, documents, and handoffs. No AI provider owns the project or is required to continue it.
 - This package is the authoritative project record. Conversation history and an agent's private workspace are not prerequisites for continuing.
 - Barry specifically requested `docs/plans/` for this project. That project-specific direction overrides the repository's general `doc/plans/` location convention. Do not maintain a competing copy there.
-- Develop locally on `ux-control-center`, using the normal checkout at `C:\Users\barry\paperclip`. The intended trial URL remains `http://paperclip.local:3100`.
+- Develop locally on `ux-control-center`, using the normal checkout at `~/paperclip`. The intended trial URL remains `http://paperclip.local:3100`.
 - Keep `master` untouched. No push, PR, merge, release, or deployment until Barry explicitly authorizes the relevant action. Local commits are not yet made; follow the repository's commit-approval workflow when requested.
 - Use the real existing components and services. Mockup forms, fake data, and simulated actions are not production implementations.
 - Preserve real company data and operational configuration. A branch isolates code, not a database. Review and obtain approval for live-instance migrations before applying them, including migrations that startup would apply automatically.

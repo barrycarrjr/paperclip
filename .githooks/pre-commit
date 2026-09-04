@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Block commits that introduce TypeScript errors.
+# Block commits that introduce forbidden tokens or TypeScript errors.
 #
 # Triggered on every `git commit` via core.hooksPath=.githooks, which the
 # package.json `prepare` script wires up on `pnpm install`. Anyone who
@@ -25,6 +25,29 @@ set -euo pipefail
 # Run from repo root regardless of how the hook was invoked (some tools
 # invoke from subdirs).
 cd "$(git rev-parse --show-toplevel)"
+
+# Forbidden tokens first, and on EVERY commit — including doc-only ones.
+# The check below this only looks at TypeScript, and the thing this catches
+# (a local username, a machine-specific path, anything on the token list)
+# turns up in docs and scripts at least as often as in source. That is not
+# hypothetical: this hook did not run it, and a batch of plan documents
+# carrying an absolute home-directory path went in unnoticed on 2026-09-04.
+#
+# Staged-only, so one pre-existing match somewhere unrelated cannot block
+# everyone's commits until somebody gets around to it.
+echo "[pre-commit] Checking staged changes for forbidden tokens."
+if ! node scripts/check-forbidden-tokens.mjs --staged; then
+  echo ""
+  echo "============================================================"
+  echo "  [pre-commit] Forbidden token check FAILED."
+  echo ""
+  echo "  A staged line contains something that should not be"
+  echo "  committed. Remove it, or if this is genuinely intended:"
+  echo ""
+  echo "    git commit --no-verify"
+  echo "============================================================"
+  exit 1
+fi
 
 # Cheap pre-filter: only typecheck when staged changes include TS source.
 # --diff-filter=ACMR = Added/Copied/Modified/Renamed (skip Deleted — a
