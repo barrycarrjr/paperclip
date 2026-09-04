@@ -1,13 +1,15 @@
 import { useEffect, useMemo } from "react";
-import { Link, Navigate, useParams } from "@/lib/router";
+import { Link, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
+import { WorkspaceUnavailable } from "@/components/WorkspaceUnavailable";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
 import { PluginSlotMount } from "@/plugins/slots";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, PlugZap } from "lucide-react";
 import { NotFoundPage } from "./NotFound";
 
 /**
@@ -24,7 +26,12 @@ export function PluginPage() {
     pluginId?: string;
     pluginRoutePath?: string;
   }>();
-  const { companies, selectedCompanyId } = useCompany();
+  const { companies } = useCompany();
+  // URL-derived, not the context's selection, which lags a render behind on a
+  // company switch. This page is normally reached with a prefix in the URL so
+  // the fallback below rarely fires, but when it does it must not name the
+  // company you just left. See useRouteCompany.ts.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const routeCompany = useMemo(() => {
     if (!routeCompanyPrefix) return null;
@@ -130,9 +137,23 @@ export function PluginPage() {
     if (pluginRoutePath) {
       return <NotFoundPage scope="board" />;
     }
-    // No page slot: redirect to plugin settings where plugin info is always shown
-    const settingsPath = pluginId ? `/instance/settings/plugins/${pluginId}` : "/instance/settings/plugins";
-    return <Navigate to={settingsPath} replace />;
+    // Was a silent redirect to plugin settings. Settings looks like a normal
+    // working page, so landing there read as "this plugin's page" rather than
+    // "that plugin has no page" — the same silent-retarget problem the scope
+    // document rules out. Say it, and offer settings as a choice.
+    const settingsPath = pluginId
+      ? `/instance/settings/plugins/${pluginId}`
+      : "/instance/settings/plugins";
+    return (
+      <WorkspaceUnavailable
+        title="This plugin"
+        icon={PlugZap}
+        reason="It does not add a page of its own."
+        whatToDo="Plugins can add tools, jobs or panels without having a page. Its settings show what it does provide."
+        actionHref={settingsPath}
+        actionLabel="Open plugin settings"
+      />
+    );
   }
 
   return (
