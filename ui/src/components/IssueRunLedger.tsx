@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { Issue, Agent } from "@paperclipai/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
-import { accessApi, type CurrentBoardAccess } from "../api/access";
+import { accessApi } from "../api/access";
 import { activityApi, type RunForIssue, type RunLivenessState } from "../api/activity";
 import { ApiError } from "../api/client";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../api/heartbeats";
 import { useToastActions } from "../context/ToastContext";
 import { cn, relativeTime } from "../lib/utils";
+import { canWriteCompany } from "../lib/company-access";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { describeRunRetryState } from "../lib/runRetryState";
@@ -315,20 +316,6 @@ function formatSilenceAge(ms: number | null | undefined) {
   return `${hours}h ${minutes}m`;
 }
 
-function canBoardRecordWatchdogDecision(
-  companyId: string,
-  boardAccess: CurrentBoardAccess | undefined,
-) {
-  if (!boardAccess) return false;
-  if (boardAccess.source === "local_implicit" || boardAccess.isInstanceAdmin) return true;
-
-  const membership = boardAccess.memberships?.find(
-    (item) => item.companyId === companyId && item.status === "active",
-  );
-  if (!membership) return boardAccess.companyIds.includes(companyId) && !boardAccess.memberships;
-  return membership.membershipRole !== "viewer" && membership.membershipRole !== null;
-}
-
 function watchdogDecisionErrorMessage(error: unknown) {
   if (error instanceof ApiError && error.status === 403) {
     return "Only the board or the assigned recovery owner can record watchdog decisions";
@@ -406,7 +393,7 @@ export function IssueRunLedger({
       childIssues={childIssues}
       agentMap={agentMap}
       pendingWatchdogDecision={watchdogDecision.variables?.decision ?? null}
-      canRecordWatchdogDecisions={canBoardRecordWatchdogDecision(companyId, boardAccess)}
+      canRecordWatchdogDecisions={canWriteCompany(companyId, boardAccess)}
       watchdogDecisionError={watchdogDecisionError}
       onWatchdogDecision={(input) => watchdogDecision.mutate(input)}
     />
