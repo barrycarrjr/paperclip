@@ -123,6 +123,26 @@ describe("IssueThreadInteractionCard", () => {
     expect(host.textContent).toContain("Child task");
   });
 
+  it("the skip notice reads will be skipped if you accept and never contains the word interaction", () => {
+    const host = renderCard({
+      interaction: pendingSuggestedTasksInteraction,
+    });
+
+    // Untick one draft so the skip notice has something to say.
+    const firstCheckbox = host.querySelector('[role="checkbox"]') as HTMLButtonElement | null;
+    expect(firstCheckbox).toBeTruthy();
+    act(() => {
+      firstCheckbox!.click();
+    });
+
+    const notice = [...host.querySelectorAll("span")].find((el) =>
+      el.textContent?.includes("will be skipped"),
+    );
+    expect(notice).toBeTruthy();
+    expect(notice!.textContent).toMatch(/will be skipped if you accept\.$/);
+    expect(notice!.textContent).not.toMatch(/interaction/i);
+  });
+
   it("shows an explicit placeholder when a rejected interaction has no reason", () => {
     const host = renderCard({
       interaction: {

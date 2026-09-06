@@ -506,7 +506,7 @@ function SuggestTasksCard({
               </span>
               {selectedCount < totalTasks ? (
                 <span>
-                  {totalTasks - selectedCount} will be skipped if you accept this interaction.
+                  {totalTasks - selectedCount} will be skipped if you accept.
                 </span>
               ) : null}
             </div>
