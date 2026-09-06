@@ -283,19 +283,33 @@ function buildSummary(toolName: string, params: unknown): string {
     return typeof v === "string" && v.trim() ? v.trim() : null;
   };
 
+  // The public-posting tools (social posts, Instagram, YouTube, KDP, Google
+  // review replies) name their target and content differently from the
+  // messaging tools this was written for. Without their field names here,
+  // every one of them summarised to the bare tool name, and the operator was
+  // asked to approve a public post without being shown a word of it.
   const recipient =
     candidate("to") ??
     candidate("recipient") ??
     candidate("channel") ??
     candidate("user") ??
     candidate("phoneNumber") ??
-    candidate("conversationId");
+    candidate("conversationId") ??
+    candidate("page") ??
+    candidate("locationKey") ??
+    candidate("account");
   const subject = candidate("subject") ?? candidate("title");
   const body =
     candidate("body") ??
     candidate("text") ??
     candidate("message") ??
-    candidate("html");
+    candidate("html") ??
+    candidate("caption") ??
+    candidate("replyText") ??
+    candidate("comment") ??
+    candidate("description") ??
+    candidate("link") ??
+    candidate("filePath");
 
   const parts: string[] = [];
   if (recipient) parts.push(`to ${recipient}`);

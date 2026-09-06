@@ -286,7 +286,8 @@ export function InstanceGeneralSettings() {
             <div className="space-y-1.5">
               <h2 className="text-sm font-semibold">Hold outbound messages for approval</h2>
               <p className="max-w-2xl text-sm text-muted-foreground">
-                When on, agent emails, Slack messages, and phone calls wait in Approvals until you
+                When on, agent emails, Slack messages, phone calls, and public posts (social media,
+                YouTube, Google review replies) wait in Approvals until you
                 OK them. Turning this off lets every outbound message send immediately, including
                 ones to other people.
               </p>

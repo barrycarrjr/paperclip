@@ -341,6 +341,25 @@ export const OUTBOUND_TOOL_DRAFT_GATE = [
   "slack-tools:slack_send_channel",
   "phone-tools:phone_call_make",
   "3cx-tools:pbx_click_to_call",
+  // Public posts. Until 2026-09-06 this list held only messaging tools, so
+  // every tool below could publish to the open internet with no hold at all
+  // while an email to one person waited for approval. A public post is
+  // harder to take back than a message, not easier. None of these can ever
+  // be self-addressed, so none belongs in OUTBOUND_SELF_RECIPIENT_RULES; they
+  // are always held. Tested by server/src/__tests__/public-post-gate.test.ts.
+  "gbp-reviews:gbp_reply_to_review",
+  "social-poster:post_to_facebook",
+  "social-poster:post_to_instagram",
+  "social-poster:post_to_x",
+  "social-poster:post_to_tiktok",
+  "social-poster:post_to_threads",
+  "instagram-tools:instagram_post_photo",
+  "instagram-tools:instagram_post_carousel",
+  "instagram-tools:instagram_post_reel",
+  "instagram-tools:instagram_post_story",
+  "youtube-tools:youtube_upload",
+  "youtube-tools:youtube_post_comment",
+  "kdp-tools:kdp_publish",
 ] as const;
 export type OutboundToolDraftGate = (typeof OUTBOUND_TOOL_DRAFT_GATE)[number];
 

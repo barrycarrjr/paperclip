@@ -27,6 +27,22 @@ const OUTBOUND_TOOL_LABEL: Record<string, string> = {
   "slack-tools:slack_send_channel": "Slack post",
   "phone-tools:phone_call_make": "Outbound call",
   "3cx-tools:pbx_click_to_call": "Click-to-call",
+  // Public posts. Duplicated in ui/src/lib/outcomes.ts on purpose (see the
+  // comment there); edit both together or the receipt feed and the approval
+  // card disagree.
+  "gbp-reviews:gbp_reply_to_review": "Public review reply",
+  "social-poster:post_to_facebook": "Facebook post",
+  "social-poster:post_to_instagram": "Instagram post",
+  "social-poster:post_to_x": "X post",
+  "social-poster:post_to_tiktok": "TikTok post",
+  "social-poster:post_to_threads": "Threads post",
+  "instagram-tools:instagram_post_photo": "Instagram photo",
+  "instagram-tools:instagram_post_carousel": "Instagram carousel",
+  "instagram-tools:instagram_post_reel": "Instagram reel",
+  "instagram-tools:instagram_post_story": "Instagram story",
+  "youtube-tools:youtube_upload": "YouTube upload",
+  "youtube-tools:youtube_post_comment": "YouTube comment",
+  "kdp-tools:kdp_publish": "KDP publish",
 };
 
 export function outboundToolLabel(toolName: string | null | undefined): string {
