@@ -160,3 +160,122 @@ describe("pickBestDefaultModel", () => {
     expect(picked).toBe(mod.encodeAdapterModel("exotic_provider", "claude-opus-4-7"));
   });
 });
+
+describe("pickOneShotModel", () => {
+  const ENV = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OLLAMA_HOST", "PAPERCLIP_OLLAMA_DISABLED", "PAPERCLIP_CHAT_DEFAULT_MODEL"];
+  const original: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of ENV) {
+      original[k] = process.env[k];
+      delete process.env[k];
+    }
+    vi.resetModules();
+  });
+  afterEach(() => {
+    for (const k of ENV) {
+      if (original[k] === undefined) delete process.env[k];
+      else process.env[k] = original[k];
+    }
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  async function loadWithAdapters(adapterTypes: Array<{ type: string; modelIds: string[] }>) {
+    vi.doMock("../adapters/registry.js", () => ({
+      findActiveServerAdapter: (t: string) =>
+        adapterTypes.find((a) => a.type === t) ? { type: t } : null,
+      listEnabledServerAdapters: () =>
+        adapterTypes.map((a) => ({ type: a.type, models: a.modelIds.map((id) => ({ id, label: id })) })),
+      listAdapterModels: async (t: string) => {
+        const a = adapterTypes.find((x) => x.type === t);
+        return a ? a.modelIds.map((id) => ({ id, label: id })) : [];
+      },
+    }));
+    return import("../services/chat-providers.js");
+  }
+
+  it("pickOneShotModel prefers a configured native provider over adapters and Ollama", async () => {
+    // Ollama is left enabled on purpose: a native key must win without the
+    // cascade ever probing Ollama, so the fetch spy doubles as the proof.
+    process.env.ANTHROPIC_API_KEY = "test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const mod = await loadWithAdapters([
+      { type: "claude_local", modelIds: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+      { type: "codex_local", modelIds: ["gpt-5"] },
+    ]);
+    const picked = await mod.pickOneShotModel();
+    expect(picked).toBe("claude-opus-4-7");
+    expect(picked).not.toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-7"));
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("pickOneShotModel walks the native order anthropic, openai, gemini", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    process.env.OPENAI_API_KEY = "test";
+    process.env.GEMINI_API_KEY = "test";
+    let mod = await loadWithAdapters([]);
+    expect(await mod.pickOneShotModel()).toBe("gpt-4.1");
+
+    delete process.env.OPENAI_API_KEY;
+    vi.resetModules();
+    mod = await loadWithAdapters([]);
+    expect(await mod.pickOneShotModel()).toBe("gemini-2.0-flash");
+  });
+
+  it("pickOneShotModel falls through to the best discovered adapter model when nothing native is configured", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapters([
+      { type: "aider_local", modelIds: ["ollama/llama3.1:8b"] },
+      { type: "claude_local", modelIds: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+    ]);
+    const picked = await mod.pickOneShotModel();
+    // Same ranking as pickBestDefaultModel: the two must never disagree.
+    expect(picked).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-7"));
+    expect(picked).toBe(await mod.pickBestDefaultModel());
+  });
+
+  it("pickOneShotModel returns null when no provider is configured and no adapter model is discovered, never claude-opus-4-7", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapters([]);
+    const picked = await mod.pickOneShotModel();
+    expect(picked).toBeNull();
+    // The sibling helper keeps its hardcoded fallback; this one must not.
+    expect(await mod.pickBestDefaultModel()).toBe("claude-opus-4-7");
+  });
+
+  it("pickOneShotModel honours PAPERCLIP_CHAT_DEFAULT_MODEL when no native provider is configured", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapters([
+      { type: "claude_local", modelIds: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+    ]);
+    // Sonnet on purpose: discovery would rank opus first, so picking sonnet
+    // can only be the explicit choice being honoured.
+    const explicit = mod.encodeAdapterModel("claude_local", "claude-sonnet-4-6");
+    process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = explicit;
+    expect(await mod.pickOneShotModel()).toBe(explicit);
+  });
+
+  it("pickOneShotModel prefers the native default over a serveable PAPERCLIP_CHAT_DEFAULT_MODEL", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    process.env.ANTHROPIC_API_KEY = "test";
+    // OpenAI has a key too, so gpt-4.1 really could be served. The native
+    // order still wins: this is the ai-rewrite behaviour from before the
+    // cascade moved into this helper, where a native SDK call costs
+    // hundreds of milliseconds and an adapter or second hop costs seconds.
+    process.env.OPENAI_API_KEY = "test";
+    process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = "gpt-4.1";
+    const mod = await loadWithAdapters([]);
+    expect(await mod.pickOneShotModel()).toBe("claude-opus-4-7");
+  });
+
+  it("pickOneShotModel ignores an explicit choice whose provider has no key and falls through to discovery", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    // gpt-4.1 with no OPENAI_API_KEY and no native provider at all.
+    process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = "gpt-4.1";
+    const mod = await loadWithAdapters([
+      { type: "claude_local", modelIds: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+    ]);
+    expect(await mod.pickOneShotModel()).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-7"));
+  });
+});

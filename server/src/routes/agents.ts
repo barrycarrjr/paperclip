@@ -2292,29 +2292,17 @@ export function agentRoutes(
 
     const {
       getProviderForModel,
-      listConfiguredProviders,
-      pickBestDefaultModel,
+      pickOneShotModel,
       removeClippyWorkspace,
     } = await import("../services/chat-providers.js");
 
-    // Prefer native API-key providers over adapter routing for inline rewrites:
-    // a native SDK call returns in ~hundreds of ms vs seconds of CLI cold-start.
-    // Ollama is deliberately excluded — its `isConfigured()` returns true by
-    // default without any reachability check, so a non-running ollama would
-    // win this cascade and then fail at fetch time. Falling through to
-    // `pickBestDefaultModel()` lets ollama's reachability check decide whether
-    // it's actually a viable target, and otherwise picks the best adapter-
-    // routed model (Claude Pro via claude_local, etc.).
-    let model: string;
-    if (requestedModel) {
-      model = requestedModel;
-    } else {
-      const configured = listConfiguredProviders();
-      const nativePreference = ["anthropic", "openai", "gemini"] as const;
-      const nativeProvider = nativePreference
-        .map((name) => configured.find((p) => p.name === name))
-        .find((p): p is NonNullable<typeof p> => Boolean(p));
-      model = nativeProvider ? nativeProvider.defaultModel() : await pickBestDefaultModel();
+    // The native-first cascade (fast SDK call over CLI cold-start, Ollama only
+    // once it has been probed) lives in pickOneShotModel so every server
+    // one-shot picks the same way. Null means nothing is set up at all.
+    const model = requestedModel ?? (await pickOneShotModel());
+    if (!model) {
+      res.status(503).json({ error: "No AI model is configured. Configure an LLM provider (Anthropic/OpenAI/Gemini/Ollama) or a local CLI adapter under Instance Settings." });
+      return;
     }
 
     const provider = getProviderForModel(model);

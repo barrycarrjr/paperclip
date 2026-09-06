@@ -375,4 +375,42 @@ describe("agent instructions bundle routes", () => {
     expect(res.body.adapterConfig.instructionsEntryFile).toBeUndefined();
     expect(res.body.adapterConfig.instructionsFilePath).toBeUndefined();
   });
+
+  it("ai-rewrite answers 503 without touching a provider when pickOneShotModel finds no model", async () => {
+    const pickOneShotModel = vi.fn(async () => null);
+    const getProviderForModel = vi.fn();
+    vi.doMock("../services/chat-providers.js", () => ({
+      pickOneShotModel,
+      getProviderForModel,
+      removeClippyWorkspace: vi.fn(),
+    }));
+
+    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+      .post("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file/ai-rewrite?companyId=company-1")
+      .send({ path: "AGENTS.md", content: "# Agent\n", prompt: "Make it shorter" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body.error).toContain("No AI model is configured");
+    expect(pickOneShotModel).toHaveBeenCalledTimes(1);
+    expect(getProviderForModel).not.toHaveBeenCalled();
+  });
+
+  it("ai-rewrite uses the requested model and skips the cascade when one is named", async () => {
+    const pickOneShotModel = vi.fn(async () => "claude-opus-4-7");
+    const getProviderForModel = vi.fn(() => null);
+    vi.doMock("../services/chat-providers.js", () => ({
+      pickOneShotModel,
+      getProviderForModel,
+      removeClippyWorkspace: vi.fn(),
+    }));
+
+    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+      .post("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file/ai-rewrite?companyId=company-1")
+      .send({ path: "AGENTS.md", content: "# Agent\n", prompt: "Make it shorter", model: "gpt-4.1" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body.error).toContain('No provider available for model "gpt-4.1"');
+    expect(pickOneShotModel).not.toHaveBeenCalled();
+    expect(getProviderForModel).toHaveBeenCalledWith("gpt-4.1");
+  });
 });
