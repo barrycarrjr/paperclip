@@ -132,5 +132,13 @@ export const issues = pgTable(
           and ${table.hiddenAt} is null
           and ${table.status} not in ('done', 'cancelled')`,
       ),
+    // One Start work request key maps to exactly one container issue, so a
+    // retried draft (Enter twice, a killed request, two tabs) can never create
+    // two. Unlike the recovery indexes above this one deliberately ignores
+    // status and hidden_at: a cancelled container keeps its key so a retry
+    // after reject returns the rejected plan instead of drafting a fresh one.
+    startWorkRequestIdx: uniqueIndex("issues_start_work_request_uq")
+      .on(table.companyId, table.originId)
+      .where(sql`${table.originKind} = 'start_work' and ${table.originId} is not null`),
   }),
 );

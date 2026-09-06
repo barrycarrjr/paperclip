@@ -680,6 +680,13 @@
       "when": 1780120005000,
       "tag": "0096_pinned_workspaces",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1780120006000,
+      "tag": "0097_start_work_request_container",
+      "breakpoints": true
     }
   ]
 }
