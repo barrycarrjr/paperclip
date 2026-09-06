@@ -223,6 +223,11 @@ export function attentionQueueService(db: Db) {
       // other policies mean it carried on.
       const stopped = group.some((entry) => entry.continuationPolicy !== "none");
       const headline = first.title?.trim() || first.summary?.trim() || null;
+      // A plan a board user asked for (Start work) is a card a person
+      // created on a backlog container nobody is assigned to. Its
+      // wake_assignee_on_accept policy would otherwise read as "an agent is
+      // paused", which is untrue: no agent exists on it until accept.
+      const askedByPerson = Boolean(first.createdByUserId) && !first.createdByAgentId;
       // A confirmation request lapses by itself when the thing it points at
       // moves on: the document gets a new revision, or a later comment
       // supersedes it. There is no clock, so no countdown, but saying
@@ -239,15 +244,23 @@ export function attentionQueueService(db: Db) {
             ? `${group.length} questions on ${first.issueIdentifier ?? "an issue"}`
             : headline
               ? truncate(headline)
-              : "An agent is asking you a question",
+              : askedByPerson
+                ? "Plan waiting for your decision"
+                : "An agent is asking you a question",
         detail: truncate(first.issueTitle, 90),
         askedBy: null,
-        blocking: stopped ? ("stopped" as const) : ("waiting" as const),
+        blocking: askedByPerson || !stopped ? ("waiting" as const) : ("stopped" as const),
         blockedSinceMs: ms(first.createdAt),
         count: group.length,
-        consequence: stopped
-          ? "The agent is paused on this issue until you answer. Waiting costs nothing."
-          : "The agent carried on; your answer steers what it does next.",
+        consequence: askedByPerson
+          // The request issue this row points at does exist already, so the
+          // honest promise is about the tasks in the plan, not about the
+          // request. Saying "nothing is created" would be contradicted by
+          // the very issue the row links to.
+          ? "No tasks are created until you accept it. Waiting costs nothing."
+          : stopped
+            ? "The agent is paused on this issue until you answer. Waiting costs nothing."
+            : "The agent carried on; your answer steers what it does next.",
         // No clock, but not "nothing happens" either: see canLapse above.
         deadlineAtMs: null,
         deadlineOutcome: canLapse
