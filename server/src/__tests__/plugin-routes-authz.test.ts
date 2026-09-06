@@ -24,13 +24,28 @@ vi.mock("../services/plugin-lifecycle.js", () => ({
   pluginLifecycleManager: () => mockLifecycle,
 }));
 
+const mockLogActivity = vi.hoisted(() => vi.fn());
+
 vi.mock("../services/activity-log.js", () => ({
-  logActivity: vi.fn(),
+  logActivity: mockLogActivity,
 }));
 
 vi.mock("../services/live-events.js", () => ({
   publishGlobalLiveEvent: vi.fn(),
 }));
+
+const mockLogError = vi.hoisted(() => vi.fn());
+
+// The routes log through logger.child(...), so the mock has to answer child()
+// with the same object the assertions look at. httpLogger is re-exported by
+// middleware/index.js, which this file imports, so it has to exist here too.
+vi.mock("../middleware/logger.js", () => {
+  const child = { error: mockLogError, warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+  return {
+    logger: { ...child, child: () => child },
+    httpLogger: vi.fn(),
+  };
+});
 
 async function createApp(
   actor: Record<string, unknown>,
@@ -593,9 +608,311 @@ describe.sequential("plugin tool and bridge authz", () => {
     expect(res.status).toBe(200);
     expect(call).toHaveBeenCalledWith(pluginId, "performAction", {
       key: "sync",
-      params: {},
+      // A global call still gets a stamp, with companyId null, so a worker that
+      // requires a company refuses it instead of guessing one.
+      params: { hostScope: { companyId: null, userId: "admin-1" } },
       renderEnvironment: null,
     });
+  });
+
+  // The four bridge routes, each with the body that carries a company scope and
+  // caller-supplied params. The URL-keyed pair takes no key in the body.
+  const scopedBridgeRoutes = [
+    ["legacy data", `/api/plugins/${pluginId}/bridge/data`, "getData", "health", { key: "health" }],
+    ["legacy action", `/api/plugins/${pluginId}/bridge/action`, "performAction", "sync", { key: "sync" }],
+    ["url data", `/api/plugins/${pluginId}/data/health`, "getData", "health", {}],
+    ["url action", `/api/plugins/${pluginId}/actions/sync`, "performAction", "sync", {}],
+  ] as const;
+
+  it.each(scopedBridgeRoutes)(
+    "stamps params.hostScope with the validated company and session user on %s bridge calls",
+    async (_name, path, method, key, body) => {
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor(), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ ...body, companyId: companyA, params: { locationKey: "loc-1" } });
+
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(pluginId, method, {
+        key,
+        params: {
+          locationKey: "loc-1",
+          hostScope: { companyId: companyA, userId: "user-1" },
+        },
+        renderEnvironment: null,
+      });
+    },
+  );
+
+  it.each(scopedBridgeRoutes)(
+    "overwrites a browser-supplied params.hostScope on %s bridge calls instead of merging it",
+    async (_name, path, method, key, body) => {
+      // The worker trusts hostScope for scoping, so a browser must not be able
+      // to smuggle another company (or an extra field) in under that key.
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor(), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({
+          ...body,
+          companyId: companyA,
+          params: { hostScope: { companyId: companyB, userId: "somebody-else", extra: true } },
+        });
+
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(pluginId, method, {
+        key,
+        params: { hostScope: { companyId: companyA, userId: "user-1" } },
+        renderEnvironment: null,
+      });
+    },
+  );
+
+  it.each(scopedBridgeRoutes)(
+    "answers 403 and never calls the worker when params.companyId names a company the caller cannot reach on %s bridge calls",
+    async (_name, path, _method, _key, body) => {
+      // A member of company A could otherwise send companyId A (which passes
+      // the access check) and params.companyId B (which the worker acted on).
+      // The claimed company gets its own access check, so B is refused here.
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor(), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ ...body, companyId: companyA, params: { companyId: companyB } });
+
+      expect(res.status).toBe(403);
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(scopedBridgeRoutes)(
+    "passes a params.companyId the caller may reach through to the worker on %s bridge calls",
+    async (_name, path, method, key, body) => {
+      // The email-tools and help-scout rules settings pages are instance level:
+      // they send the mailbox account's own company in params while the runtime
+      // always sends whichever company the sidebar is showing in the body. This
+      // caller belongs to both, so the call goes through with params.companyId
+      // untouched, and hostScope still names the validated body company.
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor({ companyIds: [companyA, companyB] }), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ ...body, companyId: companyA, params: { companyId: companyB, mailbox: "ops" } });
+
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(pluginId, method, {
+        key,
+        params: {
+          companyId: companyB,
+          mailbox: "ops",
+          hostScope: { companyId: companyA, userId: "user-1" },
+        },
+        renderEnvironment: null,
+      });
+    },
+  );
+
+  it.each(scopedBridgeRoutes)(
+    "passes a params.companyId equal to companyId through unchanged on %s bridge calls",
+    async (_name, path, method, key, body) => {
+      // email-tools and phone-tools send the same company in both places and
+      // still read params.companyId, so it has to survive the stamp.
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor(), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ ...body, companyId: companyA, params: { companyId: companyA, page: 2 } });
+
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(pluginId, method, {
+        key,
+        params: {
+          companyId: companyA,
+          page: 2,
+          hostScope: { companyId: companyA, userId: "user-1" },
+        },
+        renderEnvironment: null,
+      });
+    },
+  );
+
+  it.each([
+    ["url data", `/api/plugins/${pluginId}/data/health`],
+    ["url action", `/api/plugins/${pluginId}/actions/sync`],
+  ] as const)("rejects a viewer-role membership on %s bridge calls", async (_name, path) => {
+    // Bridge calls are POSTs, so the write-mode membership check applies to
+    // reads as well: a viewer sees an access sentence, never a list.
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const { app } = await createApp(boardActor({
+      memberships: [{ companyId: companyA, status: "active", membershipRole: "viewer" }],
+    }), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(path)
+      .send({ companyId: companyA, params: {} });
+
+    expect(res.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["url data", `/api/plugins/${pluginId}/data/health`],
+    ["url action", `/api/plugins/${pluginId}/actions/sync`],
+  ] as const)("rejects an agent actor on %s bridge calls", async (_name, path) => {
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const { app } = await createApp(
+      { type: "agent", agentId: agentA, companyId: companyA, source: "agent_key" },
+      {},
+      { bridgeDeps: { workerManager: { call } } },
+    );
+
+    const res = await request(app)
+      .post(path)
+      .send({ companyId: companyA, params: {} });
+
+    expect(res.status).toBe(403);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("writes one activity row for a successful company-scoped action", async () => {
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const db = { tag: "db" };
+    const { app } = await createApp(boardActor(), {}, {
+      db,
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/actions/review-post-reply`)
+      .send({
+        companyId: companyA,
+        params: { idempotencyKey: "idem-1", locationKey: "loc-1", replyText: "Thanks" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledWith(db, {
+      companyId: companyA,
+      actorType: "user",
+      actorId: "user-1",
+      agentId: null,
+      runId: null,
+      action: "plugin.action.performed",
+      entityType: "plugin",
+      entityId: pluginId,
+      details: { key: "review-post-reply", idempotencyKey: "idem-1", locationKey: "loc-1" },
+    });
+  });
+
+  it("writes no activity row for a global instance-admin action", async () => {
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const { app } = await createApp(boardActor({
+      userId: "admin-1",
+      isInstanceAdmin: true,
+      companyIds: [],
+    }), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/actions/sync`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("writes no activity row when the worker rejects the action", async () => {
+    readyPlugin();
+    const call = vi.fn().mockRejectedValue(new Error("[EREPLY_EXISTS] A reply is already on Google."));
+    const { app } = await createApp(boardActor(), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/actions/review-post-reply`)
+      .send({ companyId: companyA, params: { idempotencyKey: "idem-1" } });
+
+    expect(res.status).toBe(502);
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("still answers 200 with the worker result when the audit write fails", async () => {
+    // By the time the audit row is written the worker has already made the
+    // public post, so a database hiccup here must not be answered with a 502:
+    // the person would read that as "it did not send" and post a second time.
+    readyPlugin();
+    const workerResult = { posted: true, postedAt: "2026-09-06T10:00:00.000Z" };
+    const call = vi.fn().mockResolvedValue(workerResult);
+    mockLogActivity.mockRejectedValueOnce(new Error("db down"));
+    const { app } = await createApp(boardActor(), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/actions/review-post-reply`)
+      .send({
+        companyId: companyA,
+        params: { idempotencyKey: "idem-1", locationKey: "loc-1", replyText: "Thanks" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: workerResult });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId,
+        actionKey: "review-post-reply",
+        companyId: companyA,
+      }),
+      "plugin action audit row failed",
+    );
+  });
+
+  it("does not write an activity row for a bridge data read", async () => {
+    // Reads are not audited; only actions are, so a dashboard poll does not
+    // fill the activity log.
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const { app } = await createApp(boardActor(), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/data/health`)
+      .send({ companyId: companyA, params: {} });
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
   it("rejects manual job triggers for non-admin board users", async () => {

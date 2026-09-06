@@ -684,6 +684,98 @@ export function pluginRoutes(
     return companyId;
   }
 
+  /**
+   * The scope the host checked, stamped onto every bridge call under
+   * `params.hostScope` so the worker can act on it instead of on whatever the
+   * browser put in `params`. Reserved key: a plugin may read it and never send it.
+   */
+  interface PluginBridgeHostScope {
+    /** The company assertPluginBridgeScope validated, or null for an instance-admin global call. */
+    companyId: string | null;
+    /** The authenticated board user, or null when there is none to name. */
+    userId: string | null;
+  }
+
+  /**
+   * Build the params a worker receives from the params the browser sent.
+   *
+   * The route validates `body.companyId` but used to forward `body.params`
+   * untouched, so a member of company A could send `companyId: A` and
+   * `params.companyId: B` and have the worker act on B. The worker has no way
+   * to tell which of the two the host checked, so the host says so itself:
+   * `hostScope` is overwritten, never merged, so nothing browser-supplied under
+   * that key survives.
+   *
+   * A `params.companyId` that disagrees with the validated company is an
+   * access question, not a malformed request, so it gets the same access check
+   * the body company got rather than a flat refusal. Some plugin screens are
+   * instance level and deliberately act on a company other than the one the
+   * sidebar is showing: the email-tools and help-scout rules pages send the
+   * mailbox account's own company in `params.companyId` while the runtime always
+   * sends the selected company in `body.companyId`. Refusing every mismatch
+   * broke both of those pages. Checking the claimed company keeps them working
+   * and still closes the original hole, because a member of A who claims B is
+   * answered 403. `hostScope.companyId` stays the validated body company either
+   * way, so a worker that trusts `hostScope` is unaffected.
+   */
+  function stampPluginBridgeHostScope(
+    req: Request,
+    params: Record<string, unknown>,
+    validatedCompanyId: string | undefined,
+  ): Record<string, unknown> {
+    const claimed = params.companyId;
+    if (typeof claimed === "string" && claimed.length > 0 && claimed !== validatedCompanyId) {
+      assertCompanyAccess(req, claimed);
+    }
+    const hostScope: PluginBridgeHostScope = {
+      companyId: validatedCompanyId ?? null,
+      userId: getActorInfo(req).actorId ?? null,
+    };
+    return { ...params, hostScope };
+  }
+
+  /**
+   * Record a successful company-scoped bridge action in the activity log.
+   *
+   * The host is the only party that can vouch for who clicked, so the audit
+   * row lives here rather than in the plugin. A global (instance-admin) call
+   * has no company to file it under and is skipped. A failed audit write must
+   * not turn a public post that already happened into a 502, so it is logged
+   * and swallowed.
+   */
+  async function logPluginBridgeAction(
+    req: Request,
+    pluginId: string,
+    validatedCompanyId: string | undefined,
+    key: string,
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    if (!validatedCompanyId) return;
+    const actor = getActorInfo(req);
+    try {
+      await logActivity(db, {
+        companyId: validatedCompanyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "plugin.action.performed",
+        entityType: "plugin",
+        entityId: pluginId,
+        details: {
+          key,
+          idempotencyKey: params.idempotencyKey,
+          locationKey: params.locationKey,
+        },
+      });
+    } catch (err) {
+      log.error(
+        { pluginId, actionKey: key, companyId: validatedCompanyId, err },
+        "plugin action audit row failed",
+      );
+    }
+  }
+
   async function validateToolRunContextScope(runContext: ToolRunContext): Promise<string | null> {
     const [agent] = await db
       .select({ companyId: agents.companyId })
@@ -1842,7 +1934,8 @@ export function pluginRoutes(
       return;
     }
 
-    assertPluginBridgeScope(req, body.companyId);
+    const validatedCompanyId = assertPluginBridgeScope(req, body.companyId);
+    const params = stampPluginBridgeHostScope(req, body.params ?? {}, validatedCompanyId);
 
     try {
       const result = await bridgeDeps.workerManager.call(
@@ -1850,7 +1943,7 @@ export function pluginRoutes(
         "getData",
         {
           key: body.key,
-          params: body.params ?? {},
+          params,
           renderEnvironment: body.renderEnvironment ?? null,
         },
       );
@@ -1923,7 +2016,8 @@ export function pluginRoutes(
       return;
     }
 
-    assertPluginBridgeScope(req, body.companyId);
+    const validatedCompanyId = assertPluginBridgeScope(req, body.companyId);
+    const params = stampPluginBridgeHostScope(req, body.params ?? {}, validatedCompanyId);
 
     try {
       const result = await bridgeDeps.workerManager.call(
@@ -1931,10 +2025,11 @@ export function pluginRoutes(
         "performAction",
         {
           key: body.key,
-          params: body.params ?? {},
+          params,
           renderEnvironment: body.renderEnvironment ?? null,
         },
       );
+      await logPluginBridgeAction(req, plugin.id, validatedCompanyId, body.key, params);
       res.json({ data: result });
     } catch (err) {
       const bridgeError = mapRpcErrorToBridgeError(err);
@@ -2004,7 +2099,8 @@ export function pluginRoutes(
       renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
     } | undefined;
 
-    assertPluginBridgeScope(req, body?.companyId);
+    const validatedCompanyId = assertPluginBridgeScope(req, body?.companyId);
+    const params = stampPluginBridgeHostScope(req, body?.params ?? {}, validatedCompanyId);
 
     try {
       const result = await bridgeDeps.workerManager.call(
@@ -2012,7 +2108,7 @@ export function pluginRoutes(
         "getData",
         {
           key,
-          params: body?.params ?? {},
+          params,
           renderEnvironment: body?.renderEnvironment ?? null,
         },
       );
@@ -2081,7 +2177,8 @@ export function pluginRoutes(
       renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
     } | undefined;
 
-    assertPluginBridgeScope(req, body?.companyId);
+    const validatedCompanyId = assertPluginBridgeScope(req, body?.companyId);
+    const params = stampPluginBridgeHostScope(req, body?.params ?? {}, validatedCompanyId);
 
     try {
       const result = await bridgeDeps.workerManager.call(
@@ -2089,10 +2186,11 @@ export function pluginRoutes(
         "performAction",
         {
           key,
-          params: body?.params ?? {},
+          params,
           renderEnvironment: body?.renderEnvironment ?? null,
         },
       );
+      await logPluginBridgeAction(req, plugin.id, validatedCompanyId, key, params);
       res.json({ data: result });
     } catch (err) {
       const bridgeError = mapRpcErrorToBridgeError(err);
