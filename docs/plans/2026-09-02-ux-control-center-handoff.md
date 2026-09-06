@@ -33,6 +33,57 @@ The package remains uncommitted: the local `commit-review` skill prohibits stagi
 
 Recheck all of this at takeover; this table is a dated handoff, not live system state.
 
+## 2026-09-06 update: everything else, and what turned up on the way
+
+Barry asked whether the remaining phases should all be done. Yes, with one
+honest exception: P6 is his own trial and cannot be run for him. What he has
+instead is `2026-09-06-p6-trial-checklist.md`, twenty-six steps drawn from the
+acceptance list and from every item marked "not yet confirmed live".
+
+**P7 is open.** Pull request 8 on the fork, `ux-control-center` into master,
+with the branch summarised by what an operator would notice rather than by
+commit.
+
+**P5b and P5c are being designed properly, not guessed.** A six-reader
+understanding pass over the starter catalog, the reviewed-plan primitives,
+the LLM turn machinery, the reviews plugin, the outbound hold and the plugin
+UI bridge, followed by a critic asking what was missed; then a judge panel
+weighing three independent designs per feature. The build follows the
+synthesised specs. That is deliberate: both are net-new product surfaces,
+P5c writes publicly to Google, and the plan said permission design first.
+
+**The understanding pass found more security problems, all now fixed and
+released as gbp-reviews 0.1.9 (v0.76.0):**
+
+- The reviews plugin's only per-company authorisation failed open. An empty
+  allowed-companies list skipped the check entirely, the opposite of what its
+  README promised. It now denies; "*" is the explicit way to allow everyone.
+- A review email whose business name matched no location was filed under the
+  first location regardless of how many existed, so one company's review
+  opened an issue in another. The write-side twin of the read-side leak fixed
+  in 0.1.8. It is now skipped and logged unless exactly one location exists.
+- The reply tool put a caller-supplied review name straight into the Google
+  URL with no shape check and no check that it belonged to the named location
+  or that the location belonged to the calling company. All three are checked
+  now, and the name is rebuilt from validated parts.
+- Failures were reported as successes, and the local record after a public
+  post silently failed. Both fixed.
+- The package had no test script, so the scoping tests added in 0.1.8 never
+  ran anywhere but by hand. It has one now.
+
+**And a whole missing category in the host.** The outbound approval hold
+covered messaging only. A Google review reply, five social posts, four
+Instagram posts, a YouTube upload, a YouTube comment and a KDP publish all
+went to the open internet with no hold, while an email to one person waited
+for approval. Thirteen tools now join the hold, none can be treated as
+self-addressed, a test pins each one, and the approval card now shows what a
+public post actually says instead of its bare tool name. This is the agent
+half; the human half (a confirm in the editor, because the queue would ask
+the person clicking to approve themselves) is part of P5c.
+
+Also released: v0.75.0 (email-tools 0.18.9) so the host's new From line on
+compose and reply can show the real sending address.
+
 ## 2026-09-04 update
 
 Barry read the session's output and said he had expected to see UI changes.
