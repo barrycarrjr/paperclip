@@ -3372,7 +3372,12 @@ export function issueRoutes(
             status: continuationIssue.status,
             assigneeAgentId: continuationIssue.assigneeAgentId ?? null,
             assigneeUserId: continuationIssue.assigneeUserId ?? null,
-            source: "request_confirmation_accept",
+            // Only two kinds hand the host issue over on accept: a request
+            // confirmation returning it to its agent, and a Start work plan
+            // handing the container to the company's lead.
+            source: interaction.kind === "request_confirmation"
+              ? "request_confirmation_accept"
+              : "start_work_accept",
             interactionId: interaction.id,
             _previous: {
               status: issue.status,

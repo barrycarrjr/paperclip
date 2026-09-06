@@ -18,6 +18,7 @@ import { issueRoutes } from "./routes/issues.js";
 import { issueTreeControlRoutes } from "./routes/issue-tree-control.js";
 import { routineRoutes } from "./routes/routines.js";
 import { starterCatalogRoutes } from "./routes/starter-catalog.js";
+import { startWorkRoutes } from "./routes/start-work.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { internalNotificationRoutes } from "./routes/internal-notifications.js";
 import { templateRoutes } from "./routes/templates.js";
@@ -262,6 +263,7 @@ export async function createApp(
       },
     }),
   );
+  api.use(startWorkRoutes(db));
   api.use(calendarRoutes(db));
   api.use(internalNotificationRoutes(db));
   api.use(templateRoutes(db, { pluginWorkerManager: workerManager }));

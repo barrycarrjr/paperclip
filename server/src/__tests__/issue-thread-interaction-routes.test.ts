@@ -467,6 +467,87 @@ describe.sequential("issue thread interaction routes", () => {
     );
   });
 
+  it("when the service returns continuationIssue for a suggest_tasks accept, the route wakes the container owner and logs issue.updated with source start_work_accept", async () => {
+    // A Start work container: backlog, nobody assigned, until the plan is accepted.
+    mockIssueService.getById.mockResolvedValueOnce(createIssue({
+      status: "backlog",
+      assigneeAgentId: null,
+      assigneeUserId: null,
+      identifier: "PAP-1800",
+    }));
+    mockInteractionService.acceptInteraction.mockResolvedValueOnce({
+      interaction: {
+        id: "interaction-6",
+        companyId: "company-1",
+        issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        kind: "suggest_tasks",
+        status: "accepted",
+        continuationPolicy: "wake_assignee_on_accept",
+        idempotencyKey: "start-work:33333333-3333-4333-8333-333333333333",
+        sourceCommentId: null,
+        sourceRunId: null,
+        payload: {
+          version: 1,
+          tasks: [{ clientKey: "task-1", title: "One" }],
+        },
+        result: {
+          version: 1,
+          createdTasks: [{ clientKey: "task-1", issueId: "child-1" }],
+        },
+        createdAt: "2026-04-20T12:00:00.000Z",
+        updatedAt: "2026-04-20T12:05:00.000Z",
+        resolvedAt: "2026-04-20T12:05:00.000Z",
+      },
+      createdIssues: [],
+      continuationIssue: {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        assigneeAgentId: CREATED_AGENT_ID,
+        assigneeUserId: null,
+        status: "todo",
+      },
+    });
+    const app = await createApp();
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-6/accept")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      CREATED_AGENT_ID,
+      expect.objectContaining({
+        source: "automation",
+        reason: "issue_commented",
+        payload: expect.objectContaining({
+          issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          interactionId: "interaction-6",
+          interactionKind: "suggest_tasks",
+          interactionStatus: "accepted",
+        }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.updated",
+        details: expect.objectContaining({
+          identifier: "PAP-1800",
+          source: "start_work_accept",
+          status: "todo",
+          assigneeAgentId: CREATED_AGENT_ID,
+          assigneeUserId: null,
+          interactionId: "interaction-6",
+          _previous: {
+            status: "backlog",
+            assigneeAgentId: null,
+            assigneeUserId: null,
+          },
+        }),
+      }),
+    );
+  });
+
   it("does not emit a continuation wake when request confirmations are rejected", async () => {
     mockInteractionService.rejectInteraction.mockResolvedValueOnce({
       id: "interaction-3",
