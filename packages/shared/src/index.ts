@@ -1069,6 +1069,23 @@ export {
   type TerminalEmailDelegationState,
 } from "./email-delegation-state.js";
 export {
+  START_WORK_ORIGIN_KIND,
+  MAX_START_WORK_TASKS,
+  isStartWorkOriginKind,
+  startWorkInteractionIdempotencyKey,
+} from "./start-work.js";
+export {
+  startWorkPlanRequestSchema,
+  startWorkPlannerTaskSchema,
+  startWorkPlannerOutputSchema,
+  startWorkPlanResponseSchema,
+  stripDashes,
+  type StartWorkPlanRequest,
+  type StartWorkPlannerTask,
+  type StartWorkPlannerOutput,
+  type StartWorkPlanResponse,
+} from "./validators/index.js";
+export {
   AGENT_MENTION_SCHEME,
   PROJECT_MENTION_SCHEME,
   SKILL_MENTION_SCHEME,

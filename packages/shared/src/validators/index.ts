@@ -214,6 +214,19 @@ export {
 } from "./issue.js";
 
 export {
+  startWorkPlanRequestSchema,
+  startWorkPlannerTaskSchema,
+  startWorkPlannerOutputSchema,
+  startWorkPlanResponseSchema,
+  type StartWorkPlanRequest,
+  type StartWorkPlannerTask,
+  type StartWorkPlannerOutput,
+  type StartWorkPlanResponse,
+} from "./start-work.js";
+
+export { stripDashes } from "./text.js";
+
+export {
   createIssueTreeHoldSchema,
   issueTreeControlModeSchema,
   issueTreeHoldReleasePolicySchema,
