@@ -1,0 +1,5 @@
+One shared rule for whether you can write in a company
+
+The rule that decides whether the signed-in board user can create or change work in a company used to live as a private function inside the run ledger component, where only the watchdog decision buttons could use it. It now lives in its own small file, ui/src/lib/company-access.ts, as an exported function called canWriteCompany, with exactly the same logic: a local instance with no login or an instance admin can always write, otherwise the person needs an active membership in that company with a real role that is not viewer, and when the server did not send a memberships list at all the plain company list is used instead. The run ledger imports it and behaves exactly as before. This is preparation for the Start work dialog, which will use the same rule to hide the Draft a plan, Turn this on and accept buttons from viewer-only members instead of showing buttons that would be refused. A new test file pins every branch of the rule, the existing run ledger tests still pass, and the ui typecheck is clean.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
