@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Globe2, Paperclip, Plus } from "lucide-react";
+import { Paperclip, Plus } from "lucide-react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   DndContext,
@@ -53,9 +53,6 @@ import { usePluginSlots } from "../plugins/slots";
 import { resolveCompanyShortcuts } from "../lib/company-shortcuts";
 import {
   companyPathForPortfolioPage,
-  isPortfolioRoutePath,
-  isPortfolioScopeAvailable,
-  portfolioPathForPage,
   resolveScopeChoiceDescription,
 } from "../lib/scope-kind";
 
@@ -491,65 +488,82 @@ function SortableCompanyItem({
   );
 }
 
-/**
- * Portfolio, the top item on the rail, above HQ.
+/* -----------------------------------------------------------------------
+ * Portfolio as a second rail button, above HQ — DISABLED 2026-09-08, kept
+ * here as the put-back path rather than deleted.
  *
- * Not a company, which is why it is drawn as an icon tile rather than a
- * company avatar: there is no one company behind it and giving it a monogram
- * would make it look like one. It sits above HQ because that is the pair it
- * has to be told apart from, and because the mockup puts a "PF" button there
- * for the same reason.
+ * This shipped on the premise that HQ is a real company with its own team
+ * and work, separate from "the bird's-eye view of everything else" (see
+ * docs/plans/2026-09-02-ux-control-center-scope.md, decision D05). Barry
+ * corrected that premise the same day this landed: HQ was never meant to be
+ * its own operating company, it IS the bird's-eye view. Checking the live
+ * data backed this up — HQ's two real agents (Builder, Steward) and its 345
+ * real issues are all oversight/housekeeping work ("Steward — daily sweep",
+ * "Confirm backups ran", "Reply to new Google reviews"), not a second
+ * business HQ runs on its own. So a second icon for "the bird's-eye view"
+ * duplicated the job the single HQ icon already does. HQ's own Overview page
+ * still shows that oversight backlog, and the Portfolio aggregate pages are
+ * still one click away from there as pinned workspaces (seeded by
+ * hooks/useHqDefaultPins.ts the first time HQ opens).
  *
- * It is only rendered when Portfolio is worth offering at all; see
- * isPortfolioScopeAvailable in lib/scope-kind.ts.
- */
-function PortfolioRailItem({
-  isSelected,
-  description,
-  onSelect,
-}: {
-  isSelected: boolean;
-  description: string;
-  onSelect: () => void;
-}) {
-  return (
-    <div className="overflow-visible">
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onSelect}
-            aria-label="Portfolio"
-            aria-pressed={isSelected}
-            className="relative flex items-center justify-center group overflow-visible"
-          >
-            {/* Selection indicator pill, the same one the company avatars use. */}
-            <div
-              className={cn(
-                "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
-                isSelected ? "h-5" : "h-0 group-hover:h-2",
-              )}
-            />
-            <div
-              className={cn(
-                "flex h-11 w-11 items-center justify-center rounded-[14px] border transition-colors duration-150",
-                isSelected
-                  ? "border-foreground/20 bg-accent text-accent-foreground"
-                  : "border-border text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              <Globe2 className="h-5 w-5" />
-            </div>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          <p className="font-medium">Portfolio</p>
-          <p className="text-xs text-muted-foreground">{description}</p>
-        </TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
+ * Putting this back needs, in CompanyRail.tsx:
+ * - `Globe2` re-added to the lucide-react import at the top of the file.
+ * - `isPortfolioRoutePath`, `isPortfolioScopeAvailable`, `portfolioPathForPage`
+ *   re-added to the `../lib/scope-kind` import.
+ * - `inPortfolioScope`, `showPortfolio`, and `portfolioDescription` computed
+ *   again in CompanyRail() (they read `location.pathname`/`hqCompany`/
+ *   `reorderableCompanies.length`, same as `hqDescription` still does).
+ * - The block below rendered again above `<PinnedHqItem>`, and
+ *   PinnedHqItem's `isSelected` reverted to
+ *   `hqCompany.id === highlightedCompanyId && !inPortfolioScope`.
+ *
+ * function PortfolioRailItem({
+ *   isSelected,
+ *   description,
+ *   onSelect,
+ * }: {
+ *   isSelected: boolean;
+ *   description: string;
+ *   onSelect: () => void;
+ * }) {
+ *   return (
+ *     <div className="overflow-visible">
+ *       <Tooltip delayDuration={300}>
+ *         <TooltipTrigger asChild>
+ *           <button
+ *             type="button"
+ *             onClick={onSelect}
+ *             aria-label="Portfolio"
+ *             aria-pressed={isSelected}
+ *             className="relative flex items-center justify-center group overflow-visible"
+ *           >
+ *             <div
+ *               className={cn(
+ *                 "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+ *                 isSelected ? "h-5" : "h-0 group-hover:h-2",
+ *               )}
+ *             />
+ *             <div
+ *               className={cn(
+ *                 "flex h-11 w-11 items-center justify-center rounded-[14px] border transition-colors duration-150",
+ *                 isSelected
+ *                   ? "border-foreground/20 bg-accent text-accent-foreground"
+ *                   : "border-border text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+ *               )}
+ *             >
+ *               <Globe2 className="h-5 w-5" />
+ *             </div>
+ *           </button>
+ *         </TooltipTrigger>
+ *         <TooltipContent side="right" sideOffset={8}>
+ *           <p className="font-medium">Portfolio</p>
+ *           <p className="text-xs text-muted-foreground">{description}</p>
+ *         </TooltipContent>
+ *       </Tooltip>
+ *     </div>
+ *   );
+ * }
+ * ----------------------------------------------------------------------- */
 
 /**
  * HQ pinned at the top — always rendered first, never draggable, always
@@ -639,8 +653,9 @@ function PinnedHqItem({
           <TooltipContent side="right" sideOffset={8}>
             <p className="font-medium">{company.name}</p>
             {/* Was "Portfolio root", which read as "this button is the
-                portfolio". It is not, and there is now a separate Portfolio
-                button above it, so this says what HQ actually opens. */}
+                portfolio". It is the one entry point for both HQ's own
+                oversight work and the portfolio aggregate view, so this says
+                what it actually opens. */}
             <p className="text-xs text-muted-foreground">{description}</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
@@ -692,22 +707,6 @@ export function CompanyRail() {
   const reorderableCompanies = useMemo(
     () => sidebarCompanies.filter((c) => !c.isPortfolioRoot),
     [sidebarCompanies],
-  );
-  // Portfolio is a page you are on, not a company you have selected, so it is
-  // read from the address the same way the top bar's scope label reads it.
-  const inPortfolioScope = isPortfolioRoutePath(location.pathname);
-  const showPortfolio = isPortfolioScopeAvailable({
-    hasPortfolioRoot: !!hqCompany,
-    portfolioCompanyCount: reorderableCompanies.length,
-  });
-  const portfolioDescription = useMemo(
-    () =>
-      resolveScopeChoiceDescription({
-        scopeKind: "portfolio",
-        companyName: null,
-        portfolioCompanyCount: reorderableCompanies.length,
-      }),
-    [reorderableCompanies.length],
   );
   const hqDescription = useMemo(
     () =>
@@ -798,27 +797,14 @@ export function CompanyRail() {
       <div className="flex-1 flex flex-col items-center gap-2 py-3 w-full overflow-y-auto overflow-x-hidden scrollbar-none">
         {hqCompany && (
           <>
-            {showPortfolio && (
-              <PortfolioRailItem
-                isSelected={inPortfolioScope}
-                description={portfolioDescription}
-                onSelect={() => {
-                  // "shortcut" because this both picks a company and names
-                  // the page to open, so the remembered page must not
-                  // overwrite it (see lib/company-selection.ts). HQ is
-                  // selected because the portfolio pages are mounted under
-                  // HQ's own address prefix.
-                  setSelectedCompanyId(hqCompany.id, { source: "shortcut" });
-                  navigate(`/${hqCompany.issuePrefix}${portfolioPathForPage(location.pathname)}`);
-                }}
-              />
-            )}
             <PinnedHqItem
               company={hqCompany}
-              // Not lit while a portfolio page is open. HQ is the selected
-              // company there only because of the shared address prefix, and
-              // lighting both buttons would say you are in two places.
-              isSelected={hqCompany.id === highlightedCompanyId && !inPortfolioScope}
+              // HQ is the one entry point for both its own oversight work and
+              // the Portfolio aggregate pages (see the disabled
+              // PortfolioRailItem block above), so it lights up on a
+              // portfolio page too — there is no second button left to
+              // confuse it with.
+              isSelected={hqCompany.id === highlightedCompanyId}
               hasLiveAgents={hasLiveAgentsByCompanyId.get(hqCompany.id) ?? false}
               inboxCount={inboxCountByCompanyId.get(hqCompany.id) ?? 0}
               portfolioCompanyCount={reorderableCompanies.length}

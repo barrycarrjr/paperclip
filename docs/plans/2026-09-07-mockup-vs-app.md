@@ -104,6 +104,14 @@ it is already specified in `docs/plans/2026-09-03-p5a-email-delegation-spec.md`.
 
 ### 6. Portfolio is something you can pick in the mockup. Size: medium.
 
+**Superseded 2026-09-08, see `2026-09-02-ux-control-center-scope.md` D13.** The mockup description
+below and the app change it drove both rested on the premise D05 stated: that HQ is its own team
+separate from the portfolio aggregate. Barry corrected that: HQ is not an operating company, it is
+the bird's-eye view, so a second "PF" button duplicating the HQ icon was the wrong move, not a gap
+to close. The rail button this section describes was built, then reverted the same day (kept as a
+commented-out block in `CompanyRail.tsx`). Left below as the historical record of what the mockup
+showed and why it was implemented, not as current direction.
+
 Mockup: the rail has a "PF" button above HQ, and the scope picker lists "Portfolio, all accessible
 companies" first, with HQ separate below it and described as "HQ's own team, not the portfolio
 aggregate". Picking Portfolio keeps you on the page you were on.

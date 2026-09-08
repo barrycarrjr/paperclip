@@ -7,9 +7,19 @@ import {
   CalendarClock,
   Sunrise,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { Company } from "@paperclipai/shared";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -23,12 +33,36 @@ import { useHqDefaultPins } from "../hooks/useHqDefaultPins";
 import { usePinnedWorkspaces } from "../hooks/usePinnedWorkspaces";
 import { useRememberedCompanyPage } from "../hooks/useRememberedCompanyPage";
 import { usePluginSlots } from "../plugins/slots";
-import { resolvePinnedWorkspaceItems } from "../lib/workspace-catalog";
+import { resolvePinnedWorkspaceItems, type PinnedWorkspaceItem } from "../lib/workspace-catalog";
 import { isTeamPath } from "../lib/team-tabs";
 import { isWorkPath } from "../lib/work-tabs";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarPeekProvider } from "../context/SidebarPeekContext";
+
+/**
+ * One pinned row in "Your workspaces", draggable to reorder.
+ *
+ * Mouse-only, same reasoning as CompanyRail's company reordering: an
+ * `activationConstraint` distance so a plain click still lands as a click,
+ * and touch is left alone so it can scroll/tap instead of triggering a drag.
+ */
+function SortablePinnedItem({ item }: { item: PinnedWorkspaceItem }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.6 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <SidebarNavItem to={item.to} label={item.label} icon={item.icon} info={item.info} />
+    </div>
+  );
+}
 
 /**
  * The main menu.
@@ -103,7 +137,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   // about a company), so the same pin can be shown here and hidden in a
   // company whose plugin is not installed — hiding it is right, dropping the
   // pin would not be.
-  const { pinned } = usePinnedWorkspaces();
+  const { pinned, reorder } = usePinnedWorkspaces();
   const { slots: pinnablePluginSlots } = usePluginSlots({
     slotTypes: ["page"],
     companyId: company.id,
@@ -127,6 +161,21 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
       experimentalSettings?.enableIsolatedWorkspaces,
       pinnablePluginSlots,
     ],
+  );
+  // Mouse-only for the same reason CompanyRail's drag reordering is: touch
+  // has to keep meaning scroll/tap, not drag.
+  const pinSensors = useSensors(useSensor(MouseSensor, { activationConstraint: { distance: 8 } }));
+  const handlePinDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      reorder(
+        String(active.id),
+        String(over.id),
+        pinnedItems.map((item) => item.id),
+      );
+    },
+    [reorder, pinnedItems],
   );
 
   const pluginContext = {
@@ -185,16 +234,37 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
             Renders nothing at all when nothing is pinned, so in an ordinary
             company this section is just Email and Calendar for anyone who has
             not used it. In HQ it is the whole section. Pin from the Everything
-            page. */}
-        {pinnedItems.map((item) => (
-          <SidebarNavItem
-            key={item.id}
-            to={item.to}
-            label={item.label}
-            icon={item.icon}
-            info={item.info}
-          />
-        ))}
+            page, drag to reorder.
+
+            Not draggable in peek mode: that flyout is a preview of a company
+            you have not switched to, not a place to be rearranging your own
+            pin list. */}
+        {peekMode || pinnedItems.length === 0 ? (
+          pinnedItems.map((item) => (
+            <SidebarNavItem
+              key={item.id}
+              to={item.to}
+              label={item.label}
+              icon={item.icon}
+              info={item.info}
+            />
+          ))
+        ) : (
+          <DndContext
+            sensors={pinSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handlePinDragEnd}
+          >
+            <SortableContext
+              items={pinnedItems.map((item) => item.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {pinnedItems.map((item) => (
+                <SortablePinnedItem key={item.id} item={item} />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
       </SidebarSection>
 
       <SidebarSection

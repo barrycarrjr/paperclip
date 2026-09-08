@@ -4,7 +4,10 @@ Created: 2026-09-02. [Project entry point](2026-09-02-ux-control-center.md).
 
 ## Requirements established by Barry
 
-- Multiple companies each have their own agent team. HQ also has a portfolio role and its own company work.
+- Multiple companies each have their own agent team. HQ is not one of those operating companies: it is the
+  bird's-eye view/oversight seat used to manage the others, not a business running its own separate work
+  (corrected 2026-09-08 — see D13; this line originally said HQ "also has a portfolio role and its own
+  company work", which overstated it).
 - The existing fork, not upstream screenshots, is the starting product.
 - Email is the number-one daily workflow. Calendar and human-operated plugin tools are also first-class requirements.
 - Humans must remain able to perform work directly, get AI assistance, or hand it to an agent.
@@ -105,7 +108,7 @@ Proposed additions remain in the roadmap but are not automatically authorized mi
 | D02 | Project authority in `docs/plans/` | User direction; no private-agent-only dependency |
 | D03 | Existing functionality is the preservation baseline | User direction; mockup omissions do not authorize removal |
 | D04 | Email stays primary | User direction; exact default-landing preference can be refined locally |
-| D05 | Portfolio and HQ team are visibly distinct | Proposed implementation direction addressing observed ambiguity |
+| D05 | Portfolio and HQ team are visibly distinct | **Superseded 2026-09-08 by D13** — was proposed implementation direction addressing observed ambiguity |
 | D06 | Preserve workspace on company change | Proposed; verify shortcut, detail, draft, and unavailable-state rules in P1 |
 | D07 | Local working checkout, not a separate live clone | Agreed local workflow; process/database binding still needs verification |
 | D08 | No push/PR until Barry approves | User-controlled publication gate |
@@ -113,6 +116,17 @@ Proposed additions remain in the roadmap but are not automatically authorized mi
 | D10 | Runtime rollback strategy chosen before shell replacement | Resolved 2026-09-02 (agent-proposed default, not yet Barry-reviewed — see rationale below) |
 | D11 | Extension repository changes | Open only if needed; coordinate its own branch/deployment path before edits |
 | D12 | Server-side restart safety gate | Agreed working rule 2026-09-02 (agent-adopted from P0 findings, not a product decision) |
+| D13 | HQ is not a real operating company; it is the bird's-eye view/oversight seat, same job as Portfolio | Barry correction, 2026-09-08 (supersedes D05) |
+
+D13 rationale: D05 had it backwards. Checked against the live data 2026-09-08: HQ's only real content is its
+two agents (Builder, Steward) and their 345 issues, and every one of those issues is oversight/housekeeping
+("Steward — daily sweep", "Confirm backups ran", "Reply to new Google reviews"), not an operating business
+HQ runs on its own. So HQ and Portfolio are the same job, not two things that need telling apart. The rail's
+separate Portfolio button (globe icon, added under D05) was reverted the same day: it duplicated the single
+HQ icon, which already opens that oversight work and already pins the Portfolio aggregate pages by default
+(hooks/useHqDefaultPins.ts). The disabled button is kept as a commented-out block in CompanyRail.tsx, not
+deleted, in case a later Barry decision wants a differently-named separate button back. No data moved: HQ's
+agents and issues stay exactly where they are: only the rail's second icon was removed.
 
 D10 rationale: the new shell (P1) will wrap the *same* pages, routes, company context, and data hooks the current `Layout`/`Sidebar`/`CompanyRail` use — it must not fork business logic or duplicate the data layer (that would violate the "single domain implementation" preference and create drift risk). The chosen mechanism is a navigation-chrome-only runtime toggle: keep the existing shell components importable and working, add the new shell as a sibling, and gate which one renders behind a simple flag (instance setting or equivalent already-established settings surface, defaulting to a stored preference so Barry can flip back instantly without a git revert or restart). Both shells read the same pages/hooks/contexts underneath. This is an implementation-detail default chosen to keep P1 reversible cheaply; it is not a product/UX decision and does not need sign-off to start, but Barry should be told the toggle exists and where, the first time he sees the new shell.
 

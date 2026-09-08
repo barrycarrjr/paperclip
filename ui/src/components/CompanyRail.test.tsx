@@ -184,10 +184,6 @@ describe("CompanyRail", () => {
     await flushReact();
   }
 
-  function portfolioButton(): HTMLButtonElement | null {
-    return container.querySelector<HTMLButtonElement>('button[aria-label="Portfolio"]');
-  }
-
   /** The company avatars are links; HQ's is the one pointing at HQ. */
   function hqAvatar(): HTMLAnchorElement | null {
     return container.querySelector<HTMLAnchorElement>('a[href="/HQ/dashboard"]');
@@ -199,39 +195,69 @@ describe("CompanyRail", () => {
     });
   }
 
-  it("puts a Portfolio button on the rail above HQ", async () => {
-    await render();
-    const portfolio = portfolioButton();
-    expect(portfolio, "expected a Portfolio button on the rail").not.toBeNull();
-    expect(hqAvatar(), "expected HQ on the rail").not.toBeNull();
-    // Node.DOCUMENT_POSITION_FOLLOWING: HQ comes after Portfolio.
-    expect(portfolio!.compareDocumentPosition(hqAvatar()!) & 4).toBe(4);
-  });
+  /* -------------------------------------------------------------------
+   * DISABLED 2026-09-08, kept as the put-back path (see the matching
+   * disabled PortfolioRailItem block in CompanyRail.tsx for why): these
+   * covered the separate Portfolio rail button, which no longer renders.
+   * Restoring that button needs these back too, with `portfolioButton()`
+   * restored alongside `hqAvatar()` above.
+   *
+   * function portfolioButton(): HTMLButtonElement | null {
+   *   return container.querySelector<HTMLButtonElement>('button[aria-label="Portfolio"]');
+   * }
+   *
+   * it("puts a Portfolio button on the rail above HQ", async () => {
+   *   await render();
+   *   const portfolio = portfolioButton();
+   *   expect(portfolio, "expected a Portfolio button on the rail").not.toBeNull();
+   *   expect(hqAvatar(), "expected HQ on the rail").not.toBeNull();
+   *   // Node.DOCUMENT_POSITION_FOLLOWING: HQ comes after Portfolio.
+   *   expect(portfolio!.compareDocumentPosition(hqAvatar()!) & 4).toBe(4);
+   * });
+   *
+   * it("opens the all company version of the page you were on", async () => {
+   *   railState.pathname = "/ACM/costs";
+   *   await render();
+   *   click(portfolioButton()!);
+   *   expect(selectCompanySpy).toHaveBeenCalledWith(HQ.id, { source: "shortcut" });
+   *   expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-costs");
+   * });
+   *
+   * it("falls back to the Portfolio Overview from a page with no all company version", async () => {
+   *   railState.pathname = "/ACM/memories";
+   *   await render();
+   *   click(portfolioButton()!);
+   *   expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-brief");
+   * });
+   *
+   * it("hides the Portfolio button from somebody who can only reach one company", async () => {
+   *   railState.companies = [HQ];
+   *   railState.selectedCompanyId = HQ.id;
+   *   railState.pathname = "/HQ/brief";
+   *   await render();
+   *   expect(portfolioButton()).toBeNull();
+   *   // HQ itself is still there; only the Portfolio button is withheld.
+   *   expect(hqAvatar()).not.toBeNull();
+   * });
+   *
+   * it("hides the Portfolio button when there is no HQ to hang it under", async () => {
+   *   railState.companies = [ACME];
+   *   railState.selectedCompanyId = ACME.id;
+   *   await render();
+   *   expect(portfolioButton()).toBeNull();
+   * });
+   * ------------------------------------------------------------------- */
 
-  it("opens the all company version of the page you were on", async () => {
-    railState.pathname = "/ACM/costs";
-    await render();
-    click(portfolioButton()!);
-    expect(selectCompanySpy).toHaveBeenCalledWith(HQ.id, { source: "shortcut" });
-    expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-costs");
-  });
-
-  it("falls back to the Portfolio Overview from a page with no all company version", async () => {
-    railState.pathname = "/ACM/memories";
-    await render();
-    click(portfolioButton()!);
-    expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-brief");
-  });
-
-  it("shows Portfolio as the one you are in, and does not also light HQ", async () => {
-    // The two share an address prefix, so HQ is the selected company while a
-    // portfolio page is open. Lighting both would say you are in two places.
+  it("lights up HQ while a portfolio page is open, since it is the one way in", async () => {
+    // HQ is the selected company because portfolio pages are mounted under
+    // its own address prefix. There is no second button to confuse it with
+    // any more, so it should read as selected here rather than being
+    // suppressed.
     railState.pathname = "/HQ/portfolio-costs";
     railState.selectedCompanyId = HQ.id;
     await render();
-    expect(portfolioButton()!.getAttribute("aria-pressed")).toBe("true");
     const hqPill = container.querySelector('a[href="/HQ/dashboard"] div');
-    expect(hqPill?.className).toContain("h-0");
+    expect(hqPill?.className).toContain("h-5");
   });
 
   it("comes back to HQ's own version of the page when you click HQ from a portfolio page", async () => {
@@ -240,23 +266,6 @@ describe("CompanyRail", () => {
     await render();
     click(container.querySelector('a[href="/HQ/dashboard"]')!);
     expect(navigateSpy).toHaveBeenCalledWith("/HQ/costs");
-  });
-
-  it("hides the Portfolio button from somebody who can only reach one company", async () => {
-    railState.companies = [HQ];
-    railState.selectedCompanyId = HQ.id;
-    railState.pathname = "/HQ/brief";
-    await render();
-    expect(portfolioButton()).toBeNull();
-    // HQ itself is still there; only the Portfolio button is withheld.
-    expect(hqAvatar()).not.toBeNull();
-  });
-
-  it("hides the Portfolio button when there is no HQ to hang it under", async () => {
-    railState.companies = [ACME];
-    railState.selectedCompanyId = ACME.id;
-    await render();
-    expect(portfolioButton()).toBeNull();
   });
 
   describe("the shortcut panel beside a company logo", () => {
