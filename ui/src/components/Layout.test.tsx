@@ -5,7 +5,10 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
-import { ABOVE_MOBILE_BOTTOM_NAV_CLASS } from "../lib/narrow-layout";
+import {
+  ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+  PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
+} from "../lib/narrow-layout";
 
 const mockHealthApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -706,6 +709,49 @@ describe("Layout", () => {
       expect(launcher!.classList.contains(part)).toBe(true);
     }
     expect(launcher!.classList.contains("bottom-4")).toBe(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("stops a page that is too wide taking the whole phone shell sideways", async () => {
+    // The Phone Wallboard plugin page asks for panels of at least 360 pixels,
+    // which is more than a 375 pixel phone has, and the whole app including
+    // the top bar could then be dragged off the side of the screen. Where the
+    // page area stops is the app's business, not the plugin's.
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root } = await renderLayout();
+
+    const pageArea = container.querySelector("#main-content");
+    expect(pageArea).not.toBeNull();
+    for (const part of PAGE_AREA_CLIPS_SIDEWAYS_CLASS.split(" ")) {
+      expect(pageArea!.classList.contains(part)).toBe(true);
+    }
+    // jsdom has no layout engine, so this checks the rule is applied to the
+    // right element. What it looks like was measured in a real browser at 375
+    // wide: the document went from 392 pixels against a 367 pixel page, which
+    // could be dragged 25 pixels sideways, to 367 pixels and nothing to drag.
+    expect(pageArea!.classList.contains("overflow-visible")).toBe(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("lets a desktop page area scroll itself rather than clipping it", async () => {
+    // The two halves of the same rule: on a desktop the page area is already a
+    // scrolling box, so a page that is too wide gets its own scrollbar and the
+    // shell around it still does not move. Clipping there would hide content a
+    // desktop user can reach today.
+    sidebarState.isMobile = false;
+    const { root } = await renderLayout();
+
+    const pageArea = container.querySelector("#main-content");
+    expect(pageArea).not.toBeNull();
+    expect(pageArea!.classList.contains("overflow-auto")).toBe(true);
+    expect(pageArea!.classList.contains("overflow-x-clip")).toBe(false);
 
     await act(async () => {
       root.unmount();

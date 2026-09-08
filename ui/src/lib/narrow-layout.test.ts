@@ -4,6 +4,7 @@ import {
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
   OWN_LINE_ACTIONS_CLASS,
+  PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
   SCROLL_AREA_FITS_COLUMN_CLASS,
   WRAPPING_ROW_CLASS,
@@ -122,5 +123,30 @@ describe("how tall a message body is on a phone", () => {
   // height the page would have if it never did.
   it("is measured against the part of the screen the page actually has", () => {
     expect(PHONE_MESSAGE_BODY_HEIGHT_CLASS).toContain("dvh");
+  });
+});
+
+describe("stopping one page making the whole app slide sideways", () => {
+  // A plugin page with panels wider than a phone made the document 392 pixels
+  // wide against a 367 pixel page, so the top bar, the menu button and the
+  // bottom bar could all be dragged off the side of the screen with it.
+  it("cuts off anything wider than the page area", () => {
+    expect(PAGE_AREA_CLIPS_SIDEWAYS_CLASS.split(" ")).toContain("overflow-x-clip");
+  });
+
+  // CSS turns the other axis into `auto` the moment one axis is `hidden` or
+  // `auto`, which would make the page area a scrolling box of its own. On a
+  // phone the document is what scrolls, and anything inside set to stick to
+  // the top of the screen would stop doing it. Measured in a real browser at
+  // 375 wide: pinned under `clip`, 436 pixels off the top under either of the
+  // other two.
+  it("never uses hidden, auto or scroll, which would take the vertical axis with them", () => {
+    for (const part of PAGE_AREA_CLIPS_SIDEWAYS_CLASS.split(" ")) {
+      expect(part).not.toMatch(/^overflow(-[xy])?-(hidden|auto|scroll)$/);
+    }
+  });
+
+  it("says the up and down axis stays visible rather than leaving it to be worked out", () => {
+    expect(PAGE_AREA_CLIPS_SIDEWAYS_CLASS.split(" ")).toContain("overflow-y-visible");
   });
 });

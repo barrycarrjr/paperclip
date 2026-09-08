@@ -42,6 +42,7 @@ import {
   resetNavigationScroll,
   shouldResetScrollOnNavigation,
 } from "../lib/navigation-scroll";
+import { PAGE_AREA_CLIPS_SIDEWAYS_CLASS } from "../lib/narrow-layout";
 import { queryKeys } from "../lib/queryKeys";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
@@ -490,13 +491,21 @@ export function Layout() {
             <BreadcrumbBar />
           </div>
           <div className={cn(isMobile ? "block" : "flex flex-1 min-h-0")}>
+            {/* The page area is where a page that is too wide stops. On a
+                phone it clips sideways (see PAGE_AREA_CLIPS_SIDEWAYS_CLASS),
+                and on a desktop it scrolls itself, so either way the top bar,
+                the menu and the bottom bar around it stay where they are. A
+                plugin page can be as wide as it likes and only its own square
+                of the screen is affected. */}
             <main
               id="main-content"
               ref={mainContentRef}
               tabIndex={-1}
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
-                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
+                isMobile
+                  ? `${PAGE_AREA_CLIPS_SIDEWAYS_CLASS} pb-[calc(5rem+env(safe-area-inset-bottom))]`
+                  : "overflow-auto",
               )}
             >
               {hasUnknownCompanyPrefix ? (

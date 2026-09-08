@@ -30,6 +30,37 @@ export const ABOVE_MOBILE_BOTTOM_NAV_CLASS =
   "bottom-[calc(5rem+env(safe-area-inset-bottom))] md:bottom-4";
 
 /**
+ * Stops one page making the whole app slide sideways on a phone.
+ *
+ * On a phone the app lets the document scroll, so the page area is an ordinary
+ * block and anything inside it that is too wide makes the document itself too
+ * wide. The whole shell then slides, top bar and all, and the menu button and
+ * the bottom bar go with it. The page does not have to be one of ours: the
+ * Phone Wallboard page in the 3cx-tools plugin asks for panels of at least 360
+ * pixels, and the narrow-width audit on 2026-09-08 measured the document at
+ * 392 pixels against a 367 pixel page there. Plugins are released on their own
+ * timetable, so the shell has to hold its shape whatever a plugin does.
+ *
+ * `clip`, and the up-and-down axis named separately, rather than `hidden` or
+ * `auto`: CSS turns the other axis into `auto` the moment one axis is `hidden`
+ * or `auto`, which would make the page area its own scrolling box. On a phone
+ * the document is what scrolls, so that quietly changes the page. Measured in
+ * the running app at 375 wide, a heading set to `position: sticky` stayed
+ * pinned to the top of the screen under `clip` and scrolled 436 pixels off the
+ * top under `hidden` and under `auto` alike. `clip` leaves the page area an
+ * ordinary block that simply does not paint past its own edge.
+ *
+ * A page that scrolls sideways on purpose is untouched, because it carries its
+ * own scrolling box inside the page area. The issue board still scrolled its
+ * 1900 pixels of columns inside a 351 pixel strip with this in place.
+ *
+ * Desktop is not part of this rule: there the page area is already
+ * `overflow-auto`, so a page that is too wide gets a scrollbar of its own and
+ * the shell around it never moves.
+ */
+export const PAGE_AREA_CLIPS_SIDEWAYS_CLASS = "overflow-x-clip overflow-y-visible";
+
+/**
  * A row whose contents are allowed to move onto a second line. Pair it with
  * {@link OWN_LINE_ACTIONS_CLASS} on the part that should move.
  */
