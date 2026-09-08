@@ -34,13 +34,14 @@ const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 let currentPathname = "/PAP/dashboard";
+let currentCompanyPrefix = "PAP";
 
 vi.mock("@/lib/router", () => ({
-  Outlet: () => <div>Outlet content</div>,
+  Outlet: () => <div data-testid="outlet-content">Outlet content</div>,
   useLocation: () => ({ pathname: currentPathname, search: "", hash: "", state: null }),
   useNavigate: () => mockNavigate,
   useNavigationType: () => "PUSH",
-  useParams: () => ({ companyPrefix: "PAP" }),
+  useParams: () => ({ companyPrefix: currentCompanyPrefix }),
 }));
 
 vi.mock("./CompanyRail", () => ({
@@ -126,7 +127,10 @@ vi.mock("../context/PanelContext", () => ({
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
-    companies: [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }],
+    companies: [
+      { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
+      { id: "company-2", issuePrefix: "ACME", name: "Acme" },
+    ],
     loading: false,
     selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
     selectedCompanyId: "company-1",
@@ -196,6 +200,7 @@ describe("Layout", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     currentPathname = "/PAP/dashboard";
+    currentCompanyPrefix = "PAP";
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -303,6 +308,84 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Company settings sidebar");
     expect(container.textContent).not.toContain("Instance sidebar");
     expect(container.textContent).not.toContain("Main company nav");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  /**
+   * Switching company keeps you on the same page now (lib/company-switch.ts),
+   * so /PAP/routines becomes /ACME/routines: the same route with a different
+   * value in it. React would keep the page mounted through that, and every
+   * draft, open dialog and typed filter in it would carry the old company's
+   * records into the new one. The page is keyed by the company in the address
+   * to stop that, and these two check both halves of it.
+   */
+  it("starts the page again when the company in the address changes", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    const before = container.querySelector('[data-testid="outlet-content"]');
+    expect(before).not.toBeNull();
+
+    currentCompanyPrefix = "ACME";
+    currentPathname = "/ACME/dashboard";
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const after = container.querySelector('[data-testid="outlet-content"]');
+    expect(after).not.toBeNull();
+    expect(after).not.toBe(before);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the page as it is when the address moves inside one company", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    const before = container.querySelector('[data-testid="outlet-content"]');
+
+    currentPathname = "/PAP/issues";
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="outlet-content"]')).toBe(before);
 
     await act(async () => {
       root.unmount();

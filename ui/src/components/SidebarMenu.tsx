@@ -21,6 +21,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { useHqDefaultPins } from "../hooks/useHqDefaultPins";
 import { usePinnedWorkspaces } from "../hooks/usePinnedWorkspaces";
+import { useRememberedCompanyPage } from "../hooks/useRememberedCompanyPage";
 import { usePluginSlots } from "../plugins/slots";
 import { resolvePinnedWorkspaceItems } from "../lib/workspace-catalog";
 import { isTeamPath } from "../lib/team-tabs";
@@ -133,8 +134,30 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
     companyPrefix: company.issuePrefix ?? null,
   };
 
+  // Where you left off in THIS company, offered only in the hover menu, which
+  // is the one place you are looking at a company you are not in. Switching
+  // company now keeps you on the page you are reading, so the remembered page
+  // is no longer replayed at you; the scope document allows it to stay only
+  // as "an explicit alternative, not a competing implicit redirect", and this
+  // row is that choice. It goes through SidebarNavItem like every other item
+  // here, so it switches company with the "shortcut" source and its
+  // destination cannot be overridden.
+  const rememberedPage = useRememberedCompanyPage(peekMode ? company : null, location.pathname);
+
   const body = (
     <>
+      {peekMode && rememberedPage && (
+        <SidebarSection
+          label="Where you left off"
+          info="The last page you had open in this company. Clicking the company logo itself keeps you on the page you are reading instead."
+        >
+          <SidebarNavItem
+            to={rememberedPage.to}
+            label={rememberedPage.pageLabel ?? "The page you had open"}
+            icon={rememberedPage.icon}
+          />
+        </SidebarSection>
+      )}
       <SidebarSection
         label="Your workspaces"
         info="The places you use every day. Pin anything else from the Everything page and it shows up here too."

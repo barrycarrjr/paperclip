@@ -68,6 +68,7 @@ import {
 } from "../lib/attachments";
 import { makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
 import { MailSearchBar } from "../components/MailSearchBar";
+import { WorkspaceUnavailable } from "../components/WorkspaceUnavailable";
 import {
   parseMailboxRefId,
   type HelpScoutMailboxRef,
@@ -1429,16 +1430,20 @@ export function Email() {
   const helpScoutAvailableHere = enrichedHelpScoutMailboxes.length > 0;
 
   if (!imapAvailableHere && !helpScoutAvailableHere) {
+    // A mailbox belongs to particular companies, so this is the page most
+    // often reached in a company that cannot open it: changing company now
+    // keeps you on the page you were reading, and Email is one of the two
+    // lines every company shows. Said with the same component every other
+    // unavailable workspace uses, so the answer looks the same wherever you
+    // meet it.
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="text-center space-y-2">
-          <Mail className="mx-auto h-8 w-8 text-muted-foreground" />
-          <p className="text-sm font-medium">Email not configured</p>
-          <p className="text-xs text-muted-foreground max-w-xs">
-            Install the email-tools or help-scout plugin and add a mailbox with this company in
-            its Allowed Companies list.
-          </p>
-        </div>
+        <WorkspaceUnavailable
+          title="Email"
+          icon={Mail}
+          reason="No mailbox in this company has been set up yet."
+          whatToDo="Install the email-tools or help-scout plugin and add a mailbox with this company in its Allowed Companies list."
+        />
       </div>
     );
   }

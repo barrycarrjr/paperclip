@@ -446,7 +446,27 @@ export function Layout() {
                   requestedPrefix={companyPrefix ?? selectedCompany?.issuePrefix}
                 />
               ) : (
-                <Outlet />
+                // Keyed by the company in the address, so changing company
+                // starts the page again from nothing.
+                //
+                // This became necessary the moment switching company started
+                // keeping you on the same page (lib/company-switch.ts).
+                // /HQ/routines and /ACME/routines are the same route with a
+                // different value in it, so React would otherwise keep the
+                // page mounted and every draft, open dialog, typed filter and
+                // selected row in it would carry HQ's records into Acme. The
+                // scope document requires the opposite: "Clear selected
+                // records ... and prevent in-flight old-scope results from
+                // populating the new scope."
+                //
+                // One rule here rather than a reset effect in each page: the
+                // pages that had one (Email, Inbox, Memories, Calendar) were
+                // the ones somebody had already been bitten by, and the ones
+                // without were found by reading, not by anybody noticing.
+                // The existing per-page effects are left alone; they are
+                // harmless now and they still cover a company change that
+                // happens without the address moving.
+                <Outlet key={companyPrefix ? companyPrefix.toUpperCase() : "no-company"} />
               )}
             </main>
             <PropertiesPanel />

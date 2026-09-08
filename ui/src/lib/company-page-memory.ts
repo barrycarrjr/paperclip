@@ -6,6 +6,43 @@ import {
 
 const GLOBAL_SEGMENTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs"]);
 
+const STORAGE_KEY = "paperclip.companyPaths";
+
+/**
+ * The last page each company had open, by company id.
+ *
+ * Kept here rather than inside useCompanyPageMemory.ts because two different
+ * things read it now. The hook still writes it on every navigation, but since
+ * switching company keeps you on the page you were reading
+ * (lib/company-switch.ts), nothing replays it automatically any more. It is
+ * read by hooks/useRememberedCompanyPage.ts, which is what turns it into the
+ * explicit "where you left off" choice the scope document allows.
+ */
+export function readRememberedCompanyPaths(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
+export function readRememberedCompanyPath(companyId: string | null | undefined): string | null {
+  if (!companyId) return null;
+  return readRememberedCompanyPaths()[companyId] ?? null;
+}
+
+export function writeRememberedCompanyPath(companyId: string, path: string): void {
+  const paths = readRememberedCompanyPaths();
+  paths[companyId] = path;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function isRememberableCompanyPath(path: string): boolean {
   const pathname = path.split("?")[0] ?? "";
   const segments = pathname.split("/").filter(Boolean);

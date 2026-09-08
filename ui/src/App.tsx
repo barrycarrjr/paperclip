@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
+import { PortfolioScopeRoute } from "./components/PortfolioScopeRoute";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -164,18 +165,26 @@ export function boardRoutes() {
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
-      <Route path="portfolio-issues" element={<PortfolioIssues />} />
-      <Route path="portfolio-directives" element={<PortfolioDirectives />} />
-      <Route path="portfolio-agents" element={<PortfolioAgents />} />
-      <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
-      <Route path="portfolio-activity" element={<PortfolioActivity />} />
-      <Route path="portfolio-routines" element={<PortfolioRoutines />} />
-      <Route path="portfolio-calendar" element={<PortfolioCalendar />} />
-      <Route path="portfolio-costs" element={<PortfolioCosts />} />
+      {/* The all company pages. They are mounted under HQ's own address
+          prefix, so any company's prefix matches them; the shell around them
+          says so plainly when the company in the address is not HQ, instead
+          of drawing an empty page. See PortfolioScopeRoute.tsx. */}
+      <Route element={<PortfolioScopeRoute />}>
+        <Route path="portfolio-issues" element={<PortfolioIssues />} />
+        <Route path="portfolio-directives" element={<PortfolioDirectives />} />
+        <Route path="portfolio-agents" element={<PortfolioAgents />} />
+        <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
+        <Route path="portfolio-activity" element={<PortfolioActivity />} />
+        <Route path="portfolio-routines" element={<PortfolioRoutines />} />
+        <Route path="portfolio-calendar" element={<PortfolioCalendar />} />
+        <Route path="portfolio-costs" element={<PortfolioCosts />} />
+        <Route path="portfolio-brief" element={<PortfolioBrief />} />
+        <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
+        <Route path="portfolio-email" element={<PortfolioEmail />} />
+      </Route>
+      {/* Outside the shell on purpose: it is a redirect, not a page, and it
+          has to work from anywhere so an old saved link still lands. */}
       <Route path="portfolio-dashboard" element={<Navigate to="/portfolio-brief" replace />} />
-      <Route path="portfolio-brief" element={<PortfolioBrief />} />
-      <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
-      <Route path="portfolio-email" element={<PortfolioEmail />} />
       {/* The Work page. One page with tabs, instead of five separate menu
           lines (the mockup report's difference 3).
 
