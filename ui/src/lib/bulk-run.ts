@@ -101,24 +101,45 @@ export async function runBulk<T>(
   return { succeeded, failed, skipped, stoppedForRateLimit };
 }
 
+/**
+ * What the items are called in the summary, and who asked us to slow down.
+ *
+ * The defaults describe Help Scout conversations, which is where this started
+ * and what every existing caller means. The mail list runs the same fan-out
+ * over IMAP messages, so it passes its own words rather than growing a second
+ * copy of this function that says "message" instead of "conversation".
+ */
+export interface BulkRunWords {
+  /** One item, e.g. "conversation". */
+  noun?: string;
+  /** More than one. Defaults to the noun with an "s" on the end. */
+  plural?: string;
+  /** Who told us to slow down, e.g. "Help Scout" or "the mail server". */
+  slowedBy?: string;
+}
+
 /** One line an operator can read without opening anything. */
 export function summarizeBulkRun<T>(
   result: BulkRunResult<T>,
   verb: string,
+  words: BulkRunWords = {},
 ): { tone: "success" | "warning" | "error"; message: string } {
+  const noun = words.noun ?? "conversation";
+  const plural = words.plural ?? `${noun}s`;
+  const slowedBy = words.slowedBy ?? "Help Scout";
   const done = result.succeeded.length;
   const failedCount = result.failed.length;
   const skipped = result.skipped.length;
 
   if (failedCount === 0 && skipped === 0) {
-    return { tone: "success", message: `${verb} ${done} ${done === 1 ? "conversation" : "conversations"}.` };
+    return { tone: "success", message: `${verb} ${done} ${done === 1 ? noun : plural}.` };
   }
 
   if (result.stoppedForRateLimit) {
     return {
       tone: "warning",
       message:
-        `${verb} ${done}, then Help Scout asked us to slow down. `
+        `${verb} ${done}, then ${slowedBy} asked us to slow down. `
         + `${failedCount + skipped} left untouched. Try again in a minute.`,
     };
   }

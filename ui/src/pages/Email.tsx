@@ -29,6 +29,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Maximize2,
+  ListChecks,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -103,6 +104,15 @@ import {
   type EmailListView,
 } from "../lib/email-list-view";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
+import { useEmailBulkSelection } from "../components/email/useEmailBulkSelection";
+import {
+  canSelectMessages,
+  messageSelectionId,
+  selectionContextChange,
+  type EmailSelectionContext,
+} from "../lib/email-selection";
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
@@ -1079,6 +1089,125 @@ export function Email() {
     });
   }
 
+  // ── What one message does, so several can do the same thing ──────────────
+  //
+  // These two are the whole of "mark this read" and "file this in a folder"
+  // against the mailbox: hide the row straight away, make the call, and in
+  // the mark-read case remember that this sender matters. The row buttons,
+  // the reading pane and the new selection bar all go through them, so
+  // ticking four messages and marking them read is four of exactly the call
+  // the single button makes. Nothing was added on the server for the
+  // selection: there is no endpoint that takes a list of messages, so a
+  // selection is a run of single calls, which is why the bar reports how many
+  // of them worked.
+  //
+  // Neither undoes its own optimistic hide on failure. The single-message
+  // mutations already do that in their own onError, and the selection wraps
+  // them with the same undo before letting the error travel.
+
+  async function markMessageRead(msg: MailHeader): Promise<void> {
+    noteOverride(msg.uid, "read");
+    await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+    await maybeAddImplicitKeepAlways(msg);
+  }
+
+  async function moveMessageToFolder(msg: MailHeader, targetFolder: string): Promise<void> {
+    noteOverride(msg.uid, "gone");
+    await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
+  }
+
+  const bulk = useEmailBulkSelection({
+    markRead: async (msg) => {
+      try {
+        await markMessageRead(msg);
+      } catch (err) {
+        clearOverride(msg.uid);
+        throw err;
+      }
+    },
+    moveToFolder: async (msg, targetFolder) => {
+      try {
+        await moveMessageToFolder(msg, targetFolder);
+      } catch (err) {
+        clearOverride(msg.uid);
+        throw err;
+      }
+    },
+    invalidateLists: () => {
+      invalidateRules();
+      invalidateMessageLists();
+    },
+  });
+
+  // Sender groups are worked out here rather than inside the list, because
+  // ticking messages needs to know the order the rows appear in: it is what a
+  // shift-click measures a range against and what "Select visible messages"
+  // means. Grouping changes that order, so it cannot be left until render.
+  const senderGroups = useMemo(() => {
+    const groupsMap = new Map<string, MailHeader[]>();
+    for (const msg of messages) {
+      const sender = extractSender(msg);
+      const existing = groupsMap.get(sender);
+      if (existing) existing.push(msg);
+      else groupsMap.set(sender, [msg]);
+    }
+    return Array.from(groupsMap.entries())
+      .map(([sender, msgs]) => ({
+        sender,
+        msgs: msgs.slice().sort((a, b) => (b.date < a.date ? -1 : 1)),
+        latestDate: msgs.reduce((max, m) => (m.date > max ? m.date : max), msgs[0]!.date),
+      }))
+      .sort((a, b) => (b.latestDate < a.latestDate ? -1 : 1));
+  }, [messages]);
+
+  const selectingPossible = canSelectMessages({ view: listView, searchActive });
+  const orderedVisibleMessages = groupBySender
+    ? senderGroups.flatMap((g) => g.msgs)
+    : messages;
+  const orderedVisibleIds = orderedVisibleMessages.map((m) => messageSelectionId(m.uid));
+  const visibleSelectionKey = orderedVisibleIds.join(",");
+
+  // Rows leave underneath the operator: the list refetches every thirty
+  // seconds and each action takes its own row away. A tick pointing at a row
+  // that has gone would act on a message that is no longer there, so ticks
+  // are matched against what is on screen whenever that changes. The joined
+  // key is the dependency because the list array itself is rebuilt on every
+  // render.
+  const syncVisibleSelection = bulk.syncVisible;
+  useEffect(() => {
+    syncVisibleSelection(visibleSelectionKey === "" ? [] : visibleSelectionKey.split(","));
+  }, [visibleSelectionKey, syncVisibleSelection]);
+
+  // Ticks never outlive the thing they were made against. A different tab
+  // shows a different set of messages, a different mailbox or folder means
+  // the uid on a tick refers to something else entirely, and a company switch
+  // has to leave nothing of the previous company behind. Which of those also
+  // switches the checkboxes back off is decided in lib/email-selection.ts.
+  const prevSelectionContextRef = useRef<EmailSelectionContext | null>(null);
+  const resetSelectionFor = bulk.resetFor;
+  useEffect(() => {
+    const now: EmailSelectionContext = {
+      company: selectedCompanyId,
+      mailbox: selectedMailbox,
+      folder: selectedFolder,
+      view: listView,
+    };
+    const prev = prevSelectionContextRef.current;
+    prevSelectionContextRef.current = now;
+    if (prev === null) return;
+    const change = selectionContextChange(prev, now);
+    if (change) resetSelectionFor(change, now.view);
+  }, [selectedCompanyId, selectedMailbox, selectedFolder, listView, resetSelectionFor]);
+
+  // A search answers from every mailbox and folder this company can see, and
+  // these actions only know how to work on the one folder the page has open,
+  // so starting a search puts the checkboxes away rather than leaving ticks
+  // that would fire at the wrong message.
+  const stopSelectingMessages = bulk.stopSelecting;
+  useEffect(() => {
+    if (searchActive) stopSelectingMessages();
+  }, [searchActive, stopSelectingMessages]);
+
   // ── Triage mutations ──────────────────────────────────────────────────────
 
   const autoTriageMutation = useMutation({
@@ -1117,11 +1246,7 @@ export function Email() {
   });
 
   const markReadMutation = useMutation({
-    mutationFn: async (msg: MailHeader) => {
-      noteOverride(msg.uid, "read");
-      await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
-      await maybeAddImplicitKeepAlways(msg);
-    },
+    mutationFn: markMessageRead,
     onSuccess: (_, msg) => {
       invalidateRules();
       invalidateMessageLists();
@@ -1167,10 +1292,8 @@ export function Email() {
   });
 
   const moveToFolderMutation = useMutation({
-    mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
-      noteOverride(msg.uid, "gone");
-      await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
-    },
+    mutationFn: ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) =>
+      moveMessageToFolder(msg, targetFolder),
     onSuccess: () => invalidateMessageLists(),
     onError: (err, { msg }) => {
       clearOverride(msg.uid);
@@ -1676,6 +1799,26 @@ export function Email() {
             <X className="h-3.5 w-3.5" />
           </Button>
         )}
+        {/* Turns the checkboxes on. Hidden where ticking cannot work: search
+            results come from other folders, and the handover list is not the
+            mailbox. */}
+        {selectedMailbox && selectingPossible && (
+          <Button
+            variant={bulk.selectMode ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 px-2 text-xs"
+            aria-pressed={bulk.selectMode}
+            onClick={() => (bulk.selectMode ? bulk.stopSelecting() : bulk.startSelecting())}
+            title={
+              bulk.selectMode
+                ? "Stop selecting messages"
+                : "Select several messages and act on them together"
+            }
+          >
+            <ListChecks className="mr-1 h-3.5 w-3.5" />
+            Select
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -1728,6 +1871,26 @@ export function Email() {
       </Tabs>
     </div>
   );
+
+  // The messages behind the count on the bar, in the order they are on
+  // screen, so what runs is exactly what the person can see ticked.
+  const selectedMessages = orderedVisibleMessages.filter((m) => bulk.isSelected(m.uid));
+
+  const selectionBar =
+    selectingPossible && (bulk.selectMode || bulk.running) ? (
+      <EmailSelectionBar
+        count={bulk.selectedCount}
+        selectAllState={bulk.selectAllState(orderedVisibleIds)}
+        onSelectVisible={() => bulk.selectVisible(orderedVisibleIds)}
+        onMarkRead={() => void bulk.run("read", selectedMessages)}
+        onMove={(targetFolder) => void bulk.run("move", selectedMessages, targetFolder)}
+        folders={folders.filter((f) => f !== selectedFolder)}
+        onDone={() => bulk.stopSelecting()}
+        onCancel={bulk.cancel}
+        progress={bulk.progress}
+        outcome={bulk.outcome}
+      />
+    ) : null;
 
   const takeOverNoticeBar = takeOverNotice ? (
     <EmailTakeOverNotice
@@ -1938,16 +2101,38 @@ export function Email() {
 
   function renderRow(msg: MailHeader, compact: boolean) {
     const hold = holdForMessage(msg);
+    const showCheckbox = selectingPossible && (bulk.selectMode || bulk.running);
+    const ticked = bulk.isSelected(msg.uid);
     return (
       <div
         key={msg.uid}
         className={cn(
           "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
-          selectedUid === msg.uid && "bg-accent",
+          ticked ? "bg-accent/60" : selectedUid === msg.uid && "bg-accent",
           compact ? "py-2.5" : "py-3",
         )}
         onClick={() => setSelectedUid(msg.uid)}
       >
+        {/* The whole square is the click target, not just the box itself:
+            disabling the box alone still leaves its padding live, so a click
+            beside it would tick a row in the middle of a run. */}
+        {showCheckbox && (
+          <span
+            className="flex h-6 w-5 shrink-0 items-center justify-center"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (bulk.running) return;
+              bulk.toggle(msg.uid, orderedVisibleIds, event.shiftKey);
+            }}
+          >
+            <Checkbox
+              checked={ticked}
+              disabled={bulk.running}
+              aria-label={`Select message from ${msg.from}`}
+              onCheckedChange={() => {}}
+            />
+          </span>
+        )}
         <span
           className={cn(
             "shrink-0 h-1.5 w-1.5 rounded-full",
@@ -2113,22 +2298,10 @@ export function Email() {
       );
     }
 
-    // Group by canonical sender email address. Within each group sort by
-    // date desc (newest first), and sort groups by their newest message.
-    const groupsMap = new Map<string, MailHeader[]>();
-    for (const msg of messages) {
-      const sender = extractSender(msg);
-      const existing = groupsMap.get(sender);
-      if (existing) existing.push(msg);
-      else groupsMap.set(sender, [msg]);
-    }
-    const groups = Array.from(groupsMap.entries())
-      .map(([sender, msgs]) => ({
-        sender,
-        msgs: msgs.slice().sort((a, b) => (b.date < a.date ? -1 : 1)),
-        latestDate: msgs.reduce((max, m) => (m.date > max ? m.date : max), msgs[0]!.date),
-      }))
-      .sort((a, b) => (b.latestDate < a.latestDate ? -1 : 1));
+    // Grouped by canonical sender address, each group newest first and the
+    // groups themselves newest first. Worked out above rather than here,
+    // because ticking messages needs the same order (see senderGroups).
+    const groups = senderGroups;
 
     return (
       <ScrollArea className="flex-1">
@@ -2334,6 +2507,7 @@ export function Email() {
             {listViewTabs}
             {takeOverNoticeBar}
             {searchBar}
+            {selectionBar}
             <MessageListBody compact />
           </div>
 
@@ -2821,6 +2995,7 @@ export function Email() {
           {listViewTabs}
           {takeOverNoticeBar}
           {searchBar}
+          {selectionBar}
           <MessageListBody compact={false} />
         </div>
       )}
