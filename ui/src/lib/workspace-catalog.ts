@@ -52,16 +52,20 @@ import {
  *
  * Labels and icons here must match what the sidebar (SidebarMenu.tsx) and
  * every other surface already call the same destination — this file is not
- * license to rename anything. Code-reviewed 2026-09-02: a first version used
- * "Attention" for Inbox and "Automations" for Routines, anticipating labels
- * this project's own preservation doc names as a FUTURE, not-yet-approved
- * rename target (F04, F17) — while every other surface, including this same
- * diff's own MobileBottomNav.tsx and its test, still said "Inbox". That's a
- * product/labeling decision for Barry to make once, consistently, everywhere
- * at once — not something to smuggle in as a side effect of fixing search
- * completeness, and not safe to do inconsistently within a single diff. If
- * that rename ever happens, it needs to land here, in SidebarMenu.tsx, and
- * in the destination pages' own headers together.
+ * license to rename anything on its own. Code-reviewed 2026-09-02: a first
+ * version used "Attention" for Inbox and "Automations" for Routines,
+ * anticipating labels nobody had approved, while every other surface still
+ * said "Inbox". The rule that came out of it was that such a rename is one
+ * decision applied everywhere at once.
+ *
+ * Barry took that decision on 2026-09-07 and chose the mockup's names: Brief
+ * became Overview, Inbox became Attention, Issues became Tasks, Routines
+ * became Automations, and Work queues became Intake queues. The labels below
+ * changed with the sidebar, the mobile bar, the command palette, the
+ * Everything page and each destination page's own heading and breadcrumb in
+ * the same change. Ids, routeRoots, API paths and component names deliberately
+ * did NOT change, so a saved link to /issues still works and now reads Tasks
+ * when it lands.
  */
 export interface WorkspaceCatalogEntry {
   id: string;
@@ -139,15 +143,15 @@ export function workspaceUnavailableReason(
 }
 
 export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
-  { id: "brief", label: "Brief", routeRoot: "brief", icon: Sunrise },
+  { id: "brief", label: "Overview", routeRoot: "brief", icon: Sunrise },
   { id: "email", label: "Email", routeRoot: "email", icon: Mail },
-  { id: "inbox", label: "Inbox", routeRoot: "inbox", icon: Inbox },
+  { id: "inbox", label: "Attention", routeRoot: "inbox", icon: Inbox },
   { id: "calendar", label: "Calendar", routeRoot: "calendar", icon: CalendarClock },
-  { id: "issues", label: "Issues", routeRoot: "issues", icon: CircleDot },
+  { id: "issues", label: "Tasks", routeRoot: "issues", icon: CircleDot },
   { id: "projects", label: "Projects", routeRoot: "projects", icon: Hexagon },
   { id: "goals", label: "Goals", routeRoot: "goals", icon: Target },
-  { id: "routines", label: "Routines", routeRoot: "routines", icon: Repeat },
-  { id: "work-queues", label: "Work queues", routeRoot: "work-queues", icon: ListTodo },
+  { id: "routines", label: "Automations", routeRoot: "routines", icon: Repeat },
+  { id: "work-queues", label: "Intake queues", routeRoot: "work-queues", icon: ListTodo },
   { id: "agents", label: "Agents", routeRoot: "agents", icon: Bot },
   // Added 2026-09-03 (P4 audit): had a dedicated sidebar entry but no
   // presence in Command Palette or Everything at all.

@@ -124,14 +124,31 @@ function inferIssueDetailSource(
 ): IssueDetailSource | null {
   if (isIssueDetailSource(state?.issueDetailSource)) return state.issueDetailSource;
   if (!breadcrumb) return null;
-  if (breadcrumb.label === "Inbox" || breadcrumb.href.includes("/inbox")) return "inbox";
-  if (breadcrumb.label === "Issues" || breadcrumb.href.includes("/issues")) return "issues";
+  // Both the current label and the one it replaced on 2026-09-07 (Inbox became
+  // Attention, Issues became Tasks). State saved before that rename is still
+  // sitting in people's sessionStorage, and dropping it would lose their way
+  // back. The routes never changed, so the href checks below cover most of it
+  // anyway.
+  if (
+    breadcrumb.label === "Attention"
+    || breadcrumb.label === "Inbox"
+    || breadcrumb.href.includes("/inbox")
+  ) {
+    return "inbox";
+  }
+  if (
+    breadcrumb.label === "Tasks"
+    || breadcrumb.label === "Issues"
+    || breadcrumb.href.includes("/issues")
+  ) {
+    return "issues";
+  }
   return null;
 }
 
 function breadcrumbForSource(source: IssueDetailSource): IssueDetailBreadcrumb {
-  if (source === "inbox") return { label: "Inbox", href: "/inbox" };
-  return { label: "Issues", href: "/issues" };
+  if (source === "inbox") return { label: "Attention", href: "/inbox" };
+  return { label: "Tasks", href: "/issues" };
 }
 
 export function createIssueDetailLocationState(

@@ -99,7 +99,7 @@ export function Everything() {
         <div>
           <h1 className="text-xl font-semibold">Everything</h1>
           <p className="text-sm text-muted-foreground">
-            Every workspace this company can reach — including the ones not pinned to the sidebar.
+            Every workspace this company can reach, including the ones that are not in the menu.
           </p>
         </div>
       </div>

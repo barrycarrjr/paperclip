@@ -19,12 +19,16 @@ vi.mock("@/lib/router", () => ({
   }) => <a href={to}>{children({ isActive: false })}</a>,
 }));
 
+const companyState: { isPortfolioRoot: boolean } = { isPortfolioRoot: false };
 vi.mock("../context/CompanyContext", () => ({
   // `companies` is needed now that the nav resolves its company from the URL
-  // prefix rather than trusting the context's selection.
+  // prefix rather than trusting the context's selection, and the nav also
+  // reads isPortfolioRoot from it to decide whether HQ gets an Email tab.
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    companies: [{ id: "company-1", issuePrefix: "PAP", isPortfolioRoot: false }],
+    companies: [
+      { id: "company-1", issuePrefix: "PAP", isPortfolioRoot: companyState.isPortfolioRoot },
+    ],
   }),
 }));
 
@@ -59,20 +63,67 @@ describe("MobileBottomNav", () => {
     // Regression for docs/plans/2026-09-02-ux-control-center-preservation.md
     // B06: mobile navigation never included Email, the stated #1 daily
     // workflow. Added rather than swapped in, so all five prior destinations
-    // (Home, Issues, Create, Agents, Inbox) must still be present too.
+    // (Home, Tasks, Create, Agents, Attention) must still be present too.
+    // Two of those five were renamed on 2026-09-07: Issues became Tasks and
+    // Inbox became Attention. Same six taps, same six routes.
     const root = createRoot(container);
     act(() => {
       root.render(<MobileBottomNav visible />);
     });
 
     const labels = Array.from(container.querySelectorAll("a, button")).map((el) => el.textContent ?? "");
-    for (const expected of ["Home", "Issues", "Create", "Agents", "Inbox", "Email"]) {
+    for (const expected of ["Home", "Tasks", "Create", "Agents", "Attention", "Email"]) {
       expect(labels).toContain(expected);
     }
     expect(labels.length).toBe(6);
 
     const emailLink = Array.from(container.querySelectorAll("a")).find((el) => el.textContent === "Email");
     expect(emailLink?.getAttribute("href")).toBe("/email");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("leaves Email out in HQ, which has no mailbox of its own", () => {
+    companyState.isPortfolioRoot = true;
+    const root = createRoot(container);
+    act(() => {
+      root.render(<MobileBottomNav visible />);
+    });
+
+    const labels = Array.from(container.querySelectorAll("a, button")).map(
+      (el) => el.textContent ?? "",
+    );
+    expect(labels).not.toContain("Email");
+    expect(labels.length).toBe(5);
+    // The row must not keep a sixth empty column where Email used to be.
+    expect(container.querySelector(".grid-cols-5")).not.toBeNull();
+    expect(container.querySelector(".grid-cols-6")).toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+    companyState.isPortfolioRoot = false;
+  });
+
+  it("uses the new names on their unchanged routes", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(<MobileBottomNav visible />);
+    });
+
+    const hrefFor = (label: string) =>
+      Array.from(container.querySelectorAll("a"))
+        .find((el) => el.textContent === label)
+        ?.getAttribute("href");
+
+    expect(hrefFor("Tasks")).toBe("/issues");
+    expect(hrefFor("Attention")).toBe("/inbox");
+
+    const labels = Array.from(container.querySelectorAll("a, button")).map((el) => el.textContent ?? "");
+    expect(labels).not.toContain("Issues");
+    expect(labels).not.toContain("Inbox");
 
     act(() => {
       root.unmount();

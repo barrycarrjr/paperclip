@@ -93,7 +93,7 @@ export function MorningBrief() {
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Brief" }]);
+    setBreadcrumbs([{ label: "Overview" }]);
   }, [setBreadcrumbs]);
 
   const { data: session } = useQuery({
@@ -617,7 +617,7 @@ export function MorningBrief() {
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Nothing waiting on you. Inbox zero.
+              Nothing waiting on you.
             </p>
           </div>
         ) : (

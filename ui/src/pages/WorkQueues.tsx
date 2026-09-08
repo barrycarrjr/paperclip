@@ -72,7 +72,7 @@ export function WorkQueues() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Work queues" }]);
+    setBreadcrumbs([{ label: "Intake queues" }]);
   }, [setBreadcrumbs]);
 
   const queuesQuery = useQuery({
@@ -213,7 +213,7 @@ export function WorkQueues() {
   }, [countsQuery.data]);
 
   if (!selectedCompanyId) {
-    return <EmptyState icon={Inbox} message="Select a company to view its work queues." />;
+    return <EmptyState icon={Inbox} message="Select a company to view its intake queues." />;
   }
 
   if (queuesQuery.isLoading) return <PageSkeleton variant="list" />;
@@ -225,9 +225,9 @@ export function WorkQueues() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">Work queues</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Intake queues</h1>
             <InfoPopoverButton
-              title="What work queues are for"
+              title="What intake queues are for"
               info={
                 <>
                   <p>
@@ -421,7 +421,7 @@ export function WorkQueues() {
       <Dialog open={createQueueOpen} onOpenChange={setCreateQueueOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New work queue</DialogTitle>
+            <DialogTitle>New intake queue</DialogTitle>
             <DialogDescription>
               A queue is a named work stream — support tickets, leads, errors, etc. — that
               agents claim from one item at a time.

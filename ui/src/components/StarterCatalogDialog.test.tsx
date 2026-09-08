@@ -501,8 +501,8 @@ describe("StarterCatalogDialog", () => {
     await draftPlan(host);
 
     let text = host.textContent ?? "";
-    expect(text).toContain("You said every week. This sounds like something to repeat. This step creates one-off tasks only. To make it repeat, set it up on the Routines page afterwards.");
-    expect(host.querySelector('a[href="/routines"]')?.textContent).toBe("Routines page");
+    expect(text).toContain("You said every week. This sounds like something to repeat. This step creates one-off tasks only. To make it repeat, set it up on the Automations page afterwards.");
+    expect(host.querySelector('a[href="/routines"]')?.textContent).toBe("Automations page");
     expect(text).not.toContain("Portfolio directives");
     expect(host.querySelector('a[href="/portfolio-directives"]')).toBeNull();
 
@@ -543,7 +543,7 @@ describe("StarterCatalogDialog", () => {
     expect(text).toContain("Reply to every new review");
     expect(buttonLabelled(host, "Accept drafts")).toBeTruthy();
     expect(buttonLabelled(host, "Reject")).toBeTruthy();
-    expect(text).toContain("You can also decide this later from your Brief or from PAP-42.");
+    expect(text).toContain("You can also decide this later from your Overview or from PAP-42.");
   });
 
   it("a matching starter card stays visible with Turn this on and drafting does not activate it", async () => {
@@ -883,7 +883,7 @@ describe("StarterCatalogDialog", () => {
     expect(host.textContent).toContain(
       "Your role in this company can read this plan but not accept or reject it. Ask an admin for a role that can create work.",
     );
-    expect(host.textContent).not.toContain("You can also decide this later from your Brief");
+    expect(host.textContent).not.toContain("You can also decide this later from your Overview");
 
     click(acceptButton);
     await flush();

@@ -191,7 +191,7 @@ function SortableCompanyItem({
         {inboxCount > 0 && (
           <span
             className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+            aria-label={`${inboxCount} unread item${inboxCount === 1 ? "" : "s"} waiting for you`}
           >
             {inboxCount > 99 ? "99+" : inboxCount}
           </span>
@@ -220,7 +220,7 @@ function SortableCompanyItem({
             <p>{company.name}</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
-                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+                {inboxCount} item{inboxCount === 1 ? "" : "s"} waiting for you
               </p>
             )}
           </TooltipContent>
@@ -297,7 +297,7 @@ function PinnedHqItem({
         {inboxCount > 0 && (
           <span
             className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+            aria-label={`${inboxCount} unread item${inboxCount === 1 ? "" : "s"} waiting for you`}
           >
             {inboxCount > 99 ? "99+" : inboxCount}
           </span>
@@ -327,7 +327,7 @@ function PinnedHqItem({
             <p className="text-xs text-muted-foreground">Portfolio root</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
-                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+                {inboxCount} item{inboxCount === 1 ? "" : "s"} waiting for you
               </p>
             )}
           </TooltipContent>

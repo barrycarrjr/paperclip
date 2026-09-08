@@ -221,16 +221,21 @@ describe("CommandPalette", () => {
     // B06: the palette's navigation catalog used to be a separate
     // hand-copied list that never included Email, Clippy, Routines,
     // Work queues, Assistants, Memories, Approvals or Receipts. Labels here
-    // must match SidebarMenu.tsx's existing names, not a proposed future
-    // rename (see workspace-catalog.ts's file comment) — a first version of
-    // this test asserted "Automations"/"Intake queues", which would have
-    // pinned exactly that mismatch as if it were correct.
+    // must match what the rest of the app calls the same destination. Barry
+    // renamed five of them on 2026-09-07, in every surface at once, so
+    // "Automations" and "Intake queues" are now the right words here; before
+    // that decision they would have been a mismatch.
     const { root } = renderWithQueryClient(<CommandPalette />, container);
     open();
     await flush();
 
     const labels = itemLabels().join(" | ");
-    for (const expected of ["Email", "Clippy", "Routines", "Work queues", "Assistants", "Memories", "Approvals", "Receipts"]) {
+    for (const expected of ["Email", "Clippy", "Automations", "Intake queues", "Assistants", "Memories", "Approvals", "Receipts"]) {
+      expect(labels).toContain(expected);
+    }
+    // The search box is also where the destinations that left the main menu
+    // are still reachable, under their new names.
+    for (const expected of ["Overview", "Attention", "Tasks", "Org chart", "Projects", "Goals"]) {
       expect(labels).toContain(expected);
     }
 

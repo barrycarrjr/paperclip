@@ -172,7 +172,7 @@ describe("Everything", () => {
     const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
     expect(labels).not.toContain("Workspaces");
     // Everything else is untouched.
-    expect(labels).toContain("Issues");
+    expect(labels).toContain("Tasks");
     expect(labels).toContain("Email");
 
     await act(async () => {
@@ -192,6 +192,63 @@ describe("Everything", () => {
 
     const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
     expect(labels).toContain("Workspaces");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+  it("is the home for every destination that left the main menu", async () => {
+    // The menu was cut to eight entries on 2026-09-07. Nothing was deleted:
+    // each of these keeps its catalog entry, so this page (and the search box,
+    // which reads the same list) is where you now find it.
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    const links = Array.from(container.querySelectorAll("a"));
+    const hrefFor = (label: string) =>
+      links.find((el) => (el.textContent ?? "").startsWith(label))?.getAttribute("href");
+
+    for (const [label, href] of [
+      ["Projects", "/projects"],
+      ["Goals", "/goals"],
+      ["Automations", "/routines"],
+      ["Intake queues", "/work-queues"],
+      ["Memories", "/memories"],
+      ["Approvals", "/approvals"],
+      ["Receipts", "/receipts"],
+      ["Activity", "/activity"],
+      ["Org chart", "/org"],
+      ["Assistants", "/assistants"],
+      ["Clippy", "/clippy"],
+    ] as const) {
+      expect(hrefFor(label), label).toBe(href);
+    }
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("uses the names Barry chose, not the ones they replaced", async () => {
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+
+    const labels = Array.from(container.querySelectorAll("a")).map((el) => el.textContent ?? "");
+    expect(labels).toContain("Overview");
+    expect(labels).toContain("Attention");
+    expect(labels).toContain("Tasks");
+    expect(labels).toContain("Automations");
+    expect(labels).toContain("Intake queues");
+    for (const oldName of ["Brief", "Inbox", "Issues", "Routines", "Work queues"]) {
+      expect(labels, oldName).not.toContain(oldName);
+    }
 
     await act(async () => {
       root.unmount();
