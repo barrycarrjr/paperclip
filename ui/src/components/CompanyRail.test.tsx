@@ -49,11 +49,20 @@ const railState = vi.hoisted(() => ({
   pathname: "/ACM/costs",
   companies: [] as unknown[],
   selectedCompanyId: null as string | null,
+  /** The wide menu. While it is open the rail offers no shortcut panel. */
+  sidebarOpen: true,
+  isMobile: false,
+  hasMailbox: true,
+  hasPhoneAccount: true,
+  pluginPageRoutePaths: [] as string[],
 }));
 
 vi.mock("@/lib/router", () => ({
   useLocation: () => ({ pathname: railState.pathname, search: "", hash: "" }),
   useNavigate: () => navigateSpy,
+  // SidebarNavItem imports NavLink even though the shortcut rows never render
+  // it; the flyout's rows are plain links so they can switch company first.
+  NavLink: () => null,
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -69,7 +78,40 @@ vi.mock("../context/DialogContext", () => ({
 }));
 
 vi.mock("../context/SidebarContext", () => ({
-  useSidebar: () => ({ isMobile: false, sidebarOpen: true }),
+  useSidebar: () => ({
+    isMobile: railState.isMobile,
+    sidebarOpen: railState.sidebarOpen,
+    setSidebarOpen: vi.fn(),
+  }),
+}));
+
+// Which destinations the flyout offers depends on two add-ons. Both are asked
+// the same question here that the real hooks ask the server.
+vi.mock("../hooks/useEmailToolsPlugin", () => ({
+  useEmailToolsPlugin: () => ({
+    pluginId: "email-plugin",
+    hasMailboxForCompany: railState.hasMailbox,
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../hooks/usePhoneToolsPlugin", () => ({
+  usePhoneToolsPlugin: () => ({
+    pluginId: "phone-plugin",
+    hasAccountForCompany: railState.hasPhoneAccount,
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../plugins/slots", () => ({
+  usePluginSlots: () => ({
+    slots: railState.pluginPageRoutePaths.map((routePath) => ({
+      routePath,
+      displayName: routePath,
+    })),
+    isLoading: false,
+    errorMessage: null,
+  }),
 }));
 
 vi.mock("../api/heartbeats", () => ({
@@ -93,12 +135,6 @@ vi.mock("../hooks/useCompanyOrder", () => ({
   }),
 }));
 
-// The hover peek draws a whole sidebar menu inside the rail. It is not what
-// these tests are about and it pulls in most of the app.
-vi.mock("./SidebarMenu", () => ({
-  SidebarMenu: () => null,
-}));
-
 async function flushReact() {
   await act(async () => {
     await Promise.resolve();
@@ -114,6 +150,12 @@ describe("CompanyRail", () => {
     railState.pathname = "/ACM/costs";
     railState.companies = [HQ, ACME];
     railState.selectedCompanyId = ACME.id;
+    railState.sidebarOpen = true;
+    railState.isMobile = false;
+    railState.hasMailbox = true;
+    railState.hasPhoneAccount = true;
+    railState.pluginPageRoutePaths = ["phone-active-calls", "notepad"];
+    localStorage.clear();
     navigateSpy.mockClear();
     selectCompanySpy.mockClear();
     container = document.createElement("div");
@@ -215,5 +257,151 @@ describe("CompanyRail", () => {
     railState.selectedCompanyId = ACME.id;
     await render();
     expect(portfolioButton()).toBeNull();
+  });
+
+  describe("the shortcut panel beside a company logo", () => {
+    /** Acme's logo on the rail. */
+    function acmeAvatar(): HTMLAnchorElement {
+      const avatar = container.querySelector<HTMLAnchorElement>('a[href="/ACM/dashboard"]');
+      if (!avatar) throw new Error("expected Acme Printing on the rail");
+      return avatar;
+    }
+
+    /** The panel is drawn into a portal, so it is not inside the rail. */
+    function panel(): HTMLElement | null {
+      return document.body.querySelector<HTMLElement>('[data-slot="popover-content"]');
+    }
+
+    function panelLinks(): HTMLAnchorElement[] {
+      return Array.from(panel()?.querySelectorAll("a") ?? []);
+    }
+
+    function shortcutLabels(): string[] {
+      const shortcuts = panel()?.querySelector("nav");
+      return Array.from(shortcuts?.querySelectorAll("a") ?? []).map(
+        (link) => link.textContent?.trim() ?? "",
+      );
+    }
+
+    function press(el: Element | Document, key: string) {
+      act(() => {
+        el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+    }
+
+    /** The keyboard way in: focus the logo, press the right arrow key. */
+    async function openWithKeyboard() {
+      press(acmeAvatar(), "ArrowRight");
+      await flushReact();
+    }
+
+    beforeEach(() => {
+      // The panel is only offered when the wide menu is not already on screen.
+      railState.sidebarOpen = false;
+    });
+
+    it("opens from the keyboard and shows the five the mockup asks for", async () => {
+      await render();
+      expect(panel(), "no panel before the right arrow key").toBeNull();
+      await openWithKeyboard();
+      expect(panel(), "expected the shortcut panel").not.toBeNull();
+      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work", "Phone"]);
+    });
+
+    it("closes again on Escape", async () => {
+      await render();
+      await openWithKeyboard();
+      press(document, "Escape");
+      await flushReact();
+      expect(panel()).toBeNull();
+    });
+
+    it("shows the company's full name and one line saying what it is", async () => {
+      await render();
+      await openWithKeyboard();
+      const text = panel()?.textContent ?? "";
+      expect(text).toContain("Acme Printing");
+      expect(text).toContain("Its email, calendar, team, work and records.");
+    });
+
+    it("leaves Email out of a company with no mailbox", async () => {
+      railState.hasMailbox = false;
+      await render();
+      await openWithKeyboard();
+      expect(shortcutLabels()).toEqual(["Calendar", "Team", "Work", "Phone"]);
+    });
+
+    it("leaves Phone out where the add-on covers no account for this company", async () => {
+      railState.hasPhoneAccount = false;
+      await render();
+      await openWithKeyboard();
+      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work"]);
+    });
+
+    it("leaves Phone out where the add-on is not installed at all", async () => {
+      railState.pluginPageRoutePaths = ["notepad"];
+      await render();
+      await openWithKeyboard();
+      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work"]);
+    });
+
+    it("keeps the row back to the page you left off on", async () => {
+      localStorage.setItem(
+        "paperclip.companyPaths",
+        JSON.stringify({ [ACME.id]: "/ACM/goals" }),
+      );
+      await render();
+      await openWithKeyboard();
+      expect(panel()?.textContent).toContain("Where you left off");
+      const remembered = panelLinks().find((link) => link.getAttribute("href") === "/goals");
+      expect(remembered, "expected a link back to the remembered page").toBeDefined();
+      expect(remembered?.textContent).toContain("Goals");
+    });
+
+    it("takes a clicked shortcut over the page that company remembers", async () => {
+      // The "shortcut" source is what stops the remembered page overriding
+      // where the person asked to go.
+      localStorage.setItem(
+        "paperclip.companyPaths",
+        JSON.stringify({ [ACME.id]: "/ACM/goals" }),
+      );
+      await render();
+      await openWithKeyboard();
+      const work = panelLinks().find((link) => link.getAttribute("href") === "/work");
+      expect(work, "expected a Work shortcut").toBeDefined();
+      click(work!);
+      expect(selectCompanySpy).toHaveBeenCalledWith(ACME.id, { source: "shortcut" });
+      expect(navigateSpy).toHaveBeenCalledWith("/ACM/work");
+    });
+
+    it("opens on a press and hold, and that hold does not also switch company", async () => {
+      await render();
+      act(() => {
+        acmeAvatar().dispatchEvent(new Event("touchstart", { bubbles: true }));
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+      });
+      expect(panel(), "expected the shortcut panel after a press and hold").not.toBeNull();
+      // The tap that ends the hold must not carry on and open the company.
+      click(acmeAvatar());
+      expect(selectCompanySpy).not.toHaveBeenCalled();
+
+      // An ordinary tap afterwards still works. A hold whose finger lifted
+      // somewhere else would otherwise leave the next tap dead.
+      act(() => {
+        acmeAvatar().dispatchEvent(new Event("touchstart", { bubbles: true }));
+        acmeAvatar().dispatchEvent(new Event("touchend", { bubbles: true }));
+      });
+      click(acmeAvatar());
+      expect(selectCompanySpy).toHaveBeenCalledWith(ACME.id);
+    });
+
+    it("offers no panel while the wide menu is already on screen", async () => {
+      railState.sidebarOpen = true;
+      await render();
+      await openWithKeyboard();
+      expect(panel()).toBeNull();
+    });
   });
 });
