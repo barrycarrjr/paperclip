@@ -10,6 +10,7 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { usePluginSlots } from "@/plugins/slots";
 import { usePinnedWorkspaces } from "@/hooks/usePinnedWorkspaces";
 import { visibleWorkspaceCatalog } from "@/lib/workspace-catalog";
+import { SETTINGS_SCOPE_COPY, settingsCatalogForScope } from "@/lib/settings-catalog";
 
 /**
  * Complete discovery: every real destination this company can reach, in one
@@ -99,7 +100,8 @@ export function Everything() {
         <div>
           <h1 className="text-xl font-semibold">Everything</h1>
           <p className="text-sm text-muted-foreground">
-            Every workspace this company can reach, including the ones that are not in the menu.
+            Every workspace this company can reach, including the ones that are not in the menu,
+            and the settings behind them.
           </p>
         </div>
       </div>
@@ -150,15 +152,60 @@ export function Everything() {
           ))}
         </EverythingSection>
       )}
+
+      {/*
+        Settings, in two separate groups rather than one "Administration"
+        heap. The scope document asks for Administration to stay discoverable
+        "through stable entries/catalog paths"; the stable entries (the
+        company menu and the account menu) were already there, and this is the
+        catalog half, which was missing entirely. It is deliberately not a new
+        page and not a new menu line. See lib/settings-catalog.ts.
+
+        Kept apart, and each group says who it affects, because the scope
+        document is explicit that a system wide setting must not look like it
+        applies only to the company you are in.
+
+        No pin control on these. Pins resolve through
+        resolvePinnedWorkspaceItems, which only knows core workspace ids and
+        plugin routes, so a pinned settings id would be dropped silently and
+        the star would look broken.
+      */}
+      {(["company", "instance"] as const).map((scope) => (
+        <EverythingSection
+          key={scope}
+          title={SETTINGS_SCOPE_COPY[scope].title}
+          description={SETTINGS_SCOPE_COPY[scope].description}
+        >
+          {settingsCatalogForScope(scope).map((entry) => (
+            <EverythingCard
+              key={entry.id}
+              to={entry.path}
+              label={entry.label}
+              sublabel={SETTINGS_SCOPE_COPY[scope].rowNote}
+              icon={entry.icon}
+            />
+          ))}
+        </EverythingSection>
+      ))}
     </div>
   );
 }
 
-function EverythingSection({ title, children }: { title: string; children: React.ReactNode }) {
+function EverythingSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  /** One plain sentence under the heading. Used where a group needs to say who it affects. */
+  description?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="mb-8">
-      <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">{children}</div>
+      <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
+      {description && <p className="mt-1 text-xs text-muted-foreground">{description}</p>}
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">{children}</div>
     </div>
   );
 }

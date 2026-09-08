@@ -60,8 +60,11 @@ vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => sidebarState,
 }));
 
+// One shared spy rather than a fresh one per render, so a test can assert
+// where a result actually sends you.
+const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/router", () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigateMock,
 }));
 
 vi.mock("../api/issues", () => ({
@@ -83,7 +86,12 @@ vi.mock("./Identity", () => ({
 vi.mock("@/components/ui/command", () => ({
   CommandDialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
   CommandEmpty: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  CommandGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  CommandGroup: ({ heading, children }: { heading?: ReactNode; children: ReactNode }) => (
+    <div>
+      <h3>{heading}</h3>
+      {children}
+    </div>
+  ),
   CommandInput: ({
     value,
     onValueChange,
@@ -106,10 +114,16 @@ vi.mock("@/components/ui/command", () => ({
   CommandItem: ({
     children,
     onSelect,
+    value,
   }: {
     children: ReactNode;
     onSelect?: () => void;
-  }) => <button onClick={onSelect}>{children}</button>,
+    value?: string;
+  }) => (
+    <button data-value={value} onClick={onSelect}>
+      {children}
+    </button>
+  ),
   CommandList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   CommandSeparator: () => <hr />,
 }));
@@ -170,6 +184,7 @@ describe("CommandPalette", () => {
     mockIssuesApi.list.mockReset();
     mockAgentsApi.list.mockReset();
     mockProjectsApi.list.mockReset();
+    navigateMock.mockReset();
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
     mockProjectsApi.list.mockResolvedValue([]);
@@ -322,9 +337,7 @@ describe("CommandPalette", () => {
     // visibility guard used to check the unfiltered slot count, so a
     // routePath-less-only install would show an empty "Plugins" heading with
     // nothing clickable under it — fixed by filtering before both the guard
-    // and the render. This asserts the item itself never renders; it can't
-    // assert the heading is absent too, since CommandGroup is mocked here
-    // without its `heading` prop.
+    // and the render. This asserts the item itself never renders.
     pluginSlotsState.slots = [
       { id: "slot-1", displayName: "Embedded Widget", routePath: undefined, pluginKey: "widget-plugin", pluginDisplayName: "Widget Plugin" },
     ];
@@ -336,6 +349,93 @@ describe("CommandPalette", () => {
       (el.textContent ?? "").includes("Embedded Widget"),
     );
     expect(widgetButton).toBeUndefined();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+  it("finds the settings pages, which it used to know nothing about", async () => {
+    // Typing "plugins", "secrets" or "MCP" found nothing at all before this:
+    // the box listed every page in the app except the settings ones. There is
+    // still no Administration page and no new menu line.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const labels = itemLabels().join(" | ");
+    for (const expected of ["Company settings", "Secrets", "Invites", "Plugins", "MCP servers", "Experimental", "Adapters"]) {
+      expect(labels, expected).toContain(expected);
+    }
+
+    const headings = Array.from(container.querySelectorAll("h3")).map((el) => el.textContent ?? "");
+    expect(headings).toContain("Company settings");
+    expect(headings).toContain("Instance settings");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("says on each settings result who it affects, and can tell the two Access pages apart", async () => {
+    // Both scopes have a page called Access. The scope document rules out a
+    // system wide setting looking like it applies only to the company you are
+    // in, so the note is on the row itself, and the words a person types pick
+    // the right one.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const values = buttons.map((el) => el.getAttribute("data-value") ?? "");
+    const companyAccess = values.find((value) => value.startsWith("company settings access"));
+    const instanceAccess = values.find((value) => value.startsWith("instance settings access"));
+    expect(companyAccess).toBeTruthy();
+    expect(instanceAccess).toBeTruthy();
+
+    const rowFor = (startsWith: string) =>
+      buttons.find((el) => (el.getAttribute("data-value") ?? "").startsWith(startsWith))?.textContent ?? "";
+    expect(rowFor("company settings access")).toContain("This company");
+    expect(rowFor("instance settings access")).toContain("Every company");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("sends a settings result to the real screen, company-scoped or not", async () => {
+    // One render per click: picking a result closes the box, so the second
+    // one has to start from a freshly opened list rather than a stale node.
+    for (const [searchValue, path] of [
+      ["instance settings plugins", "/instance/settings/plugins"],
+      ["company settings secrets", "/company/settings/secrets"],
+    ] as const) {
+      navigateMock.mockReset();
+      const { root } = renderWithQueryClient(<CommandPalette />, container);
+      open();
+      await flush();
+
+      const button = Array.from(container.querySelectorAll("button")).find((el) =>
+        (el.getAttribute("data-value") ?? "").startsWith(searchValue),
+      );
+      expect(button, searchValue).toBeTruthy();
+      act(() => {
+        button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(navigateMock, searchValue).toHaveBeenCalledWith(path);
+
+      act(() => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("says in the box that it finds settings too", () => {
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+
+    const box = container.querySelector("input");
+    expect(box?.getAttribute("placeholder") ?? "").toContain("settings");
 
     act(() => {
       root.unmount();

@@ -31,6 +31,20 @@ vi.mock("@/hooks/useRouteCompany", () => ({
   useActiveCompanyId: () => activeCompanyIdState.value,
 }));
 
+// Pinning is on for this person, so the pin control really renders. Without
+// this the hook's own "no signed-in user, so pinning is unavailable" path
+// hides every star and a test about which cards offer one would pass for the
+// wrong reason.
+vi.mock("@/hooks/usePinnedWorkspaces", () => ({
+  usePinnedWorkspaces: () => ({
+    pinned: [],
+    isPinned: () => false,
+    toggle: vi.fn(),
+    canPin: true,
+    isLoading: false,
+  }),
+}));
+
 const setBreadcrumbs = vi.fn();
 vi.mock("@/context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs }),
@@ -227,6 +241,81 @@ describe("Everything", () => {
       ["Clippy", "/clippy"],
     ] as const) {
       expect(hrefFor(label), label).toBe(href);
+    }
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("offers company settings and instance settings as two separate groups", async () => {
+    // Before this the page promised every workspace this company can reach
+    // and did not know a single settings page existed. There is still no
+    // Administration page and no new menu line: these are the real screens.
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+
+    const links = Array.from(container.querySelectorAll("a"));
+    const hrefFor = (label: string) =>
+      links.find((el) => (el.textContent ?? "").startsWith(label))?.getAttribute("href");
+
+    expect(hrefFor("Company settings")).toBe("/company/settings");
+    expect(hrefFor("Invites")).toBe("/company/settings/invites");
+    expect(hrefFor("Secrets")).toBe("/company/settings/secrets");
+    expect(hrefFor("Plugins")).toBe("/instance/settings/plugins");
+    expect(hrefFor("MCP servers")).toBe("/instance/settings/external-mcp");
+    expect(hrefFor("Experimental")).toBe("/instance/settings/experimental");
+
+    const headings = Array.from(container.querySelectorAll("h2")).map((el) => el.textContent ?? "");
+    expect(headings).toContain("Company settings");
+    expect(headings).toContain("Instance settings");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("says which settings affect every company, on the group and on each row", async () => {
+    // The scope document is explicit that a system wide setting must not look
+    // like it applies only to the company you are in. Both scopes have a page
+    // called Access, so the note has to be on the row, not only the heading.
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Every company on this instance, not only the one you are in.");
+    expect(text).toContain("Just the company you are in.");
+
+    const links = Array.from(container.querySelectorAll("a"));
+    const cardFor = (href: string) =>
+      links.find((el) => el.getAttribute("href") === href)?.textContent ?? "";
+    expect(cardFor("/instance/settings/plugins")).toContain("Every company");
+    expect(cardFor("/company/settings/secrets")).toContain("This company");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("does not offer to pin a settings page, because a pin there would be dropped", async () => {
+    // Pins resolve through resolvePinnedWorkspaceItems, which only knows core
+    // workspace ids and plugin routes. A star on these would look like it
+    // worked and then quietly do nothing.
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(renderWithQueryClient());
+    });
+
+    const pinLabels = Array.from(container.querySelectorAll("button"))
+      .map((el) => el.getAttribute("aria-label") ?? "")
+      .filter((label) => label.startsWith("Pin ") || label.startsWith("Unpin "));
+    expect(pinLabels.length).toBeGreaterThan(0);
+    for (const forbidden of ["Pin Secrets", "Pin Plugins", "Pin Company settings", "Pin MCP servers"]) {
+      expect(pinLabels, forbidden).not.toContain(forbidden);
     }
 
     await act(async () => {

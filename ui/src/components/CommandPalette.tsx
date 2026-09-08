@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
@@ -22,6 +22,11 @@ import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
 import { usePluginSlots } from "@/plugins/slots";
 import { CORE_WORKSPACE_CATALOG, isWorkspaceAvailable } from "@/lib/workspace-catalog";
+import {
+  SETTINGS_SCOPE_COPY,
+  settingsCatalogForScope,
+  settingsSearchValue,
+} from "@/lib/settings-catalog";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 
 export function CommandPalette() {
@@ -157,8 +162,9 @@ export function CommandPalette() {
         // assistants, the org chart, memories, skills, approvals, receipts,
         // costs, activity, intake queues, every add-on page and the all
         // company pages. Naming a few of the ones people do not expect is
-        // more use than listing the three they already know about.
-        placeholder="Search tasks, agents, email, notes, add-ons..."
+        // more use than listing the three they already know about. Settings
+        // joined the list on 2026-09-08, when the box learned about them.
+        placeholder="Search tasks, agents, email, notes, add-ons, settings..."
         value={query}
         onValueChange={setQuery}
       />
@@ -296,6 +302,39 @@ export function CommandPalette() {
             </CommandGroup>
           </>
         )}
+
+        {/*
+          Settings, last on purpose. Before this the box found every page in
+          the app except the settings ones, so typing "plugins", "secrets" or
+          "MCP" found nothing at all. Listed last so that opening the box
+          without typing still shows the daily things first.
+
+          Two groups, never one, and each row says who it affects: the scope
+          document rules out a system wide setting looking like it applies
+          only to the company you are in. Both scopes have a page called
+          Access, which is exactly why the note is on the row and not only in
+          the heading.
+        */}
+        {(["company", "instance"] as const).map((scope) => (
+          <Fragment key={scope}>
+            <CommandSeparator />
+            <CommandGroup heading={SETTINGS_SCOPE_COPY[scope].title}>
+              {settingsCatalogForScope(scope).map((entry) => (
+                <CommandItem
+                  key={entry.id}
+                  value={settingsSearchValue(entry)}
+                  onSelect={() => go(entry.path)}
+                >
+                  <entry.icon className="mr-2 h-4 w-4" />
+                  {entry.label}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {SETTINGS_SCOPE_COPY[scope].rowNote}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Fragment>
+        ))}
       </CommandList>
     </CommandDialog>
   );

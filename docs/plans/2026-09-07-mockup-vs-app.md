@@ -235,6 +235,39 @@ App today: instance settings are reached from the account menu and company setti
 company menu, with no sidebar line. Memories sits in the Work group and Skills sits in the company
 dropdown, so what the mockup calls Knowledge is two separate entries in two different places.
 
+**Decided 2026-09-08, and they are two different questions.**
+
+**Knowledge: nothing to build.** The scope document asks for Knowledge to be "discoverable through
+stable entries/catalog paths", and it already is. Memories and Skills are both entries in
+`ui/src/lib/workspace-catalog.ts`, so both are already on the Everything page and both are already
+found by the search box. Checked live on 2026-09-08 against the running app: the Everything page
+lists them, and typing "skill" into the search box returns Skills under Pages. A Knowledge page
+with two tabs would be a new page whose only content is two pages that already exist and already
+have their own addresses, and it would need a new menu line to be worth having, which works against
+the 2026-09-07 decision to cut the main menu to eight entries. Work and Team each folded several
+menu lines into one; a Knowledge page would fold none and add one.
+
+**Administration: no page and no menu line, but the catalog half was genuinely missing.** The
+mockup's Administration page is a list of section names whose Inspect buttons open stub dialogs, so
+there is nothing there to copy, and a hub page that only holds links to screens that already have
+their own navigation is the "manufactured page" the scope document rules out. The two stable
+entries were already in place: the company menu offers Company settings and the account menu offers
+Instance settings.
+
+What was missing is the other half of the same sentence, the catalog paths. The Everything page
+promises "every workspace this company can reach" and the search box finds every other page in the
+app, and neither of them knew a single settings page existed. Typing "plugins", "secrets",
+"invites" or "MCP" found nothing. So the settings destinations now have their own small list,
+`ui/src/lib/settings-catalog.ts`, which the Everything page and the search box both read. Sixteen
+real screens, each reached directly. No new page, no new menu line, and nothing moved.
+
+They are shown as two groups, never merged into one Administration heap, because the scope document
+says a system wide setting must not look like it applies only to the company you are in. Each group
+carries its own sentence and each row carries the short version, "This company" or "Every company".
+Both scopes have a page called Access, which is exactly why the note is on the row rather than only
+in the heading. Settings entries are deliberately not pinnable: pins resolve against core workspace
+ids and plugin routes, so a star there would look like it worked and quietly do nothing.
+
 ### Things the mockup shows that the app already matches
 
 Worth stating so nobody rebuilds them: Calendar's month and list views, the switch that hides agent

@@ -37,8 +37,12 @@ import {
  * restrictions, local sub-navigation). Deliberately excludes pure redirects
  * (e.g. "/dashboard" -> "/brief"), deeply-nested detail routes (issue/agent
  * detail — reached via search results, not this list), and settings/admin
- * surfaces already reachable through the company/instance menus (adding
- * those here is future scope, not a gap this slice claims to close).
+ * surfaces already reachable through the company/instance menus.
+ *
+ * Settings live in their own list, lib/settings-catalog.ts, added 2026-09-08.
+ * They are not here because entries here are pinnable and every routeRoot
+ * here has to be a real company-scoped route root (a test enforces it), and
+ * a settings path is neither.
  *
  * Plugin-contributed pages are NOT listed here — they're already available
  * with real labels via usePluginSlots({ slotTypes: ["page"] }) in
