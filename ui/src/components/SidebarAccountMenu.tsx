@@ -72,6 +72,12 @@ interface SidebarAccountMenuProps {
     | null;
   /** The branch this install tracks, named only when we actually know it. */
   trackedBranch?: string | null;
+  /**
+   * Whether this copy runs the working tree's own source rather than a build of
+   * it. It is said, never offered: there is no build in the path, so a rebuild
+   * has nothing to apply and no pill appears for it.
+   */
+  runningFromSource?: boolean;
 }
 
 interface MenuActionProps {
@@ -252,6 +258,7 @@ export function SidebarAccountMenu({
   updateReason = null,
   remoteRelation = null,
   trackedBranch = null,
+  runningFromSource = false,
 }: SidebarAccountMenuProps) {
   const shortCommit = commit ? commit.slice(0, 8) : null;
   const [internalOpen, setInternalOpen] = useState(false);
@@ -490,6 +497,17 @@ export function SidebarAccountMenu({
                           {shortCommit}
                         </span>
                       ) : null}
+                    </p>
+                  ) : null}
+                  {/*
+                    Why this copy shows a commit that the install marker does
+                    not match and yet offers no rebuild. One quiet line, next to
+                    the version it is about, and only ever on a copy that really
+                    is running the working tree.
+                  */}
+                  {runningFromSource ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      This copy runs straight from the working tree, so there is nothing to build.
                     </p>
                   ) : null}
                   {updateAvailable ? (

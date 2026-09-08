@@ -118,6 +118,10 @@ export function Layout() {
   // that would move it backwards.
   const remoteRelation = updateCheck?.remoteRelation ?? null;
   const trackedBranch = updateCheck?.branch ?? null;
+  // Whether this copy runs straight from the working tree. Nothing is offered
+  // on the back of it; the account card just says so, which is why a checkout
+  // that differs from the install marker shows no Rebuild pill here.
+  const runningFromSource = updateCheck?.runningFromSource === true;
   const keyboardShortcutsEnabled = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -397,6 +401,7 @@ export function Layout() {
               updateReason={updateReason}
               remoteRelation={remoteRelation}
               trackedBranch={trackedBranch}
+              runningFromSource={runningFromSource}
             />
           </div>
         ) : (
@@ -426,6 +431,7 @@ export function Layout() {
                 updateReason={updateReason}
                 remoteRelation={remoteRelation}
                 trackedBranch={trackedBranch}
+                runningFromSource={runningFromSource}
               />
             </div>
           </div>

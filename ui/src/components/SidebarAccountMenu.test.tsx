@@ -522,6 +522,26 @@ describe("SidebarAccountMenu", () => {
       });
     });
 
+    // A copy running the working tree has no build to move forward, so the
+    // Rebuild pill has nothing to offer and must not appear.
+    it("shows no Rebuild pill on a copy that runs from the working tree", async () => {
+      const root = await renderMenu({
+        updateAvailable: false,
+        runningFromSource: true,
+        remoteRelation: "ahead",
+      });
+
+      expect(container.querySelector('button[aria-label^="Downloaded but not built"]')).toBeNull();
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+      // The one slot on the trigger row still belongs to the GitHub answer.
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).toContain("Newer");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
     // Both can be true at once: newer than GitHub, and never built. The
     // rebuild is a real job so it keeps the pill; the badge stands down.
     it("keeps the Rebuild pill when this copy is ahead but was never built", async () => {
@@ -622,6 +642,37 @@ describe("SidebarAccountMenu", () => {
       expect(document.body.textContent).not.toContain("newer than GitHub");
       expect(document.body.textContent).not.toContain("have both changed");
       expect(document.body.textContent).not.toContain("has no branch called");
+      void root;
+    });
+
+    it("says this copy runs from the working tree, and offers no rebuild", async () => {
+      const root = await renderOpenMenu({ updateAvailable: false, runningFromSource: true });
+
+      expect(document.body.textContent).toContain(
+        "This copy runs straight from the working tree, so there is nothing to build.",
+      );
+      expect(document.body.textContent).not.toContain("Downloaded but not built");
+      void root;
+    });
+
+    it("says nothing about the working tree on a copy that runs a build", async () => {
+      const root = await renderOpenMenu({ updateAvailable: false });
+
+      expect(document.body.textContent).not.toContain("runs straight from the working tree");
+      void root;
+    });
+
+    // The real rebuild case is untouched: a built copy that was never rebuilt
+    // still says so, and says nothing about a working tree it is not running.
+    it("still says the build is behind on a copy that runs a build", async () => {
+      const root = await renderOpenMenu({
+        updateAvailable: true,
+        updateReason: "build_behind",
+        runningFromSource: false,
+      });
+
+      expect(document.body.textContent).toContain("Downloaded but not built. Rebuild to run it.");
+      expect(document.body.textContent).not.toContain("runs straight from the working tree");
       void root;
     });
   });

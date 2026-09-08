@@ -46,6 +46,12 @@ export interface SystemUpdateCheck {
   remoteCommit: string | null;
   /** What was last built and installed. */
   installedCommit: string | null;
+  /**
+   * Whether this copy runs the working tree's own source rather than a build
+   * of it. When it is true there is no build in the path, so no rebuild is
+   * ever offered and the account card says so.
+   */
+  runningFromSource: boolean;
   reason: SystemUpdateCheckReason | null;
   /** Which way round this copy and GitHub are, or null when nothing was compared. */
   remoteRelation: SystemRemoteRelation | null;

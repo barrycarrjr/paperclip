@@ -25,6 +25,7 @@ import {
   __clearUpdateCheckCacheForTests,
   checkForRemoteUpdate,
   compareCheckoutToRemote,
+  isRunningFromSource,
   parseGitHubRemote,
 } from "../services/check-for-updates.js";
 
@@ -87,6 +88,45 @@ describe("parseGitHubRemote", () => {
   it("returns null for unparseable input", () => {
     expect(parseGitHubRemote("not-a-url")).toBeNull();
     expect(parseGitHubRemote("")).toBeNull();
+  });
+});
+
+/**
+ * The signal that tells an instance running from source apart from one running
+ * a build. Both halves are passed in, so each case says out loud what it is
+ * testing instead of depending on how the test runner itself was started.
+ */
+describe("isRunningFromSource", () => {
+  const SOURCE_MODULE =
+    "file:///C:/Users/example/paperclip/server/src/services/check-for-updates.ts";
+  const BUILT_MODULE =
+    "file:///C:/Users/example/paperclip/server/dist/services/check-for-updates.js";
+
+  it("is true when the server module is TypeScript and Vite serves the browser code", () => {
+    expect(isRunningFromSource(SOURCE_MODULE, { PAPERCLIP_UI_DEV_MIDDLEWARE: "true" })).toBe(true);
+  });
+
+  // A built server with the dev middleware switched on still runs compiled
+  // server code, so a rebuild would still apply something.
+  it("is false on a built server even when the browser code comes from Vite", () => {
+    expect(isRunningFromSource(BUILT_MODULE, { PAPERCLIP_UI_DEV_MIDDLEWARE: "true" })).toBe(false);
+  });
+
+  // And the other way round: source server, built browser bundle. The bundle is
+  // stale until something builds it.
+  it("is false when the browser code comes from a build", () => {
+    expect(isRunningFromSource(SOURCE_MODULE, {})).toBe(false);
+    expect(isRunningFromSource(SOURCE_MODULE, { PAPERCLIP_UI_DEV_MIDDLEWARE: "false" })).toBe(false);
+  });
+
+  it("is false for a built module with no dev middleware, which is an ordinary install", () => {
+    expect(isRunningFromSource(BUILT_MODULE, {})).toBe(false);
+  });
+
+  it("still reads a query-suffixed module URL as source", () => {
+    expect(
+      isRunningFromSource(`${SOURCE_MODULE}?v=1`, { PAPERCLIP_UI_DEV_MIDDLEWARE: "true" }),
+    ).toBe(true);
   });
 });
 
@@ -678,6 +718,150 @@ describe("checkForRemoteUpdate", () => {
       expect(result.error).toBe("unsupported_remote");
       expect(result.localCommit).toBe(LIVE_HEAD);
       expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
+    });
+
+    // The second wrong answer, and the sibling of the "ahead" one: a Rebuild
+    // pill on an instance that has no build anywhere in its path. The marker is
+    // left over from the last built install, and the running code already IS
+    // the checkout, so a rebuild has nothing to apply.
+    describe("when the instance runs from source", () => {
+      const fromSource = { runningFromSourceImpl: () => true };
+      const fromBuild = { runningFromSourceImpl: () => false };
+
+      it("offers no rebuild when the marker records a different commit", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: LIVE_HEAD })) as never,
+          headImpl: async () => LIVE_HEAD,
+        });
+
+        expect(result.runningFromSource).toBe(true);
+        expect(result.reason).toBeNull();
+        expect(result.available).toBe(false);
+        // The two commits are still reported, because they are still true. It
+        // is only the offer to act on them that goes away.
+        expect(result.localCommit).toBe(LIVE_HEAD);
+        expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
+      });
+
+      // The state this machine is in: a checkout ahead of GitHub, run straight
+      // from the working tree. Neither button is a real job, so neither shows.
+      it("offers nothing at all when it is also ahead of GitHub", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: "feedface" })) as never,
+          headImpl: async () => LIVE_HEAD,
+          relationImpl: async () => "ahead",
+        });
+
+        expect(result.remoteRelation).toBe("ahead");
+        expect(result.reason).toBeNull();
+        expect(result.available).toBe(false);
+        expect(result.runningFromSource).toBe(true);
+      });
+
+      // Running from source says nothing about the remote. New commits on
+      // GitHub are still worth having, so the pull is untouched.
+      it("still offers the pull when GitHub really does have newer commits", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: "feedface" })) as never,
+          headImpl: async () => LIVE_HEAD,
+          relationImpl: async () => "behind",
+        });
+
+        expect(result.reason).toBe("remote_ahead");
+        expect(result.available).toBe(true);
+        expect(result.runningFromSource).toBe(true);
+      });
+
+      // The paths that never reach GitHub carry the local rebuild answer on
+      // their own, so the suppression has to hold there too.
+      it("offers no rebuild on a remote it cannot check", async () => {
+        mockInstall({ remote: "https://gitlab.com/foo/bar.git" });
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn() as never,
+          headImpl: async () => LIVE_HEAD,
+        });
+
+        expect(result.error).toBe("unsupported_remote");
+        expect(result.reason).toBeNull();
+        expect(result.available).toBe(false);
+        expect(result.runningFromSource).toBe(true);
+      });
+
+      it("offers no rebuild when GitHub has never seen the branch", async () => {
+        mockInstall({ branch: "ux-mockup-shell" });
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () =>
+            jsonResponse({ message: "No commit found for SHA" }, { ok: false, status: 422 }),
+          ) as never,
+          headImpl: async () => LIVE_HEAD,
+        });
+
+        expect(result.error).toBe("branch_not_on_remote");
+        expect(result.reason).toBeNull();
+        expect(result.available).toBe(false);
+      });
+
+      it("answers the source question even with no install marker at all", async () => {
+        mockInstall("missing");
+        const result = await checkForRemoteUpdate({ ...fromSource, fetchImpl: vi.fn() as never });
+
+        expect(result.error).toBe("no_install_marker");
+        expect(result.runningFromSource).toBe(true);
+        expect(result.available).toBe(false);
+      });
+
+      // The case that must not be weakened. Same install marker, same commits,
+      // same everything except that this instance runs a build: the rebuild is
+      // still found, still offered, and still called build_behind.
+      it("keeps the rebuild on an instance that runs a build", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromBuild,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: LIVE_HEAD })) as never,
+          headImpl: async () => LIVE_HEAD,
+        });
+
+        expect(result.runningFromSource).toBe(false);
+        expect(result.reason).toBe("build_behind");
+        expect(result.available).toBe(true);
+        expect(result.localCommit).toBe(LIVE_HEAD);
+        expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
+      });
+
+      it("keeps the rebuild on a built instance that is ahead of GitHub", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromBuild,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: "feedface" })) as never,
+          headImpl: async () => LIVE_HEAD,
+          relationImpl: async () => "ahead",
+        });
+
+        expect(result.remoteRelation).toBe("ahead");
+        expect(result.reason).toBe("build_behind");
+        expect(result.available).toBe(true);
+      });
+
+      it("keeps the rebuild on a built instance whose remote cannot be checked", async () => {
+        mockInstall({ remote: "https://gitlab.com/foo/bar.git" });
+        const result = await checkForRemoteUpdate({
+          ...fromBuild,
+          fetchImpl: vi.fn() as never,
+          headImpl: async () => LIVE_HEAD,
+        });
+
+        expect(result.error).toBe("unsupported_remote");
+        expect(result.reason).toBe("build_behind");
+        expect(result.available).toBe(true);
+      });
     });
 
     it("reports no update when both HEAD and marker are unreadable", async () => {

@@ -24,12 +24,14 @@ const mockSidebarAccountMenu = vi.hoisted(() =>
       updateAvailable?: boolean;
       remoteRelation?: string | null;
       trackedBranch?: string | null;
+      runningFromSource?: boolean;
     }) => (
       <div
         data-testid="account-menu"
         data-update-available={props.updateAvailable ? "yes" : "no"}
         data-remote-relation={props.remoteRelation ?? "none"}
         data-tracked-branch={props.trackedBranch ?? "none"}
+        data-running-from-source={props.runningFromSource ? "yes" : "no"}
       >
         Account menu
       </div>
@@ -292,6 +294,85 @@ describe("Layout", () => {
 
     expect(mockSystemApi.checkUpdate).toHaveBeenCalled();
     const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
+    expect(accountMenuNode?.getAttribute("data-update-available")).toBe("yes");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // A copy running the working tree has no build to move forward. The account
+  // menu can only say so, and only leave the Rebuild pill off, if the fact
+  // reaches it.
+  it("forwards the running-from-source answer to SidebarAccountMenu", async () => {
+    mockSystemApi.checkUpdate.mockResolvedValue({
+      available: false,
+      localCommit: "e1660dbe9e68191fb8d93e2d671e4ce5e4a9d55f",
+      remoteCommit: "558f0096faa8fbb1caee01dede0de231568f7ee5",
+      installedCommit: "558f0096faa8fbb1caee01dede0de231568f7ee5",
+      runningFromSource: true,
+      reason: null,
+      remoteRelation: "ahead",
+      branch: "master",
+      lastChecked: new Date().toISOString(),
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
+    expect(accountMenuNode?.getAttribute("data-running-from-source")).toBe("yes");
+    expect(accountMenuNode?.getAttribute("data-update-available")).toBe("no");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // The same wiring on an instance that runs a build: the rebuild is still
+  // offered, and the working-tree answer is plainly no.
+  it("forwards a build-behind rebuild offer with running-from-source off", async () => {
+    mockSystemApi.checkUpdate.mockResolvedValue({
+      available: true,
+      localCommit: "e1660dbe9e68191fb8d93e2d671e4ce5e4a9d55f",
+      remoteCommit: "e1660dbe9e68191fb8d93e2d671e4ce5e4a9d55f",
+      installedCommit: "558f0096faa8fbb1caee01dede0de231568f7ee5",
+      runningFromSource: false,
+      reason: "build_behind",
+      remoteRelation: "level",
+      branch: "master",
+      lastChecked: new Date().toISOString(),
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
+    expect(accountMenuNode?.getAttribute("data-running-from-source")).toBe("no");
     expect(accountMenuNode?.getAttribute("data-update-available")).toBe("yes");
 
     await act(async () => {

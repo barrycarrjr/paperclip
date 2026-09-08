@@ -36,6 +36,17 @@
  * direction cannot be established it is reported as `unknown` and nothing is
  * offered: an invented direction is worse than an absent one.
  *
+ * The build comparison has a direction problem of its own, and it is not about
+ * which commit is newer. `build_behind` only means anything when the running
+ * code came from a build. An instance that runs the checkout's own source, with
+ * the server started through tsx and the browser code served by Vite, already
+ * IS the checkout: the marker left over from the last built install differs
+ * from HEAD, and yet there is nothing a rebuild would apply. Offering a rebuild
+ * there is wrong in the same way offering an update to a checkout that is ahead
+ * was. So `runningFromSource` is worked out from the running process itself,
+ * no rebuild is offered while it is true, and the account card says plainly
+ * that this copy runs from the working tree.
+ *
  * Results are cached in-process with a short TTL so repeated UI polls and
  * multi-tab sessions don't burn GitHub's 60/hr unauthenticated rate limit. The
  * cache resets on server restart, which is exactly what we want: after an
@@ -78,6 +89,9 @@ export type UpdateCheckErrorReason =
  * checked out has never been built, so a rebuild applies it without touching
  * the remote. When both are true the pull is reported, because updating does
  * the rebuild too.
+ *
+ * `build_behind` is never reported on an instance that runs from source. There
+ * is no build in the path there, so there is nothing for a rebuild to apply.
  */
 export type UpdateCheckReason = "remote_ahead" | "build_behind";
 
@@ -110,6 +124,12 @@ export interface UpdateCheckResult {
   remoteCommit: string | null;
   /** What was last built and installed, from the install marker. */
   installedCommit: string | null;
+  /**
+   * Whether this instance is running the checkout's own source rather than a
+   * build of it. True means a rebuild has nothing to apply, so `build_behind`
+   * is never reported. See {@link isRunningFromSource}.
+   */
+  runningFromSource: boolean;
   /** Which of the two gaps this is, or null when there is no gap. */
   reason: UpdateCheckReason | null;
   /**
@@ -192,6 +212,45 @@ async function readCheckoutHead(repoPath: string | null): Promise<string | null>
     logger.warn({ err, repoPath }, "Update check: could not read local git HEAD");
     return null;
   }
+}
+
+/**
+ * Is this instance running the checkout's own source, rather than a build of
+ * it?
+ *
+ * This decides whether a rebuild has anything to apply, so it is worked out
+ * from facts about the running process rather than from anything a person can
+ * type. Two parts, and both have to be true:
+ *
+ * - This very module was loaded from a `.ts` file. Server code that came from a
+ *   build is `server/dist/services/check-for-updates.js`; the same code run
+ *   from source through tsx is `server/src/services/check-for-updates.ts`.
+ *   `import.meta.url` is the path the running module was actually loaded from,
+ *   so it describes the code doing the asking, not how it was launched.
+ * - The browser code is being served by Vite straight from `ui/src`, which is
+ *   what `PAPERCLIP_UI_DEV_MIDDLEWARE` turns on. `server/src/config.ts` reads
+ *   the same variable into `uiDevMiddleware` and `server/src/index.ts` turns
+ *   that into `uiMode === "vite-dev"`, while `cli/src/commands/run.ts` sets it
+ *   itself when the entry point it imports is `server/src/index.ts`. It is read
+ *   here rather than importing the config module, because importing that module
+ *   loads .env files and repairs config files as a side effect, and a read-only
+ *   check has no business doing either.
+ *
+ * Both parts, because either one on its own still leaves work a rebuild would
+ * do: a source server behind a built UI bundle serves stale browser code, and a
+ * built server behind Vite runs stale server code. Only when both come from the
+ * working tree is the running app the checkout itself.
+ *
+ * The arguments exist so tests can state the two facts directly, instead of the
+ * check having to be run twice under two different harnesses.
+ */
+export function isRunningFromSource(
+  moduleUrl: string = import.meta.url,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const serverFromSource = /\.tsx?(?:[?#].*)?$/i.test(moduleUrl);
+  const uiFromSource = env.PAPERCLIP_UI_DEV_MIDDLEWARE === "true";
+  return serverFromSource && uiFromSource;
 }
 
 /** Does this checkout already hold the given commit in its object store? */
@@ -307,6 +366,8 @@ interface FetchOptions {
   fetchImpl?: typeof ghFetch;
   /** Override the local `git rev-parse HEAD` read for tests. */
   headImpl?: (repoPath: string | null) => Promise<string | null>;
+  /** Override the running-from-source check for tests. */
+  runningFromSourceImpl?: () => boolean;
   /** Override the local git direction test for tests. */
   relationImpl?: (
     repoPath: string | null,
@@ -451,6 +512,7 @@ async function compareOnGitHub(
 export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<UpdateCheckResult> {
   const now = opts.now ?? Date.now;
   const lastChecked = new Date(now()).toISOString();
+  const runningFromSource = (opts.runningFromSourceImpl ?? isRunningFromSource)();
 
   const info = readInstallInfo();
   if (!info) {
@@ -459,6 +521,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
       localCommit: null,
       remoteCommit: null,
       installedCommit: null,
+      runningFromSource,
       reason: null,
       remoteRelation: null,
       branch: null,
@@ -477,14 +540,25 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
   const installedCommit = info.commit;
 
   /**
-   * Is the installed build behind what is checked out?
+   * Does the install marker record a different commit from what is checked out?
    *
    * Only answerable when git actually ran; with no HEAD there is nothing to
    * compare the marker against and claiming a gap would be a guess.
    */
-  const buildBehind = Boolean(
+  const markerDiffersFromCheckout = Boolean(
     checkoutCommit && installedCommit && checkoutCommit !== installedCommit,
   );
+
+  /**
+   * Is there a build that a rebuild would move forward?
+   *
+   * A differing marker is only half the answer. It says the last build was of a
+   * different commit, which matters when the running app came from a build and
+   * means nothing when it did not. On an instance running from source the
+   * marker is a leftover from the last built install, and the running code is
+   * already the checkout, so there is nothing for a rebuild to apply.
+   */
+  const buildBehind = markerDiffersFromCheckout && !runningFromSource;
 
   /**
    * The answer when there is no usable remote to compare against. The local
@@ -498,6 +572,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
     localCommit,
     remoteCommit: null,
     installedCommit,
+    runningFromSource,
     reason: buildBehind ? "build_behind" : null,
     remoteRelation,
     branch: info.branch,
@@ -559,6 +634,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
     localCommit,
     remoteCommit,
     installedCommit,
+    runningFromSource,
     reason,
     remoteRelation,
     branch,
