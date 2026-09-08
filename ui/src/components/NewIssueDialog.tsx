@@ -974,6 +974,10 @@ export function NewIssueDialog() {
   return (
     <Dialog
       open={newIssueOpen}
+      // Not modal: this dialog is built to stay open and keep the company you
+      // started it in (see the dialogCompanyId state above) while you switch
+      // company on the rail behind it, so the rail has to stay clickable.
+      modal={false}
       onOpenChange={(open) => {
         if (!open && !createIssue.isPending) closeNewIssue();
       }}
@@ -993,31 +997,17 @@ export function NewIssueDialog() {
             event.preventDefault();
           }
         }}
-        onPointerDownOutside={(event) => {
-          if (createIssue.isPending) {
-            event.preventDefault();
-            return;
-          }
-          // Radix Dialog's modal DismissableLayer calls preventDefault() on
-          // pointerdown events that originate outside the Dialog DOM tree.
-          // Popover portals render at the body level (outside the Dialog), so
-          // touch events on popover content get their default prevented — which
-          // kills scroll gesture recognition on mobile.  Telling Radix "this
-          // event is handled" skips that preventDefault, restoring touch scroll.
-          const target = event.detail.originalEvent.target as HTMLElement | null;
-          if (target?.closest("[data-radix-popper-content-wrapper]")) {
-            event.preventDefault();
-          }
-        }}
-        onInteractOutside={(event) => {
-          // Same guard as onPointerDownOutside: allow interact events that land
-          // inside a Radix portal (e.g. the company-switcher Popover) so that
-          // clicks on popover items aren't eaten by the Dialog's DismissableLayer.
-          const target = event.detail.originalEvent.target as HTMLElement | null;
-          if (target?.closest("[data-radix-popper-content-wrapper]")) {
-            event.preventDefault();
-          }
-        }}
+        // Always prevent the default: `modal={false}` above only stops the
+        // click from being blocked (see the comment on the Dialog root), it
+        // does not stop Radix's DismissableLayer treating that same click as
+        // an "outside interaction" and closing the dialog for it, which would
+        // lose whatever was typed the moment you switched company. This used
+        // to only preventDefault for a pending create, or for a click landing
+        // inside a Radix portal (the company-switcher Popover) — both are now
+        // covered by the same unconditional preventDefault, so those two
+        // narrower checks are gone rather than kept as dead branches.
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
       >
         {/* Header bar */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">

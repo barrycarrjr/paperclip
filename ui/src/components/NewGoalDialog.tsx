@@ -115,6 +115,11 @@ export function NewGoalDialog() {
   return (
     <Dialog
       open={newGoalOpen}
+      // Not modal: this dialog is built to stay open and keep the company you
+      // started it in (see hooks/useDialogCompany.ts and
+      // movedCompanyWhileOpen above) while you switch company on the rail
+      // behind it, so the rail has to stay clickable.
+      modal={false}
       onOpenChange={(open) => {
         if (!open) {
           reset();
@@ -126,6 +131,12 @@ export function NewGoalDialog() {
         showCloseButton={false}
         className={cn("p-0 gap-0", expanded ? "sm:max-w-2xl" : "sm:max-w-lg")}
         onKeyDown={handleKeyDown}
+        // Radix still treats a click on the rail as an "outside" interaction
+        // and closes the dialog for it by default, `modal={false}` only stops
+        // it from being blocked. Without this the fix above lets the click
+        // reach the rail and then the dialog closes anyway, losing whatever
+        // was typed. Escape and the × button are untouched.
+        onPointerDownOutside={(event) => event.preventDefault()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
