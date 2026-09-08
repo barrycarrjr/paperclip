@@ -159,6 +159,35 @@ in the main app sidebar, contributed by the two phone add-ons, and each entry is
 So the grouping the mockup asks for is already real; it is in the outer menu rather than inside the
 Phone page.
 
+**Decided 2026-09-08: do not build this.** Looked at again after the main menu was cut to eight
+entries, in case that made the phone groups too large a share of it. It does not.
+
+What the two add-ons really contribute: 3cx-tools gives one folding "Phone" item holding Live,
+History and Directory, 11 real pages; phone-tools gives a second folding "AI Calls" item holding 5
+more. Fully open that is 21 lines, but both groups remember whether you left them shut, per browser,
+so on this machine they currently cost 2 lines out of about 11. Both groups appear together in only
+two companies anyway, because each add-on allows a different set.
+
+Three reasons not to move them. Nobody can own the page: there is no Phone page today, neither
+add-on can host the other, and a company with only one of them would have pages with nowhere to
+live, while making the app own it would mean the core product learning what a phone is and which
+add-ons fill it, which is the coupling the add-on system exists to avoid. It would make the pages
+harder to reach, not easier: Recordings is two clicks today and would become three, and all 15
+addresses would still have to work, so it adds a hub and a second menu without removing anything.
+And the shipping risk is one sided: add-ons release on their own tag, so an older copy of the app
+would show a broken Phone entry while those pages vanished from the menu, with nothing gained to
+offset it.
+
+The scope document also asks for those groups to survive, not to move: "Live, History, Directory,
+and AI calls with their existing subviews", and "maintain distinct scope/permission semantics even
+when two plugins share one navigation group".
+
+One real but separate thing was found while looking: the two phone groups are not next to each
+other, because the host sorts contributed menu items by the add-on's display name when no order is
+set, so Backups sits between 3CX and Phone Tools. The fix is an explicit order in the two add-on
+manifests. That is an add-on change and should ride along with the next release rather than being
+cut on its own.
+
 ### 11. The agent's own page has slightly different tabs. Size: small.
 
 Mockup: Current work, Instructions, Skills, Runs, Configuration, Budget, Channels.
