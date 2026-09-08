@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GOAL_STATUSES, GOAL_LEVELS } from "@paperclipai/shared";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { useDialogCompanyId } from "../hooks/useDialogCompany";
 import { goalsApi } from "../api/goals";
 import { assetsApi } from "../api/assets";
 import { queryKeys } from "../lib/queryKeys";
@@ -35,7 +36,14 @@ const levelLabels: Record<string, string> = {
 
 export function NewGoalDialog() {
   const { newGoalOpen, newGoalDefaults, closeNewGoal } = useDialog();
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { companies, selectedCompanyId } = useCompany();
+  // The company this goal is being written in, held still while the dialog is
+  // open so changing company does not file it somewhere else. See
+  // hooks/useDialogCompany.ts.
+  const companyId = useDialogCompanyId(newGoalOpen);
+  const dialogCompany = companies.find((c) => c.id === companyId) ?? null;
+  const movedCompanyWhileOpen =
+    newGoalOpen && !!companyId && !!selectedCompanyId && companyId !== selectedCompanyId;
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -53,16 +61,16 @@ export function NewGoalDialog() {
   const appliedParentId = parentId || newGoalDefaults.parentId || "";
 
   const { data: goals } = useQuery({
-    queryKey: queryKeys.goals.list(selectedCompanyId!),
-    queryFn: () => goalsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId && newGoalOpen,
+    queryKey: queryKeys.goals.list(companyId!),
+    queryFn: () => goalsApi.list(companyId!),
+    enabled: !!companyId && newGoalOpen,
   });
 
   const createGoal = useMutation({
     mutationFn: (data: Record<string, unknown>) =>
-      goalsApi.create(selectedCompanyId!, data),
+      goalsApi.create(companyId!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(selectedCompanyId!) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(companyId!) });
       reset();
       closeNewGoal();
     },
@@ -70,8 +78,8 @@ export function NewGoalDialog() {
 
   const uploadDescriptionImage = useMutation({
     mutationFn: async (file: File) => {
-      if (!selectedCompanyId) throw new Error("No company selected");
-      return assetsApi.uploadImage(selectedCompanyId, file, "goals/drafts");
+      if (!companyId) throw new Error("No company selected");
+      return assetsApi.uploadImage(companyId, file, "goals/drafts");
     },
   });
 
@@ -85,7 +93,7 @@ export function NewGoalDialog() {
   }
 
   function handleSubmit() {
-    if (!selectedCompanyId || !title.trim()) return;
+    if (!companyId || !title.trim()) return;
     createGoal.mutate({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -122,9 +130,9 @@ export function NewGoalDialog() {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            {selectedCompany && (
+            {dialogCompany && (
               <span className="bg-muted px-1.5 py-0.5 rounded text-xs font-medium">
-                {selectedCompany.name.slice(0, 3).toUpperCase()}
+                {dialogCompany.name.slice(0, 3).toUpperCase()}
               </span>
             )}
             <span className="text-muted-foreground/60">&rsaquo;</span>
@@ -149,6 +157,14 @@ export function NewGoalDialog() {
             </Button>
           </div>
         </div>
+
+        {/* You changed company with this form open. It keeps the company you
+            started it in rather than quietly moving to the new one. */}
+        {movedCompanyWhileOpen && dialogCompany && (
+          <div className="px-4 pt-3 text-xs text-muted-foreground">
+            This goal will be saved in {dialogCompany.name}, where you started it.
+          </div>
+        )}
 
         {/* Title */}
         <div className="px-4 pt-4 pb-2 shrink-0">
