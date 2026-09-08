@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  companyPathForPortfolioPage,
   isInstanceSettingsPath,
   isPortfolioRoutePath,
+  isPortfolioScopeAvailable,
+  portfolioPathForPage,
+  resolveScopeChoiceDescription,
+  resolveScopeChoices,
   resolveScopeExplanation,
   resolveScopeKind,
   resolveScopeLabelText,
+  type ScopeChoiceCompany,
   type ScopeKind,
 } from "./scope-kind";
 
@@ -186,6 +192,211 @@ describe("resolveScopeExplanation", () => {
       const explanation = resolveScopeExplanation({ scopeKind, companyName: "Acme Printing", portfolioCompanyCount: 2 });
       const all = [explanation.title, explanation.meaning, explanation.includes, explanation.guardrail].join(" ");
       expect(all, scopeKind).not.toMatch(/[–—]/);
+    }
+  });
+});
+
+describe("portfolioPathForPage", () => {
+  it("opens the all company version of the page you are on", () => {
+    expect(portfolioPathForPage("/ACM/costs")).toBe("/portfolio-costs");
+    expect(portfolioPathForPage("/ACM/email")).toBe("/portfolio-email");
+    expect(portfolioPathForPage("/ACM/calendar")).toBe("/portfolio-calendar");
+    expect(portfolioPathForPage("/ACM/brief")).toBe("/portfolio-brief");
+  });
+
+  it("treats every Team address as the same question, so all four lead to Portfolio Agents", () => {
+    expect(portfolioPathForPage("/ACM/team")).toBe("/portfolio-agents");
+    expect(portfolioPathForPage("/ACM/agents/all")).toBe("/portfolio-agents");
+    expect(portfolioPathForPage("/ACM/org")).toBe("/portfolio-agents");
+    expect(portfolioPathForPage("/ACM/assistants")).toBe("/portfolio-agents");
+  });
+
+  it("keeps the page when a deeper address still names a page that has an all company version", () => {
+    expect(portfolioPathForPage("/ACM/issues/ACM-12")).toBe("/portfolio-issues");
+  });
+
+  it("falls back to the Portfolio Overview where there is no all company version", () => {
+    expect(portfolioPathForPage("/ACM/memories")).toBe("/portfolio-brief");
+    expect(portfolioPathForPage("/ACM/projects")).toBe("/portfolio-brief");
+    expect(portfolioPathForPage("/instance/settings/general")).toBe("/portfolio-brief");
+    expect(portfolioPathForPage("/")).toBe("/portfolio-brief");
+  });
+
+  it("stays put when you are already on a portfolio page", () => {
+    expect(portfolioPathForPage("/HQ/portfolio-costs")).toBe("/portfolio-costs");
+    expect(portfolioPathForPage("/HQ/portfolio-directives")).toBe("/portfolio-directives");
+  });
+});
+
+describe("companyPathForPortfolioPage", () => {
+  it("comes back to the same page for one company", () => {
+    expect(companyPathForPortfolioPage("/HQ/portfolio-costs")).toBe("/costs");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-email")).toBe("/email");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-brief")).toBe("/brief");
+  });
+
+  it("comes back from Portfolio Agents to the Team page", () => {
+    expect(companyPathForPortfolioPage("/HQ/portfolio-agents")).toBe("/team");
+  });
+
+  it("falls back to the Overview from a portfolio page with no per company twin", () => {
+    expect(companyPathForPortfolioPage("/HQ/portfolio-directives")).toBe("/brief");
+  });
+
+  it("answers null anywhere that is not a portfolio page, so an ordinary switch is left alone", () => {
+    expect(companyPathForPortfolioPage("/HQ/costs")).toBeNull();
+    expect(companyPathForPortfolioPage("/ACM/brief")).toBeNull();
+    expect(companyPathForPortfolioPage("/instance/settings/general")).toBeNull();
+  });
+});
+
+describe("isPortfolioScopeAvailable", () => {
+  it("offers Portfolio once there is an HQ and something to add up", () => {
+    expect(isPortfolioScopeAvailable({ hasPortfolioRoot: true, portfolioCompanyCount: 1 })).toBe(true);
+    expect(isPortfolioScopeAvailable({ hasPortfolioRoot: true, portfolioCompanyCount: 4 })).toBe(true);
+  });
+
+  it("does not offer Portfolio to somebody who can only reach one company", () => {
+    // A total of one company is that company, so the button would lead
+    // somewhere that repeats the page they are already on.
+    expect(isPortfolioScopeAvailable({ hasPortfolioRoot: true, portfolioCompanyCount: 0 })).toBe(false);
+  });
+
+  it("does not offer Portfolio with no HQ, because the pages live under HQ's address", () => {
+    expect(isPortfolioScopeAvailable({ hasPortfolioRoot: false, portfolioCompanyCount: 3 })).toBe(false);
+  });
+});
+
+describe("resolveScopeChoiceDescription", () => {
+  it("says HQ is its own team rather than the all company total", () => {
+    expect(
+      resolveScopeChoiceDescription({ scopeKind: "hq", companyName: "HQ", portfolioCompanyCount: 2 }),
+    ).toBe("Its own team and work, not the all company total.");
+  });
+
+  it("reuses the explanation copy for the other scopes so the two cannot drift apart", () => {
+    const portfolio = resolveScopeChoiceDescription({
+      scopeKind: "portfolio",
+      companyName: null,
+      portfolioCompanyCount: 2,
+    });
+    expect(portfolio).toBe(
+      resolveScopeExplanation({ scopeKind: "portfolio", companyName: null, portfolioCompanyCount: 2 }).meaning,
+    );
+    const company = resolveScopeChoiceDescription({
+      scopeKind: "company",
+      companyName: "Acme Printing",
+      portfolioCompanyCount: 2,
+    });
+    expect(company).toBe(
+      resolveScopeExplanation({ scopeKind: "company", companyName: "Acme Printing", portfolioCompanyCount: 2 })
+        .includes,
+    );
+  });
+});
+
+describe("resolveScopeChoices", () => {
+  const HQ: ScopeChoiceCompany = {
+    id: "company-hq",
+    name: "HQ",
+    issuePrefix: "HQ",
+    isPortfolioRoot: true,
+    kind: "standard",
+    status: "active",
+  };
+  const ACME: ScopeChoiceCompany = {
+    id: "company-acme",
+    name: "Acme Printing",
+    issuePrefix: "ACM",
+    isPortfolioRoot: false,
+    kind: "standard",
+    status: "active",
+  };
+  const PERSONAL: ScopeChoiceCompany = {
+    id: "company-personal",
+    name: "Barry",
+    issuePrefix: "PER",
+    isPortfolioRoot: false,
+    kind: "personal",
+    status: "active",
+  };
+  const CLOSED: ScopeChoiceCompany = { ...ACME, id: "company-old", name: "Old Shop", status: "archived" };
+
+  function choices(overrides?: Partial<Parameters<typeof resolveScopeChoices>[0]>) {
+    return resolveScopeChoices({
+      companies: [HQ, ACME, PERSONAL],
+      scopeKind: "company",
+      activeCompanyId: ACME.id,
+      portfolioCompanyCount: 2,
+      ...overrides,
+    });
+  }
+
+  it("puts Portfolio first and HQ directly below it", () => {
+    const result = choices();
+    expect(result.map((c) => c.title)).toEqual(["Portfolio", "HQ", "Acme Printing", "Barry"]);
+    expect(result[0]!.kind).toBe("portfolio");
+    expect(result[1]!.kind).toBe("hq");
+  });
+
+  it("separates the two by describing HQ as its own team, not the all company total", () => {
+    const result = choices();
+    expect(result[0]!.description).toBe("All the companies you can open, added together in one view.");
+    expect(result[1]!.description).toBe("Its own team and work, not the all company total.");
+  });
+
+  it("leaves Portfolio out for somebody who can only reach one company", () => {
+    const result = choices({ companies: [HQ], portfolioCompanyCount: 0, activeCompanyId: HQ.id, scopeKind: "hq" });
+    expect(result.map((c) => c.title)).toEqual(["HQ"]);
+  });
+
+  it("leaves Portfolio out when there is no HQ to hang it under", () => {
+    const result = choices({ companies: [ACME, PERSONAL], portfolioCompanyCount: 2 });
+    expect(result.map((c) => c.title)).toEqual(["Acme Printing", "Barry"]);
+  });
+
+  it("marks the company you are in", () => {
+    const result = choices();
+    expect(result.find((c) => c.title === "Acme Printing")!.current).toBe(true);
+    expect(result.filter((c) => c.current)).toHaveLength(1);
+  });
+
+  it("marks Portfolio, and not HQ, while a portfolio page is open", () => {
+    // The two share an address prefix, so HQ is the selected company on a
+    // portfolio page. Ticking both would say you are in two places.
+    const result = choices({ scopeKind: "portfolio", activeCompanyId: HQ.id });
+    expect(result.find((c) => c.title === "Portfolio")!.current).toBe(true);
+    expect(result.find((c) => c.title === "HQ")!.current).toBe(false);
+  });
+
+  it("marks nothing in instance settings, which are not a company", () => {
+    const result = choices({ scopeKind: "instance", activeCompanyId: ACME.id });
+    expect(result.filter((c) => c.current)).toHaveLength(0);
+  });
+
+  it("describes the private company as private rather than as an ordinary workspace", () => {
+    const result = choices();
+    expect(result.find((c) => c.title === "Barry")!.description).toContain("private to-dos and notes");
+  });
+
+  it("leaves out archived companies", () => {
+    const result = choices({ companies: [HQ, ACME, CLOSED] });
+    expect(result.map((c) => c.title)).not.toContain("Old Shop");
+  });
+
+  it("carries the company on every company row, so a caller can address it", () => {
+    for (const choice of choices()) {
+      if (choice.kind === "portfolio") {
+        expect(choice.company).toBeNull();
+      } else {
+        expect(choice.company?.issuePrefix.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("uses no dash characters a person would have to decode", () => {
+    for (const choice of choices()) {
+      expect(`${choice.title} ${choice.description}`).not.toMatch(/[–—]/);
     }
   });
 });

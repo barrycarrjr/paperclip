@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Paperclip, Plus } from "lucide-react";
+import { Globe2, Paperclip, Plus } from "lucide-react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   DndContext,
@@ -40,6 +40,13 @@ import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { isLiveRunStatus } from "../lib/liveIssueIds";
 import { SidebarMenu } from "./SidebarMenu";
+import {
+  companyPathForPortfolioPage,
+  isPortfolioRoutePath,
+  isPortfolioScopeAvailable,
+  portfolioPathForPage,
+  resolveScopeChoiceDescription,
+} from "../lib/scope-kind";
 
 /**
  * Body shown inside a CompanyRail hover-peek flyout: company name header
@@ -241,6 +248,66 @@ function SortableCompanyItem({
 }
 
 /**
+ * Portfolio, the top item on the rail, above HQ.
+ *
+ * Not a company, which is why it is drawn as an icon tile rather than a
+ * company avatar: there is no one company behind it and giving it a monogram
+ * would make it look like one. It sits above HQ because that is the pair it
+ * has to be told apart from, and because the mockup puts a "PF" button there
+ * for the same reason.
+ *
+ * It is only rendered when Portfolio is worth offering at all; see
+ * isPortfolioScopeAvailable in lib/scope-kind.ts.
+ */
+function PortfolioRailItem({
+  isSelected,
+  description,
+  onSelect,
+}: {
+  isSelected: boolean;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <div className="overflow-visible">
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onSelect}
+            aria-label="Portfolio"
+            aria-pressed={isSelected}
+            className="relative flex items-center justify-center group overflow-visible"
+          >
+            {/* Selection indicator pill, the same one the company avatars use. */}
+            <div
+              className={cn(
+                "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+                isSelected ? "h-5" : "h-0 group-hover:h-2",
+              )}
+            />
+            <div
+              className={cn(
+                "flex h-11 w-11 items-center justify-center rounded-[14px] border transition-colors duration-150",
+                isSelected
+                  ? "border-foreground/20 bg-accent text-accent-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              <Globe2 className="h-5 w-5" />
+            </div>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={8}>
+          <p className="font-medium">Portfolio</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/**
  * HQ pinned at the top — always rendered first, never draggable, always
  * rounded-square shape (other companies toggle between circle and square
  * on hover/select). Tooltip identifies it as the portfolio root.
@@ -250,12 +317,14 @@ function PinnedHqItem({
   isSelected,
   hasLiveAgents,
   inboxCount,
+  description,
   onSelect,
 }: {
   company: Company;
   isSelected: boolean;
   hasLiveAgents: boolean;
   inboxCount: number;
+  description: string;
   onSelect: () => void;
 }) {
   const peek = useCompanyPeek(false);
@@ -324,7 +393,10 @@ function PinnedHqItem({
           </HoverCardTrigger>
           <TooltipContent side="right" sideOffset={8}>
             <p className="font-medium">{company.name}</p>
-            <p className="text-xs text-muted-foreground">Portfolio root</p>
+            {/* Was "Portfolio root", which read as "this button is the
+                portfolio". It is not, and there is now a separate Portfolio
+                button above it, so this says what HQ actually opens. */}
+            <p className="text-xs text-muted-foreground">{description}</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
                 {inboxCount} item{inboxCount === 1 ? "" : "s"} waiting for you
@@ -365,6 +437,31 @@ export function CompanyRail() {
   const reorderableCompanies = useMemo(
     () => sidebarCompanies.filter((c) => !c.isPortfolioRoot),
     [sidebarCompanies],
+  );
+  // Portfolio is a page you are on, not a company you have selected, so it is
+  // read from the address the same way the top bar's scope label reads it.
+  const inPortfolioScope = isPortfolioRoutePath(location.pathname);
+  const showPortfolio = isPortfolioScopeAvailable({
+    hasPortfolioRoot: !!hqCompany,
+    portfolioCompanyCount: reorderableCompanies.length,
+  });
+  const portfolioDescription = useMemo(
+    () =>
+      resolveScopeChoiceDescription({
+        scopeKind: "portfolio",
+        companyName: null,
+        portfolioCompanyCount: reorderableCompanies.length,
+      }),
+    [reorderableCompanies.length],
+  );
+  const hqDescription = useMemo(
+    () =>
+      resolveScopeChoiceDescription({
+        scopeKind: "hq",
+        companyName: hqCompany?.name ?? null,
+        portfolioCompanyCount: reorderableCompanies.length,
+      }),
+    [hqCompany?.name, reorderableCompanies.length],
   );
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -446,12 +543,41 @@ export function CompanyRail() {
       <div className="flex-1 flex flex-col items-center gap-2 py-3 w-full overflow-y-auto overflow-x-hidden scrollbar-none">
         {hqCompany && (
           <>
+            {showPortfolio && (
+              <PortfolioRailItem
+                isSelected={inPortfolioScope}
+                description={portfolioDescription}
+                onSelect={() => {
+                  // "shortcut" because this both picks a company and names
+                  // the page to open, so the remembered page must not
+                  // overwrite it (see lib/company-selection.ts). HQ is
+                  // selected because the portfolio pages are mounted under
+                  // HQ's own address prefix.
+                  setSelectedCompanyId(hqCompany.id, { source: "shortcut" });
+                  navigate(`/${hqCompany.issuePrefix}${portfolioPathForPage(location.pathname)}`);
+                }}
+              />
+            )}
             <PinnedHqItem
               company={hqCompany}
-              isSelected={hqCompany.id === highlightedCompanyId}
+              // Not lit while a portfolio page is open. HQ is the selected
+              // company there only because of the shared address prefix, and
+              // lighting both buttons would say you are in two places.
+              isSelected={hqCompany.id === highlightedCompanyId && !inPortfolioScope}
               hasLiveAgents={hasLiveAgentsByCompanyId.get(hqCompany.id) ?? false}
               inboxCount={inboxCountByCompanyId.get(hqCompany.id) ?? 0}
+              description={hqDescription}
               onSelect={() => {
+                // Coming back from a portfolio page is not a company switch,
+                // so nothing would happen without an explicit destination:
+                // HQ is already selected, and its remembered page can be the
+                // portfolio page you are trying to leave.
+                const leavingPortfolio = companyPathForPortfolioPage(location.pathname);
+                if (leavingPortfolio) {
+                  setSelectedCompanyId(hqCompany.id, { source: "shortcut" });
+                  navigate(`/${hqCompany.issuePrefix}${leavingPortfolio}`);
+                  return;
+                }
                 setSelectedCompanyId(hqCompany.id);
                 if (isInstanceRoute) {
                   navigate(`/${hqCompany.issuePrefix}/dashboard`);

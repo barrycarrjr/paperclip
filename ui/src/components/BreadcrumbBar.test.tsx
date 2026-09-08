@@ -52,11 +52,14 @@ let currentSelectedCompanyId: string | null = ACME.id;
 let currentBreadcrumbs: { label: string; href?: string }[] = [{ label: "Brief" }];
 
 const starterDialogRenders = vi.hoisted(() => vi.fn());
+const navigateSpy = vi.hoisted(() => vi.fn());
+const selectCompanySpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/router", () => ({
   Link: ({ children }: { children?: unknown }) => <a>{children as never}</a>,
   useLocation: () => ({ pathname: currentPathname, search: "", hash: "", state: null }),
   useParams: () => currentParams,
+  useNavigate: () => navigateSpy,
 }));
 
 vi.mock("../context/BreadcrumbContext", () => ({
@@ -76,6 +79,7 @@ vi.mock("../context/CompanyContext", () => ({
     companies: currentCompanies,
     selectedCompanyId: currentSelectedCompanyId,
     selectedCompany: currentCompanies.find((c) => c.id === currentSelectedCompanyId) ?? null,
+    setSelectedCompanyId: selectCompanySpy,
   }),
 }));
 
@@ -118,6 +122,8 @@ describe("BreadcrumbBar", () => {
     currentSelectedCompanyId = ACME.id;
     currentBreadcrumbs = [{ label: "Brief" }];
     starterDialogRenders.mockClear();
+    navigateSpy.mockClear();
+    selectCompanySpy.mockClear();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -150,11 +156,32 @@ describe("BreadcrumbBar", () => {
     });
   }
 
-  function openScopePanelText(): string {
+  function openScopePanel(): HTMLElement {
+    const already = document.querySelector<HTMLElement>('[data-slot="popover-content"]');
+    if (already) return already;
     click(scopeButton());
-    const panel = document.querySelector('[data-slot="popover-content"]');
+    const panel = document.querySelector<HTMLElement>('[data-slot="popover-content"]');
     expect(panel, "expected the scope panel to open").not.toBeNull();
-    return panel!.textContent ?? "";
+    return panel!;
+  }
+
+  function openScopePanelText(): string {
+    return openScopePanel().textContent ?? "";
+  }
+
+  /** The rows under "Go to", in the order the panel lists them. */
+  function scopeChoiceTitles(): string[] {
+    return Array.from(openScopePanel().querySelectorAll("button")).map(
+      (b) => b.querySelector("span > span")?.textContent ?? "",
+    );
+  }
+
+  function clickScopeChoice(title: string) {
+    const button = Array.from(openScopePanel().querySelectorAll("button")).find(
+      (b) => b.querySelector("span > span")?.textContent === title,
+    );
+    expect(button, `expected a "${title}" row in the scope picker`).toBeDefined();
+    click(button!);
   }
 
   it("puts the scope, search and start work in the top bar", () => {
@@ -273,6 +300,59 @@ describe("BreadcrumbBar", () => {
     );
     expect(startWork).toBeUndefined();
     expect(starterDialogRenders).not.toHaveBeenCalled();
+  });
+
+  it("lists Portfolio first and HQ below it, so the two can be told apart and picked", () => {
+    render();
+    expect(scopeChoiceTitles()).toEqual(["Portfolio", "HQ", "Acme Printing", "Barry"]);
+    const text = openScopePanelText();
+    expect(text).toContain("Its own team and work, not the all company total.");
+  });
+
+  it("opens the all company version of the page you were on when you pick Portfolio", () => {
+    // Not a fixed landing page. Portfolio pages live under HQ's own address
+    // prefix, so this is a page change rather than a company change.
+    currentPathname = "/ACM/costs";
+    currentParams = { companyPrefix: "ACM" };
+    render();
+    clickScopeChoice("Portfolio");
+    expect(selectCompanySpy).toHaveBeenCalledWith(HQ.id, { source: "shortcut" });
+    expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-costs");
+  });
+
+  it("falls back to the Portfolio Overview from a page with no all company version", () => {
+    currentPathname = "/ACM/memories";
+    currentParams = { companyPrefix: "ACM" };
+    render();
+    clickScopeChoice("Portfolio");
+    expect(navigateSpy).toHaveBeenCalledWith("/HQ/portfolio-brief");
+  });
+
+  it("comes back to HQ's own version of the page when you pick HQ from a portfolio page", () => {
+    // HQ is already the selected company here, so an ordinary switch would do
+    // nothing at all and leave you looking at the portfolio page.
+    currentPathname = "/HQ/portfolio-costs";
+    currentParams = { companyPrefix: "HQ" };
+    currentSelectedCompanyId = HQ.id;
+    render();
+    clickScopeChoice("HQ");
+    expect(navigateSpy).toHaveBeenCalledWith("/HQ/costs");
+  });
+
+  it("leaves an ordinary company switch exactly as it was, with no destination of its own", () => {
+    render();
+    clickScopeChoice("Barry");
+    expect(selectCompanySpy).toHaveBeenCalledWith(PERSONAL.id);
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it("offers no Portfolio row to somebody who can only reach one company", () => {
+    currentCompanies = [HQ];
+    currentSelectedCompanyId = HQ.id;
+    currentPathname = "/HQ/brief";
+    currentParams = { companyPrefix: "HQ" };
+    render();
+    expect(scopeChoiceTitles()).toEqual(["HQ"]);
   });
 
   it("still shows the sidebar toggle and the page title alongside the new controls", () => {

@@ -1,5 +1,5 @@
-import { Link, useLocation } from "@/lib/router";
-import { ChevronsUpDown, Menu, Search, Sparkles } from "lucide-react";
+import { Link, useLocation, useNavigate } from "@/lib/router";
+import { Check, ChevronsUpDown, Menu, Search, Sparkles } from "lucide-react";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
@@ -21,14 +21,20 @@ import { PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
 import { PluginLauncherOutlet, usePluginLaunchers } from "@/plugins/launchers";
 import { StarterCatalogDialog } from "./StarterCatalogDialog";
 import {
+  companyPathForPortfolioPage,
+  isInstanceSettingsPath,
+  portfolioPathForPage,
+  resolveScopeChoices,
   resolveScopeExplanation,
   resolveScopeKind,
   resolveScopeLabelText,
+  type ScopeChoice,
   type ScopeExplanation,
 } from "@/lib/scope-kind";
 
 /**
- * The scope you are in, as a button you can open.
+ * The scope you are in, as a button you can open, and the scopes you can
+ * move to.
  *
  * The label on its own answers "where am I" but not "so what". A person
  * looking at HQ cannot tell from the word "HQ" whether they are seeing HQ's
@@ -40,22 +46,33 @@ import {
  * data. The wording lives in lib/scope-kind.ts next to the classifier that
  * decides which scope you are in, so the two cannot drift apart.
  *
- * It explains the current scope; it is not a scope picker. Companies are
- * chosen on the rail and in the sidebar's company menu, and adding a second
- * way to switch here would put two different switchers on the same screen.
+ * It used to explain and nothing more, on the reasoning that companies are
+ * already chosen on the rail so a second switcher would be one too many. That
+ * held right up until Portfolio needed choosing: Portfolio is not a company,
+ * so the rail's company list could never offer it, and the panel that already
+ * said "This is not the all company total. Open Portfolio for that." gave no
+ * way to open Portfolio. It now lists the scopes underneath the explanation,
+ * Portfolio first and HQ below it, exactly as the mockup's own scope picker
+ * does. The rail keeps its list; this is the same list plus the one entry the
+ * rail cannot hold.
  */
 function ScopeButton({
   text,
   explanation,
+  choices,
+  onChoose,
   withSeparator = false,
 }: {
   text: string;
   explanation: ScopeExplanation;
+  choices: ScopeChoice[];
+  onChoose: (choice: ScopeChoice) => void;
   withSeparator?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   return (
     <>
-      <Popover>
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -80,6 +97,42 @@ function ScopeButton({
           <p className="border-t border-border pt-2 text-[12px] leading-snug text-muted-foreground">
             {explanation.guardrail}
           </p>
+          {choices.length > 0 && (
+            <div className="space-y-1 border-t border-border pt-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+                Go to
+              </p>
+              <div className="-mx-1 max-h-64 overflow-y-auto">
+                {choices.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    aria-current={choice.current ? "true" : undefined}
+                    onClick={() => {
+                      setOpen(false);
+                      onChoose(choice);
+                    }}
+                    className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] font-medium text-foreground">
+                        {choice.title}
+                      </span>
+                      <span className="block text-[12px] leading-snug text-muted-foreground">
+                        {choice.description}
+                      </span>
+                    </span>
+                    {choice.current && (
+                      <Check
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                        aria-hidden
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </PopoverContent>
       </Popover>
       {withSeparator && <span className="shrink-0 text-muted-foreground/50">·</span>}
@@ -104,9 +157,10 @@ function GlobalToolbarPlugins({ context }: { context: GlobalToolbarContext }) {
 export function BreadcrumbBar() {
   const { breadcrumbs, mobileToolbar } = useBreadcrumbs();
   const { toggleSidebar, sidebarOpen, isMobile } = useSidebar();
-  const { companies, selectedCompanyId, selectedCompany } = useCompany();
+  const { companies, selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
   const { keyboardShortcutsEnabled } = useGeneralSettings();
   const location = useLocation();
+  const navigate = useNavigate();
   const [starterOpen, setStarterOpen] = useState(false);
 
   // Reads the URL first, falling back to context, see useRouteCompany.ts's
@@ -156,6 +210,56 @@ export function BreadcrumbBar() {
         portfolioCompanyCount,
       }),
     [scopeKind, activeCompany?.name, portfolioCompanyCount],
+  );
+
+  const scopeChoices = useMemo(
+    () =>
+      resolveScopeChoices({
+        companies,
+        scopeKind,
+        activeCompanyId,
+        portfolioCompanyCount,
+      }),
+    [companies, scopeKind, activeCompanyId, portfolioCompanyCount],
+  );
+  const hqCompany = useMemo(
+    () => companies.find((c) => c.isPortfolioRoot && c.status !== "archived") ?? null,
+    [companies],
+  );
+
+  /**
+   * Act on a picked scope.
+   *
+   * Only two of the three cases need a destination naming. Picking Portfolio
+   * does, because Portfolio is a set of pages under HQ's own address rather
+   * than a company, so selecting a company alone would not move you. Picking a
+   * company while a portfolio page is open does too, for the mirror image of
+   * the same reason. Everything else is an ordinary company switch and is left
+   * exactly as the rail does it, remembered page and all, so this does not
+   * quietly change how switching company behaves.
+   */
+  const chooseScope = useCallback(
+    (choice: ScopeChoice) => {
+      if (choice.kind === "portfolio") {
+        if (!hqCompany) return;
+        setSelectedCompanyId(hqCompany.id, { source: "shortcut" });
+        navigate(`/${hqCompany.issuePrefix}${portfolioPathForPage(location.pathname)}`);
+        return;
+      }
+      const company = choice.company;
+      if (!company) return;
+      if (company.id === activeCompanyId) {
+        const leavingPortfolio = companyPathForPortfolioPage(location.pathname);
+        const target = leavingPortfolio
+          ?? (isInstanceSettingsPath(location.pathname) ? "/dashboard" : null);
+        if (!target) return;
+        setSelectedCompanyId(company.id, { source: "shortcut" });
+        navigate(`/${company.issuePrefix}${target}`);
+        return;
+      }
+      setSelectedCompanyId(company.id);
+    },
+    [activeCompanyId, hqCompany, location.pathname, navigate, setSelectedCompanyId],
   );
 
   // The same synthetic key press the sidebar's search button used, and the
@@ -281,6 +385,8 @@ export function BreadcrumbBar() {
     <ScopeButton
       text={scopeLabelText}
       explanation={scopeExplanation}
+      choices={scopeChoices}
+      onChoose={chooseScope}
       withSeparator={breadcrumbs.length > 0}
     />
   ) : null;
