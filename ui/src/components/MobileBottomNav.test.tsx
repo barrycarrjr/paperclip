@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileBottomNav } from "./MobileBottomNav";
+import { MOBILE_BOTTOM_NAV_HEIGHT_CLASS } from "../lib/narrow-layout";
 
 vi.mock("@/lib/router", () => ({
   useLocation: () => ({ pathname: "/PAP/dashboard", search: "", hash: "", state: null }),
@@ -143,6 +144,24 @@ describe("MobileBottomNav", () => {
     });
 
     expect(badgeCalls).toContain("company-1");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  // The round Clippy launcher is positioned to clear this bar. Both numbers now
+  // come from lib/narrow-layout, so this checks the bar really reads its height
+  // from there rather than carrying a second copy that can drift.
+  it("takes its height from the shared narrow-width rule", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(<MobileBottomNav visible />);
+    });
+
+    const row = container.querySelector(".grid");
+    expect(row).not.toBeNull();
+    expect(row!.classList.contains(MOBILE_BOTTOM_NAV_HEIGHT_CLASS)).toBe(true);
 
     act(() => {
       root.unmount();

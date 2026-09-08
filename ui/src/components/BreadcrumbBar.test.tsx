@@ -361,4 +361,15 @@ describe("BreadcrumbBar", () => {
     expect(container.querySelector('button[aria-label="Hide sidebar"]')).not.toBeNull();
     expect(container.textContent).toContain("ACM-12");
   });
+
+  // Layout finds this button by attribute to put focus back on it when the
+  // phone sidebar drawer closes, including when the drawer was opened by a
+  // swipe and so had no button to remember. Without the marker, focus lands on
+  // the page body and the next Tab starts again from the top of the document.
+  it("marks the sidebar toggle so the phone drawer can hand focus back to it", () => {
+    render();
+    const toggle = container.querySelector("[data-sidebar-toggle]");
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute("aria-label")).toBe("Hide sidebar");
+  });
 });

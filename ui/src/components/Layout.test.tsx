@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
+import { ABOVE_MOBILE_BOTTOM_NAV_CLASS } from "../lib/narrow-layout";
 
 const mockHealthApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -46,6 +47,9 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
+// Mutable so a test can put the shell on a phone, or close the sidebar,
+// without a second copy of the whole mock list.
+const sidebarState = vi.hoisted(() => ({ sidebarOpen: true, isMobile: false }));
 let currentPathname = "/PAP/dashboard";
 let currentCompanyPrefix = "PAP";
 
@@ -154,10 +158,10 @@ vi.mock("../context/CompanyContext", () => ({
 
 vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => ({
-    sidebarOpen: true,
+    sidebarOpen: sidebarState.sidebarOpen,
     setSidebarOpen: mockSetSidebarOpen,
     toggleSidebar: vi.fn(),
-    isMobile: false,
+    isMobile: sidebarState.isMobile,
   }),
 }));
 
@@ -214,6 +218,8 @@ describe("Layout", () => {
     document.body.appendChild(container);
     currentPathname = "/PAP/dashboard";
     currentCompanyPrefix = "PAP";
+    sidebarState.sidebarOpen = true;
+    sidebarState.isMobile = false;
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -517,6 +523,189 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.querySelector('[data-testid="outlet-content"]')).toBe(before);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  /**
+   * The narrow-width and keyboard-only audit of 2026-09-08
+   * (docs/plans/2026-09-08-narrow-and-keyboard-audit.md) found three separate
+   * ways the sidebar left controls where a person could not use them:
+   *
+   *  - closed on a phone, sixty of the eighty-five things you could Tab to on
+   *    the page were inside a drawer that had only been slid off screen;
+   *  - collapsed on a desktop, twenty-five stayed in the tab order at zero
+   *    width;
+   *  - open on a phone, Tab walked straight out of the drawer, Escape did
+   *    nothing, and focus sat on the toggle button the drawer was covering.
+   */
+  async function renderLayout() {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const render = async () => {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <Layout />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+    };
+    await render();
+    await flushReact();
+    return { root, render };
+  }
+
+  function sheetContent(): HTMLElement | null {
+    return document.querySelector('[data-slot="sheet-content"]');
+  }
+
+  it("keeps nothing from the closed phone drawer in the keyboard's path", async () => {
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+
+    const { root } = await renderLayout();
+
+    expect(sheetContent()).toBeNull();
+    expect(document.body.textContent).not.toContain("Main company nav");
+    expect(document.body.textContent).not.toContain("Company rail");
+    expect(document.body.textContent).not.toContain("Account menu");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("moves focus into the phone drawer when it opens, and closes it on Escape", async () => {
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root, render } = await renderLayout();
+
+    sidebarState.sidebarOpen = true;
+    await render();
+
+    const drawer = sheetContent();
+    expect(drawer).not.toBeNull();
+    expect(drawer!.textContent).toContain("Main company nav");
+    expect(drawer!.textContent).toContain("Company rail");
+    // Focus lands on the drawer itself rather than the first control in it: the
+    // first control is a company logo, and focusing it opens that logo's
+    // tooltip, which is then frontmost and swallows the first Escape.
+    expect(document.activeElement).toBe(drawer);
+
+    mockSetSidebarOpen.mockClear();
+    await act(async () => {
+      drawer!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await flushReact();
+
+    expect(mockSetSidebarOpen).toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("puts focus back on the button that opened the phone drawer", async () => {
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root, render } = await renderLayout();
+
+    const toggle = document.createElement("button");
+    toggle.setAttribute("data-sidebar-toggle", "true");
+    toggle.textContent = "Show sidebar";
+    document.body.appendChild(toggle);
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+
+    sidebarState.sidebarOpen = true;
+    await render();
+    expect(document.activeElement).toBe(sheetContent());
+
+    sidebarState.sidebarOpen = false;
+    await render();
+    await flushReact();
+
+    expect(sheetContent()).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+
+    toggle.remove();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("falls back to the sidebar toggle when the drawer was opened by a swipe", async () => {
+    // A swipe from the left edge opens the drawer with nothing focused, so
+    // there is no opener to remember and focus would otherwise land on the
+    // page body, sending the next Tab back to the top of the document.
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root, render } = await renderLayout();
+
+    const toggle = document.createElement("button");
+    toggle.setAttribute("data-sidebar-toggle", "true");
+    toggle.textContent = "Show sidebar";
+    document.body.appendChild(toggle);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    sidebarState.sidebarOpen = true;
+    await render();
+    sidebarState.sidebarOpen = false;
+    await render();
+    await flushReact();
+
+    expect(document.activeElement).toBe(toggle);
+
+    toggle.remove();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("marks the collapsed desktop sidebar inert, and does not while it is open", async () => {
+    sidebarState.isMobile = false;
+    sidebarState.sidebarOpen = false;
+    const { root, render } = await renderLayout();
+
+    const panel = container.querySelector('div[class*="transition-[width]"]');
+    expect(panel).not.toBeNull();
+    // `inert` is what a browser reads to take everything inside out of the tab
+    // order and away from screen readers. jsdom carries the attribute but does
+    // not act on it, so this checks the attribute is there and the live check
+    // was done in a real browser.
+    expect(panel!.hasAttribute("inert")).toBe(true);
+
+    sidebarState.sidebarOpen = true;
+    await render();
+    expect(
+      container.querySelector('div[class*="transition-[width]"]')!.hasAttribute("inert"),
+    ).toBe(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the Clippy launcher clear of the phone bottom bar", async () => {
+    // The launcher was pinned at bottom-4 on a higher layer than the bar, so it
+    // covered the last button in the bar exactly and every tap on that button
+    // opened Clippy instead.
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root } = await renderLayout();
+
+    const launcher = document.querySelector('button[aria-label^="Open Clippy"]');
+    expect(launcher).not.toBeNull();
+    for (const part of ABOVE_MOBILE_BOTTOM_NAV_CLASS.split(" ")) {
+      expect(launcher!.classList.contains(part)).toBe(true);
+    }
+    expect(launcher!.classList.contains("bottom-4")).toBe(false);
 
     await act(async () => {
       root.unmount();

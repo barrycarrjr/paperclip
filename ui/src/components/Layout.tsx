@@ -45,6 +45,7 @@ import {
 import { queryKeys } from "../lib/queryKeys";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { NotFoundPage } from "../pages/NotFound";
 
 const INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
@@ -84,6 +85,8 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const previousPathname = useRef<string | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
+  const sidebarSheetRef = useRef<HTMLDivElement | null>(null);
+  const sidebarOpenerRef = useRef<HTMLElement | null>(null);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -366,48 +369,89 @@ export function Layout() {
       <WorktreeBanner />
       <DevRestartBanner devServer={health?.devServer} />
       <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
-        {isMobile && sidebarOpen && (
-          <button
-            type="button"
-            className="fixed inset-0 z-40 bg-black/50"
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close sidebar"
-          />
-        )}
-
         {isMobile ? (
-          <div
-            className={cn(
-              "fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden pt-[env(safe-area-inset-top)] transition-transform duration-100 ease-out",
-              sidebarOpen ? "translate-x-0" : "-translate-x-full"
-            )}
-          >
-            <div className="flex flex-1 min-h-0 overflow-hidden">
-              <CompanyRail />
-              {isInstanceSettingsRoute ? (
-                <InstanceSidebar />
-              ) : isCompanySettingsRoute ? (
-                <CompanySettingsSidebar />
-              ) : (
-                <Sidebar />
-              )}
-            </div>
-            <SidebarAccountMenu
-              deploymentMode={health?.deploymentMode}
-              instanceSettingsTarget={instanceSettingsTarget}
-              version={health?.version}
-              commit={health?.commit}
-              updateAvailable={updateAvailable}
-              updateReason={updateReason}
-              remoteRelation={remoteRelation}
-              trackedBranch={trackedBranch}
-              runningFromSource={runningFromSource}
-            />
-          </div>
+          /* The phone drawer is a Sheet, which is the app's own Radix dialog
+             primitive, rather than a panel slid off screen by hand. The hand
+             rolled version had three faults that all come free here: it kept
+             about sixty controls in the keyboard's path while closed (it was
+             only moved out of sight, never taken out of the page), Escape did
+             nothing, and opening it left focus on the toggle button it then
+             covered. Radix moves focus in on open, keeps Tab inside, closes on
+             Escape, and puts focus back on the button that opened it. The
+             classes below keep it looking and holding exactly what it did: no
+             padding, no gap, its own content width rather than the Sheet's
+             three-quarter default, the sidebar's own right border rather than
+             a second one, and the same 100ms slide. */
+          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+            <SheetContent
+              ref={sidebarSheetRef}
+              side="left"
+              showCloseButton={false}
+              aria-describedby={undefined}
+              // Focus the drawer itself rather than the first control in it.
+              // Left to itself the drawer lands focus on the first company
+              // logo, which opens that logo's tooltip, and the tooltip is then
+              // the frontmost thing on screen, so it swallows the first
+              // Escape and the drawer only closes on the second press.
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                const opener = document.activeElement;
+                sidebarOpenerRef.current =
+                  opener instanceof HTMLElement && opener !== document.body ? opener : null;
+                sidebarSheetRef.current?.focus();
+              }}
+              // Put focus back on the button that opened the drawer. Radix
+              // does this from its own Trigger, and there is no Trigger here:
+              // the button lives in the top bar and the drawer lives in this
+              // file, so without this focus would land on the page body and
+              // the next Tab would start again from the top of the document.
+              // The swipe-from-the-edge gesture opens the drawer with nothing
+              // focused, which is what the fallback is for.
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                const opener = sidebarOpenerRef.current;
+                const target =
+                  opener && opener.isConnected
+                    ? opener
+                    : document.querySelector<HTMLElement>("[data-sidebar-toggle]");
+                sidebarOpenerRef.current = null;
+                target?.focus();
+              }}
+              className="w-auto max-w-none gap-0 overflow-hidden border-r-0 p-0 pt-[env(safe-area-inset-top)] duration-100 sm:max-w-none data-[state=open]:duration-100 data-[state=closed]:duration-100"
+            >
+              <SheetTitle className="sr-only">Sidebar</SheetTitle>
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                <CompanyRail />
+                {isInstanceSettingsRoute ? (
+                  <InstanceSidebar />
+                ) : isCompanySettingsRoute ? (
+                  <CompanySettingsSidebar />
+                ) : (
+                  <Sidebar />
+                )}
+              </div>
+              <SidebarAccountMenu
+                deploymentMode={health?.deploymentMode}
+                instanceSettingsTarget={instanceSettingsTarget}
+                version={health?.version}
+                commit={health?.commit}
+                updateAvailable={updateAvailable}
+                updateReason={updateReason}
+                remoteRelation={remoteRelation}
+                trackedBranch={trackedBranch}
+                runningFromSource={runningFromSource}
+              />
+            </SheetContent>
+          </Sheet>
         ) : (
           <div className="flex h-full shrink-0">
             <CompanyRail />
+            {/* `inert` while collapsed. Animating the width to zero only
+                makes the panel invisible: without this, twenty-five controls
+                stay in the keyboard's path at zero width, and a screen reader
+                still reads them out. One attribute covers both. */}
             <div
+              inert={!sidebarOpen}
               className={cn(
                 "overflow-hidden transition-[width] duration-100 ease-out flex flex-col",
                 sidebarOpen ? "w-60" : "w-0"

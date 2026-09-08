@@ -17,6 +17,7 @@ import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
+import { ABOVE_MOBILE_BOTTOM_NAV_CLASS } from "../lib/narrow-layout";
 import {
   reconcileClippyDrawerSession,
   shouldReconcileClippyDrawerSession,
@@ -302,10 +303,18 @@ export function ClippyDrawer() {
 
   return (
     <>
+      {/* The launcher sits above the phone bottom bar, not on it. At
+          `bottom-4` it covered the last button in that bar exactly, on a
+          higher layer, so on a phone that button could not be tapped at all:
+          every tap opened Clippy instead. The offset comes from
+          lib/narrow-layout so it stays tied to the bar's own height. */}
       <Button
         variant="default"
         size="icon"
-        className="fixed bottom-4 right-4 z-40 h-12 w-12 rounded-full shadow-lg"
+        className={cn(
+          "fixed right-4 z-40 h-12 w-12 rounded-full shadow-lg",
+          ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+        )}
         onClick={() => setOpen(true)}
         aria-label={launcherLabel}
         title={launcherLabel}

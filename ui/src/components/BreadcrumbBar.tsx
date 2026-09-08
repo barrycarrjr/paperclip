@@ -305,6 +305,10 @@ export function BreadcrumbBar() {
           className="mr-2 shrink-0"
           onClick={toggleSidebar}
           aria-label={menuLabel}
+          // Layout looks this up to put focus back here when the phone drawer
+          // closes, including when the drawer was opened by a swipe and so had
+          // no button to remember.
+          data-sidebar-toggle="true"
         >
           <Menu className="h-5 w-5" />
         </Button>

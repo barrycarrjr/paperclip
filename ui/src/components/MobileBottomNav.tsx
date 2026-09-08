@@ -11,6 +11,7 @@ import {
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { MOBILE_BOTTOM_NAV_HEIGHT_CLASS } from "../lib/narrow-layout";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useInboxBadge } from "../hooks/useInboxBadge";
@@ -120,7 +121,13 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
     >
       {/* The column count follows the item count, because HQ drops Email and a
           fixed six would leave an empty slot where it used to be. */}
-      <div className={cn("grid h-16 px-1", items.length === 6 ? "grid-cols-6" : "grid-cols-5")}>
+      <div
+        className={cn(
+          "grid px-1",
+          MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
+          items.length === 6 ? "grid-cols-6" : "grid-cols-5",
+        )}
+      >
         {items.map((item) => {
           if (item.type === "action") {
             const Icon = item.icon;
