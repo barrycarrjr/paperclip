@@ -21,6 +21,7 @@ import {
   Sunrise,
   Target,
   UserCog,
+  Users,
   ListTodo,
 } from "lucide-react";
 
@@ -152,6 +153,11 @@ export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
   { id: "goals", label: "Goals", routeRoot: "goals", icon: Target },
   { id: "routines", label: "Automations", routeRoot: "routines", icon: Repeat },
   { id: "work-queues", label: "Intake queues", routeRoot: "work-queues", icon: ListTodo },
+  // Added 2026-09-07: the Team page, which opens on what each agent is
+  // doing right now. The three entries below it are its other tabs and
+  // stay listed in their own right, because each is still its own page
+  // with its own address.
+  { id: "team", label: "Team", routeRoot: "team", icon: Users },
   { id: "agents", label: "Agents", routeRoot: "agents", icon: Bot },
   // Added 2026-09-03 (P4 audit): had a dedicated sidebar entry but no
   // presence in Command Palette or Everything at all.

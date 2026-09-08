@@ -20,6 +20,12 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
 }));
 
+// The address the menu thinks it is on. Mutable so a test can put the app on
+// one of the Work page's tabs.
+const routerState = vi.hoisted(() => ({
+  location: { pathname: "/PAP/brief", search: "", hash: "" },
+}));
+
 vi.mock("@/lib/router", () => ({
   NavLink: ({ to, children, className, ...props }: {
     to: string;
@@ -35,6 +41,8 @@ vi.mock("@/lib/router", () => ({
     </a>
   ),
   useNavigate: () => vi.fn(),
+  // The Work entry reads the address so it can stay lit on any of its tabs.
+  useLocation: () => routerState.location,
 }));
 
 vi.mock("../context/DialogContext", () => ({
@@ -183,6 +191,7 @@ describe("Sidebar", () => {
     emailState.hasMailbox = true;
     emailState.installed = true;
     companyState.value = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    routerState.location = { pathname: "/PAP/brief", search: "", hash: "" };
   });
 
   afterEach(() => {
@@ -239,9 +248,59 @@ describe("Sidebar", () => {
 
     expect(hrefFor("Overview")).toBe("/brief");
     expect(hrefFor("Attention")).toBe("/inbox");
-    expect(hrefFor("Work")).toBe("/issues");
-    expect(hrefFor("Team")).toBe("/agents/all");
+    // Work and Team are the two entries that moved, and both moved to a front
+    // door rather than to a new page: /work sends you straight to the Tasks
+    // tab, which is still /issues, and /team opens on who is doing what with
+    // the roster, the org chart and the assistants as tabs. Every address the
+    // old menu lines pointed at is untouched and is now a tab.
+    expect(hrefFor("Work")).toBe("/work");
+    expect(hrefFor("Team")).toBe("/team");
     expect(hrefFor("Everything")).toBe("/everything");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps Work looking selected on every one of its tabs", async () => {
+    // The menu entry points at /work, but the page you are actually on is one
+    // of five other addresses. Without this, opening the Projects tab would
+    // leave nothing in the menu highlighted and you could not tell which menu
+    // line you were inside. The NavLink stub above always reports isActive as
+    // false, so the highlight can only come from the Work entry's own check.
+    for (const pathname of [
+      "/PAP/issues",
+      "/PAP/projects",
+      "/PAP/goals",
+      "/PAP/routines",
+      "/PAP/work-queues",
+      "/PAP/issues/PAP-12",
+    ]) {
+      routerState.location = { pathname, search: "", hash: "" };
+      const root = await renderSidebar();
+
+      const workLink = [...container.querySelectorAll("a")].find(
+        (anchor) => anchor.textContent?.trim() === "Work",
+      );
+      // "before:absolute" is the marker bar the active style draws and the
+      // inactive style does not. Checking for "bg-accent" would pass either
+      // way, because the inactive style carries "hover:bg-accent/50".
+      expect(workLink?.className ?? "", pathname).toContain("before:absolute");
+
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("does not light Work up on a page that is not part of it", async () => {
+    routerState.location = { pathname: "/PAP/calendar", search: "", hash: "" };
+    const root = await renderSidebar();
+
+    const workLink = [...container.querySelectorAll("a")].find(
+      (anchor) => anchor.textContent?.trim() === "Work",
+    );
+    expect(workLink?.className ?? "").not.toContain("before:absolute");
 
     await act(async () => {
       root.unmount();

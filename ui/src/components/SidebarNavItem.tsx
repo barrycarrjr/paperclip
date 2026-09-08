@@ -21,6 +21,18 @@ interface SidebarNavItemProps {
   alert?: boolean;
   liveCount?: number;
   info?: string;
+  /**
+   * Mark this item as the current one even when the address does not start
+   * with `to`.
+   *
+   * Added for the Work entry, which points at /work but whose page is really
+   * five addresses (/issues, /projects, /goals, /routines, /work-queues).
+   * Without this, opening the Projects tab would leave nothing in the menu
+   * looking selected, and the person would have no idea which menu line they
+   * were inside. Never turns an item OFF, so an item that would light up
+   * anyway is unaffected.
+   */
+  alsoActive?: boolean;
 }
 
 export function SidebarNavItem({
@@ -36,6 +48,7 @@ export function SidebarNavItem({
   alert = false,
   liveCount,
   info,
+  alsoActive = false,
 }: SidebarNavItemProps) {
   const { isMobile, setSidebarOpen } = useSidebar();
   const peek = useSidebarPeek();
@@ -158,7 +171,7 @@ export function SidebarNavItem({
       className={({ isActive }) =>
         cn(
           "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
-          isActive
+          isActive || alsoActive
             ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
             : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
           info && "pr-8",

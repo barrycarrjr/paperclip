@@ -8,6 +8,7 @@ import {
   Sunrise,
 } from "lucide-react";
 import { useMemo } from "react";
+import { useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@paperclipai/shared";
 import { SidebarSection } from "./SidebarSection";
@@ -22,6 +23,8 @@ import { useHqDefaultPins } from "../hooks/useHqDefaultPins";
 import { usePinnedWorkspaces } from "../hooks/usePinnedWorkspaces";
 import { usePluginSlots } from "../plugins/slots";
 import { resolvePinnedWorkspaceItems } from "../lib/workspace-catalog";
+import { isTeamPath } from "../lib/team-tabs";
+import { isWorkPath } from "../lib/work-tabs";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarPeekProvider } from "../context/SidebarPeekContext";
@@ -61,6 +64,7 @@ interface SidebarMenuProps {
 }
 
 export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: SidebarMenuProps) {
+  const location = useLocation();
   const inboxBadge = useInboxBadge(company.id);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
@@ -191,21 +195,23 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
           info="Everything waiting on you: agents' questions, work waiting for your sign-off, approvals, failed runs, join requests, and the work you have looked at recently."
         />
         <SidebarNavItem
-          to="/agents/all"
+          to="/team"
           label="Team"
           icon={Bot}
+          alsoActive={isTeamPath(location.pathname)}
           textBadge={
             activeAgentCount > 0
               ? `${activeAgentCount} agent${activeAgentCount === 1 ? "" : "s"}`
               : undefined
           }
-          info="The agents in this company, with filters for active, paused, error and terminated. The org chart and the assistants list are on the Everything page."
+          info="Who is doing what right now, with tabs for the full roster, the org chart and the assistants. Each tab is still its own page and keeps its own web address, so a saved link still opens the same thing."
         />
         <SidebarNavItem
-          to="/issues"
+          to="/work"
           label="Work"
           icon={CircleDot}
-          info="Opens your tasks: the pieces of work with a clear definition of done. Projects, goals, automations and intake queues are on the Everything page."
+          alsoActive={isWorkPath(location.pathname)}
+          info="One page with tabs for tasks, projects, goals, automations and intake queues. Each tab is still its own page with its own controls, and each keeps its own web address, so a saved link still opens the same thing."
         />
       </SidebarSection>
 

@@ -880,6 +880,12 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "plugins",
   "skills",
   "org",
+  // The Team page's front door (added 2026-09-07). It opens on what each
+  // agent is doing right now; the roster, org chart and assistants keep the
+  // addresses they already had. Reserved here like every other core segment
+  // so a plugin cannot claim the name and so the UI's own prefixing knows
+  // "/team" is a page rather than a company code.
+  "team",
   "clippy",
   "agents",
   "assistants",
@@ -905,6 +911,12 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "calendar",
   "goals",
   "memories",
+  // The Work page's front door (added 2026-09-07). It holds no content of its
+  // own: it sends you to the Tasks tab, which is still /issues. Reserved here
+  // for the same reason every other core segment is, so a plugin cannot claim
+  // the name and so the UI's own prefixing knows "/work" is a page rather than
+  // a company code.
+  "work",
   "work-queues",
   "approvals",
   "costs",
