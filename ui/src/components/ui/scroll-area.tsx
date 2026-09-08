@@ -1,6 +1,7 @@
 import * as React from "react"
 import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
+import { SCROLL_AREA_FITS_COLUMN_CLASS } from "@/lib/narrow-layout"
 import { cn } from "@/lib/utils"
 
 function ScrollArea({
@@ -16,7 +17,10 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="flex-1 min-h-0 w-full focus-visible:ring-ring/50 rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+        className={cn(
+          "flex-1 min-h-0 w-full focus-visible:ring-ring rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1",
+          SCROLL_AREA_FITS_COLUMN_CLASS,
+        )}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

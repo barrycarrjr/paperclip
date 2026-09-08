@@ -1,5 +1,7 @@
 import { AlertCircle, Bot, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { FILLS_OR_KEEPS_HEIGHT_CLASS } from "@/lib/narrow-layout";
+import { cn } from "@/lib/utils";
 import { EmailAgentHoldPanel } from "./EmailAgentHoldPanel";
 import type { EmailHandoffSummary, TakeOverHandoffResult } from "@/api/emailHandoffs";
 
@@ -27,7 +29,7 @@ export function EmailAgentHoldList({
 }) {
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
       </div>
     );
@@ -35,7 +37,7 @@ export function EmailAgentHoldList({
 
   if (error) {
     return (
-      <div className="flex-1 flex items-center justify-center px-4">
+      <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center px-4")}>
         <div className="text-center space-y-1">
           <AlertCircle className="h-5 w-5 text-destructive mx-auto" />
           {/* An empty list and a list that could not be read are different
@@ -50,7 +52,7 @@ export function EmailAgentHoldList({
 
   if (holds.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center">
+      <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex flex-col items-center justify-center gap-2 px-4 text-center")}>
         <Bot className="h-5 w-5 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">No agent is holding any mail right now.</p>
       </div>

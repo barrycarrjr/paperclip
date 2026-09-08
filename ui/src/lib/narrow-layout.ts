@@ -53,6 +53,53 @@ export const OWN_LINE_ACTIONS_CLASS =
   "flex basis-full flex-wrap items-center gap-1.5 lg:basis-auto lg:flex-nowrap lg:shrink-0";
 
 /**
+ * Keeps the rows inside a scrolling column no wider than the column.
+ *
+ * The scrolling column comes from Radix, and Radix wraps whatever you put in
+ * it in a box of its own that is set to `display: table` with a minimum width
+ * of the column. A table box grows to fit its widest content, so a row set to
+ * the full width of that box is the full width of the WIDEST row, not the
+ * width of the column, and a row asking to cut its text short with three dots
+ * never has to, because it was never short of room. Every mailbox and folder
+ * row on the Email page ran 64 pixels past the right edge of the column that
+ * clips it, at 375, 768 and 1280 alike, and the little refresh button in the
+ * Folders heading sat entirely outside the column and could not be clicked.
+ *
+ * Turning that one box back into an ordinary block fixes all of it: a block is
+ * exactly as wide as the space it is given and does not stretch for its
+ * children. Nothing in this app scrolls a column sideways, which is the only
+ * thing the table box buys.
+ *
+ * The `!` is needed because Radix sets `display` in a style attribute on the
+ * element itself, and only an important rule can win against that.
+ */
+export const SCROLL_AREA_FITS_COLUMN_CLASS = "[&>div]:!block";
+
+/**
+ * A panel that fills the height it is given, and still has a readable height
+ * when it is the page that scrolls rather than the panel.
+ *
+ * On a phone the app lets the whole page scroll, so nothing above a panel has
+ * a settled height and `flex-1` resolves to nothing at all. A spinner, an
+ * error or an empty-list message written that way is drawn 0 pixels tall and
+ * simply never appears. The floor costs nothing on a desktop, where the panel
+ * is taller than the floor anyway.
+ */
+export const FILLS_OR_KEEPS_HEIGHT_CLASS = "flex-1 min-h-40";
+
+/**
+ * How tall a message body is on a phone.
+ *
+ * Same reasoning as {@link FILLS_OR_KEEPS_HEIGHT_CLASS}, but a message body
+ * needs a real reading height rather than a floor, and it is set in two places
+ * that must agree: the frame that shows mail written as a web page, and the
+ * scrolling box that shows mail written as plain text. If those two drifted
+ * apart, the same message would be a different height depending on how the
+ * sender wrote it.
+ */
+export const PHONE_MESSAGE_BODY_HEIGHT_CLASS = "h-[60dvh]";
+
+/**
  * Pixels behind a Tailwind spacing class, for tests that check one clears the
  * other. Handles both a plain scale value (`h-16` is 4rem, so 64) and a rem
  * length inside an arbitrary value (`bottom-[calc(5rem+...)]` is 80). Returns

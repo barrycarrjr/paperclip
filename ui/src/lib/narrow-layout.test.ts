@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+  FILLS_OR_KEEPS_HEIGHT_CLASS,
   MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
   OWN_LINE_ACTIONS_CLASS,
+  PHONE_MESSAGE_BODY_HEIGHT_CLASS,
+  SCROLL_AREA_FITS_COLUMN_CLASS,
   WRAPPING_ROW_CLASS,
   spacingClassPixels,
 } from "./narrow-layout";
@@ -65,5 +68,59 @@ describe("an action row that takes its own line when it is too wide", () => {
     expect(unconditional).not.toContain("flex-nowrap");
     expect(OWN_LINE_ACTIONS_CLASS).toContain("lg:shrink-0");
     expect(OWN_LINE_ACTIONS_CLASS).toContain("lg:flex-nowrap");
+  });
+});
+
+describe("keeping the rows in a scrolling column inside the column", () => {
+  // Radix wraps the contents of a scrolling column in a box of its own set to
+  // `display: table`, and a table box grows to fit its widest content. Every
+  // mailbox and folder row on the Email page was therefore as wide as the
+  // longest folder name rather than as wide as the column, and ran 64 pixels
+  // past the edge that clips it, at 375, 768 and 1280 alike.
+  it("turns that box back into an ordinary block", () => {
+    expect(SCROLL_AREA_FITS_COLUMN_CLASS).toContain("block");
+  });
+
+  it("only reaches the box Radix adds, not everything inside it", () => {
+    // `>` and not a descendant selector: the rows themselves must keep their
+    // own display, or a row laid out as a flex line would collapse.
+    expect(SCROLL_AREA_FITS_COLUMN_CLASS).toContain("[&>div]");
+  });
+
+  it("is important, because Radix sets that display on the element itself", () => {
+    // A style attribute beats an ordinary rule, so an ordinary rule would do
+    // nothing at all here and the fault would look fixed in the source.
+    expect(SCROLL_AREA_FITS_COLUMN_CLASS).toContain("!");
+  });
+});
+
+describe("a panel that has to stay visible when the page is what scrolls", () => {
+  it("still fills the height it is given", () => {
+    expect(FILLS_OR_KEEPS_HEIGHT_CLASS.split(" ")).toContain("flex-1");
+  });
+
+  // On a phone the whole page scrolls, so nothing above a panel has a settled
+  // height and `flex-1` on its own resolves to nothing. A spinner or an
+  // empty-list message written that way is drawn 0 pixels tall and never
+  // appears at all.
+  it("keeps a readable height of its own as well", () => {
+    const floor = FILLS_OR_KEEPS_HEIGHT_CLASS.split(" ").find((part) =>
+      part.startsWith("min-h-"),
+    );
+    expect(floor).toBeDefined();
+    expect(spacingClassPixels(floor!)).toBeGreaterThan(0);
+  });
+});
+
+describe("how tall a message body is on a phone", () => {
+  it("is a real reading height, not a floor", () => {
+    expect(PHONE_MESSAGE_BODY_HEIGHT_CLASS.startsWith("h-")).toBe(true);
+    expect(PHONE_MESSAGE_BODY_HEIGHT_CLASS.startsWith("min-h-")).toBe(false);
+  });
+
+  // dvh, not vh: on a phone the address bar comes and goes, and vh is the
+  // height the page would have if it never did.
+  it("is measured against the part of the screen the page actually has", () => {
+    expect(PHONE_MESSAGE_BODY_HEIGHT_CLASS).toContain("dvh");
   });
 });
