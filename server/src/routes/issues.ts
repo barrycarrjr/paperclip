@@ -30,6 +30,7 @@ import {
   acknowledgeEmailDelegationSchema,
   handBackEmailDelegationSchema,
   resolveEmailDelegationSchema,
+  takeOverEmailDelegationSchema,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
@@ -3898,6 +3899,7 @@ export function issueRoutes(
     res: Response,
   ): Promise<{
     companyId: string;
+    issue: NonNullable<Awaited<ReturnType<typeof svc.getById>>>;
     delegation: IssueEmailDelegationRow;
     svc: IssueEmailDelegationService;
   } | null> {
@@ -3928,8 +3930,30 @@ export function issueRoutes(
     }
     // Handed back so callers get a service the compiler knows is present,
     // rather than re-checking a nullable one this function already proved.
-    return { companyId, delegation, svc: emailDelegationsSvc };
+    return { companyId, issue, delegation, svc: emailDelegationsSvc };
   }
+
+  /**
+   * Everything an agent is holding in this company right now.
+   *
+   * The mail list has no way of knowing which of its messages are already
+   * with an agent — it reads a mailbox, not this app's records — so it asks
+   * for the whole open set once and matches messages against it locally.
+   * Read access only: seeing that a message is with an agent tells you
+   * nothing you could not already see on the work item.
+   */
+  router.get("/companies/:companyId/email-delegations", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    if (!emailDelegationsSvc) {
+      // An empty list, not an error. A missing tracking service means nothing
+      // is being held as far as anyone can tell, and the mail list should
+      // still work.
+      res.json([]);
+      return;
+    }
+    res.json(await emailDelegationsSvc.listOpenForCompany({ companyId }));
+  });
 
   router.get("/companies/:companyId/issues/:issueId/email-delegations", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -4033,6 +4057,163 @@ export function issueRoutes(
     },
   );
 
+  /**
+   * A person takes the email back from the agent.
+   *
+   * The mirror image of hand back, and deliberately a separate route: hand
+   * back is the agent saying it cannot continue, this is a person deciding
+   * they want it themselves. Only a signed-in person may do it, so an agent
+   * cannot "take over" on someone's behalf.
+   *
+   * Three things happen, in this order and for these reasons:
+   *
+   * 1. The handover is closed first, because that is the fact the person
+   *    asked for. Doing it last would mean a failure in the tidying-up
+   *    afterwards left the email still showing as held.
+   * 2. The agent's run on that work item is stopped. If that fails, the
+   *    take-over still stands and the failure is REPORTED in the response
+   *    rather than swallowed, because a person who thinks an agent has
+   *    stopped when it has not is worse off than one who is told.
+   * 3. The work item keeps everything it has, but the agent is taken off it
+   *    (and a work item that was being worked on goes back to "to do", since
+   *    nobody is working on it now). Without that, the next thing to wake the
+   *    agent would put it straight back on the job the person just took.
+   *
+   * Nothing is sent to anyone. Replying is what "finish" does.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/take-over",
+    validate(takeOverEmailDelegationSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await loaded.svc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation.id,
+        to: "handed_back",
+        handedBackReason: req.body.reason,
+        expectedVersion: req.body.expectedVersion,
+      });
+
+      const run = await stopRunForTakeOver(loaded.issue, loaded.delegation.id);
+      const workItem = await releaseWorkItemForTakeOver(loaded.issue, actor, req.body.reason);
+
+      await logDelegationActivity(
+        req,
+        actor,
+        loaded.companyId,
+        updated.id,
+        "handed_back",
+        null,
+        { takenOverBy: actor.actorId, runState: run.state, workItemState: workItem.state },
+      );
+      res.json({ delegation: updated, run, workItem });
+    },
+  );
+
+  type TakeOverRunOutcome =
+    | { state: "none" }
+    | { state: "stopped"; runId: string }
+    | { state: "failed"; error: string; runId: string | null };
+
+  async function stopRunForTakeOver(
+    issue: { id: string; assigneeAgentId: string | null; executionRunId?: string | null },
+    delegationId: string,
+  ): Promise<TakeOverRunOutcome> {
+    let runId: string | null = null;
+    try {
+      const active = await resolveActiveIssueRun(issue);
+      if (!active) return { state: "none" };
+      runId = active.id;
+      const cancelled = await heartbeat.cancelRun(active.id);
+      if (cancelled?.status === "cancelled") return { state: "stopped", runId: cancelled.id };
+      // It was running a moment ago and is not cancelled now. Say so plainly
+      // rather than reporting a stop that did not happen.
+      return {
+        state: "failed",
+        error: `The agent's run could not be stopped (it is ${cancelled?.status ?? "in an unknown state"}).`,
+        runId,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, delegationId, issueId: issue.id },
+        "could not stop the agent's run during an email take-over",
+      );
+      return { state: "failed", error: message, runId };
+    }
+  }
+
+  type TakeOverWorkItemOutcome = {
+    state: "updated" | "unchanged" | "failed";
+    unassignedAgent: boolean;
+    statusChangedTo: string | null;
+    error: string | null;
+  };
+
+  async function releaseWorkItemForTakeOver(
+    issue: { id: string; companyId: string; assigneeAgentId: string | null; status: string },
+    actor: ReturnType<typeof getActorInfo>,
+    reason: string,
+  ): Promise<TakeOverWorkItemOutcome> {
+    const unassignAgent = Boolean(issue.assigneeAgentId);
+    const nextStatus = issue.status === "in_progress" ? "todo" : null;
+    if (!unassignAgent && !nextStatus) {
+      await noteTakeOverOnWorkItem(issue.id, actor, reason);
+      return { state: "unchanged", unassignedAgent: false, statusChangedTo: null, error: null };
+    }
+
+    try {
+      await svc.update(issue.id, {
+        ...(unassignAgent ? { assigneeAgentId: null } : {}),
+        ...(nextStatus ? { status: nextStatus } : {}),
+        actorUserId: actor.actorType === "user" ? actor.actorId : null,
+      });
+      await noteTakeOverOnWorkItem(issue.id, actor, reason);
+      return {
+        state: "updated",
+        unassignedAgent: unassignAgent,
+        statusChangedTo: nextStatus,
+        error: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err, issueId: issue.id }, "could not release the work item during a take-over");
+      return { state: "failed", unassignedAgent: false, statusChangedTo: null, error: message };
+    }
+  }
+
+  /**
+   * Leave a plain note on the work item saying who took the email back.
+   *
+   * The handover row records that it ended and why, but not that a person
+   * ended it rather than the agent — telling those apart in the record needs
+   * a column the table does not have. This comment is where a person can
+   * read it, and it fails quietly because a missing note must not undo a
+   * take-over that already happened.
+   */
+  async function noteTakeOverOnWorkItem(
+    issueId: string,
+    actor: ReturnType<typeof getActorInfo>,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await svc.addComment(
+        issueId,
+        `Took this email back from the agent.\n\nReason: ${reason}`,
+        {
+          ...(actor.actorType === "user" ? { userId: actor.actorId } : {}),
+          ...(actor.agentId ? { agentId: actor.agentId } : {}),
+        },
+      );
+    } catch (err) {
+      logger.warn({ err, issueId }, "could not add the take-over note to the work item");
+    }
+  }
+
   async function logDelegationActivity(
     _req: Request,
     actor: ReturnType<typeof getActorInfo>,
@@ -4040,6 +4221,7 @@ export function issueRoutes(
     delegationId: string,
     state: string,
     replyState: string | null,
+    extraDetails: Record<string, unknown> = {},
   ): Promise<void> {
     try {
       await logActivity(db, {
@@ -4051,7 +4233,7 @@ export function issueRoutes(
         action: "email_delegation.updated",
         entityType: "issue",
         entityId: delegationId,
-        details: { state, ...(replyState ? { replyState } : {}) },
+        details: { state, ...(replyState ? { replyState } : {}), ...extraDetails },
       });
     } catch (err) {
       // A missing audit line must not undo a state change that already

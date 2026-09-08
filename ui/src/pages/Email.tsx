@@ -11,8 +11,6 @@ import {
   Loader2,
   Bot,
   AlertCircle,
-  Eye,
-  EyeOff,
   MoveRight,
   Archive,
   UserCheck,
@@ -80,6 +78,30 @@ import {
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
 import { usePrintEmail } from "../components/email/usePrintEmail";
+import { EmailAgentHoldPanel } from "../components/email/EmailAgentHoldPanel";
+import { EmailAgentHoldList } from "../components/email/EmailAgentHoldList";
+import { EmailTakeOverNotice } from "../components/email/EmailTakeOverNotice";
+import {
+  emailHandoffsApi,
+  type TakeOverHandoffResult,
+} from "../api/emailHandoffs";
+import {
+  findHoldForMessage,
+  holdStageLabel,
+  holderName,
+  indexHoldsBySource,
+} from "../lib/email-agent-holds";
+import {
+  EMAIL_LIST_VIEW_LABEL,
+  EMAIL_LIST_VIEW_STORAGE_KEY,
+  EMAIL_LIST_VIEWS,
+  EMAIL_SHOW_ALL_STORAGE_KEY,
+  emptyListMessage,
+  initialEmailListView,
+  listViewShowsAllMail,
+  type EmailListView,
+} from "../lib/email-list-view";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
@@ -417,29 +439,42 @@ export function Email() {
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialImapMailboxKey);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
-  const [showAllMessages, setShowAllMessages] = useState(() => {
-    // Explicit ?all= in the URL wins (deep-links can force a view); otherwise
-    // restore the operator's remembered preference. Opening a specific ?uid=
-    // no longer forces "show all" — the detail pane renders the message
-    // regardless of the list filter, so the operator's unread-only view is
-    // preserved when arriving from Portfolio Email.
-    const param = searchParams.get("all");
-    if (param === "1") return true;
-    if (param === "0") return false;
+  // Explicit ?all= in the URL wins (deep-links can force a view); otherwise
+  // restore the operator's remembered preference. Opening a specific ?uid=
+  // no longer forces "show all" — the detail pane renders the message
+  // regardless of the list filter, so the operator's unread-only view is
+  // preserved when arriving from Portfolio Email. The rules live in
+  // lib/email-list-view.ts so they can be tested without a browser.
+  const [listView, setListView] = useState<EmailListView>(() => {
+    let stored: string | null = null;
+    let legacyShowAll: string | null = null;
     try {
-      return localStorage.getItem("email-showAll") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const toggleShowAllMessages = (v: boolean) => {
-    try {
-      localStorage.setItem("email-showAll", String(v));
+      stored = localStorage.getItem(EMAIL_LIST_VIEW_STORAGE_KEY);
+      legacyShowAll = localStorage.getItem(EMAIL_SHOW_ALL_STORAGE_KEY);
     } catch {
       // ignore quota / disabled-storage errors
     }
-    setShowAllMessages(v);
+    return initialEmailListView({ allParam: searchParams.get("all"), stored, legacyShowAll });
+  });
+  const showAllMessages = listViewShowsAllMail(listView);
+  const chooseListView = (v: EmailListView) => {
+    try {
+      localStorage.setItem(EMAIL_LIST_VIEW_STORAGE_KEY, v);
+      // Still written, so an older build of this page (which only knows the
+      // two-value key) opens on the view the person last chose.
+      localStorage.setItem(EMAIL_SHOW_ALL_STORAGE_KEY, String(listViewShowsAllMail(v)));
+    } catch {
+      // ignore quota / disabled-storage errors
+    }
+    setListView(v);
   };
+  // What a person was told after taking a message back from an agent. Kept
+  // here rather than in the panel that started it, because that panel is
+  // gone the moment the message stops being held, and a warning that the
+  // agent could not be stopped must outlive it.
+  const [takeOverNotice, setTakeOverNotice] = useState<
+    { result: TakeOverHandoffResult; agentName: string } | null
+  >(null);
   // The message shown at full size on top of the three-pane layout.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
@@ -698,6 +733,48 @@ export function Email() {
   const messages = applyImapOverrides(allMessages, overrides, {
     unseenOnly: !showAllMessages,
   });
+
+  // ── What agents are holding ───────────────────────────────────────────────
+  //
+  // Asked for once per company rather than per message: the mailbox knows
+  // nothing about handovers, so the list is told the whole open set and
+  // matches its own rows against it locally (lib/email-agent-holds.ts).
+  // Scope is the company, not the mailbox, because the "With agents" view is
+  // meant to answer "what is out with agents" across all of them.
+  // `isPending`, not `isLoading`, on purpose. A request that has failed and is
+  // waiting to be tried again reports isLoading false with no error yet, and
+  // the list would then say "no agent is holding any mail" when the honest
+  // answer is that we have not been told. Anything short of a real answer
+  // counts as still checking.
+  const {
+    data: agentHoldsData,
+    isPending: agentHoldsLoading,
+    error: agentHoldsError,
+  } = useQuery({
+    queryKey: queryKeys.issues.emailHandoffsForCompany(selectedCompanyId ?? ""),
+    queryFn: () => emailHandoffsApi.listForCompany(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 60_000,
+  });
+  const agentHolds = useMemo(() => agentHoldsData ?? [], [agentHoldsData]);
+  const agentHoldIndex = useMemo(() => indexHoldsBySource(agentHolds), [agentHolds]);
+  const agentHoldLocation = useMemo(
+    () => ({ pluginId, mailbox: selectedMailbox, folder: selectedFolder }),
+    [pluginId, selectedMailbox, selectedFolder],
+  );
+  function holdForMessage(msg: { uid: number; messageId: string | null }) {
+    return findHoldForMessage(agentHoldIndex, agentHoldLocation, msg);
+  }
+  function onTookOverMessage(result: TakeOverHandoffResult, agentName: string) {
+    setTakeOverNotice({ result, agentName });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.issues.emailHandoffsForCompany(selectedCompanyId ?? ""),
+    });
+    // The message is unread again as far as the person is concerned only if
+    // they make it so; what changes here is who holds it, so only the lists
+    // are refreshed.
+    invalidateMessageLists();
+  }
 
   // Reset the open message + transient compose state when the operator
   // switches mailbox or folder. We track the previous (mailbox, folder) and
@@ -1597,18 +1674,6 @@ export function Email() {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => toggleShowAllMessages(!showAllMessages)}
-          title={showAllMessages ? "Showing all — click for unread only" : "Showing unread only — click for all"}
-        >
-          {showAllMessages ? (
-            <Eye className="h-3.5 w-3.5" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5" />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
           onClick={() => toggleGroupBySender(!groupBySender)}
           title={groupBySender ? "Group by sender — click to flatten" : "Flat list — click to group by sender"}
         >
@@ -1631,6 +1696,41 @@ export function Email() {
       </div>
     </div>
   );
+
+  /**
+   * The three views of the list.
+   *
+   * These replace the eye-shaped button that flipped between all mail and
+   * unread only: the same two views, now named, plus the one that was
+   * missing. "With agents" carries a count because the whole point of it is
+   * knowing whether anything is out there at all without opening it.
+   */
+  const listViewTabs = (
+    <div className="px-2 py-1.5 border-b border-border shrink-0">
+      <Tabs value={listView} onValueChange={(v) => chooseListView(v as EmailListView)}>
+        <TabsList className="w-full">
+          {EMAIL_LIST_VIEWS.map((view) => (
+            <TabsTrigger key={view} value={view} className="text-xs">
+              {EMAIL_LIST_VIEW_LABEL[view]}
+              {view === "agents" && agentHolds.length > 0 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  {agentHolds.length}
+                </span>
+              )}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+    </div>
+  );
+
+  const takeOverNoticeBar = takeOverNotice ? (
+    <EmailTakeOverNotice
+      result={takeOverNotice.result}
+      agentName={takeOverNotice.agentName}
+      onDismiss={() => setTakeOverNotice(null)}
+    />
+  ) : null;
 
   // ── Shared: inline row actions ────────────────────────────────────────────
 
@@ -1832,6 +1932,7 @@ export function Email() {
   // ── Message list body (shared between both modes) ─────────────────────────
 
   function renderRow(msg: MailHeader, compact: boolean) {
+    const hold = holdForMessage(msg);
     return (
       <div
         key={msg.uid}
@@ -1858,6 +1959,16 @@ export function Email() {
             </span>
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
+          {/* A message an agent has is not free to act on, so the row says so
+              before anyone opens it. */}
+          {hold && (
+            <div className="flex items-center gap-1 mt-0.5 text-[10px] text-muted-foreground truncate">
+              <Bot className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                With {holderName(hold)} · {holdStageLabel(hold.status)}
+              </span>
+            </div>
+          )}
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <RowActions msg={msg} />
@@ -1948,6 +2059,20 @@ export function Email() {
 
   function MessageListBody({ compact }: { compact: boolean }) {
     if (searchActive) return <SearchListBody compact={compact} />;
+    // Built from the handover records rather than from the mailbox: a message
+    // that has been handed over is usually already read and usually not in
+    // the newest fifty, so re-reading the mailbox would miss most of them.
+    if (listView === "agents") {
+      return (
+        <EmailAgentHoldList
+          companyId={selectedCompanyId ?? ""}
+          holds={agentHolds}
+          loading={agentHoldsLoading}
+          error={(agentHoldsError as Error | null) ?? null}
+          onTakenOver={onTookOverMessage}
+        />
+      );
+    }
     if (messagesError) {
       return (
         <div className="flex-1 flex items-center justify-center px-4">
@@ -1968,7 +2093,7 @@ export function Email() {
     if (messages.length === 0) {
       return (
         <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground px-4 text-center">
-          {showAllMessages ? "No messages in this folder." : "No unread messages. Toggle the eye to see all."}
+          {emptyListMessage(listView)}
         </div>
       );
     }
@@ -2201,6 +2326,8 @@ export function Email() {
           {/* Center: narrow list */}
           <div className="w-72 shrink-0 border-r border-border flex flex-col group">
             {listHeader}
+            {listViewTabs}
+            {takeOverNoticeBar}
             {searchBar}
             <MessageListBody compact />
           </div>
@@ -2499,6 +2626,21 @@ export function Email() {
                   </div>
                 </div>
 
+                {/* An agent has this one. Said here, above the message,
+                    because this is where someone decides whether to reply
+                    themselves. Read from the open message rather than from its
+                    row, since a message opened by link may not be in the list
+                    at all. */}
+                {selectedCompanyId && holdForMessage(fullMessage) && (
+                  <div className="shrink-0 px-4 py-3 border-b border-border">
+                    <EmailAgentHoldPanel
+                      companyId={selectedCompanyId}
+                      hold={holdForMessage(fullMessage)!}
+                      onTakenOver={onTookOverMessage}
+                    />
+                  </div>
+                )}
+
                 {/* Message body */}
                 <div className="flex-1 overflow-hidden flex flex-col">
                   {fullMessage.html ? (
@@ -2671,6 +2813,8 @@ export function Email() {
         // ── 2-pane view: expanded list with per-row actions ─────────────────
         <div className="flex-1 min-w-0 flex flex-col">
           {listHeader}
+          {listViewTabs}
+          {takeOverNoticeBar}
           {searchBar}
           <MessageListBody compact={false} />
         </div>
