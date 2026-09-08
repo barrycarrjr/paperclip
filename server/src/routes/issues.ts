@@ -1187,7 +1187,7 @@ export function issueRoutes(
   // Broadcast a directive straight from the HQ Directives page (the one-tap
   // path — same fan-out the `broadcast_directive` Clippy tool uses, but
   // callable without a chat turn). Board-only, HQ-only.
-  const broadcastDirectiveSchema = z.object({
+  const previewDirectiveSchema = z.object({
     intent: z.string().trim().min(1).max(4000),
     title: z.string().trim().max(200).optional(),
     // Omit entirely to target every accessible company; an explicit but
@@ -1196,7 +1196,21 @@ export function issueRoutes(
     companyIds: z.array(z.string()).min(1).max(500).optional(),
     includePortfolioRoot: z.boolean().optional(),
   });
-  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+  // The send carries the id of the preview the operator read. The service
+  // refuses anything else, so this page cannot start work in every company
+  // from a press whose effect was never shown.
+  const broadcastDirectiveSchema = previewDirectiveSchema.extend({
+    previewId: z.string().trim().min(1).max(200),
+  });
+
+  /**
+   * The shared gate for both directive endpoints. Answers false, having
+   * already sent the refusal, when the caller may not be here.
+   */
+  async function allowDirectiveRequest(
+    req: Request,
+    res: Response,
+  ): Promise<boolean> {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId, "read");
     assertBoard(req);
@@ -1205,7 +1219,7 @@ export function issueRoutes(
     const hqCompany = await companySvc.getById(companyId);
     if (!hqCompany?.isPortfolioRoot) {
       res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
-      return;
+      return false;
     }
     const isPortfolioRootAccess =
       req.actor.source === "local_implicit" ||
@@ -1213,8 +1227,42 @@ export function issueRoutes(
       req.actor.isPortfolioRootUserAdmin === true;
     if (!isPortfolioRootAccess) {
       res.status(403).json({ error: "Portfolio root access required" });
+      return false;
+    }
+    return true;
+  }
+
+  function directiveActor(req: Request) {
+    return {
+      userId: req.actor.userId ?? "board",
+      isInstanceAdmin: req.actor.isInstanceAdmin === true,
+      companyIds: req.actor.companyIds ?? [],
+    };
+  }
+
+  // Ask what a broadcast would do. Writes nothing: no issue, no wake-up, no
+  // setting touched, so asking and then walking away leaves no trace.
+  router.post("/companies/:companyId/portfolio-directives/preview", async (req, res) => {
+    if (!(await allowDirectiveRequest(req, res))) return;
+
+    const parsed = previewDirectiveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
       return;
     }
+
+    const preview = await portfolioDirectiveService(db).preview({
+      actor: directiveActor(req),
+      intent: parsed.data.intent,
+      title: parsed.data.title,
+      companyIds: parsed.data.companyIds,
+      includePortfolioRoot: parsed.data.includePortfolioRoot,
+    });
+    res.json(preview);
+  });
+
+  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+    if (!(await allowDirectiveRequest(req, res))) return;
 
     const parsed = broadcastDirectiveSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1223,15 +1271,12 @@ export function issueRoutes(
     }
 
     const result = await portfolioDirectiveService(db).broadcast({
-      actor: {
-        userId: req.actor.userId ?? "board",
-        isInstanceAdmin: req.actor.isInstanceAdmin === true,
-        companyIds: req.actor.companyIds ?? [],
-      },
+      actor: directiveActor(req),
       intent: parsed.data.intent,
       title: parsed.data.title,
       companyIds: parsed.data.companyIds,
       includePortfolioRoot: parsed.data.includePortfolioRoot,
+      previewId: parsed.data.previewId,
     });
     res.status(201).json(result);
   });

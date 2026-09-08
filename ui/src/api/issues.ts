@@ -3,6 +3,7 @@ import type {
   Approval,
   Company,
   CreateIssueTreeHold,
+  DirectivePreview,
   DocumentRevision,
   Issue,
   IssueAttachment,
@@ -153,9 +154,29 @@ export const issuesApi = {
     api.get<{ directives: PortfolioDirective[]; companies: Company[] }>(
       `/companies/${hqCompanyId}/portfolio-directives`,
     ),
-  broadcastDirective: (
+  /**
+   * What a broadcast would do, answered by the server without doing any of
+   * it. Nothing is created, nobody is woken, so asking and then walking away
+   * leaves nothing behind.
+   */
+  previewDirective: (
     hqCompanyId: string,
     body: { intent: string; title?: string; companyIds?: string[]; includePortfolioRoot?: boolean },
+  ) =>
+    api.post<DirectivePreview>(
+      `/companies/${hqCompanyId}/portfolio-directives/preview`,
+      body,
+    ),
+  /** Send it. The server refuses without the id of the preview that was read. */
+  broadcastDirective: (
+    hqCompanyId: string,
+    body: {
+      intent: string;
+      title?: string;
+      companyIds?: string[];
+      includePortfolioRoot?: boolean;
+      previewId: string;
+    },
   ) =>
     api.post<DirectiveBroadcastResult>(
       `/companies/${hqCompanyId}/portfolio-directives`,

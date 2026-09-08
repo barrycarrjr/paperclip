@@ -1077,6 +1077,12 @@ export {
   startWorkInteractionIdempotencyKey,
 } from "./start-work.js";
 export {
+  directivePreviewSummaryLines,
+  type DirectivePreview,
+  type DirectivePreviewRecipient,
+  type DirectivePreviewSkip,
+} from "./portfolio-directive-preview.js";
+export {
   startWorkPlanRequestSchema,
   startWorkPlannerTaskSchema,
   startWorkPlannerOutputSchema,

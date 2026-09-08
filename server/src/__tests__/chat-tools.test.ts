@@ -86,6 +86,36 @@ describe("chat-tools registry", () => {
     }
   });
 
+  it("preview_directive is registered and reads only, so asking what a broadcast would do changes nothing", () => {
+    const tool = getChatTool("preview_directive");
+    expect(tool).toBeDefined();
+    expect(tool!.mutating).toBe(false);
+  });
+
+  it("broadcast_directive will not run without the previewId from a preview_directive call", async () => {
+    // The chat path has no screen to show a preview on, so this is the guard
+    // that keeps it from starting work in every company unannounced: the
+    // schema refuses the call before the handler, and therefore before the
+    // database, is ever reached.
+    const result = await executeChatTool(
+      "broadcast_directive",
+      { intent: "Reply to every company's Google reviews" },
+      {
+        db: createDbStub(),
+        actor: { userId: "u1", isInstanceAdmin: true, companyIds: [] },
+        defaultCompanyId: null,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/Invalid input/);
+  });
+
+  it("broadcast_directive's own description tells the model to preview first", () => {
+    const tool = getChatTool("broadcast_directive");
+    expect(tool!.spec.input_schema.required).toContain("previewId");
+    expect(tool!.description).toMatch(/preview_directive first/);
+  });
+
   it("rejects unknown tool names", async () => {
     const result = await executeChatTool(
       "no_such_tool",
