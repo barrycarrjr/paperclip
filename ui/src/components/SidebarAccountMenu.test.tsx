@@ -403,4 +403,227 @@ describe("SidebarAccountMenu", () => {
     });
   });
 
+  // How this copy stands against GitHub. Only "behind" is a job; the rest are
+  // things to say. The trigger row must never turn any of them into a button.
+  describe("when this copy is not behind GitHub", () => {
+    async function renderMenu(props: Record<string, unknown>) {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <SidebarAccountMenu
+                deploymentMode="authenticated"
+                instanceSettingsTarget="/instance/settings/general"
+                version="1.2.3"
+                commit="9be597811d288770ab6722fad3e69aa40ebf4a64"
+                {...props}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      return root;
+    }
+
+    // The defect: a checkout ahead of GitHub used to be offered an update that
+    // would have moved it backwards.
+    it("shows a quiet Newer badge and no Update pill when this copy is ahead", async () => {
+      const root = await renderMenu({ updateAvailable: false, remoteRelation: "ahead" });
+
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+      expect(container.querySelector('button[aria-label^="Downloaded but not built"]')).toBeNull();
+
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).toContain("Newer");
+      // The commit hash gives up its slot, so the row never carries both.
+      expect(trigger?.textContent).not.toContain("9be59781");
+
+      // A badge, not a button: there is nothing here to press.
+      const badge = Array.from(container.querySelectorAll("span")).find(
+        (el) => el.textContent === "Newer",
+      );
+      expect(badge).toBeDefined();
+      expect(badge?.closest("button")?.getAttribute("aria-label")).toBe("Open account menu");
+      expect(badge?.getAttribute("title")).toBe(
+        "This copy is newer than GitHub. There is nothing to update.",
+      );
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("shows a quiet Differs badge and no pill when the two have diverged", async () => {
+      const root = await renderMenu({ updateAvailable: false, remoteRelation: "diverged" });
+
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).toContain("Differs");
+
+      const badge = Array.from(container.querySelectorAll("span")).find(
+        (el) => el.textContent === "Differs",
+      );
+      expect(badge?.getAttribute("title")).toContain("would not be a simple move forward");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("keeps the commit hash and says nothing when the two are level", async () => {
+      const root = await renderMenu({ updateAvailable: false, remoteRelation: "level" });
+
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).toContain("9be59781");
+      expect(trigger?.textContent).not.toContain("Newer");
+      expect(trigger?.textContent).not.toContain("Differs");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    // A direction we could not work out is not a state to announce. The row
+    // looks exactly as it does when everything is fine, because claiming
+    // anything else would be inventing it.
+    it("says nothing when the direction could not be worked out", async () => {
+      const root = await renderMenu({ updateAvailable: false, remoteRelation: "unknown" });
+
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).toContain("9be59781");
+      expect(trigger?.textContent).not.toContain("Newer");
+      expect(trigger?.textContent).not.toContain("Differs");
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("says nothing on the row when GitHub has never seen this branch, and offers nothing", async () => {
+      const root = await renderMenu({
+        updateAvailable: false,
+        remoteRelation: "no_remote_branch",
+        trackedBranch: "ux-mockup-shell",
+      });
+
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).not.toContain("Newer");
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    // Both can be true at once: newer than GitHub, and never built. The
+    // rebuild is a real job so it keeps the pill; the badge stands down.
+    it("keeps the Rebuild pill when this copy is ahead but was never built", async () => {
+      const root = await renderMenu({
+        updateAvailable: true,
+        updateReason: "build_behind",
+        remoteRelation: "ahead",
+      });
+
+      const pill = container.querySelector('button[aria-label^="Downloaded but not built"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent).toContain("Rebuild");
+      expect(container.querySelector('button[aria-label^="Update available"]')).toBeNull();
+      const trigger = container.querySelector('button[aria-label="Open account menu"]');
+      expect(trigger?.textContent).not.toContain("Newer");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+  });
+
+  // These read the popover, which is portalled into document.body, so they
+  // leave the tree mounted for afterEach to wipe (see the note above about
+  // Radix portal cleanup under React 19 and jsdom).
+  describe("what the account card says about GitHub", () => {
+    async function renderOpenMenu(props: Record<string, unknown>) {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <SidebarAccountMenu
+                deploymentMode="authenticated"
+                instanceSettingsTarget="/instance/settings/general"
+                version="1.2.3"
+                open={true}
+                {...props}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      return root;
+    }
+
+    it("says this copy is newer, and does not offer an update", async () => {
+      const root = await renderOpenMenu({ updateAvailable: false, remoteRelation: "ahead" });
+
+      expect(document.body.textContent).toContain(
+        "This copy is newer than GitHub, so there is nothing to update.",
+      );
+      expect(document.body.textContent).not.toContain("Update available.");
+      void root;
+    });
+
+    it("says both sides have changed, and leaves the decision to a person", async () => {
+      const root = await renderOpenMenu({ updateAvailable: false, remoteRelation: "diverged" });
+
+      expect(document.body.textContent).toContain("This copy and GitHub have both changed");
+      expect(document.body.textContent).toContain("no update is offered here");
+      void root;
+    });
+
+    it("names the branch GitHub has never seen", async () => {
+      const root = await renderOpenMenu({
+        updateAvailable: false,
+        remoteRelation: "no_remote_branch",
+        trackedBranch: "ux-mockup-shell",
+      });
+
+      expect(document.body.textContent).toContain("GitHub has no branch called ux-mockup-shell");
+      void root;
+    });
+
+    it("still says this copy is newer while offering the rebuild", async () => {
+      const root = await renderOpenMenu({
+        updateAvailable: true,
+        updateReason: "build_behind",
+        remoteRelation: "ahead",
+      });
+
+      expect(document.body.textContent).toContain("Downloaded but not built. Rebuild to run it.");
+      expect(document.body.textContent).toContain(
+        "This copy is newer than GitHub, so there is nothing to update.",
+      );
+      void root;
+    });
+
+    it("says nothing extra when the direction could not be worked out", async () => {
+      const root = await renderOpenMenu({ updateAvailable: false, remoteRelation: "unknown" });
+
+      expect(document.body.textContent).not.toContain("newer than GitHub");
+      expect(document.body.textContent).not.toContain("have both changed");
+      expect(document.body.textContent).not.toContain("has no branch called");
+      void root;
+    });
+  });
+
 });

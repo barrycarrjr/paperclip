@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowUp,
   BookOpen,
   Download,
+  GitBranch,
   Hammer,
   LogOut,
   type LucideIcon,
@@ -50,6 +52,26 @@ interface SidebarAccountMenuProps {
    * what the pill always did before the two cases were told apart.
    */
   updateReason?: "remote_ahead" | "build_behind" | null;
+  /**
+   * Which way round this copy and GitHub are.
+   *
+   * Only `behind` has anything to pull, and that arrives as `updateAvailable`
+   * with a `remote_ahead` reason. The other answers are shown, never offered:
+   * `ahead` means this copy is newer than GitHub, `diverged` means both sides
+   * have changed so pulling would not be a simple move forward, and
+   * `no_remote_branch` means GitHub has never seen this branch. `unknown` and
+   * `level` say nothing on screen, because there is nothing true to say.
+   */
+  remoteRelation?:
+    | "level"
+    | "behind"
+    | "ahead"
+    | "diverged"
+    | "no_remote_branch"
+    | "unknown"
+    | null;
+  /** The branch this install tracks, named only when we actually know it. */
+  trackedBranch?: string | null;
 }
 
 interface MenuActionProps {
@@ -228,6 +250,8 @@ export function SidebarAccountMenu({
   commit,
   updateAvailable = false,
   updateReason = null,
+  remoteRelation = null,
+  trackedBranch = null,
 }: SidebarAccountMenuProps) {
   const shortCommit = commit ? commit.slice(0, 8) : null;
   const [internalOpen, setInternalOpen] = useState(false);
@@ -306,6 +330,33 @@ export function SidebarAccountMenu({
   // Pulling cannot fix a build that was never run, so the pill has to offer the
   // action that actually closes the gap it found.
   const needsRebuildOnly = updateReason === "build_behind";
+
+  // States that are worth saying but are not a job to do. None of them can
+  // coexist with an offer to pull, because an offer to pull only comes from
+  // being behind, so each is safe to state on its own.
+  const localIsNewer = remoteRelation === "ahead";
+  const hasDiverged = remoteRelation === "diverged";
+  const branchNotOnGitHub = remoteRelation === "no_remote_branch";
+
+  // The trigger row has one slot at its right edge. A pill that does something
+  // wins it; otherwise a quiet badge can use it to say how this copy stands.
+  // The badge is a plain span, never a button, so it cannot look like a job.
+  const quietBadge = updateAvailable
+    ? null
+    : localIsNewer
+      ? {
+          label: "Newer",
+          icon: ArrowUp,
+          title: "This copy is newer than GitHub. There is nothing to update.",
+        }
+      : hasDiverged
+        ? {
+            label: "Differs",
+            icon: GitBranch,
+            title:
+              "This copy and GitHub have both changed. Pulling would not be a simple move forward, so no update is offered.",
+          }
+        : null;
   const pillPending = needsRebuildOnly ? rebuildMutation.isPending : updateMutation.isPending;
   const pillLabel = needsRebuildOnly ? "Rebuild" : "Update";
 
@@ -332,12 +383,21 @@ export function SidebarAccountMenu({
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1 truncate">{displayName}</span>
-            {shortCommit && !updateAvailable ? (
+            {shortCommit && !updateAvailable && !quietBadge ? (
               <span
                 className="ml-auto shrink-0 font-mono text-[10px] font-normal text-muted-foreground/70"
                 title={commit ?? undefined}
               >
                 {shortCommit}
+              </span>
+            ) : null}
+            {quietBadge ? (
+              <span
+                className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title={quietBadge.title}
+              >
+                <quietBadge.icon className="size-3" />
+                {quietBadge.label}
               </span>
             ) : null}
             {updateAvailable ? <span className="ml-auto h-6 w-[5.25rem]" aria-hidden="true" /> : null}
@@ -360,8 +420,8 @@ export function SidebarAccountMenu({
                       ? "Rebuilding Paperclip"
                       : "Updating Paperclip"
                     : needsRebuildOnly
-                      ? "Downloaded but not built — click to rebuild Paperclip"
-                      : "Update available — click to update Paperclip"
+                      ? "Downloaded but not built. Click to rebuild Paperclip"
+                      : "Update available. Click to update Paperclip"
                 }
                 className="absolute right-5 top-1/2 z-10 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 text-[10px] font-medium text-amber-500 transition-colors hover:bg-amber-500/15 hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -378,6 +438,16 @@ export function SidebarAccountMenu({
                   ? "The latest code is already here, but the server is still running an older build. Click to build and relaunch."
                   : "A new commit is on origin/master. Click to pull, rebuild, and relaunch."}
               </p>
+              {/*
+                A rebuild and a newer copy can both be true at once, and the
+                pill only has room for the job. Say the other part here so it
+                is not a surprise waiting inside the menu.
+              */}
+              {localIsNewer ? (
+                <p className="text-[10px] opacity-80">
+                  This copy is also newer than GitHub, so there is nothing to pull.
+                </p>
+              ) : null}
             </TooltipContent>
           </Tooltip>
         ) : null}
@@ -425,8 +495,31 @@ export function SidebarAccountMenu({
                   {updateAvailable ? (
                     <p className="mt-1 text-xs font-medium text-amber-500">
                       {needsRebuildOnly
-                        ? "Downloaded but not built — rebuild to run it."
-                        : "Update available — pull origin/master to apply."}
+                        ? "Downloaded but not built. Rebuild to run it."
+                        : "Update available. Pull origin/master to apply."}
+                    </p>
+                  ) : null}
+                  {/*
+                    Said, not offered. Each of these is a true statement about
+                    where this copy stands, and none of them is a button,
+                    because none of them is a job someone should just do.
+                  */}
+                  {localIsNewer ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      This copy is newer than GitHub, so there is nothing to update.
+                    </p>
+                  ) : null}
+                  {hasDiverged ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      This copy and GitHub have both changed since they last matched. Pulling
+                      would not be a simple move forward, so no update is offered here.
+                    </p>
+                  ) : null}
+                  {branchNotOnGitHub ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {trackedBranch
+                        ? `GitHub has no branch called ${trackedBranch}, so there is nothing to compare this copy against.`
+                        : "GitHub does not have the branch this copy tracks, so there is nothing to compare it against."}
                     </p>
                   ) : null}
                 </div>

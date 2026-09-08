@@ -113,6 +113,11 @@ export function Layout() {
   });
   const updateAvailable = updateCheck?.available === true;
   const updateReason = updateCheck?.reason ?? null;
+  // Which way round this copy and GitHub are. Passed straight through so the
+  // account menu can say "this copy is newer" instead of offering an update
+  // that would move it backwards.
+  const remoteRelation = updateCheck?.remoteRelation ?? null;
+  const trackedBranch = updateCheck?.branch ?? null;
   const keyboardShortcutsEnabled = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -390,6 +395,8 @@ export function Layout() {
               commit={health?.commit}
               updateAvailable={updateAvailable}
               updateReason={updateReason}
+              remoteRelation={remoteRelation}
+              trackedBranch={trackedBranch}
             />
           </div>
         ) : (
@@ -416,7 +423,9 @@ export function Layout() {
                 version={health?.version}
                 commit={health?.commit}
                 updateAvailable={updateAvailable}
-              updateReason={updateReason}
+                updateReason={updateReason}
+                remoteRelation={remoteRelation}
+                trackedBranch={trackedBranch}
               />
             </div>
           </div>

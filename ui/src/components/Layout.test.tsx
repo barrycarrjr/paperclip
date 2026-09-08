@@ -19,11 +19,22 @@ const mockSystemApi = vi.hoisted(() => ({
 }));
 
 const mockSidebarAccountMenu = vi.hoisted(() =>
-  vi.fn((props: { updateAvailable?: boolean }) => (
-    <div data-testid="account-menu" data-update-available={props.updateAvailable ? "yes" : "no"}>
-      Account menu
-    </div>
-  )),
+  vi.fn(
+    (props: {
+      updateAvailable?: boolean;
+      remoteRelation?: string | null;
+      trackedBranch?: string | null;
+    }) => (
+      <div
+        data-testid="account-menu"
+        data-update-available={props.updateAvailable ? "yes" : "no"}
+        data-remote-relation={props.remoteRelation ?? "none"}
+        data-tracked-branch={props.trackedBranch ?? "none"}
+      >
+        Account menu
+      </div>
+    ),
+  ),
 );
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
@@ -282,6 +293,45 @@ describe("Layout", () => {
     expect(mockSystemApi.checkUpdate).toHaveBeenCalled();
     const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
     expect(accountMenuNode?.getAttribute("data-update-available")).toBe("yes");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // A copy that is ahead of GitHub has nothing to update, and the account menu
+  // can only say so if the direction reaches it.
+  it("forwards the remote direction and the tracked branch to SidebarAccountMenu", async () => {
+    mockSystemApi.checkUpdate.mockResolvedValue({
+      available: false,
+      localCommit: "8655f5e926a7e0e99f0e5019716c73c4fe5e2d32",
+      remoteCommit: "558f0096faa8fbb1caee01dede0de231568f7ee5",
+      installedCommit: "558f0096faa8fbb1caee01dede0de231568f7ee5",
+      reason: null,
+      remoteRelation: "ahead",
+      branch: "master",
+      lastChecked: new Date().toISOString(),
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const accountMenuNode = container.querySelector('[data-testid="account-menu"]');
+    expect(accountMenuNode?.getAttribute("data-update-available")).toBe("no");
+    expect(accountMenuNode?.getAttribute("data-remote-relation")).toBe("ahead");
+    expect(accountMenuNode?.getAttribute("data-tracked-branch")).toBe("master");
 
     await act(async () => {
       root.unmount();
