@@ -21,10 +21,20 @@
  * tooltips, so the icon-row labels inside it rendered behind the very menu they
  * belonged to and could not be read at all. Keep TOOLTIP above PANEL.
  *
+ * **Height alone cannot hide a tooltip from a dialog, and it should not try.**
+ * A dialog can hold tooltips of its own, so tooltips have to stay above
+ * dialogs too. What used to go wrong was a tooltip left over from the page
+ * behind: opened by keyboard focus, it stayed on screen above the dimmed
+ * backdrop once a dialog opened. That is fixed by closing it rather than by
+ * moving a number, in lib/tooltip-dismiss.ts, which dialog.tsx and sheet.tsx
+ * call when they open.
+ *
  * Not everything floating uses these yet. Known stragglers, left alone because
- * they are self-contained and changing them buys nothing today: the markdown
- * editor's mention list (`z-[9999]`) and the new-issue dialog's inline property
- * menu (`z-[200]`). If you touch either, move it onto this scale.
+ * they are self-contained and changing them buys nothing today: dropdown menus
+ * and selects (both plain `z-50`, which is the same value BASE_OVERLAY holds),
+ * the markdown editor's mention list (`z-[9999]`) and the new-issue dialog's
+ * inline property menu (`z-[200]`). If you touch any of them, move it onto this
+ * scale.
  */
 
 /** Dialogs, sheets, dropdown menus, selects. */

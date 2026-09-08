@@ -110,6 +110,9 @@ export function ClippyDrawer() {
   const widthRef = useRef<number>(width);
   widthRef.current = width;
   const draggingRef = useRef(false);
+  // The round launcher is the only way this drawer opens, so it is the button
+  // to put focus back on when the drawer closes. See the Sheet below.
+  const launcherRef = useRef<HTMLButtonElement | null>(null);
   // Read from the address rather than the context selection: the selection is
   // synced from the route by an effect, so it is one render behind on the
   // first render after a company change (see hooks/useRouteCompany.ts).
@@ -309,6 +312,7 @@ export function ClippyDrawer() {
           every tap opened Clippy instead. The offset comes from
           lib/narrow-layout so it stays tied to the bar's own height. */}
       <Button
+        ref={launcherRef}
         variant="default"
         size="icon"
         className={cn(
@@ -332,6 +336,18 @@ export function ClippyDrawer() {
           style={{ width: `${width}px`, maxWidth: "100vw" }}
           className="flex flex-col gap-0 p-0 sm:max-w-none"
           showCloseButton={false}
+          // Put focus back on the round launcher when the drawer closes. Radix
+          // does this by itself from its own Trigger, and there is no Trigger
+          // here: the launcher opens the drawer through state instead. Without
+          // this, closing left focus on the page body, so the next Tab press
+          // started again from the very top of the document. This is the same
+          // shape the phone sidebar drawer uses in Layout.tsx.
+          onCloseAutoFocus={(event) => {
+            const launcher = launcherRef.current;
+            if (!launcher || !launcher.isConnected) return;
+            event.preventDefault();
+            launcher.focus();
+          }}
         >
           {/* Resize handle on the left edge */}
           <div

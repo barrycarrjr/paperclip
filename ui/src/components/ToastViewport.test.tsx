@@ -83,6 +83,40 @@ describe("ToastViewport", () => {
     expect(button?.className).toContain("opacity-50");
   });
 
+  it("keeps a pile of failures inside the window instead of letting it grow off the top", () => {
+    // Failures stay until they are closed, and the app holds five at once. On
+    // a short window five of them were taller than the screen, so the oldest
+    // one, the only place the server's reason is written down, sat above the
+    // top edge with its close button out of reach. The list now stops at the
+    // height of the window and scrolls inside itself.
+    act(() => {
+      for (let i = 0; i < 5; i += 1) {
+        push?.({ title: `Save failed ${i}`, body: "The server refused it", tone: "error" });
+      }
+    });
+    const stack = container.querySelector<HTMLElement>('[data-testid="toast-stack"]');
+    expect(stack).not.toBeNull();
+    expect(stack?.className).toContain("max-h-[calc(100dvh-1.5rem)]");
+    expect(stack?.className).toContain("overflow-y-auto");
+    // Scrolling a list needs pointer events, and the list is the only part
+    // that takes them: the box around it stays see-through to clicks.
+    expect(stack?.className).toContain("pointer-events-auto");
+    expect(stack?.parentElement?.className).toContain("pointer-events-none");
+  });
+
+  it("holds the messages in from both sides so a phone does not cut them off", () => {
+    // It used to be `left-3 w-full`, and on a phone `w-full` is the width of
+    // the whole page, so the right hand side of every message, close button
+    // included, was off the screen.
+    act(() => {
+      push?.({ title: "Save failed", tone: "error" });
+    });
+    const box = container.querySelector<HTMLElement>('[data-testid="toast-stack"]')?.parentElement;
+    expect(box?.className).toContain("inset-x-3");
+    expect(box?.className).not.toContain("w-full");
+    expect(box?.className).toContain("max-w-sm");
+  });
+
   it("closes a failure when the close button is pressed", () => {
     act(() => {
       push?.({ title: "Delete failed", tone: "error" });

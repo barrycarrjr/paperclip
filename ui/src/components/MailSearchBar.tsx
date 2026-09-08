@@ -69,7 +69,7 @@ export function MailSearchBar({
             }}
             className={cn(
               "w-full rounded-md border border-input bg-transparent py-1 pl-7 text-xs outline-none transition-[color,box-shadow]",
-              "placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+              "placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]",
               value ? "pr-7" : "pr-2",
             )}
           />

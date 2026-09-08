@@ -83,8 +83,37 @@ vi.mock("./Identity", () => ({
   Identity: ({ name }: { name: string }) => <span>{name}</span>,
 }));
 
-vi.mock("@/components/ui/command", () => ({
-  CommandDialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
+vi.mock("@/components/ui/command", async () => {
+  const React = await import("react");
+  return {
+  // Stands in for the real box, and copies the one bit of Radix behaviour
+  // these tests care about: when it closes it asks the caller where focus
+  // should go. ui/command.test.tsx checks the real box does the same.
+  CommandDialog: ({
+    open,
+    children,
+    onOpenChange,
+    onCloseAutoFocus,
+  }: {
+    open: boolean;
+    children: ReactNode;
+    onOpenChange?: (open: boolean) => void;
+    onCloseAutoFocus?: (event: { preventDefault: () => void }) => void;
+  }) => {
+    const wasOpen = React.useRef(false);
+    React.useEffect(() => {
+      if (wasOpen.current && !open) onCloseAutoFocus?.({ preventDefault: () => {} });
+      wasOpen.current = open;
+    }, [open, onCloseAutoFocus]);
+    if (!open) return null;
+    return (
+      <div>
+        {/* Stands in for pressing Escape or clicking outside. */}
+        <button type="button" aria-label="Back out" onClick={() => onOpenChange?.(false)} />
+        {children}
+      </div>
+    );
+  },
   CommandEmpty: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   CommandGroup: ({ heading, children }: { heading?: ReactNode; children: ReactNode }) => (
     <div>
@@ -126,7 +155,8 @@ vi.mock("@/components/ui/command", () => ({
   ),
   CommandList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   CommandSeparator: () => <hr />,
-}));
+  };
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -440,5 +470,69 @@ describe("CommandPalette", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("puts focus back on the button that opened it when you back out", async () => {
+    // The Search button in the top bar does not own this box: it fires a
+    // Ctrl+K key event and the box picks that up, so Radix has no trigger to
+    // hand focus back to. Backing out used to leave focus on the page body, so
+    // the next Tab press started again at the very top of the document.
+    const searchButton = document.createElement("button");
+    searchButton.setAttribute("aria-label", "Search");
+    document.body.appendChild(searchButton);
+    searchButton.focus();
+
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+    expect(container.querySelector("input")).not.toBeNull();
+    // Something inside the box has focus now, the way it would in the app.
+    (container.querySelector("input") as HTMLInputElement).focus();
+    expect(document.activeElement).not.toBe(searchButton);
+
+    const backOut = container.querySelector<HTMLButtonElement>('button[aria-label="Back out"]');
+    expect(backOut).not.toBeNull();
+    await act(async () => {
+      backOut!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(document.activeElement).toBe(searchButton);
+
+    act(() => {
+      root.unmount();
+    });
+    searchButton.remove();
+  });
+
+  it("does not drag focus back to the search button after you pick a result", async () => {
+    // Picking a result takes you somewhere new, and the page you land on moves
+    // focus into its own main content. Putting focus back on the Search button
+    // as well would only fight that.
+    const searchButton = document.createElement("button");
+    searchButton.setAttribute("aria-label", "Search");
+    document.body.appendChild(searchButton);
+    searchButton.focus();
+
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const result = Array.from(container.querySelectorAll("button")).find(
+      (el) => (el.textContent ?? "").includes("Goals"),
+    );
+    expect(result).not.toBeUndefined();
+    (container.querySelector("input") as HTMLInputElement).focus();
+
+    await act(async () => {
+      result!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(navigateMock).toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(searchButton);
+
+    act(() => {
+      root.unmount();
+    });
+    searchButton.remove();
   });
 });

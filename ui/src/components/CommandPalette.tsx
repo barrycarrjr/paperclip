@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
@@ -38,11 +38,20 @@ export function CommandPalette() {
   const { openNewIssue, openNewAgent } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
+  // Whatever had focus when the box was asked for, so focus can go back there
+  // when it closes. This box has no Radix Trigger to hand focus back to: the
+  // Search button in the top bar opens it by firing a Ctrl+K key event rather
+  // than owning the dialog, so remembering the opener is the only way to know
+  // where focus came from.
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
+        const opener = document.activeElement;
+        openerRef.current =
+          opener instanceof HTMLElement && opener !== document.body ? opener : null;
         setOpen(true);
         if (isMobile) setSidebarOpen(false);
       }
@@ -136,8 +145,20 @@ export function CommandPalette() {
     [availability],
   );
 
-  function go(path: string) {
+  /**
+   * Close the box because the person picked something, rather than because
+   * they backed out of it. Forgetting the opener matters here: choosing a
+   * result takes you somewhere new, and the page you land on moves focus into
+   * the main content by itself (see lib/main-content-focus). Putting focus
+   * back on the Search button as well would only fight that.
+   */
+  function closeAfterChoosing() {
+    openerRef.current = null;
     setOpen(false);
+  }
+
+  function go(path: string) {
+    closeAfterChoosing();
     navigate(path);
   }
 
@@ -152,10 +173,25 @@ export function CommandPalette() {
   );
 
   return (
-    <CommandDialog open={open} onOpenChange={(v) => {
+    <CommandDialog
+      open={open}
+      onOpenChange={(v) => {
         setOpen(v);
         if (v && isMobile) setSidebarOpen(false);
-      }}>
+      }}
+      // Put focus back on the button that opened the box. Without this, closing
+      // it dropped focus on the outer page wrapper, so the next Tab press
+      // started again at the very top of the document. If the opener has gone
+      // from the page, say because a result navigated somewhere else, this
+      // stands aside and lets Radix do whatever it would have done.
+      onCloseAutoFocus={(event) => {
+        const opener = openerRef.current;
+        openerRef.current = null;
+        if (!opener || !opener.isConnected) return;
+        event.preventDefault();
+        opener.focus();
+      }}
+    >
       <CommandInput
         // The box used to say "Search issues, agents, projects", which
         // undersold it: this already finds Email, Clippy, Calendar, the
@@ -174,7 +210,7 @@ export function CommandPalette() {
         <CommandGroup heading="Actions">
           <CommandItem
             onSelect={() => {
-              setOpen(false);
+              closeAfterChoosing();
               openNewIssue();
             }}
           >
@@ -184,7 +220,7 @@ export function CommandPalette() {
           </CommandItem>
           <CommandItem
             onSelect={() => {
-              setOpen(false);
+              closeAfterChoosing();
               openNewAgent();
             }}
           >
