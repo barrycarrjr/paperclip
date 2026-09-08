@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { AGENT_TABS, agentTabLabel } from "@/lib/agent-tabs";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -930,7 +931,9 @@ export function AgentDetail() {
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
       } else {
-        crumbs.push({ label: "Dashboard" });
+        // Read from the shared list rather than typed again here, so the
+        // breadcrumb and the tab can never say different words.
+        crumbs.push({ label: agentTabLabel("dashboard") ?? "Current work" });
       }
     }
     setBreadcrumbs(crumbs);
@@ -1149,12 +1152,7 @@ export function AgentDetail() {
         >
           <PageTabBar
             items={[
-              { value: "dashboard", label: "Dashboard" },
-              { value: "instructions", label: "Instructions" },
-              { value: "skills", label: "Skills" },
-              { value: "configuration", label: "Configuration" },
-              { value: "runs", label: "Runs" },
-              { value: "budget", label: "Budget" },
+              ...AGENT_TABS,
               ...pluginTabItems.map((item) => ({ value: item.value, label: item.label })),
             ]}
             value={isPluginTab ? (urlTab ?? activeView) : activeView}
