@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Puzzle, ArrowLeft, ShieldAlert, ActivitySquare, CheckCircle, XCircle, Loader2, Clock, Cpu, Webhook, CalendarClock, AlertTriangle } from "lucide-react";
+import { Puzzle, ArrowLeft, ShieldAlert, ActivitySquare, CheckCircle, XCircle, Loader2, Clock, Cpu, Webhook, CalendarClock, AlertTriangle, AlertCircle } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { Link, Navigate, useParams } from "@/lib/router";
@@ -29,6 +29,12 @@ import {
   type JsonSchemaNode,
 } from "@/components/JsonSchemaForm";
 import { MarkdownBody } from "@/components/MarkdownBody";
+import {
+  resolvePluginCompanyAccess,
+  summarizePluginTools,
+  type PluginCompanyAccess,
+  type PluginToolSummary,
+} from "@/lib/plugin-tool-summary";
 
 type PluginSettingsTab = "status" | "setup" | "configuration";
 
@@ -184,6 +190,23 @@ export function PluginSettings() {
   // contributed panel itself depends on.
   const hasCustomSettingsPage = pluginSlots.length > 0;
 
+  // What this add-on's tools let agents do, in the add-on's own words. The
+  // host's tool registry is built straight from these manifest declarations at
+  // load time, so this is the same wording an agent is handed.
+  const toolSummaries = useMemo(
+    () => summarizePluginTools(plugin?.manifestJson?.tools),
+    [plugin?.manifestJson?.tools],
+  );
+
+  // Whether those tools reach the company the operator is looking at. Only
+  // worth stating once the saved settings have actually arrived: a slow or
+  // failed config fetch must show no claim rather than a wrong one.
+  const companyAccess = useMemo(
+    () => resolvePluginCompanyAccess(configSchema, configData?.configJson, selectedCompanyId),
+    [configSchema, configData?.configJson, selectedCompanyId],
+  );
+  const companyAccessKnown = !hasConfigSchema || configData !== undefined;
+
   useEffect(() => {
     setBreadcrumbs([
       { label: selectedCompany?.name ?? "Company", href: "/brief" },
@@ -304,6 +327,19 @@ export function PluginSettings() {
                 </div>
               </div>
             </section>
+
+            {toolSummaries.length > 0 ? (
+              <>
+                <Separator />
+                <PluginToolList
+                  pluginName={plugin.manifestJson.displayName ?? plugin.packageName}
+                  tools={toolSummaries}
+                  access={companyAccess}
+                  accessKnown={companyAccessKnown}
+                  companyName={selectedCompany?.name ?? null}
+                />
+              </>
+            ) : null}
 
             <Separator />
 
@@ -642,6 +678,97 @@ export function PluginSettings() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PluginToolList - what an add-on actually lets agents do
+// ---------------------------------------------------------------------------
+
+interface PluginToolListProps {
+  /** Name of the add-on, used in the sentence above the list. */
+  pluginName: string;
+  /** One entry per tool the add-on contributes. Never empty when rendered. */
+  tools: PluginToolSummary[];
+  /** Whether those tools reach the company the operator is in. */
+  access: PluginCompanyAccess;
+  /** False while the saved settings are still loading, so nothing is claimed. */
+  accessKnown: boolean;
+  /** Name of the company the operator is in, for the sentence about it. */
+  companyName: string | null;
+}
+
+/**
+ * The list of things an add-on can do.
+ *
+ * Some add-ons contribute only tools for agents and no page of their own,
+ * which is right for what they are, but it left an operator with nothing to
+ * read but a one-line description. This section is the missing answer. It is
+ * shown for every add-on that contributes tools, whether or not it also
+ * contributes a page, because the question is the same either way, and it is
+ * not shown at all for an add-on with no tools rather than standing an empty
+ * heading in front of them.
+ */
+function PluginToolList({
+  pluginName,
+  tools,
+  access,
+  accessKnown,
+  companyName,
+}: PluginToolListProps) {
+  const [showNotes, setShowNotes] = useState(false);
+  const hasNotes = tools.some((tool) => tool.detail.length > 0);
+  const where = companyName ?? "this company";
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">What this add-on can do</h2>
+          <p className="text-sm text-muted-foreground">
+            {tools.length === 1
+              ? `One thing your agents can do with ${pluginName}.`
+              : `${tools.length} things your agents can do with ${pluginName}.`}{" "}
+            Your agents use these on their own, in the background.
+          </p>
+        </div>
+        {hasNotes ? (
+          <Button variant="outline" size="sm" onClick={() => setShowNotes((shown) => !shown)}>
+            {showNotes ? "Hide the full notes" : "Show the full notes"}
+          </Button>
+        ) : null}
+      </div>
+
+      {accessKnown && access.scoped ? (
+        access.allowed ? (
+          <p className="text-sm text-muted-foreground">
+            Set up for {where}, so agents there can use these.
+          </p>
+        ) : (
+          <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {access.configured
+                ? `Not set up for ${where}. This add-on serves other companies only, so agents in ${where} cannot do any of this.`
+                : "Not set up for any company yet. Nobody has chosen which companies this add-on serves, so no agent can do any of this. Choose them under Settings below."}
+            </span>
+          </p>
+        )
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {tools.map((tool) => (
+          <div key={tool.name} className="space-y-1 rounded-md border bg-card p-3">
+            <h3 className="text-sm font-medium">{tool.title}</h3>
+            {tool.summary ? <p className="text-sm text-muted-foreground">{tool.summary}</p> : null}
+            {showNotes && tool.detail ? (
+              <p className="text-sm text-muted-foreground/80">{tool.detail}</p>
+            ) : null}
+            <p className="font-mono text-xs text-muted-foreground/70">{tool.name}</p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
