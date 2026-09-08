@@ -94,16 +94,38 @@ describe("TeamLayout", () => {
     expect(selected?.textContent).toBe("Assistants");
   });
 
+  /**
+   * A click on a tab, in the order a browser really does it.
+   *
+   * The focus step in the middle is the point. A browser focuses the button
+   * it is about to click, between the mouse going down and the click landing,
+   * and the tab strip listens to both. Leaving focus out is what let a real
+   * defect through: one click asked to go to the page twice, put two entries
+   * in the browser's history, and made the back button need two presses.
+   */
+  function clickTab(label: string) {
+    const target = tabButtons(container).find((tab) => tab.textContent === label)!;
+    act(() => {
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      target.focus();
+      target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      target.click();
+    });
+  }
+
   it("sends a tab click to the address that page already had", () => {
     render();
 
-    const orgTab = tabButtons(container).find((tab) => tab.textContent === "Org chart")!;
-    act(() => {
-      orgTab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      orgTab.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      orgTab.click();
-    });
+    clickTab("Org chart");
 
     expect(navigate).toHaveBeenCalledWith("/org");
+  });
+
+  it("asks to move once per tab click, so the back button needs one press", () => {
+    render();
+
+    clickTab("Org chart");
+
+    expect(navigate).toHaveBeenCalledTimes(1);
   });
 });

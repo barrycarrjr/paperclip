@@ -641,6 +641,7 @@ export function Routines() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <PageTabBar
+          label="Automations section"
           align="start"
           value={activeTab}
           onValueChange={handleTabChange}

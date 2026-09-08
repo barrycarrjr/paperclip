@@ -70,8 +70,21 @@ export function TeamLayout() {
         <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           {companyName ? `Team in ${companyName}` : "Team"}
         </p>
-        <Tabs value={activeTab.id} onValueChange={goToTab}>
-          <PageTabBar items={items} value={activeTab.id} onValueChange={goToTab} align="start" />
+        {/*
+          activationMode="manual" for the same reason the Work page sets it,
+          written out in full there: without it a single tab click asks to
+          change tab twice, once on mouse down and once when the button takes
+          focus, and both pushes land on the browser's history so the back
+          button needs two presses.
+        */}
+        <Tabs value={activeTab.id} onValueChange={goToTab} activationMode="manual">
+          <PageTabBar
+            items={items}
+            value={activeTab.id}
+            onValueChange={goToTab}
+            align="start"
+            label="Team section"
+          />
         </Tabs>
       </div>
       <div className={cn("min-w-0", fillHeight && "min-h-0 flex-1")}>

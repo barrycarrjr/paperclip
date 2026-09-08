@@ -2031,6 +2031,7 @@ export function Inbox() {
         <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
           <PageTabBar
+            label="Attention filter"
             items={[
               {
                 value: "mine",

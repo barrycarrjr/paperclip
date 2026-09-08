@@ -130,15 +130,38 @@ describe("the Work page", () => {
     return active?.textContent?.trim() ?? "";
   }
 
+  /**
+   * A click on a tab, in the order a browser really does it.
+   *
+   * The focus step in the middle is the point. A browser focuses the button
+   * it is about to click, between the mouse going down and the click landing,
+   * and the tab strip listens to both. Leaving focus out of this helper is
+   * what let a real defect through: one click asked to change tab twice and
+   * put two entries in the browser's history, and a test that only sent
+   * mousedown and click could never see it.
+   */
   async function clickTab(label: string) {
     const trigger = tab(label);
     await act(async () => {
       trigger.dispatchEvent(
         new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
       );
+      trigger.focus();
+      trigger.dispatchEvent(
+        new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }),
+      );
       trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
     });
     await flush();
+  }
+
+  /** How many entries deep in the browser's history we are. */
+  function historyDepth(): number {
+    const state = window.history.state as { idx?: number } | null;
+    if (!state || typeof state.idx !== "number") {
+      throw new Error("The router has not stamped a position on the history entry");
+    }
+    return state.idx;
   }
 
   beforeEach(() => {
@@ -192,6 +215,27 @@ describe("the Work page", () => {
     expect(where()).toBe("/PAP/routines");
     expect(pageShown()).toBe("routines page");
     expect(selectedTab()).toBe("Automations");
+  });
+
+  it("puts one entry in the history per tab click, so one back press undoes it", async () => {
+    // The one a person actually notices: change tab, press back once, expect
+    // to be where you started. It used to take two presses, because a single
+    // click asked to change tab twice and both asks pushed an entry for the
+    // same page, so the first press landed on a copy of the page already on
+    // screen and looked like it had done nothing.
+    await openAt("/PAP/issues");
+    const startedAt = historyDepth();
+
+    await clickTab("Projects");
+
+    expect(historyDepth()).toBe(startedAt + 1);
+    expect(where()).toBe("/PAP/projects");
+
+    await pressBack();
+
+    expect(where()).toBe("/PAP/issues");
+    expect(pageShown()).toBe("issues page");
+    expect(selectedTab()).toBe("Tasks");
   });
 
   it("goes back through the tabs when you press the browser's back button", async () => {

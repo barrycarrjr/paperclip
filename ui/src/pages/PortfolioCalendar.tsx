@@ -297,6 +297,7 @@ export function PortfolioCalendar() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <PageTabBar
+          label="Calendar view"
           align="start"
           value={activeTab}
           onValueChange={handleTabChange}

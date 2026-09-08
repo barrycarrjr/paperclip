@@ -63,8 +63,27 @@ export function WorkLayout() {
         <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           {companyName ? `Work in ${companyName}` : "Work"}
         </p>
-        <Tabs value={activeTab.id} onValueChange={goToTab}>
-          <PageTabBar items={items} value={activeTab.id} onValueChange={goToTab} align="start" />
+        {/*
+          activationMode="manual" is what keeps one tab click to one entry in
+          the browser's history. Left on its default, the tab strip asks to
+          change tab twice for a single click: once when the mouse goes down,
+          and again when the button takes focus a moment later. Neither call
+          knows the other happened, because the address has not changed yet
+          when the second one runs, so both push a new entry for the same page
+          and the back button then needs two presses to leave the tab. Manual
+          means only a real choice changes the tab: a click, or moving to a tab
+          with the arrow keys and pressing Enter. Moving between tabs with the
+          arrow keys no longer loads a page per tab you pass through either,
+          which is the same fault seen from the keyboard.
+        */}
+        <Tabs value={activeTab.id} onValueChange={goToTab} activationMode="manual">
+          <PageTabBar
+            items={items}
+            value={activeTab.id}
+            onValueChange={goToTab}
+            align="start"
+            label="Work section"
+          />
         </Tabs>
       </div>
       <Outlet />

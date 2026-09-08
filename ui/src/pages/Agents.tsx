@@ -134,6 +134,7 @@ export function Agents() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Tabs value={tab} onValueChange={(v) => navigate(`/agents/${v}`)}>
           <PageTabBar
+            label="Agent filter"
             items={[
               { value: "all", label: "All" },
               { value: "active", label: "Active" },

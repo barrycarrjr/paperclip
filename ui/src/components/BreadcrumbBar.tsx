@@ -391,7 +391,10 @@ export function BreadcrumbBar() {
       explanation={scopeExplanation}
       choices={scopeChoices}
       onChoose={chooseScope}
-      withSeparator={breadcrumbs.length > 0}
+      // The middot only makes sense when the scope and the page name sit on
+      // one line. On a phone they are stacked, so there is nothing to
+      // separate.
+      withSeparator={!isMobile && breadcrumbs.length > 0}
     />
   ) : null;
 
@@ -430,8 +433,35 @@ export function BreadcrumbBar() {
     );
   }
 
+  // On a phone the scope and the page name cannot share a line. The scope
+  // button is as wide as the company's name and does not give way, so the
+  // page name was being squeezed to nothing and a phone user had no way to
+  // tell which page they were on. Stacking them gives each its own line and
+  // its own cut-off point, inside the same bar height, and the scope button
+  // now shortens its own text with an ellipsis instead of being sliced by the
+  // edge of the box it sits in.
+  if (isMobile) {
+    return (
+      <div
+        data-testid="top-bar"
+        className="border-b border-border px-4 h-12 shrink-0 flex items-center"
+      >
+        {menuButton}
+        <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden leading-tight">
+          {scopeButton}
+          {pageTitle}
+        </div>
+        {topBarActions}
+        {starterDialog}
+      </div>
+    );
+  }
+
   return (
-    <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center">
+    <div
+      data-testid="top-bar"
+      className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center"
+    >
       {menuButton}
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         {scopeButton}

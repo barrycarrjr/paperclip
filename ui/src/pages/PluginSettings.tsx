@@ -244,6 +244,7 @@ export function PluginSettings() {
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PluginSettingsTab)} className="space-y-6">
         <PageTabBar
+          label="Plugin section"
           align="start"
           items={[
             { value: "status", label: "Status" },

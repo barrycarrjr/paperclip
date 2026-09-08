@@ -66,11 +66,13 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ breadcrumbs: currentBreadcrumbs, mobileToolbar: null }),
 }));
 
+let onAPhone = false;
+
 vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => ({
     toggleSidebar: vi.fn(),
     sidebarOpen: true,
-    isMobile: false,
+    isMobile: onAPhone,
   }),
 }));
 
@@ -116,6 +118,7 @@ describe("BreadcrumbBar", () => {
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
+    onAPhone = false;
     currentPathname = "/ACM/brief";
     currentParams = { companyPrefix: "ACM" };
     currentCompanies = [HQ, ACME, PERSONAL];
@@ -371,5 +374,43 @@ describe("BreadcrumbBar", () => {
     const toggle = container.querySelector("[data-sidebar-toggle]");
     expect(toggle).not.toBeNull();
     expect(toggle!.getAttribute("aria-label")).toBe("Hide sidebar");
+  });
+
+  /**
+   * The page name on a phone.
+   *
+   * On one line the scope button wins: it is as wide as the company's name
+   * and does not give way, so the page name was squeezed to nothing and a
+   * phone user could not tell which page they were on. These tests cannot
+   * measure that, because jsdom does not lay anything out. What they can
+   * check is the thing that causes it: whether the two share a line or are
+   * stacked. The widths were checked by hand in a real browser at 375 pixels
+   * across.
+   */
+  function scopeAndTitleShareABox(): HTMLElement {
+    const title = container.querySelector("h1");
+    expect(title, "expected the page name in the top bar").not.toBeNull();
+    const box = title!.parentElement!;
+    expect(box.contains(scopeButton()), "expected the scope beside the page name").toBe(true);
+    return box;
+  }
+
+  it("stacks the page name under the scope on a phone, so both can be read", () => {
+    onAPhone = true;
+    render();
+
+    const box = scopeAndTitleShareABox();
+    expect(container.querySelector("h1")!.textContent).toBe("Brief");
+    expect(box.className).toContain("flex-col");
+    // The middot only joins them when they share a line.
+    expect(box.textContent).not.toContain("·");
+  });
+
+  it("keeps the scope and the page name on one line on a wide screen", () => {
+    render();
+
+    const box = scopeAndTitleShareABox();
+    expect(box.className).not.toContain("flex-col");
+    expect(box.textContent).toContain("·");
   });
 });

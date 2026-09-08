@@ -1151,6 +1151,7 @@ export function AgentDetail() {
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
+            label="Agent section"
             items={[
               ...AGENT_TABS,
               ...pluginTabItems.map((item) => ({ value: item.value, label: item.label })),
