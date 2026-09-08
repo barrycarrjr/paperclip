@@ -37,6 +37,10 @@ function AnimatedToast({
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  // A message that will not go away on its own has to look closeable, so the
+  // close button is shown at full strength rather than faded until hover.
+  const staysUntilDismissed = toast.ttlMs === null;
+
   return (
     <li
       className={cn(
@@ -69,8 +73,12 @@ function AnimatedToast({
         <button
           type="button"
           aria-label="Dismiss notification"
+          data-stays={staysUntilDismissed ? "true" : undefined}
           onClick={() => onDismiss(toast.id)}
-          className="mt-0.5 shrink-0 rounded p-1 opacity-50 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+          className={cn(
+            "mt-0.5 shrink-0 rounded p-1 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10",
+            staysUntilDismissed ? "opacity-100" : "opacity-50",
+          )}
         >
           <X className="h-3.5 w-3.5" />
         </button>
