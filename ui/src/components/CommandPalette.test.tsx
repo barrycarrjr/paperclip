@@ -87,13 +87,16 @@ vi.mock("@/components/ui/command", () => ({
   CommandInput: ({
     value,
     onValueChange,
+    placeholder,
   }: {
     value: string;
     onValueChange: (value: string) => void;
+    placeholder?: string;
   }) => (
     <div>
       <input
         aria-label="Command search"
+        placeholder={placeholder}
         value={value}
         onChange={(event) => onValueChange(event.currentTarget.value)}
       />
@@ -187,6 +190,25 @@ describe("CommandPalette", () => {
 
   afterEach(() => {
     container.remove();
+  });
+
+  it("says in the box that it finds more than tasks and agents", () => {
+    // The old wording named only issues, agents and projects, which is a
+    // fraction of what it actually searches.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+
+    const box = container.querySelector("input");
+    const text = box?.getAttribute("placeholder") ?? "";
+    expect(text).toContain("email");
+    expect(text).not.toContain("Search issues, agents, projects");
+
+    act(() => {
+      root.unmount();
+    });
   });
 
   it("includes routine execution issues in search queries", async () => {

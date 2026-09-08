@@ -152,7 +152,13 @@ export function CommandPalette() {
         if (v && isMobile) setSidebarOpen(false);
       }}>
       <CommandInput
-        placeholder="Search issues, agents, projects..."
+        // The box used to say "Search issues, agents, projects", which
+        // undersold it: this already finds Email, Clippy, Calendar, the
+        // assistants, the org chart, memories, skills, approvals, receipts,
+        // costs, activity, intake queues, every add-on page and the all
+        // company pages. Naming a few of the ones people do not expect is
+        // more use than listing the three they already know about.
+        placeholder="Search tasks, agents, email, notes, add-ons..."
         value={query}
         onValueChange={setQuery}
       />
