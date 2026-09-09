@@ -71,3 +71,6 @@ tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
 .superset/
 .claude/worktrees/
+/scripts/_run-with-clean-env.mjs
+/.server-err.log
+/.server-out.log
