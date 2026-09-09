@@ -273,6 +273,40 @@ export function issueEmailDelegationService(db: Db) {
   }
 
   /**
+   * Mark the open handover on an issue as picked up, because an agent just
+   * took the work.
+   *
+   * The only things that could move a handover off `delegated` used to be the
+   * operator's own button and an MCP tool the agents do not have, so an issue
+   * could show "Waiting to be picked up" while the agent it was handed to was
+   * visibly working on it in the same panel. Issue checkout is the honest
+   * moment to say otherwise: it is the assigned agent taking the work, and it
+   * happens once.
+   *
+   * Returns the updated row, or null when there was nothing to pick up —
+   * which is the ordinary case, since most issues did not come from an email.
+   * Someone else's handover is left alone; a handover with no named holder is
+   * fair game, because it was handed to the issue rather than to a person and
+   * whoever is doing the work is the one who has it.
+   */
+  async function acknowledgeOnCheckout(input: {
+    companyId: string;
+    issueId: string;
+    agentId: string;
+  }): Promise<IssueEmailDelegationRow | null> {
+    const handoffs = await listForIssue(input.companyId, input.issueId);
+    const open = handoffs.find((row) => row.status === "delegated");
+    if (!open) return null;
+    if (open.delegatedToAgentId && open.delegatedToAgentId !== input.agentId) return null;
+    return transition({
+      companyId: input.companyId,
+      delegationId: open.id,
+      to: "acknowledged",
+      expectedVersion: open.version,
+    });
+  }
+
+  /**
    * Hand the same email to someone else.
    *
    * Closes the current delegation as `re_delegated` and opens a new one
@@ -479,6 +513,7 @@ export function issueEmailDelegationService(db: Db) {
   }
 
   return {
+    acknowledgeOnCheckout,
     create,
     findById,
     findOpenBySourceKey,

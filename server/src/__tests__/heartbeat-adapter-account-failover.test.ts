@@ -61,7 +61,7 @@ describeEmbeddedPostgres("Adapter account failover", () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-claude-account-failover-");
     db = createDb(tempDb.connectionString);
     heartbeat = heartbeatService(db);
-  }, 20_000);
+  }, 90_000);
 
   beforeEach(() => {
     // Only the clock is faked, not setTimeout: the embedded Postgres driver

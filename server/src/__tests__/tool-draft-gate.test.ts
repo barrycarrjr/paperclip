@@ -40,11 +40,37 @@ vi.mock("../services/activity-log.js", () => ({
   logActivity: mockLogActivity,
 }));
 
+const mockIssueApprovalService = vi.hoisted(() => ({
+  link: vi.fn(async () => ({ issueId: "issue-1" })),
+}));
+
+vi.mock("../services/issue-approvals.js", () => ({
+  issueApprovalService: () => mockIssueApprovalService,
+}));
+
 const stubDb = {} as never;
 
-async function loadDraftGate() {
+/**
+ * A database stub that answers exactly one question: which issue was this run
+ * working on. Shaped like the drizzle chain the gate uses
+ * (`select().from().where().then()`), because that is all it has to satisfy.
+ */
+function dbReturningRunIssue(issueId: string | null) {
+  const rows = issueId === null ? [] : [{ contextSnapshot: { issueId } }];
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          then: (resolve: (value: unknown) => unknown) => Promise.resolve(rows).then(resolve),
+        }),
+      }),
+    }),
+  } as never;
+}
+
+async function loadDraftGate(db: never = stubDb) {
   const { createDraftGate } = await import("../services/tool-draft-gate.js");
-  return createDraftGate({ db: stubDb });
+  return createDraftGate({ db });
 }
 
 function ctx(overrides: Partial<ToolRunContext>): ToolRunContext {
@@ -424,5 +450,72 @@ describe("tool draft gate — self-notification bypass", () => {
 
       expect(result.intercepted).toBe(false);
     });
+  });
+});
+
+describe("tool draft gate — the issue a draft belongs to", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApprovalService.create.mockResolvedValue({ id: "approval-1" });
+    mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: true });
+  });
+
+  it("links the draft to the issue the run was working on", async () => {
+    // Without this the approval exists in isolation: the issue that prompted
+    // the message says nothing about it having been drafted or sent, and the
+    // post-approval wake has no issue to point the agent at.
+    const gate = await loadDraftGate(dbReturningRunIssue("issue-42"));
+    await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U123", text: "hello" },
+      ctx({ runId: "run-7" }),
+    );
+
+    expect(mockIssueApprovalService.link).toHaveBeenCalledWith(
+      "issue-42",
+      "approval-1",
+      expect.anything(),
+    );
+  });
+
+  it("drafts fine when the run has no issue", async () => {
+    const gate = await loadDraftGate(dbReturningRunIssue(null));
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U123", text: "hello" },
+      ctx({ runId: "run-8" }),
+    );
+
+    expect(result.intercepted).toBe(true);
+    expect(mockIssueApprovalService.link).not.toHaveBeenCalled();
+  });
+
+  it("still drafts when linking throws", async () => {
+    mockIssueApprovalService.link.mockRejectedValueOnce(new Error("db down"));
+    const gate = await loadDraftGate(dbReturningRunIssue("issue-42"));
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U123", text: "hello" },
+      ctx({ runId: "run-9" }),
+    );
+
+    expect(result.intercepted).toBe(true);
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the caller in plain words that nothing has been sent", async () => {
+    // An agent read the old wording as close enough to done and commented
+    // "Reached out to Brandon Carr via Slack DM" on the issue before the
+    // operator had even been asked.
+    const gate = await loadDraftGate(dbReturningRunIssue(null));
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U123", text: "hello" },
+      ctx({ runId: "run-10" }),
+    );
+
+    const content = String(result.result?.content ?? "");
+    expect(content).toContain("NOTHING HAS BEEN SENT");
+    expect(content).toMatch(/do not write, comment or report/i);
   });
 });

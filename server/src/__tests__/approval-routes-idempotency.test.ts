@@ -23,6 +23,10 @@ const mockIssueApprovalService = vi.hoisted(() => ({
   linkManyForApproval: vi.fn(),
 }));
 
+const mockIssuesService = vi.hoisted(() => ({
+  addComment: vi.fn(async () => ({ id: "comment-1" })),
+}));
+
 const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
 }));
@@ -38,6 +42,7 @@ function registerModuleMocks() {
     approvalService: () => mockApprovalService,
     heartbeatService: () => mockHeartbeatService,
     issueApprovalService: () => mockIssueApprovalService,
+    issueService: () => mockIssuesService,
     logActivity: mockLogActivity,
     secretService: () => mockSecretService,
   }));
@@ -494,6 +499,163 @@ describe("approval routes idempotent retries", () => {
         outcome: { ok: false, error: "PBX rejected: extension 200 is offline" },
       }),
     );
+  });
+
+  it("says on the issue that the approved message went out, and tells the agent so", async () => {
+    // The bug this covers: approving a Slack draft sent the message and left
+    // no trace of it on the issue it came from, so the operator could not
+    // tell it had happened and the agent went on believing it was pending.
+    const draftedApproval = {
+      id: "approval-receipt-ok",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "slack-tools:slack_send_dm",
+        parameters: { userId: "U123", text: "Is this domain still live?" },
+        summary: '— "Is this domain still live?"',
+        agentId: "agent-uuid-1",
+        runId: "run-1",
+        chatSessionId: "heartbeat:run-1",
+      },
+      requestedByAgentId: "agent-uuid-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
+      { id: "issue-1", companyId: "company-1" },
+    ]);
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "slack-tools",
+        toolName: "slack-tools:slack_send_dm",
+        result: { content: "sent" },
+      }),
+    };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-receipt-ok/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockIssuesService.addComment).toHaveBeenCalledTimes(1);
+    const [issueId, body] = mockIssuesService.addComment.mock.calls[0];
+    expect(issueId).toBe("issue-1");
+    expect(body).toContain("Sent.");
+    expect(body).toContain("slack-tools:slack_send_dm");
+
+    // And the wake carries the outcome, not just "approved" — which is what
+    // left the agent unable to tell a sent message from a pending one.
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      "agent-uuid-1",
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          draftExecution: expect.objectContaining({ ok: true }),
+        }),
+      }),
+    );
+  });
+
+  it("says on the issue when an approved message did not go out", async () => {
+    const draftedApproval = {
+      id: "approval-receipt-bad",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "slack-tools:slack_send_dm",
+        parameters: { userId: "U123", text: "hello" },
+        summary: '— "hello"',
+        agentId: "agent-uuid-1",
+        runId: "run-2",
+      },
+      requestedByAgentId: "agent-uuid-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
+      { id: "issue-1", companyId: "company-1" },
+    ]);
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "slack-tools",
+        toolName: "slack-tools:slack_send_dm",
+        result: { error: "slack token expired" },
+      }),
+    };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-receipt-bad/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    const [, body] = mockIssuesService.addComment.mock.calls[0];
+    expect(body).toContain("Not sent.");
+    expect(body).toContain("slack token expired");
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      "agent-uuid-1",
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          draftExecution: expect.objectContaining({ ok: false }),
+        }),
+      }),
+    );
+  });
+
+  it("still returns 200 when the issue receipt comment cannot be written", async () => {
+    const draftedApproval = {
+      id: "approval-receipt-throws",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "slack-tools:slack_send_dm",
+        parameters: { userId: "U123", text: "hello" },
+        summary: '— "hello"',
+        agentId: "agent-uuid-1",
+        runId: "run-3",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
+      { id: "issue-1", companyId: "company-1" },
+    ]);
+    mockIssuesService.addComment.mockRejectedValueOnce(new Error("db down"));
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "slack-tools",
+        toolName: "slack-tools:slack_send_dm",
+        result: { content: "sent" },
+      }),
+    };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-receipt-throws/approve")
+      .send({});
+
+    // The message already went. Losing the note about it is not a reason to
+    // tell the caller the approval failed.
+    expect(res.status).toBe(200);
   });
 
   it("does not fail the approve response when the chat-session wake append throws", async () => {

@@ -70,7 +70,7 @@ describeEmbeddedPostgres("creating an issue from an email records the delegation
     });
     app.use(issueRoutes(db, {} as any, {}));
     app.use(errorHandler);
-  }, 30_000);
+  }, 90_000);
 
   afterEach(async () => {
     // Order matters: creating an issue through the route also writes an

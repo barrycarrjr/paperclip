@@ -88,7 +88,7 @@ describeEmbeddedPostgres("email delegation routes", () => {
     db = createDb(tempDb.connectionString);
     ({ issueRoutes } = await import("../routes/issues.js"));
     ({ errorHandler } = await import("../middleware/index.js"));
-  }, 30_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(activityLog);

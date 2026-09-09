@@ -14,6 +14,25 @@ import {
 } from "../adapter-accounts.js";
 
 /**
+ * No Switchboard, whatever the machine running this has installed.
+ *
+ * These tests are about Paperclip's own account list: which entry in it is
+ * active, and what happens when it is empty. Switchboard is the fallback for
+ * exactly that empty case, so on a developer machine that has Switchboard the
+ * "empty list" assertions stopped testing the empty list and started reading
+ * that developer's real `~/.codex` and `~/.claude`. They failed there and
+ * passed everywhere else, which is the worst way for a test to be wrong.
+ *
+ * Stubbed at the module boundary rather than by unsetting an environment
+ * variable, because `switchboardAccountFor` reaches for a CLI on PATH and a
+ * cached last-good answer on disk, and neither is under the test's control.
+ */
+vi.mock("../switchboard.js", () => ({
+  switchboardAccountFor: vi.fn(async () => null),
+  switchboardAccountEnv: vi.fn(() => ({})),
+}));
+
+/**
  * A fixed clock, so the reset below stays in the future however long after
  * today the suite is run.
  *

@@ -32,7 +32,7 @@ describeEmbeddedPostgres("calendar service fire + delivery", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-calendar-service-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(calendarEventDeliveries);

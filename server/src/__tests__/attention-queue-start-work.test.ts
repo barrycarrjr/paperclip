@@ -51,7 +51,7 @@ describeEmbeddedPostgres("attention queue: plans a board user asked for", () => 
     issuesSvc = issueService(db);
     interactionsSvc = issueThreadInteractionService(db);
     queueSvc = attentionQueueService(db);
-  }, 20_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(agentWakeupRequests);

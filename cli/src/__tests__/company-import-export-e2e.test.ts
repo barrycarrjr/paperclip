@@ -15,6 +15,32 @@ import { createStoredZipArchive } from "./helpers/zip.js";
 const execFileAsync = promisify(execFile);
 type ServerProcess = ReturnType<typeof spawn>;
 
+const E2E_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+/**
+ * How this test invokes the paperclipai CLI.
+ *
+ * It used to spawn `pnpm paperclipai ...`. On Windows pnpm is `pnpm.cmd`, and
+ * `spawn`/`execFile` without a shell look only for an executable of that exact
+ * name, so the child died instantly with ENOENT. The failure surfaced as
+ * "paperclipai run exited before healthcheck succeeded" with empty stdout AND
+ * empty stderr, because a spawn failure arrives on the `error` event and never
+ * reaches the pipes the test was collecting — so the message named the
+ * healthcheck and said nothing about the real cause.
+ *
+ * Adding `shell: true` would fix the ENOENT and introduce a worse problem: the
+ * direct child becomes cmd.exe, so `stopServerProcess`'s kill would reach the
+ * shell and leave the real server running on its test port after the run.
+ *
+ * So skip the package manager and run the same thing its script runs — tsx on
+ * the CLI entry point — through `process.execPath`. No shell, nothing platform
+ * specific, and the spawned process IS the CLI, so killing it works.
+ */
+const PAPERCLIP_CLI_ARGV = [
+  path.join(E2E_REPO_ROOT, "cli", "node_modules", "tsx", "dist", "cli.mjs"),
+  path.join(E2E_REPO_ROOT, "cli", "src", "index.ts"),
+];
+
 async function getAvailablePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -212,8 +238,7 @@ async function runCliJson<T>(
   args: string[],
   opts: TestPaperclipEnv & { apiBase?: string; includeConfigArg?: boolean },
 ) {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const cliArgs = ["--silent", "paperclipai", ...args];
+  const cliArgs = [...PAPERCLIP_CLI_ARGV, ...args];
   if (opts.apiBase) {
     cliArgs.push("--api-base", opts.apiBase);
   }
@@ -222,10 +247,10 @@ async function runCliJson<T>(
   }
   cliArgs.push("--json");
   const result = await execFileAsync(
-    "pnpm",
+    process.execPath,
     cliArgs,
     {
-      cwd: repoRoot,
+      cwd: E2E_REPO_ROOT,
       env: createCliEnv(opts),
       maxBuffer: 10 * 1024 * 1024,
     },
@@ -293,13 +318,12 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
     writeTestConfig(configPath, tempRoot, port, tempDb.connectionString);
     apiBase = `http://127.0.0.1:${port}`;
 
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const output = { stdout: [] as string[], stderr: [] as string[] };
     const child = spawn(
-      "pnpm",
-      ["paperclipai", "run", "--config", configPath],
+      process.execPath,
+      [...PAPERCLIP_CLI_ARGV, "run", "--config", configPath],
       {
-        cwd: repoRoot,
+        cwd: E2E_REPO_ROOT,
         env: createServerEnv(configPath, port, tempDb.connectionString, {
           paperclipHome,
           instanceId: paperclipInstanceId,
@@ -309,6 +333,13 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
       },
     );
     serverProcess = child;
+    // Without this, a failure to spawn at all reports as "exited before
+    // healthcheck succeeded" with both pipes empty, which describes the
+    // symptom and hides the cause.
+    child.on("error", (error) => {
+      output.stderr.push(`failed to spawn the paperclipai CLI: ${String(error)}
+`);
+    });
     child.stdout?.on("data", (chunk) => {
       output.stdout.push(String(chunk));
     });

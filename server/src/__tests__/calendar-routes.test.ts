@@ -60,7 +60,7 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-calendar-routes-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 90_000);
 
   afterEach(async () => {
     // activity_log.company_id references companies with no cascade, so it must

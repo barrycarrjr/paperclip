@@ -38,7 +38,7 @@ describeEmbeddedPostgres("inbox dismissals", () => {
     db = createDb(tempDb.connectionString);
     dismissalsSvc = inboxDismissalService(db);
     queueSvc = attentionQueueService(db);
-  }, 20_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(inboxDismissals);

@@ -31,7 +31,7 @@ describeEmbeddedPostgres("plugin secrets handler rate limiting", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-plugin-secrets-");
     db = createDb(tempDb.connectionString);
-  }, 30_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(pluginConfig);

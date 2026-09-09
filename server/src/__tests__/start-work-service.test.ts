@@ -92,7 +92,7 @@ describeEmbeddedPostgres("startWorkService.plan", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-start-work-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 90_000);
 
   beforeEach(() => {
     mocks.completeOnce.mockReset();

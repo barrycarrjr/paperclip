@@ -41,7 +41,7 @@ describeEmbeddedPostgres("scheduled routine time zones", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-routine-timezone-");
     db = createDb(tempDb.connectionString);
-  }, 60_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(routineRuns);

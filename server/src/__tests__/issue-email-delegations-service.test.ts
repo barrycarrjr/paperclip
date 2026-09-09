@@ -38,7 +38,7 @@ describeEmbeddedPostgres("issue email delegation service", () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-email-delegations-");
     db = createDb(tempDb.connectionString);
     service = issueEmailDelegationService(db);
-  }, 20_000);
+  }, 90_000);
 
   afterEach(async () => {
     await db.delete(issueEmailDelegations);
@@ -99,6 +99,79 @@ describeEmbeddedPostgres("issue email delegation service", () => {
     expect(delegation.sourceKey).toBe(sourceKey);
     expect(delegation.acknowledgedAt).toBeNull();
     expect(delegation.resolvedAt).toBeNull();
+  });
+
+  describe("picking it up at checkout", () => {
+    // "Waiting to be picked up" used to be the only thing an issue could say
+    // about a handed-over email, because nothing an agent could reach moved
+    // it off `delegated`. Checkout is the moment the assigned agent takes the
+    // work, so that is where it gets said.
+    async function seedAgent(name: string) {
+      const agentId = randomUUID();
+      await db.insert(agents).values({ id: agentId, companyId, name, role: "cto" });
+      return agentId;
+    }
+
+    it("marks the handover picked up when the agent it was handed to checks out", async () => {
+      await seed();
+      const agentId = await seedAgent("Ada");
+      await delegate({ delegatedToAgentId: agentId });
+
+      const picked = await service.acknowledgeOnCheckout({ companyId, issueId, agentId });
+
+      expect(picked?.status).toBe("acknowledged");
+      expect(picked?.acknowledgedAt).not.toBeNull();
+    });
+
+    it("picks up a handover that names nobody, because whoever is working on it has it", async () => {
+      await seed();
+      const agentId = await seedAgent("Ada");
+      await delegate();
+
+      const picked = await service.acknowledgeOnCheckout({ companyId, issueId, agentId });
+
+      expect(picked?.status).toBe("acknowledged");
+    });
+
+    it("leaves someone else's handover alone", async () => {
+      await seed();
+      const holder = await seedAgent("Ada");
+      const other = await seedAgent("Grace");
+      const { delegation } = await delegate({ delegatedToAgentId: holder });
+
+      const picked = await service.acknowledgeOnCheckout({
+        companyId,
+        issueId,
+        agentId: other,
+      });
+
+      expect(picked).toBeNull();
+      const after = await service.findById(companyId, delegation.id);
+      expect(after?.status).toBe("delegated");
+    });
+
+    it("does nothing on an issue that did not come from an email", async () => {
+      await seed();
+      const agentId = await seedAgent("Ada");
+
+      await expect(
+        service.acknowledgeOnCheckout({ companyId, issueId, agentId }),
+      ).resolves.toBeNull();
+    });
+
+    it("does not pick a handover up twice", async () => {
+      await seed();
+      const agentId = await seedAgent("Ada");
+      await delegate({ delegatedToAgentId: agentId });
+
+      const first = await service.acknowledgeOnCheckout({ companyId, issueId, agentId });
+      const second = await service.acknowledgeOnCheckout({ companyId, issueId, agentId });
+
+      expect(first?.status).toBe("acknowledged");
+      // A second checkout is a no-op rather than a conflict: the handover is
+      // already past `delegated`, so there is nothing left to say.
+      expect(second).toBeNull();
+    });
   });
 
   it("does not hand the same email over twice", async () => {

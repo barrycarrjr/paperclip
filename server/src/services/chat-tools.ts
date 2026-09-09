@@ -11,10 +11,15 @@ import {
   issueComments,
   issues,
 } from "@paperclipai/db";
-import type { CreateCalendarEvent } from "@paperclipai/shared";
+import {
+  ISSUE_PRIORITIES,
+  ISSUE_STATUSES,
+  type CreateCalendarEvent,
+} from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { calendarService } from "./calendar.js";
+import { issueService } from "./issues.js";
 import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
@@ -374,6 +379,127 @@ const createIssueTool: ChatToolDefinition<{
       .returning()
       .then((rows) => rows[0]);
     return { issue: summarizeIssue(created) };
+  },
+};
+
+/**
+ * Who to credit for a change, given an actor that may not be a person.
+ *
+ * A bridge session for an agent run carries `agent:<uuid>` as its user id,
+ * because the chat tools were built for Clippy, where there is always a
+ * person. Writing that string into a user column is how an agent's edits end
+ * up looking like they came from a user who does not exist, so split it back
+ * out here and credit the agent.
+ */
+function attributionFor(ctx: ToolContext): { actorAgentId?: string; actorUserId?: string } {
+  const raw = ctx.actor.userId ?? "";
+  if (raw.startsWith("agent:")) {
+    const agentId = raw.slice("agent:".length);
+    return agentId ? { actorAgentId: agentId } : {};
+  }
+  return raw ? { actorUserId: raw } : {};
+}
+
+/**
+ * Changing an issue's status — the tool whose absence stranded a run.
+ *
+ * An agent could read an issue, comment on it and create new ones, but not
+ * move the one it was working on. That gap is not cosmetic: when an assigned
+ * issue is left `in_progress` with nothing live on it, the recovery sweep
+ * wakes the agent again roughly every thirty seconds, so an agent that was
+ * genuinely blocked and knew it was blocked could not say so, and instead
+ * posted "No new context. No-op. Exiting." on a loop, costing real money
+ * every time. The documented fallback was to PATCH the REST API, which is
+ * not a fallback for an agent whose shell cannot reach it.
+ *
+ * Deliberately narrow. Status and priority are what an agent needs to
+ * describe the state of its own work. Reassigning, retitling and rewriting
+ * are somebody else's decision, and an agent that wants one of those can say
+ * so in a comment.
+ */
+const updateIssueTool: ChatToolDefinition<{
+  issueId: string;
+  status?: (typeof ISSUE_STATUSES)[number];
+  priority?: (typeof ISSUE_PRIORITIES)[number];
+  comment?: string;
+}> = {
+  name: "update_issue",
+  description:
+    "Change an issue's status and/or priority, optionally with a comment saying why. " +
+    "Mutating — requires permission. Use this to mark your own work `blocked` when you " +
+    "are waiting on someone, or `done` when it is finished; leaving finished or blocked " +
+    "work sitting in `in_progress` makes Paperclip wake you again and again for nothing.",
+  mutating: true,
+  inputSchema: z
+    .object({
+      issueId: z.string().min(1),
+      status: z.enum(ISSUE_STATUSES).optional(),
+      priority: z.enum(ISSUE_PRIORITIES).optional(),
+      comment: z.string().min(1).max(20_000).optional(),
+    })
+    .refine((value) => value.status !== undefined || value.priority !== undefined, {
+      message: "Pass status, priority, or both — there is nothing to change otherwise",
+    }),
+  spec: {
+    name: "update_issue",
+    description:
+      "Change an issue's status and/or priority, optionally with a comment saying why. " +
+      "Mark work `blocked` when waiting on someone and `done` when finished.",
+    input_schema: {
+      type: "object",
+      properties: {
+        issueId: { type: "string" },
+        status: {
+          type: "string",
+          enum: [...ISSUE_STATUSES],
+          description: "New status. Pass this or priority (or both).",
+        },
+        priority: {
+          type: "string",
+          enum: [...ISSUE_PRIORITIES],
+          description: "New priority. Pass this or status (or both).",
+        },
+        comment: {
+          type: "string",
+          description: "Optional note posted on the issue alongside the change.",
+        },
+      },
+      required: ["issueId"],
+    },
+  },
+  async handler({ issueId, status, priority, comment }, ctx) {
+    const existing = await ctx.db
+      .select({ id: issues.id, companyId: issues.companyId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((r) => r[0] ?? null);
+    if (!existing) throw notFound(`Issue ${issueId} not found`);
+    await assertCompanyAccess(ctx, existing.companyId);
+
+    const attribution = attributionFor(ctx);
+    // Through the service rather than straight at the table: closing an issue
+    // has consequences (parents, blockers, execution state) that a bare
+    // UPDATE would skip, and skipping them is how a "done" issue keeps
+    // behaving like an open one.
+    const updated = await issueService(ctx.db).update(issueId, {
+      ...(status !== undefined ? { status } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...attribution,
+    });
+    if (!updated) throw notFound(`Issue ${issueId} not found`);
+
+    if (comment) {
+      await ctx.db.insert(issueComments).values({
+        companyId: existing.companyId,
+        issueId,
+        body: comment,
+        ...(attribution.actorAgentId
+          ? { authorAgentId: attribution.actorAgentId }
+          : { authorUserId: ctx.actor.userId }),
+      });
+    }
+
+    return { issue: summarizeIssue(updated) };
   },
 };
 
@@ -1052,6 +1178,7 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   listIssuesTool,
   getIssueTool,
   createIssueTool,
+  updateIssueTool,
   previewDirectiveTool,
   broadcastDirectiveTool,
   addCommentTool,

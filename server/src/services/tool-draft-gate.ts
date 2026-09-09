@@ -25,7 +25,9 @@
  *     and worker routing are all unchanged.
  */
 
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { heartbeatRuns } from "@paperclipai/db";
 import {
   DEFAULT_SELF_NOTIFY_SETTINGS,
   OUTBOUND_SELF_RECIPIENT_RULES,
@@ -36,6 +38,7 @@ import {
 } from "@paperclipai/shared";
 import type { ToolRunContext, ToolResult } from "@paperclipai/plugin-sdk";
 import { approvalService } from "./approvals.js";
+import { issueApprovalService } from "./issue-approvals.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
@@ -119,6 +122,38 @@ export interface DraftGate {
  * and `activity_log.agent_id`. Detect it here and route the attribution to
  * the user-id columns instead.
  */
+/**
+ * The issue a run was working on, read back from the run itself.
+ *
+ * `ToolRunContext` carries the agent, the run and the company, but not the
+ * issue — plugin tools have never needed it. The draft gate does: an outbound
+ * message drafted while working on an issue belongs to that issue, and
+ * without the link nothing about the draft or the eventual send appears on
+ * the issue at all. That is how an operator ends up approving a Slack DM and
+ * then finding no trace of it anywhere near the work it came from.
+ *
+ * Read from the run's own context snapshot rather than threaded through the
+ * call, so no plugin, adapter or SDK type has to change to get it right.
+ * Returns null for chat turns and for runs with no issue, which is correct:
+ * there is nothing to link to.
+ */
+async function issueIdForRun(db: Db, runId: string | null): Promise<string | null> {
+  if (!runId) return null;
+  try {
+    const row = await db
+      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    const snapshot = (row?.contextSnapshot ?? null) as Record<string, unknown> | null;
+    const candidate = snapshot?.issueId ?? snapshot?.taskId;
+    return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+  } catch (err) {
+    log.warn({ err, runId }, "could not read the run's issue for draft linking");
+    return null;
+  }
+}
+
 const CLIPPY_AGENT_PREFIX = "clippy:";
 
 interface ResolvedRunActor {
@@ -432,6 +467,27 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         decidedAt: null,
       });
 
+      // Tie the draft to the issue it came out of, so the issue shows the
+      // message was drafted and (after approval) sent. This is also what puts
+      // an issue id on the post-approval wake, so the agent is woken about the
+      // work rather than about a bare approval id.
+      const draftIssueId = await issueIdForRun(db, runContext.runId ?? null);
+      if (draftIssueId) {
+        try {
+          await issueApprovalService(db).link(draftIssueId, approval.id, {
+            agentId: actor.agentUuid,
+            userId: actor.userId,
+          });
+        } catch (err) {
+          // A draft that is not linked is still a valid draft. Say so and
+          // carry on rather than failing the agent's tool call over it.
+          log.warn(
+            { err, approvalId: approval.id, issueId: draftIssueId },
+            "could not link the draft to its issue (non-fatal)",
+          );
+        }
+      }
+
       // Drop a receipt-style activity entry so the draft surfaces in the
       // Receipt feed and Morning Brief as a "drafted" outcome immediately,
       // not only after the user resolves it.
@@ -473,11 +529,26 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         ? "The user must approve this draft before it executes. Do not retry the tool — wait for the approval.resolved wake."
         : "The user must approve this draft before it executes. Do not retry the tool. Tell the user it is queued and end your turn — you will not be woken when they approve.";
 
+      // Spelled out because the previous wording did not say it, and an agent
+      // read "queued for approval" as close enough to done: it commented
+      // "Reached out to Brandon Carr via Slack DM" on the issue at a moment
+      // when nothing had been sent and the operator had not yet been asked.
+      // The operator then read that sentence as a record of something that
+      // happened. Nothing about a draft is worth more than not being lied to
+      // about it.
+      const nothingSentYet =
+        "NOTHING HAS BEEN SENT. No message, email or call has gone out and none will " +
+        "until the draft is approved. Do not write, comment or report anywhere that " +
+        "you contacted, messaged, emailed or called anyone — say it is waiting for " +
+        "approval, and name the person it is waiting on if you know it.";
+
       const content = [
         DRAFT_RESULT_HEADER,
         `Tool: ${namespacedName}`,
         `Approval ID: ${approval.id}`,
         summary ? `Summary: ${summary}` : null,
+        "",
+        nothingSentYet,
         "",
         guidance,
       ]

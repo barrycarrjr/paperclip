@@ -14,6 +14,7 @@ import {
   companyService,
   heartbeatService,
   issueApprovalService,
+  issueService,
   logActivity,
   secretService,
 } from "../services/index.js";
@@ -53,6 +54,7 @@ export function approvalRoutes(
     pluginWorkerManager: options.pluginWorkerManager,
   });
   const issueApprovalsSvc = issueApprovalService(db);
+  const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -230,6 +232,16 @@ export function approvalRoutes(
       // — the user would approve, a new pending appears, approve, repeat.
       // Log a separate "approval.executed" activity so the receipt feed
       // shows both the draft (created on the agent's call) and the actual send.
+      // What actually happened to the drafted call, so the wake below can say
+      // so. Without it the agent is woken knowing only that its draft was
+      // "approved", which is not the same as "sent" — one agent read that gap
+      // as the send still being pending and spent four more runs, and a
+      // second Slack draft, telling the operator about a message that had
+      // already gone out four minutes earlier.
+      let draftExecution:
+        | { ok: boolean; reason: string | null; error: string | null }
+        | null = null;
+
       if (approval.type === "outbound_tool_draft") {
         const dispatcher = options.getToolDispatcher?.() ?? null;
         if (dispatcher) {
@@ -242,6 +254,11 @@ export function approvalRoutes(
               }),
             db,
           });
+          draftExecution = {
+            ok: exec.ok && !exec.toolResult?.error,
+            reason: exec.reason ?? null,
+            error: exec.toolResult?.error ?? null,
+          };
           await logActivity(db, {
             companyId: approval.companyId,
             actorType: "user",
@@ -307,7 +324,48 @@ export function approvalRoutes(
             }
           }
         } else {
+          draftExecution = {
+            ok: false,
+            reason: "no_tool_dispatcher",
+            error: "Plugin tools were not available, so the approved call did not run.",
+          };
           logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
+        }
+      }
+
+      // Say on the issue what happened to the message.
+      //
+      // Approving a draft used to leave no mark anywhere near the work: the
+      // approval row moved to `approved`, the send succeeded, and the issue
+      // the message was written for said nothing about either. The operator
+      // is left unable to tell an approved-and-sent message from one that
+      // silently failed, and the agent — which is only told its draft was
+      // "approved" — cannot tell either. A comment answers both, in the one
+      // place both of them are already looking.
+      if (draftExecution && primaryIssueId) {
+        const payload = (approval.payload ?? {}) as Record<string, unknown>;
+        const toolName = typeof payload.toolName === "string" ? payload.toolName : "the tool";
+        const summary = typeof payload.summary === "string" ? payload.summary.trim() : "";
+        const wentWrong = draftExecution.error ?? draftExecution.reason ?? null;
+        const paragraphs = draftExecution.ok
+          ? [`Sent. The approved \`${toolName}\` call went out just now.`, summary]
+          : [
+              `Not sent. The approved \`${toolName}\` call was approved but did not go out.`,
+              wentWrong ? `What went wrong: ${wentWrong}` : null,
+              "Nothing reached the recipient. It needs another try.",
+            ];
+        const body = paragraphs.filter((line): line is string => Boolean(line)).join("\n\n");
+        try {
+          await issuesSvc.addComment(primaryIssueId, body, {
+            userId: req.actor.userId ?? "board",
+          });
+        } catch (err) {
+          // The message itself already went (or already failed). Losing the
+          // note about it must not turn a successful send into a 500.
+          logger.warn(
+            { err, approvalId: approval.id, issueId: primaryIssueId },
+            "could not comment the send outcome on the issue (non-fatal)",
+          );
         }
       }
 
@@ -322,6 +380,7 @@ export function approvalRoutes(
               approvalStatus: approval.status,
               issueId: primaryIssueId,
               issueIds: linkedIssueIds,
+              ...(draftExecution ? { draftExecution } : {}),
             },
             requestedByActorType: "user",
             requestedByActorId: req.actor.userId ?? "board",
@@ -333,6 +392,7 @@ export function approvalRoutes(
               issueIds: linkedIssueIds,
               taskId: primaryIssueId,
               wakeReason: "approval_approved",
+              ...(draftExecution ? { draftExecution } : {}),
             },
           });
 

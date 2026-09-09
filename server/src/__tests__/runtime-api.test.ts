@@ -13,6 +13,65 @@ describe("runtime API discovery", () => {
     ).toBe("https://paperclip.example.com");
   });
 
+  it("swaps in the listen port when a portless http base URL names a host we serve", () => {
+    // The exact shape that broke agents: `.env` carried
+    // BETTER_AUTH_URL=http://paperclip.local while the server listened on
+    // 3100, so every agent's REST call went to whatever owned port 80.
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: "http://paperclip.local",
+        allowedHostnames: ["127.0.0.1", "paperclip.local"],
+        bindHost: "0.0.0.0",
+        port: 3100,
+      }),
+    ).toBe("http://paperclip.local:3100");
+  });
+
+  it("leaves an https base URL alone, because this server does not terminate its TLS", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: "https://paperclip.example.com",
+        allowedHostnames: ["paperclip.example.com"],
+        bindHost: "0.0.0.0",
+        port: 3100,
+      }),
+    ).toBe("https://paperclip.example.com");
+  });
+
+  it("leaves a written-down port alone", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: "http://paperclip.local:8080",
+        allowedHostnames: ["paperclip.local"],
+        bindHost: "0.0.0.0",
+        port: 3100,
+      }),
+    ).toBe("http://paperclip.local:8080");
+  });
+
+  it("leaves a hostname we do not serve alone, since the proxy is the only route in", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: "http://proxy.example.com",
+        allowedHostnames: ["127.0.0.1", "paperclip.local"],
+        bindHost: "0.0.0.0",
+        port: 3100,
+      }),
+    ).toBe("http://proxy.example.com");
+  });
+
+  it("puts the corrected origin first in the candidate list too", () => {
+    expect(
+      buildRuntimeApiCandidateUrls({
+        authPublicBaseUrl: "http://paperclip.local",
+        allowedHostnames: ["paperclip.local", "127.0.0.1"],
+        bindHost: "0.0.0.0",
+        port: 3100,
+        networkInterfacesMap: {},
+      })[0],
+    ).toBe("http://paperclip.local:3100");
+  });
+
   it("builds ordered callback candidates from explicit, allowed, bind, and interface hosts", () => {
     expect(
       buildRuntimeApiCandidateUrls({
