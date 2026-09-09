@@ -711,7 +711,7 @@ export function PortfolioBrief() {
       {/* Hero */}
       <section
         aria-label="Portfolio brief"
-        className="group relative overflow-hidden border border-border bg-card pl-6 pr-5 py-6"
+        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card py-6 pl-6 pr-5 shadow-sm"
       >
         <span aria-hidden className={cn("absolute left-0 top-0 h-full w-[3px]", heroBarClass)} />
         <div className="flex items-start gap-4">
@@ -1002,7 +1002,7 @@ export function PortfolioBrief() {
                 return (
                   <div
                     key={company.id}
-                    className="border border-border bg-card overflow-hidden"
+                    className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm"
                   >
                     <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
                       <Link
@@ -1203,7 +1203,7 @@ function SectionHeader({ label, chip, right }: SectionHeaderProps) {
 
 function EmptySection({ icon: Icon, message, tone }: { icon: typeof Sun; message: string; tone?: "emerald" }) {
   return (
-    <div className="border border-border bg-card p-8 text-center">
+    <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
       <Icon className={cn("mx-auto h-5 w-5", tone === "emerald" ? "text-emerald-500/70" : "text-muted-foreground/40")} />
       <p className="mt-3 text-sm text-muted-foreground">{message}</p>
     </div>
@@ -1219,7 +1219,7 @@ interface CompanyBlockProps {
 
 function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
   return (
-    <div className="border border-border bg-card overflow-hidden">
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
       <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
         <Link
           to={`/${company.issuePrefix}/brief`}
@@ -1594,7 +1594,7 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
       onKeyDown={(e) => {
         if (e.key === "Enter") onSelect();
       }}
-      className="block rounded-lg border border-border bg-card hover:border-primary/40 hover:shadow-sm transition-all p-4 group cursor-pointer"
+      className="group block cursor-pointer rounded-xl border border-border/70 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
     >
       <div className="flex items-center gap-2 mb-3">
         <CompanyPatternIcon

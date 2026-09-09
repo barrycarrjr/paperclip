@@ -500,7 +500,7 @@ export function MorningBrief() {
       {/* Hero */}
       <section
         aria-label="Morning brief"
-        className="group relative overflow-hidden border border-border bg-card pl-6 pr-5 py-6"
+        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card py-6 pl-6 pr-5 shadow-sm"
       >
         <span aria-hidden className={cn("absolute left-0 top-0 h-full w-[3px]", heroBarClass)} />
         <div className="flex items-start gap-4">
@@ -530,7 +530,7 @@ export function MorningBrief() {
       {/* Metric cards (absorbed from Dashboard) */}
       {summary && (
         <section aria-label="Key metrics">
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-px bg-border">
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <MetricCard
               icon={Bot}
               value={totalAgents}
@@ -615,7 +615,7 @@ export function MorningBrief() {
         </div>
 
         {attentionRows.length === 0 && reviewQueue.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
               Nothing waiting on you.
@@ -624,7 +624,7 @@ export function MorningBrief() {
         ) : (
           <div className="space-y-4">
             {attentionRows.length > 0 && (
-              <div className="border border-border bg-card divide-y divide-border">
+              <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
                 {attentionToShow.map((row) => (
                   <AttentionRow
                     key={row.key}
@@ -670,7 +670,7 @@ export function MorningBrief() {
                     Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Keep · mute = auto-mark future as read · Dismiss = no rule
                   </span>
                 </div>
-                <div className="border border-border bg-card divide-y divide-border">
+                <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
                   {(reviewQueueExpanded
                     ? reviewQueue
                     : reviewQueue.slice(0, REVIEW_QUEUE_SHOWN)
@@ -748,14 +748,14 @@ export function MorningBrief() {
         </div>
 
         {outcomesToShow.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <Sparkles className="mx-auto h-5 w-5 text-muted-foreground/40" />
             <p className="mt-3 text-sm text-muted-foreground">
               Nothing produced in the last {OVERNIGHT_HOURS} hours yet. Quiet morning.
             </p>
           </div>
         ) : (
-          <div className="border border-border bg-card divide-y divide-border">
+          <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
             {outcomesToShow.map((event) => (
               <OutcomeRow
                 key={event.id}
@@ -793,14 +793,14 @@ export function MorningBrief() {
         </div>
 
         {myIssues.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <ListChecks className="mx-auto h-5 w-5 text-muted-foreground/40" />
             <p className="mt-3 text-sm text-muted-foreground">
               No issues need your attention today.
             </p>
           </div>
         ) : (
-          <div className="border border-border bg-card divide-y divide-border">
+          <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
             <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/20">
               Open issues you own
             </div>
@@ -832,7 +832,7 @@ export function MorningBrief() {
         slotTypes={["dashboardWidget"]}
         context={{ companyId: selectedCompanyId }}
         className="grid gap-4 md:grid-cols-2"
-        itemClassName="border border-border bg-card p-4"
+        itemClassName="rounded-xl border border-border/70 bg-card p-4 shadow-sm"
       />
 
       {/* Trends — charts pushed to the bottom (absorbed from Dashboard) */}
@@ -844,7 +844,7 @@ export function MorningBrief() {
             </h2>
             <span className="text-[10px] text-muted-foreground/70">Last 14 days</span>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <ChartCard title="Run Activity">
               <RunActivityChart activity={summary.runActivity} />
             </ChartCard>

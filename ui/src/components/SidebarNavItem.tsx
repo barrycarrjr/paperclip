@@ -56,7 +56,7 @@ export function SidebarNavItem({
   const navigate = useNavigate();
 
   const baseClassName = cn(
-    "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
+    "relative flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
     "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
     info && "pr-8",
     className,
@@ -170,7 +170,7 @@ export function SidebarNavItem({
       onClick={() => { if (isMobile) setSidebarOpen(false); }}
       className={({ isActive }) =>
         cn(
-          "relative flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors",
+          "relative flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
           isActive || alsoActive
             ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
             : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
