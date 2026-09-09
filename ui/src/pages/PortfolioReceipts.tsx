@@ -239,7 +239,7 @@ export function PortfolioReceipts() {
       </div>
 
       <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
-        <PageTabBar align="start" items={tabItems} />
+        <PageTabBar label="Outcome filter" align="start" items={tabItems} />
       </Tabs>
 
       {filtered.length === 0 ? (

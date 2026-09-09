@@ -335,7 +335,7 @@ export function Routines() {
   const [routineViewState, setRoutineViewState] = useState<RoutineViewState>(() => getRoutineViewState(routineViewStateKey));
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Routines" }]);
+    setBreadcrumbs([{ label: "Automations" }]);
   }, [setBreadcrumbs]);
 
   useEffect(() => {
@@ -568,7 +568,7 @@ export function Routines() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">Routines</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Automations</h1>
             <InfoPopoverButton
               title="What routines are for"
               info={
@@ -579,7 +579,7 @@ export function Routines() {
                     agent — so the work is auditable and replayable, not just
                     a "ran at 9am" log line.
                   </p>
-                  <p className="font-medium text-foreground">Routine vs issue vs work queue</p>
+                  <p className="font-medium text-foreground">Routine vs issue vs intake queue</p>
                   <ul className="ml-4 list-disc space-y-1">
                     <li>
                       <span className="font-medium">Issue</span> — one-off work
@@ -590,7 +590,7 @@ export function Routines() {
                       should happen on a clock (daily report, hourly sweep).
                     </li>
                     <li>
-                      <span className="font-medium">Work queue</span> — work
+                      <span className="font-medium">Intake queue</span> — work
                       that arrives continuously from outside (tickets, leads,
                       errors). Use a routine to drive a queue runner if the
                       arrival rate is steady; pair them.
@@ -641,11 +641,12 @@ export function Routines() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <PageTabBar
+          label="Automations section"
           align="start"
           value={activeTab}
           onValueChange={handleTabChange}
           items={[
-            { value: "routines", label: "Routines" },
+            { value: "routines", label: "Automations" },
             { value: "runs", label: "Recent Runs" },
           ]}
         />

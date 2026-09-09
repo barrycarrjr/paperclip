@@ -957,7 +957,7 @@ export function Costs() {
           ) : (
             <>
               <Tabs value={effectiveProvider} onValueChange={setActiveProvider}>
-                <PageTabBar items={providerTabItems} value={effectiveProvider} />
+                <PageTabBar label="Provider" items={providerTabItems} value={effectiveProvider} />
 
                 <TabsContent value="all" className="mt-4">
                   {providers.length === 0 ? (
@@ -1012,7 +1012,7 @@ export function Costs() {
           ) : (
             <>
               <Tabs value={effectiveBiller} onValueChange={setActiveBiller}>
-                <PageTabBar items={billerTabItems} value={effectiveBiller} />
+                <PageTabBar label="Who is billed" items={billerTabItems} value={effectiveBiller} />
 
                 <TabsContent value="all" className="mt-4">
                   {billers.length === 0 ? (

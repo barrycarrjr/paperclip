@@ -30,6 +30,7 @@ import {
   type ComponentType,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 import type {
   PluginLauncherDeclaration,
   PluginUiSlotDeclaration,
@@ -170,6 +171,25 @@ const pluginLoadStates = new Map<string, PluginLoadState>();
 const inflightImports = new Map<string, Promise<void>>();
 
 /**
+ * Plugins whose UI bundle failed to load, keyed by plugin ID.
+ *
+ * A bundle that fails to load registers nothing, so every slot it was meant to
+ * fill comes up empty. Without this record that is indistinguishable from a
+ * plugin with nothing to show, and the only trace is a console line. Keeping
+ * the failure lets the slot say so on screen.
+ */
+const pluginLoadFailures = new Map<string, string>();
+
+/**
+ * Whether a plugin's UI bundle failed to load. Exported for tests and for
+ * callers that render their own empty state.
+ * @internal
+ */
+export function getPluginLoadFailure(pluginId: string): string | null {
+  return pluginLoadFailures.get(pluginId) ?? null;
+}
+
+/**
  * Build the full URL for a plugin's UI entry module.
  *
  * The server serves plugin UI bundles at `/_plugins/:pluginId/ui/*`.
@@ -217,24 +237,132 @@ function applyJsxRuntimeKey(
   return { ...(props ?? {}), key };
 }
 
+/**
+ * Names the React stand-in forwarded before it was generated from the live
+ * React object. Kept as a floor so a plugin never loses a name the host used
+ * to hand out, even if React is unavailable at the moment the stand-in is
+ * built or hides a name from `Object.keys`.
+ */
+const BASELINE_REACT_EXPORT_NAMES: readonly string[] = [
+  "Children",
+  "Component",
+  "Fragment",
+  "StrictMode",
+  "Suspense",
+  "cloneElement",
+  "createContext",
+  "createElement",
+  "createRef",
+  "forwardRef",
+  "isValidElement",
+  "lazy",
+  "memo",
+  "useCallback",
+  "useContext",
+  "useEffect",
+  "useMemo",
+  "useRef",
+  "useState",
+];
+
+/**
+ * Names the react-dom stand-in forwarded before it was generated. `createRoot`
+ * and `hydrateRoot` live on `react-dom/client` rather than on the `react-dom`
+ * object the bridge holds, so they are kept by name: dropping them would turn
+ * today's harmless `undefined` into a failure to load.
+ */
+const BASELINE_REACT_DOM_EXPORT_NAMES: readonly string[] = [
+  "createPortal",
+  "createRoot",
+  "flushSync",
+  "hydrateRoot",
+];
+
+/**
+ * Keys that exist on a module object but must never be turned into a named
+ * re-export: `default` is spelled with its own `export default` line and is
+ * not a legal binding name, and `__esModule` is bundler bookkeeping.
+ */
+const NON_FORWARDABLE_MODULE_KEYS = new Set(["default", "__esModule"]);
+
+/** A plain JavaScript identifier, which is what an export name has to be. */
+const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * Work out which names a stand-in module should re-export.
+ *
+ * Reads them off the host's own module object rather than a hand written list,
+ * so a plugin can use anything the host supports. Anything that would not
+ * survive being written into a module (a key that is not a plain identifier,
+ * or `default`) is dropped rather than assumed safe. The baseline names are
+ * always included so the stand-in can only ever gain names, never lose them.
+ */
+function collectShimExportNames(namespace: unknown, baseline: readonly string[]): string[] {
+  const names = new Set<string>(baseline);
+
+  if (namespace && (typeof namespace === "object" || typeof namespace === "function")) {
+    for (const key of Object.keys(namespace as Record<string, unknown>)) {
+      if (NON_FORWARDABLE_MODULE_KEYS.has(key)) continue;
+      if (!IDENTIFIER_PATTERN.test(key)) continue;
+      names.add(key);
+    }
+  }
+
+  return [...names].sort();
+}
+
+/** Kept for the React stand-in, whose baseline is the list it used to carry. */
+function collectReactExportNames(react: unknown): string[] {
+  return collectShimExportNames(react, BASELINE_REACT_EXPORT_NAMES);
+}
+
+/**
+ * Build the source of a stand-in module that plugin bundles import by a bare
+ * name the browser cannot resolve, such as `"react"`.
+ *
+ * A module that imports a name its target does not export fails when the
+ * browser links it, before a line of it runs, which takes down the whole
+ * plugin bundle. So the export list is generated from the object on the bridge
+ * at the moment this runs, not typed out by hand.
+ *
+ * Every name gets its own prefixed local binding, so a React name that happens
+ * to be a reserved word (`delete`, say) still produces valid source.
+ */
+function buildNamespaceShimSource(
+  bridgeProperty: "react" | "reactDom",
+  namespace: unknown,
+  baseline: readonly string[],
+): string {
+  const names = collectShimExportNames(namespace, baseline);
+  const lines = [
+    `const __pxModule = globalThis.__paperclipPluginBridge__?.${bridgeProperty};`,
+    "export default __pxModule;",
+    "const __pxSource = __pxModule ?? {};",
+  ];
+  for (const name of names) {
+    lines.push(`const __px_${name} = __pxSource[${JSON.stringify(name)}];`);
+  }
+  if (names.length > 0) {
+    lines.push(`export { ${names.map((name) => `__px_${name} as ${name}`).join(", ")} };`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function buildReactShimSource(react: unknown): string {
+  return buildNamespaceShimSource("react", react, BASELINE_REACT_EXPORT_NAMES);
+}
+
+function buildReactDomShimSource(reactDom: unknown): string {
+  return buildNamespaceShimSource("reactDom", reactDom, BASELINE_REACT_DOM_EXPORT_NAMES);
+}
+
 function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | "react/jsx-runtime" | "sdk-ui"): string {
   if (shimBlobUrls[specifier]) return shimBlobUrls[specifier];
 
   let source: string;
   switch (specifier) {
     case "react":
-      source = `
-        const R = globalThis.__paperclipPluginBridge__?.react;
-        export default R;
-        const { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef } = R;
-        export { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef };
-      `;
+      source = buildReactShimSource(globalThis.__paperclipPluginBridge__?.react);
       break;
     case "react/jsx-runtime":
       source = `
@@ -247,12 +375,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | 
       break;
     case "react-dom":
     case "react-dom/client":
-      source = `
-        const RD = globalThis.__paperclipPluginBridge__?.reactDom;
-        export default RD;
-        const { createRoot, hydrateRoot, createPortal, flushSync } = RD ?? {};
-        export { createRoot, hydrateRoot, createPortal, flushSync };
-      `;
+      source = buildReactDomShimSource(globalThis.__paperclipPluginBridge__?.reactDom);
       break;
     case "sdk-ui":
       source = `
@@ -390,6 +513,7 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
   }
 
   pluginLoadStates.set(moduleKey, "loading");
+  pluginLoadFailures.delete(pluginId);
 
   const url = buildPluginUiUrl(contribution);
 
@@ -441,8 +565,10 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
       }
 
       pluginLoadStates.set(moduleKey, "loaded");
+      pluginLoadFailures.delete(pluginId);
     } catch (err) {
       pluginLoadStates.set(moduleKey, "error");
+      pluginLoadFailures.set(pluginId, getErrorMessage(err));
       console.error(`Failed to load UI module for plugin "${pluginKey}"`, err);
     } finally {
       inflightImports.delete(pluginId);
@@ -720,6 +846,48 @@ function PluginBridgeScope({
   );
 }
 
+/**
+ * Shown in place of a slot whose plugin bundle failed to load.
+ *
+ * Plain words only: the person reading this did not write the plugin and can
+ * do nothing with a stack trace, so the detail stays in the browser console.
+ */
+function PluginLoadFailureNotice({
+  slot,
+  className,
+}: {
+  slot: ResolvedPluginSlot;
+  className?: string;
+}) {
+  const whatIsMissing = slot.type === "page"
+    ? "Its page did not load, so there is nothing to show here."
+    : "Part of it did not load, so there is nothing to show here.";
+
+  return (
+    <div
+      role="alert"
+      data-testid="plugin-load-failure"
+      className={cn(
+        "rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2",
+        className,
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-destructive">
+            {slot.pluginDisplayName} could not be loaded
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {whatIsMissing} Reloading the page may fix it. If it keeps happening, this plugin
+            needs an update from whoever wrote it. The technical detail is in the browser console.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PluginSlotMount({
   slot,
   context,
@@ -747,6 +915,11 @@ export function PluginSlotMount({
   }, [component, slot.pluginId]);
 
   if (!component) {
+    // A bundle that failed to load registers nothing, which looks exactly like
+    // a plugin with no content. Say what really happened instead.
+    if (pluginLoadFailures.has(slot.pluginId)) {
+      return <PluginLoadFailureNotice slot={slot} className={className} />;
+    }
     if (missingBehavior === "hidden") return null;
     return (
       <div className={cn("rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground", className)}>
@@ -839,6 +1012,7 @@ export function PluginSlotOutlet({
 export function _resetPluginModuleLoader(): void {
   pluginLoadStates.clear();
   inflightImports.clear();
+  pluginLoadFailures.clear();
   registry.clear();
   if (typeof URL.revokeObjectURL === "function") {
     for (const url of Object.values(shimBlobUrls)) {
@@ -852,3 +1026,6 @@ export function _resetPluginModuleLoader(): void {
 
 export const _applyJsxRuntimeKeyForTests = applyJsxRuntimeKey;
 export const _rewriteBareSpecifiersForTests = rewriteBareSpecifiers;
+export const _buildReactShimSourceForTests = buildReactShimSource;
+export const _buildReactDomShimSourceForTests = buildReactDomShimSource;
+export const _collectReactExportNamesForTests = collectReactExportNames;

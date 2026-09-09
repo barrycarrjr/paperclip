@@ -100,7 +100,7 @@ export function HorizontalScroller({
         aria-label={label}
         className={cn(
           "scrollbar-visible overflow-x-auto overscroll-x-contain",
-          "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring",
           contentClassName,
         )}
       >

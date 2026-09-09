@@ -43,6 +43,7 @@ import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { StatusIcon } from "../components/StatusIcon";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { buildReviewSenderGroups } from "../lib/email-triage-rules";
@@ -1335,7 +1336,13 @@ function ReviewQueueRow({
       onMouseLeave={() => onHoverChange(false)}
     >
       <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
-      <div className="flex items-start gap-3">
+      {/* The five actions come to more than this card is wide on anything
+          narrower than a laptop, and the card clips whatever does not fit with
+          no scrollbar and no wrap, so on a phone the last two could not be
+          reached by finger at all. Below `lg` the actions take a line of their
+          own and wrap on it; at `lg` and up they sit on the same line as
+          before. */}
+      <div className={WRAPPING_ROW_CLASS}>
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
@@ -1407,7 +1414,7 @@ function ReviewQueueRow({
             </TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className={OWN_LINE_ACTIONS_CLASS}>
           {ruleButtonGate(
             <button
               type="button"

@@ -224,6 +224,7 @@ export function Calendar() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <PageTabBar
+          label="Calendar view"
           align="start"
           value={activeTab}
           onValueChange={handleTabChange}

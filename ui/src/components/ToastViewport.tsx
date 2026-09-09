@@ -8,6 +8,7 @@ import {
   type ToastTone,
 } from "../context/ToastContext";
 import { cn } from "../lib/utils";
+import { Z_TOAST } from "@/lib/z-layers";
 
 const toneClasses: Record<ToastTone, string> = {
   info: "border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-500/25 dark:bg-sky-950/60 dark:text-sky-100",
@@ -36,6 +37,10 @@ function AnimatedToast({
     const frame = requestAnimationFrame(() => setVisible(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+
+  // A message that will not go away on its own has to look closeable, so the
+  // close button is shown at full strength rather than faded until hover.
+  const staysUntilDismissed = toast.ttlMs === null;
 
   return (
     <li
@@ -69,8 +74,12 @@ function AnimatedToast({
         <button
           type="button"
           aria-label="Dismiss notification"
+          data-stays={staysUntilDismissed ? "true" : undefined}
           onClick={() => onDismiss(toast.id)}
-          className="mt-0.5 shrink-0 rounded p-1 opacity-50 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+          className={cn(
+            "mt-0.5 shrink-0 rounded p-1 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10",
+            staysUntilDismissed ? "opacity-100" : "opacity-50",
+          )}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -89,9 +98,28 @@ export function ToastViewport() {
     <aside
       aria-live="polite"
       aria-atomic="false"
-      className="pointer-events-none fixed bottom-3 left-3 z-[120] w-full max-w-sm px-1"
+      // Held in from BOTH sides. This used to be `left-3 w-full max-w-sm`, and
+      // on a phone `w-full` is the width of the whole page, so the box began
+      // 12 pixels in from the left and ended 12 pixels past the right edge of
+      // the screen. The right hand edge of every message was off screen, and
+      // on a narrower phone that took part of the close button with it.
+      className={cn("pointer-events-none fixed inset-x-3 bottom-3 max-w-sm", Z_TOAST)}
     >
-      <ol className="flex w-full flex-col-reverse gap-2">
+      <ol
+        data-testid="toast-stack"
+        // Failures stay on screen until they are closed, so they pile up, and
+        // the pile used to grow straight off the top of a short window: the
+        // oldest message, the one carrying a reason that is written nowhere
+        // else in the app, ended up above the top edge with its close button
+        // out of reach. The list now stops at the height of the window and
+        // scrolls inside itself, so every message can still be reached.
+        //
+        // Scrolling needs pointer events, so the list takes them back, and the
+        // box around it stays see-through to clicks. The list is only as big
+        // as the messages it holds plus the thin gaps between them, so it
+        // catches no more of the page than the messages themselves do.
+        className="pointer-events-auto flex max-h-[calc(100dvh-1.5rem)] w-full flex-col-reverse gap-2 overflow-y-auto overscroll-contain px-1"
+      >
         {toasts.map((toast) => (
           <AnimatedToast
             key={toast.id}

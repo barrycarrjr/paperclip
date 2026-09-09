@@ -41,6 +41,7 @@ export function CompanySettingsNav() {
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange}>
       <PageTabBar
+        label="Company settings section"
         items={items.map(({ value, label }) => ({ value, label }))}
         value={activeTab}
         onValueChange={handleTabChange}

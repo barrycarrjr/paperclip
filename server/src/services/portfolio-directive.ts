@@ -1,10 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, companies } from "@paperclipai/db";
+import {
+  directivePreviewSummaryLines,
+  type DirectivePreview,
+  type DirectivePreviewRecipient,
+} from "@paperclipai/shared";
 import { issueService } from "./issues.js";
 import { heartbeatService } from "./heartbeat.js";
+import { instanceSettingsService } from "./instance-settings.js";
 import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
+import { conflict, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { personalCompanyOwner } from "./personal-companies.js";
 
@@ -56,7 +63,12 @@ export interface DirectiveResult {
   skipped: DirectiveSkip[];
 }
 
-export interface BroadcastDirectiveInput {
+/**
+ * Everything needed to work out what a broadcast would do. `broadcast` takes
+ * the same fields plus the id of the preview that answered for them, so the
+ * two can never be asked different questions.
+ */
+export interface PreviewDirectiveInput {
   actor: DirectiveActor;
   /** The high-level intent, verbatim from the operator. */
   intent: string;
@@ -75,6 +87,16 @@ export interface BroadcastDirectiveInput {
   includePortfolioRoot?: boolean;
 }
 
+export interface BroadcastDirectiveInput extends PreviewDirectiveInput {
+  /**
+   * The `previewId` from the preview the operator actually read. Required:
+   * there is no way to send a directive without first asking what it would
+   * do, on any path, so neither the Directives page nor Clippy can start
+   * work in eight companies from a press nobody was shown the effect of.
+   */
+  previewId: string;
+}
+
 // Agent lifecycle states that mean "can't take work". Kept permissive: any
 // status not in this set (idle, busy, active, …) is treated as assignable.
 const TERMINAL_AGENT_STATUSES = ["terminated", "archived", "disabled", "suspended"];
@@ -90,6 +112,42 @@ function deriveTitle(intent: string): string {
   const firstLine = intent.trim().split("\n")[0]!.trim();
   if (firstLine.length <= ORDINARY_TITLE_MAX) return `Directive: ${firstLine}`;
   return `Directive: ${firstLine.slice(0, ORDINARY_TITLE_MAX - 1).trimEnd()}…`;
+}
+
+/**
+ * Salt for the preview id, minted once per server process and never sent
+ * anywhere. It means a `previewId` can only come from a preview this server
+ * actually answered: nobody, including the model behind Clippy, can work one
+ * out and skip the step.
+ */
+const PREVIEW_SALT = randomBytes(32).toString("hex");
+
+/**
+ * The id of one preview: a fingerprint of everything that preview claimed
+ * would happen. Recomputed at send time from a fresh look at the world, so a
+ * company archived, a lead replaced, or the approval hold switched off
+ * between reading and sending all produce a different id and the send is
+ * refused rather than quietly doing something else.
+ */
+function previewFingerprint(
+  userId: string,
+  plan: {
+    intent: string;
+    title: string;
+    willReceive: DirectivePreviewRecipient[];
+    skipped: DirectiveSkip[];
+    outboundHold: boolean;
+  },
+): string {
+  const canonical = JSON.stringify({
+    userId,
+    intent: plan.intent,
+    title: plan.title,
+    willReceive: plan.willReceive.map((r) => `${r.companyId}:${r.lead.id}`).sort(),
+    skipped: plan.skipped.map((s) => `${s.companyId}:${s.reason}`).sort(),
+    outboundHold: plan.outboundHold,
+  });
+  return createHash("sha256").update(PREVIEW_SALT).update(canonical).digest("hex");
 }
 
 function directiveBody(intent: string, companyName: string, directiveId: string): string {
@@ -114,7 +172,7 @@ export function portfolioDirectiveService(db: Db) {
   }
 
   async function resolveTargetCompanies(
-    input: BroadcastDirectiveInput,
+    input: PreviewDirectiveInput,
   ): Promise<{
     targets: { id: string; name: string }[];
     skipped: DirectiveSkip[];
@@ -246,17 +304,28 @@ export function portfolioDirectiveService(db: Db) {
     return root ? { id: root.id, name: root.name } : null;
   }
 
-  async function broadcast(input: BroadcastDirectiveInput): Promise<DirectiveResult> {
-    const directiveId = randomUUID();
+  /**
+   * The whole answer to "what would this do", with nothing written.
+   *
+   * Both `preview` and `broadcast` go through here, so the preview cannot
+   * drift from the send: they resolve the same companies with the same rules
+   * and report the same skip reasons, because it is the same code.
+   */
+  async function resolvePlan(input: PreviewDirectiveInput): Promise<{
+    intent: string;
+    title: string;
+    willReceive: DirectivePreviewRecipient[];
+    skipped: DirectiveSkip[];
+    outboundHold: boolean;
+  }> {
     const intent = input.intent.trim();
     const title = (input.title?.trim() || deriveTitle(intent)).slice(0, 200);
-
     const { targets, skipped } = await resolveTargetCompanies(input);
-    const dispatched: DirectiveDispatch[] = [];
 
+    const willReceive: DirectivePreviewRecipient[] = [];
     for (const company of targets) {
-      const ceo = await findCeo(company.id);
-      if (!ceo) {
+      const lead = await findCeo(company.id);
+      if (!lead) {
         skipped.push({
           companyId: company.id,
           companyName: company.name,
@@ -264,12 +333,68 @@ export function portfolioDirectiveService(db: Db) {
         });
         continue;
       }
+      willReceive.push({
+        companyId: company.id,
+        companyName: company.name,
+        lead: { id: lead.id, name: lead.name },
+      });
+    }
+
+    const general = await instanceSettingsService(db).getGeneral();
+    return { intent, title, willReceive, skipped, outboundHold: general.outboundToolDraftMode };
+  }
+
+  /**
+   * Say what a broadcast would do. Reads only: no issue is created, nobody is
+   * woken, and no setting is touched, so an operator (or Clippy) can ask this
+   * as often as they like and cancelling afterwards leaves nothing behind.
+   */
+  async function preview(input: PreviewDirectiveInput): Promise<DirectivePreview> {
+    const plan = await resolvePlan(input);
+    const facts = {
+      willReceive: plan.willReceive,
+      skipped: plan.skipped,
+      guardrails: { outboundHold: plan.outboundHold },
+    };
+    return {
+      previewId: previewFingerprint(input.actor.userId, plan),
+      intent: plan.intent,
+      title: plan.title,
+      ...facts,
+      summaryLines: directivePreviewSummaryLines(facts),
+    };
+  }
+
+  async function broadcast(input: BroadcastDirectiveInput): Promise<DirectiveResult> {
+    const directiveId = randomUUID();
+    const plan = await resolvePlan(input);
+    const { intent, title, skipped } = plan;
+
+    // The gate. A send only goes through carrying the id of a preview of this
+    // exact answer, so nobody can be shown one set of companies and send to
+    // another, and no path can send without a preview having been produced.
+    const expected = previewFingerprint(input.actor.userId, plan);
+    if (!input.previewId) {
+      throw unprocessable(
+        "Preview this directive first, so you can see which companies would receive it and who in each one.",
+      );
+    }
+    if (input.previewId !== expected) {
+      throw conflict(
+        "This is not what the preview said would happen, or something has changed since. Preview it again before sending.",
+      );
+    }
+
+    const dispatched: DirectiveDispatch[] = [];
+
+    for (const recipient of plan.willReceive) {
+      const { companyId, companyName, lead } = recipient;
       try {
-        const created = await issues.create(company.id, {
+        const created = await issues.create(companyId, {
           title,
-          description: directiveBody(intent, company.name, directiveId),
+          description: directiveBody(intent, companyName, directiveId),
           status: "todo",
-          assigneeAgentId: ceo.id,
+          assigneeAgentId: lead.id,
           createdByUserId: input.actor.userId,
           originKind: ORIGIN_KIND,
           originId: directiveId,
@@ -284,21 +409,21 @@ export function portfolioDirectiveService(db: Db) {
           requestedByActorId: input.actor.userId,
         });
         dispatched.push({
-          companyId: company.id,
-          companyName: company.name,
-          ceoAgentId: ceo.id,
-          ceoAgentName: ceo.name,
+          companyId,
+          companyName,
+          ceoAgentId: lead.id,
+          ceoAgentName: lead.name,
           issueId: created.id,
           issueIdentifier: created.identifier ?? null,
         });
       } catch (err) {
         logger.warn(
-          { err: err instanceof Error ? err.message : String(err), companyId: company.id, directiveId },
+          { err: err instanceof Error ? err.message : String(err), companyId, directiveId },
           "portfolio directive: failed to dispatch to company",
         );
         skipped.push({
-          companyId: company.id,
-          companyName: company.name,
+          companyId,
+          companyName,
           reason: err instanceof Error ? err.message : "Failed to create the directive issue",
         });
       }
@@ -311,7 +436,7 @@ export function portfolioDirectiveService(db: Db) {
     return { directiveId, intent, title, dispatched, skipped };
   }
 
-  return { broadcast };
+  return { preview, broadcast };
 }
 
 export type PortfolioDirectiveService = ReturnType<typeof portfolioDirectiveService>;

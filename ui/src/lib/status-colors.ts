@@ -102,6 +102,26 @@ export const statusBadge: Record<string, string> = {
 export const statusBadgeDefault = "bg-muted text-muted-foreground";
 
 // ---------------------------------------------------------------------------
+// Team "right now" states — the Team page's opening view
+// ---------------------------------------------------------------------------
+
+/**
+ * Pill colors for the derived states in lib/team-current-work.ts. These are
+ * not entity statuses, so they cannot come from statusBadge above, but they
+ * borrow its hues on purpose: cyan still means a run is going, amber still
+ * means a person is needed, orange still means paused.
+ */
+export const teamWorkStateBadge: Record<string, string> = {
+  needs_you: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+  working: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300",
+  retrying: "bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300",
+  error: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
+  paused: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
+  waiting: "bg-muted text-muted-foreground",
+  quiet: "bg-muted text-muted-foreground",
+};
+
+// ---------------------------------------------------------------------------
 // Agent status dot — solid background for small indicator dots
 // ---------------------------------------------------------------------------
 

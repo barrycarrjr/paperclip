@@ -18,7 +18,7 @@
 
 import { and, desc, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issueEmailDelegations, issues } from "@paperclipai/db";
+import { agents, issueEmailDelegations, issues } from "@paperclipai/db";
 import {
   TERMINAL_EMAIL_DELEGATION_STATES,
   checkEmailDelegationTransition,
@@ -39,6 +39,20 @@ const log = logger.child({ service: "issue-email-delegations" });
 const OPEN_SOURCE_CONSTRAINT = "issue_email_delegations_open_source_uq";
 
 export type IssueEmailDelegationRow = typeof issueEmailDelegations.$inferSelect;
+
+/**
+ * A handover plus the two things a person always wants beside it: which
+ * agent has it, and which work item it turned into.
+ */
+export interface EmailDelegationSummary extends IssueEmailDelegationRow {
+  issue: {
+    id: string;
+    identifier: string | null;
+    title: string;
+    status: string | null;
+  } | null;
+  agent: { id: string; name: string | null } | null;
+}
 
 export interface CreateEmailDelegationInput {
   issueId: string;
@@ -387,6 +401,63 @@ export function issueEmailDelegationService(db: Db) {
     return rows;
   }
 
+  /**
+   * Everything an agent is holding right now, for a whole company.
+   *
+   * This is what the mail list needs: the message list itself knows nothing
+   * about handovers, so it has to be told, once, which of its messages are
+   * already with someone. Each row carries the work item it produced and the
+   * agent holding it, because "who has this and where is the work" is the
+   * whole question and looking each one up separately would be a query per
+   * message.
+   *
+   * Only open handovers are returned. A resolved or handed-back one is
+   * history: the email is the person's again and the list must not keep
+   * claiming otherwise.
+   */
+  async function listOpenForCompany(input: {
+    companyId: string;
+    limit?: number;
+  }): Promise<EmailDelegationSummary[]> {
+    const rows = await db
+      .select({
+        delegation: issueEmailDelegations,
+        issueIdentifier: issues.identifier,
+        issueTitle: issues.title,
+        issueStatus: issues.status,
+        agentName: agents.name,
+      })
+      .from(issueEmailDelegations)
+      .leftJoin(issues, eq(issues.id, issueEmailDelegations.issueId))
+      .leftJoin(agents, eq(agents.id, issueEmailDelegations.delegatedToAgentId))
+      .where(
+        and(
+          eq(issueEmailDelegations.companyId, input.companyId),
+          notInArray(issueEmailDelegations.status, [...TERMINAL_EMAIL_DELEGATION_STATES]),
+        ),
+      )
+      .orderBy(desc(issueEmailDelegations.delegatedAt))
+      .limit(input.limit ?? 200);
+
+    return rows.map((row) => ({
+      ...row.delegation,
+      issue: row.issueTitle
+        ? {
+            id: row.delegation.issueId,
+            identifier: row.issueIdentifier,
+            title: row.issueTitle,
+            status: row.issueStatus ?? null,
+          }
+        : null,
+      // Null rather than a made-up name. The agent can have been deleted
+      // since (the column is set null on delete), and "we do not know who
+      // has this" is the honest answer in that case.
+      agent: row.delegation.delegatedToAgentId
+        ? { id: row.delegation.delegatedToAgentId, name: row.agentName ?? null }
+        : null,
+    }));
+  }
+
   async function listByStatus(input: {
     companyId: string;
     statuses: EmailDelegationState[];
@@ -414,6 +485,7 @@ export function issueEmailDelegationService(db: Db) {
     listForIssue,
     listByStatus,
     listIssuesMissingDelegation,
+    listOpenForCompany,
     listStale,
     reDelegate,
     setReplyState,

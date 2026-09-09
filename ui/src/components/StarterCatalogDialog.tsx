@@ -501,7 +501,7 @@ export function StarterCatalogDialog({
 
             {canWrite ? (
               <p className="text-xs text-muted-foreground">
-                You can also decide this later from your Brief or from{" "}
+                You can also decide this later from your Overview or from{" "}
                 <Link to={`/issues/${plan.issue.identifier}`} className="underline">
                   {plan.issue.identifier}
                 </Link>
@@ -600,7 +600,7 @@ function PlanHeader({ plan }: { plan: StartWorkPlanResponse }) {
           <li>
             {plan.notes.recurringNote ? `${plan.notes.recurringNote} ` : ""}
             This sounds like something to repeat. This step creates one-off tasks only. To make it repeat, set it up on the{" "}
-            <Link to="/routines" className="underline">Routines page</Link> afterwards.
+            <Link to="/routines" className="underline">Automations page</Link> afterwards.
           </li>
         ) : null}
         {plan.notes.isPortfolioRoot ? (

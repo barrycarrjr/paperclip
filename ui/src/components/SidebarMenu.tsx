@@ -1,45 +1,91 @@
 import {
   Inbox,
-  Activity,
-  Brain,
+  Bot,
   CircleDot,
-  Target,
-  DollarSign,
   LayoutGrid,
   Mail,
-  Network,
-  Receipt,
-  Repeat,
   CalendarClock,
-  GitBranch,
-  MessageSquare,
-  Globe2,
-  Bot,
-  UserCog,
-  ShieldCheck,
   Sunrise,
-  FolderKanban,
-  Megaphone,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { Company } from "@paperclipai/shared";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
-import { PortfolioNavList, type PortfolioNavEntry } from "./PortfolioNavList";
 import { isLiveRunStatus } from "../lib/liveIssueIds";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { useHqDefaultPins } from "../hooks/useHqDefaultPins";
 import { usePinnedWorkspaces } from "../hooks/usePinnedWorkspaces";
+import { useRememberedCompanyPage } from "../hooks/useRememberedCompanyPage";
 import { usePluginSlots } from "../plugins/slots";
-import { resolvePinnedWorkspaceItems } from "../lib/workspace-catalog";
+import { resolvePinnedWorkspaceItems, type PinnedWorkspaceItem } from "../lib/workspace-catalog";
+import { isTeamPath } from "../lib/team-tabs";
+import { isWorkPath } from "../lib/work-tabs";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarPeekProvider } from "../context/SidebarPeekContext";
 
+/**
+ * One pinned row in "Your workspaces", draggable to reorder.
+ *
+ * Mouse-only, same reasoning as CompanyRail's company reordering: an
+ * `activationConstraint` distance so a plain click still lands as a click,
+ * and touch is left alone so it can scroll/tap instead of triggering a drag.
+ */
+function SortablePinnedItem({ item }: { item: PinnedWorkspaceItem }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.6 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <SidebarNavItem to={item.to} label={item.label} icon={item.icon} info={item.info} />
+    </div>
+  );
+}
+
+/**
+ * The main menu.
+ *
+ * Shortened 2026-09-07 to the eight destinations in the agreed primary
+ * navigation table (docs/plans/2026-09-02-ux-control-center-scope.md, "A small
+ * primary navigation"), which is also what the mockup shows: Email, Calendar,
+ * pinned tools, Overview, Attention, Team, Work, and Everything. See
+ * docs/plans/2026-09-07-mockup-vs-app.md, difference 1.
+ *
+ * Everything that used to have its own line here still exists, still has its
+ * route, and is still listed on the Everything page and in the command palette,
+ * because both build themselves from lib/workspace-catalog.ts. Nothing was
+ * deleted; the old menu is kept, commented out, at the bottom of this file so
+ * it can be put back in one edit.
+ *
+ * HQ is the exception to the automatic Email and Calendar lines. HQ is where
+ * you look across companies, and neither a single mailbox nor a single
+ * calendar means anything there, so in HQ "Your workspaces" holds only what
+ * the person pinned. It does not start out empty: the pages the old Portfolio
+ * block listed are pinned for them the first time they open HQ, once, by
+ * hooks/useHqDefaultPins.ts.
+ */
 interface SidebarMenuProps {
   company: Company;
   /**
@@ -53,6 +99,7 @@ interface SidebarMenuProps {
 }
 
 export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: SidebarMenuProps) {
+  const location = useLocation();
   const inboxBadge = useInboxBadge(company.id);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
@@ -74,17 +121,23 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   const activeAgentCount = (agents ?? []).filter(
     (a) => a.status !== "terminated",
   ).length;
-  const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
-  const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
-    useEmailToolsPlugin(company.id);
-  const showPortfolioEmailNav = company.isPortfolioRoot === true && !!emailPluginId;
-
+  const isPortfolioRoot = company.isPortfolioRoot === true;
+  const { hasMailboxForCompany: hasMailbox } = useEmailToolsPlugin(company.id);
+  // HQ never gets the automatic Email line, even on an instance where the
+  // email add-on is installed. Its cross-company mail page is a pin like any
+  // other, seeded below with the rest of HQ's starting pins.
+  const showEmailNav = hasMailbox && !isPortfolioRoot;
+  // Put HQ's starting pins in place the first time this person opens HQ. Never
+  // from a hover flyout: peeking at HQ from the company rail is not opening
+  // it, and quietly rewriting someone's saved list because their pointer
+  // passed over a logo would be the wrong moment to do anything at all.
+  useHqDefaultPins(isPortfolioRoot && !peekMode);
   // The person's pinned tools, resolved against what this company can
   // actually open. A pin is per user (Phone is a tool you use, not a fact
   // about a company), so the same pin can be shown here and hidden in a
   // company whose plugin is not installed — hiding it is right, dropping the
   // pin would not be.
-  const { pinned } = usePinnedWorkspaces();
+  const { pinned, reorder } = usePinnedWorkspaces();
   const { slots: pinnablePluginSlots } = usePluginSlots({
     slotTypes: ["page"],
     companyId: company.id,
@@ -93,7 +146,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
     () =>
       resolvePinnedWorkspaceItems({
         pinned,
-        isPortfolioRoot: company.isPortfolioRoot === true,
+        isPortfolioRoot,
         availability: {
           isolatedWorkspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
         },
@@ -104,10 +157,25 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
       }),
     [
       pinned,
-      company.isPortfolioRoot,
+      isPortfolioRoot,
       experimentalSettings?.enableIsolatedWorkspaces,
       pinnablePluginSlots,
     ],
+  );
+  // Mouse-only for the same reason CompanyRail's drag reordering is: touch
+  // has to keep meaning scroll/tap, not drag.
+  const pinSensors = useSensors(useSensor(MouseSensor, { activationConstraint: { distance: 8 } }));
+  const handlePinDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      reorder(
+        String(active.id),
+        String(over.id),
+        pinnedItems.map((item) => item.id),
+      );
+    },
+    [reorder, pinnedItems],
   );
 
   const pluginContext = {
@@ -115,124 +183,34 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
     companyPrefix: company.issuePrefix ?? null,
   };
 
+  // Where you left off in THIS company, offered only in the hover menu, which
+  // is the one place you are looking at a company you are not in. Switching
+  // company now keeps you on the page you are reading, so the remembered page
+  // is no longer replayed at you; the scope document allows it to stay only
+  // as "an explicit alternative, not a competing implicit redirect", and this
+  // row is that choice. It goes through SidebarNavItem like every other item
+  // here, so it switches company with the "shortcut" source and its
+  // destination cannot be overridden.
+  const rememberedPage = useRememberedCompanyPage(peekMode ? company : null, location.pathname);
+
   const body = (
     <>
-      {company.isPortfolioRoot && (
+      {peekMode && rememberedPage && (
         <SidebarSection
-          label="Portfolio"
-          info="Cross-company views for managing the whole portfolio from one place."
+          label="Where you left off"
+          info="The last page you had open in this company. Clicking the company logo itself keeps you on the page you are reading instead."
         >
-          <PortfolioNavList
-            entries={[
-              {
-                id: "portfolio-brief",
-                to: "/portfolio-brief",
-                label: "Portfolio Brief",
-                icon: Sunrise,
-                info: "Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company.",
-              },
-              {
-                id: "portfolio-approvals",
-                to: "/portfolio-approvals",
-                label: "Portfolio Approvals",
-                icon: ShieldCheck,
-                info: "Every draft and approval waiting on you, across all companies, in one list.",
-              },
-              {
-                id: "portfolio-issues",
-                to: "/portfolio-issues",
-                label: "Portfolio Issues",
-                icon: Globe2,
-                info: "A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies.",
-              },
-              {
-                id: "portfolio-directives",
-                to: "/portfolio-directives",
-                label: "Portfolio Directives",
-                icon: Megaphone,
-                info: "Directives you've broadcast from HQ — one high-level intent fanned out to each company's CEO. Watch each cascade land and track how far each company has taken it.",
-              },
-              {
-                id: "portfolio-agents",
-                to: "/portfolio-agents",
-                label: "Portfolio Agents",
-                icon: Bot,
-                info: "See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide.",
-              },
-              {
-                id: "portfolio-activity",
-                to: "/portfolio-activity",
-                label: "Portfolio Activity",
-                icon: Activity,
-                info: "The raw record of everything agents and people did, across all companies, newest first.",
-              },
-              {
-                id: "portfolio-receipts",
-                to: "/portfolio-receipts",
-                label: "Portfolio Receipts",
-                icon: Receipt,
-                info: "What your agents actually produced across all companies (emails sent, drafts made, issues finished), grouped by day.",
-              },
-              {
-                id: "portfolio-routines",
-                to: "/portfolio-routines",
-                label: "Portfolio Routines",
-                icon: Repeat,
-                info: "See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place.",
-              },
-              {
-                id: "portfolio-calendar",
-                to: "/portfolio-calendar",
-                label: "Portfolio Calendar",
-                icon: CalendarClock,
-                info: "Reminders and scheduled events across every company — as a combined list or a single month grid. Filter by company or status.",
-              },
-              ...(showPortfolioEmailNav
-                ? [
-                    {
-                      id: "portfolio-email",
-                      to: "/portfolio-email",
-                      label: "Portfolio Email",
-                      icon: Mail,
-                      info: "Triage every enabled mailbox in one view — no need to switch companies. Triage actions and rules work the same as the per-company view.",
-                    } satisfies PortfolioNavEntry,
-                  ]
-                : []),
-              {
-                id: "portfolio-costs",
-                to: "/portfolio-costs",
-                label: "Portfolio Costs",
-                icon: DollarSign,
-                info: "Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable.",
-              },
-            ]}
+          <SidebarNavItem
+            to={rememberedPage.to}
+            label={rememberedPage.pageLabel ?? "The page you had open"}
+            icon={rememberedPage.icon}
           />
         </SidebarSection>
       )}
-
-      <div className="flex flex-col gap-0.5">
-        <SidebarNavItem
-          to="/brief"
-          label="Brief"
-          icon={Sunrise}
-          liveCount={liveRunCount}
-          info="Your overview: what your agents got done overnight, what's awaiting your tap, what's lined up today, key metrics, and active runs in one place."
-        />
-        <SidebarNavItem
-          to="/inbox"
-          label="Inbox"
-          icon={Inbox}
-          badge={inboxBadge.inbox}
-          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-          alert={inboxBadge.failedRuns > 0}
-          info="Everything waiting on you: agents' questions, work waiting for your sign-off, approvals, failed runs, join requests, and the issues you have worked on recently."
-        />
-        <SidebarNavItem
-          to="/clippy"
-          label="Clippy"
-          icon={MessageSquare}
-          info="Talk to Clippy — Paperclip's in-app assistant. Switch to Agent mode to let it run tools and make changes for you."
-        />
+      <SidebarSection
+        label="Your workspaces"
+        info="The places you use every day. Pin anything else from the Everything page and it shows up here too."
+      >
         {showEmailNav && (
           <SidebarNavItem
             to="/email"
@@ -241,140 +219,92 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
             info="View and triage your inbox. Triage actions move mail immediately and update your rules so future messages follow automatically."
           />
         )}
-        {/* Pinned up here with Email/Inbox/Clippy rather than left inside
-            Work below, matching docs/plans/2026-09-02-ux-control-center-scope.md's
-            "small primary navigation" table (Email, Calendar, Pinned tools,
-            Overview, Attention, Team, Work, All workspaces) — Calendar is a
-            daily-use destination, not one more Work sub-type. */}
-        <SidebarNavItem
-          to="/calendar"
-          label="Calendar"
-          icon={CalendarClock}
-          info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
-        />
-        {/* "Pinned tools" from the scope document's primary navigation table,
-            between Calendar and the grouped sections. Renders nothing at all
-            when nothing is pinned, so the sidebar is unchanged for anyone who
-            has not used it. Pin from the Everything page. */}
-        {pinnedItems.map((item) => (
+        {/* Not in HQ. One company's calendar is a real thing you look at; HQ
+            has no calendar of its own, and Portfolio Calendar is one of the
+            pins HQ starts with instead. */}
+        {!isPortfolioRoot && (
           <SidebarNavItem
-            key={item.id}
-            to={item.to}
-            label={item.label}
-            icon={item.icon}
-            info={item.info}
+            to="/calendar"
+            label="Calendar"
+            icon={CalendarClock}
+            info="Reminders and scheduled events for this company. A reminder is a calendar event with notifications turned on. View them as a list or on a month grid."
           />
-        ))}
-      </div>
+        )}
+        {/* "Pinned tools" from the scope document's primary navigation table.
+            Renders nothing at all when nothing is pinned, so in an ordinary
+            company this section is just Email and Calendar for anyone who has
+            not used it. In HQ it is the whole section. Pin from the Everything
+            page, drag to reorder.
+
+            Not draggable in peek mode: that flyout is a preview of a company
+            you have not switched to, not a place to be rearranging your own
+            pin list. */}
+        {peekMode || pinnedItems.length === 0 ? (
+          pinnedItems.map((item) => (
+            <SidebarNavItem
+              key={item.id}
+              to={item.to}
+              label={item.label}
+              icon={item.icon}
+              info={item.info}
+            />
+          ))
+        ) : (
+          <DndContext
+            sensors={pinSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handlePinDragEnd}
+          >
+            <SortableContext
+              items={pinnedItems.map((item) => item.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {pinnedItems.map((item) => (
+                <SortablePinnedItem key={item.id} item={item} />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
+      </SidebarSection>
 
       <SidebarSection
-        label="Work"
-        info="Day-to-day work: tasks, schedules, and the goals they ladder up to."
+        label="Control center"
+        info="What happened, what needs you, who is working, and what is being worked on."
       >
         <SidebarNavItem
-          to="/issues"
-          label="Issues"
-          icon={CircleDot}
-          info="Discrete pieces of work with a clear definition of done. Anything an agent or person needs to do — bugs, questions, one-off jobs — lives here."
+          to="/brief"
+          label="Overview"
+          icon={Sunrise}
+          liveCount={liveRunCount}
+          info="What your agents got done overnight, what's awaiting your tap, what's lined up today, key metrics, and active runs in one place."
         />
         <SidebarNavItem
-          to="/routines"
-          label="Routines"
-          icon={Repeat}
-          info="Recurring work that runs on a schedule or trigger. Use routines for anything that should happen repeatedly without you asking each time."
-        />
-        <SidebarNavItem
-          to="/goals"
-          label="Goals"
-          icon={Target}
-          info="Higher-level objectives this company is working toward. Goals can have sub-goals and link to the issues that contribute to them."
-        />
-        <SidebarNavItem
-          to="/projects"
-          label="Projects"
-          icon={FolderKanban}
-          info="Group related issues, routines, and goals together. Each project gets its own scoped view."
-        />
-        <SidebarNavItem
-          to="/work-queues"
-          label="Work queues"
+          to="/inbox"
+          label="Attention"
           icon={Inbox}
-          info="Named work streams (support, leads, errors). Webhooks or operators drop items in; agents claim and complete one item at a time."
+          badge={inboxBadge.inbox}
+          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+          alert={inboxBadge.failedRuns > 0}
+          info="Everything waiting on you: agents' questions, work waiting for your sign-off, approvals, failed runs, join requests, and the work you have looked at recently."
         />
         <SidebarNavItem
-          to="/memories"
-          label="Memories"
-          icon={Brain}
-          info="Durable notes — facts, preferences, decisions — that agents save and recall across runs. Scope to the whole company or to a specific agent."
-        />
-        {showWorkspacesLink ? (
-          <SidebarNavItem
-            to="/workspaces"
-            label="Workspaces"
-            icon={GitBranch}
-            info="Isolated environments where agents can work in parallel without stepping on each other's files. (Experimental.)"
-          />
-        ) : null}
-      </SidebarSection>
-
-      <SidebarSection
-        label="Records"
-        info="What already happened in this company: decisions waiting on you, outcomes produced, and the raw activity log."
-      >
-        <SidebarNavItem
-          to="/approvals/pending"
-          label="Approvals"
-          icon={ShieldCheck}
-          info="Actions agents drafted that will not run until you approve them. They are counted in the Inbox number above, so this one has no badge of its own."
-        />
-        <SidebarNavItem
-          to="/receipts"
-          label="Receipts"
-          icon={Receipt}
-          info="What your agents actually produced (emails sent, drafts made, issues finished), grouped by day."
-        />
-        <SidebarNavItem
-          to="/activity"
-          label="Activity"
-          icon={Activity}
-          info="The raw record of everything agents and people did in this company, newest first."
-        />
-      </SidebarSection>
-
-      <SidebarSection
-        label="Team"
-        info="The roster for this company. Agents and their reporting structure live on the Org chart; assistants you talk to directly are listed here for quick access."
-      >
-        <SidebarNavItem
-          to="/org"
-          label="Org chart"
-          icon={Network}
+          to="/team"
+          label="Team"
+          icon={Bot}
+          alsoActive={isTeamPath(location.pathname)}
           textBadge={
             activeAgentCount > 0
               ? `${activeAgentCount} agent${activeAgentCount === 1 ? "" : "s"}`
               : undefined
           }
-          info="Visualise how agents in this company report to each other — who delegates to whom, and where the CEO sits."
+          info="Who is doing what right now, with tabs for the full roster, the org chart and the assistants. Each tab is still its own page and keeps its own web address, so a saved link still opens the same thing."
         />
-        {/* Added 2026-09-03 (P3 audit): the filterable All/Active/Paused/
-            Error list existed (mobile already links to it) but had no
-            desktop sidebar entry — Org chart is a different view (structure,
-            not status), not a substitute for it. */}
         <SidebarNavItem
-          to="/agents/all"
-          label="All agents"
-          icon={Bot}
-          info="The full roster with status filters — active, paused, error, and terminated."
-        />
-        {/* This section's own info text above promises assistants are "listed
-            here for quick access" — added 2026-09-03 (P3 audit) after finding
-            no Assistants entry existed anywhere in the desktop sidebar, only
-            reachable via Command Palette search or a direct URL. */}
-        <SidebarNavItem
-          to="/assistants"
-          label="Assistants"
-          icon={UserCog}
-          info="Agents built as a persona to talk to directly — phone, chat, or both — distinct from agents doing background work."
+          to="/work"
+          label="Work"
+          icon={CircleDot}
+          alsoActive={isWorkPath(location.pathname)}
+          info="One page with tabs for tasks, projects, goals, automations and intake queues. Each tab is still its own page with its own controls, and each keeps its own web address, so a saved link still opens the same thing."
         />
       </SidebarSection>
 
@@ -396,13 +326,13 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
 
       {/* "All workspaces" from scope.md's primary nav table — complete
           discovery, last in the list on purpose: everything above is a
-          pinned daily shortcut, this is the catch-all for the rest. */}
+          daily shortcut, this is the catch-all for the rest. */}
       <div className="flex flex-col gap-0.5">
         <SidebarNavItem
           to="/everything"
           label="Everything"
           icon={LayoutGrid}
-          info="Every workspace this company can reach, including ones not pinned above — the same list Command Palette search uses."
+          info="Every workspace this company can reach, including the ones not listed above. It is the same list the search box uses."
         />
       </div>
     </>
@@ -418,3 +348,223 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
 
   return body;
 }
+
+/* ---------------------------------------------------------------------------
+ * The longer menu this replaced, kept so it can be put back in one edit.
+ *
+ * Disabled 2026-09-07 (see the note at the top of this file). Every
+ * destination below is still a live page with a live route; it is listed on
+ * the Everything page and in the command palette instead of having its own
+ * line here. The Portfolio block only ever rendered on HQ.
+ *
+ * Putting any of it back needs its icons and the PortfolioNavList import
+ * restored at the top of the file:
+ *   Activity, Brain, Target, DollarSign, Network, Receipt, Repeat, GitBranch,
+ *   MessageSquare, Globe2, UserCog, ShieldCheck, FolderKanban, Megaphone
+ *   import { PortfolioNavList, type PortfolioNavEntry } from "./PortfolioNavList";
+ * and, for the Portfolio block, the showWorkspacesLink / showPortfolioEmailNav
+ * values that used to be computed alongside showEmailNav:
+ *   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
+ *   const { hasMailboxForCompany: showEmailNav, pluginId: emailPluginId } =
+ *     useEmailToolsPlugin(company.id);
+ *   const showPortfolioEmailNav = company.isPortfolioRoot === true && !!emailPluginId;
+ *
+ * {company.isPortfolioRoot && (
+ *   <SidebarSection
+ *     label="Portfolio"
+ *     info="Cross-company views for managing the whole portfolio from one place."
+ *   >
+ *     <PortfolioNavList
+ *       entries={[
+ *         {
+ *           id: "portfolio-brief",
+ *           to: "/portfolio-brief",
+ *           label: "Portfolio Brief",
+ *           icon: Sunrise,
+ *           info: "Cross-portfolio overview: per-company health, drafts awaiting your tap, overnight outcomes, today's open issues, and trends — grouped by company.",
+ *         },
+ *         {
+ *           id: "portfolio-approvals",
+ *           to: "/portfolio-approvals",
+ *           label: "Portfolio Approvals",
+ *           icon: ShieldCheck,
+ *           info: "Every draft and approval waiting on you, across all companies, in one list.",
+ *         },
+ *         {
+ *           id: "portfolio-issues",
+ *           to: "/portfolio-issues",
+ *           label: "Portfolio Issues",
+ *           icon: Globe2,
+ *           info: "A bird's-eye view of open issues across every company in the portfolio. Filter, bulk-update, and comment without switching companies.",
+ *         },
+ *         {
+ *           id: "portfolio-directives",
+ *           to: "/portfolio-directives",
+ *           label: "Portfolio Directives",
+ *           icon: Megaphone,
+ *           info: "Directives you've broadcast from HQ — one high-level intent fanned out to each company's CEO. Watch each cascade land and track how far each company has taken it.",
+ *         },
+ *         {
+ *           id: "portfolio-agents",
+ *           to: "/portfolio-agents",
+ *           label: "Portfolio Agents",
+ *           icon: Bot,
+ *           info: "See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide.",
+ *         },
+ *         {
+ *           id: "portfolio-activity",
+ *           to: "/portfolio-activity",
+ *           label: "Portfolio Activity",
+ *           icon: Activity,
+ *           info: "The raw record of everything agents and people did, across all companies, newest first.",
+ *         },
+ *         {
+ *           id: "portfolio-receipts",
+ *           to: "/portfolio-receipts",
+ *           label: "Portfolio Receipts",
+ *           icon: Receipt,
+ *           info: "What your agents actually produced across all companies (emails sent, drafts made, issues finished), grouped by day.",
+ *         },
+ *         {
+ *           id: "portfolio-routines",
+ *           to: "/portfolio-routines",
+ *           label: "Portfolio Routines",
+ *           icon: Repeat,
+ *           info: "See all scheduled routines across every company — filter by status, spot errors, and track next-run times in one place.",
+ *         },
+ *         {
+ *           id: "portfolio-calendar",
+ *           to: "/portfolio-calendar",
+ *           label: "Portfolio Calendar",
+ *           icon: CalendarClock,
+ *           info: "Reminders and scheduled events across every company — as a combined list or a single month grid. Filter by company or status.",
+ *         },
+ *         ...(showPortfolioEmailNav
+ *           ? [
+ *               {
+ *                 id: "portfolio-email",
+ *                 to: "/portfolio-email",
+ *                 label: "Portfolio Email",
+ *                 icon: Mail,
+ *                 info: "Triage every enabled mailbox in one view — no need to switch companies. Triage actions and rules work the same as the per-company view.",
+ *               } satisfies PortfolioNavEntry,
+ *             ]
+ *           : []),
+ *         {
+ *           id: "portfolio-costs",
+ *           to: "/portfolio-costs",
+ *           label: "Portfolio Costs",
+ *           icon: DollarSign,
+ *           info: "Month-to-date spend and budget utilisation for every company in the portfolio, sortable and filterable.",
+ *         },
+ *       ]}
+ *     />
+ *   </SidebarSection>
+ * )}
+ *
+ * <SidebarNavItem
+ *   to="/clippy"
+ *   label="Clippy"
+ *   icon={MessageSquare}
+ *   info="Talk to Clippy — Paperclip's in-app assistant. Switch to Agent mode to let it run tools and make changes for you."
+ * />
+ *
+ * <SidebarSection
+ *   label="Work"
+ *   info="Day-to-day work: tasks, schedules, and the goals they ladder up to."
+ * >
+ *   <SidebarNavItem
+ *     to="/issues"
+ *     label="Issues"
+ *     icon={CircleDot}
+ *     info="Discrete pieces of work with a clear definition of done. Anything an agent or person needs to do — bugs, questions, one-off jobs — lives here."
+ *   />
+ *   <SidebarNavItem
+ *     to="/routines"
+ *     label="Routines"
+ *     icon={Repeat}
+ *     info="Recurring work that runs on a schedule or trigger. Use routines for anything that should happen repeatedly without you asking each time."
+ *   />
+ *   <SidebarNavItem
+ *     to="/goals"
+ *     label="Goals"
+ *     icon={Target}
+ *     info="Higher-level objectives this company is working toward. Goals can have sub-goals and link to the issues that contribute to them."
+ *   />
+ *   <SidebarNavItem
+ *     to="/projects"
+ *     label="Projects"
+ *     icon={FolderKanban}
+ *     info="Group related issues, routines, and goals together. Each project gets its own scoped view."
+ *   />
+ *   <SidebarNavItem
+ *     to="/work-queues"
+ *     label="Work queues"
+ *     icon={Inbox}
+ *     info="Named work streams (support, leads, errors). Webhooks or operators drop items in; agents claim and complete one item at a time."
+ *   />
+ *   <SidebarNavItem
+ *     to="/memories"
+ *     label="Memories"
+ *     icon={Brain}
+ *     info="Durable notes — facts, preferences, decisions — that agents save and recall across runs. Scope to the whole company or to a specific agent."
+ *   />
+ *   {showWorkspacesLink ? (
+ *     <SidebarNavItem
+ *       to="/workspaces"
+ *       label="Workspaces"
+ *       icon={GitBranch}
+ *       info="Isolated environments where agents can work in parallel without stepping on each other's files. (Experimental.)"
+ *     />
+ *   ) : null}
+ * </SidebarSection>
+ *
+ * <SidebarSection
+ *   label="Records"
+ *   info="What already happened in this company: decisions waiting on you, outcomes produced, and the raw activity log."
+ * >
+ *   <SidebarNavItem
+ *     to="/approvals/pending"
+ *     label="Approvals"
+ *     icon={ShieldCheck}
+ *     info="Actions agents drafted that will not run until you approve them. They are counted in the Attention number above, so this one has no badge of its own."
+ *   />
+ *   <SidebarNavItem
+ *     to="/receipts"
+ *     label="Receipts"
+ *     icon={Receipt}
+ *     info="What your agents actually produced (emails sent, drafts made, issues finished), grouped by day."
+ *   />
+ *   <SidebarNavItem
+ *     to="/activity"
+ *     label="Activity"
+ *     icon={Activity}
+ *     info="The raw record of everything agents and people did in this company, newest first."
+ *   />
+ * </SidebarSection>
+ *
+ * <SidebarSection
+ *   label="Team"
+ *   info="The roster for this company. Agents and their reporting structure live on the Org chart; assistants you talk to directly are listed here for quick access."
+ * >
+ *   <SidebarNavItem
+ *     to="/org"
+ *     label="Org chart"
+ *     icon={Network}
+ *     textBadge={activeAgentCount > 0 ? `${activeAgentCount} agents` : undefined}
+ *     info="Visualise how agents in this company report to each other — who delegates to whom, and where the CEO sits."
+ *   />
+ *   <SidebarNavItem
+ *     to="/agents/all"
+ *     label="All agents"
+ *     icon={Bot}
+ *     info="The full roster with status filters — active, paused, error, and terminated."
+ *   />
+ *   <SidebarNavItem
+ *     to="/assistants"
+ *     label="Assistants"
+ *     icon={UserCog}
+ *     info="Agents built as a persona to talk to directly — phone, chat, or both — distinct from agents doing background work."
+ *   />
+ * </SidebarSection>
+ * ------------------------------------------------------------------------- */

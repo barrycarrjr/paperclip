@@ -11,8 +11,6 @@ import {
   Loader2,
   Bot,
   AlertCircle,
-  Eye,
-  EyeOff,
   MoveRight,
   Archive,
   UserCheck,
@@ -31,6 +29,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Maximize2,
+  ListChecks,
+  ChevronLeft,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -45,9 +45,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { useSidebar } from "../context/SidebarContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { useHelpScoutPlugin } from "../hooks/useHelpScoutPlugin";
@@ -70,6 +72,7 @@ import {
 } from "../lib/attachments";
 import { makeHelpScoutBridgeApi } from "../api/helpScoutBridge";
 import { MailSearchBar } from "../components/MailSearchBar";
+import { WorkspaceUnavailable } from "../components/WorkspaceUnavailable";
 import {
   parseMailboxRefId,
   type HelpScoutMailboxRef,
@@ -80,6 +83,39 @@ import {
   type EmailPopoutRequest,
 } from "../components/email/EmailPopoutDialog";
 import { usePrintEmail } from "../components/email/usePrintEmail";
+import { EmailAgentHoldPanel } from "../components/email/EmailAgentHoldPanel";
+import { EmailAgentHoldList } from "../components/email/EmailAgentHoldList";
+import { EmailTakeOverNotice } from "../components/email/EmailTakeOverNotice";
+import {
+  emailHandoffsApi,
+  type TakeOverHandoffResult,
+} from "../api/emailHandoffs";
+import {
+  findHoldForMessage,
+  holdStageLabel,
+  holderName,
+  indexHoldsBySource,
+} from "../lib/email-agent-holds";
+import {
+  EMAIL_LIST_VIEW_LABEL,
+  EMAIL_LIST_VIEW_STORAGE_KEY,
+  EMAIL_LIST_VIEWS,
+  EMAIL_SHOW_ALL_STORAGE_KEY,
+  emptyListMessage,
+  initialEmailListView,
+  listViewShowsAllMail,
+  type EmailListView,
+} from "../lib/email-list-view";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
+import { useEmailBulkSelection } from "../components/email/useEmailBulkSelection";
+import {
+  canSelectMessages,
+  messageSelectionId,
+  selectionContextChange,
+  type EmailSelectionContext,
+} from "../lib/email-selection";
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
@@ -90,6 +126,11 @@ import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
+import { emailPaneLayout } from "../lib/email-pane-layout";
+import {
+  FILLS_OR_KEEPS_HEIGHT_CLASS,
+  PHONE_MESSAGE_BODY_HEIGHT_CLASS,
+} from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
 import {
   applyImapOverrides,
@@ -417,29 +458,42 @@ export function Email() {
   const [selectedMailbox, setSelectedMailbox] = useState<string | null>(initialImapMailboxKey);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialUrlState.folder || "INBOX");
   const [selectedUid, setSelectedUid] = useState<number | null>(initialUrlState.uid);
-  const [showAllMessages, setShowAllMessages] = useState(() => {
-    // Explicit ?all= in the URL wins (deep-links can force a view); otherwise
-    // restore the operator's remembered preference. Opening a specific ?uid=
-    // no longer forces "show all" — the detail pane renders the message
-    // regardless of the list filter, so the operator's unread-only view is
-    // preserved when arriving from Portfolio Email.
-    const param = searchParams.get("all");
-    if (param === "1") return true;
-    if (param === "0") return false;
+  // Explicit ?all= in the URL wins (deep-links can force a view); otherwise
+  // restore the operator's remembered preference. Opening a specific ?uid=
+  // no longer forces "show all" — the detail pane renders the message
+  // regardless of the list filter, so the operator's unread-only view is
+  // preserved when arriving from Portfolio Email. The rules live in
+  // lib/email-list-view.ts so they can be tested without a browser.
+  const [listView, setListView] = useState<EmailListView>(() => {
+    let stored: string | null = null;
+    let legacyShowAll: string | null = null;
     try {
-      return localStorage.getItem("email-showAll") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const toggleShowAllMessages = (v: boolean) => {
-    try {
-      localStorage.setItem("email-showAll", String(v));
+      stored = localStorage.getItem(EMAIL_LIST_VIEW_STORAGE_KEY);
+      legacyShowAll = localStorage.getItem(EMAIL_SHOW_ALL_STORAGE_KEY);
     } catch {
       // ignore quota / disabled-storage errors
     }
-    setShowAllMessages(v);
+    return initialEmailListView({ allParam: searchParams.get("all"), stored, legacyShowAll });
+  });
+  const showAllMessages = listViewShowsAllMail(listView);
+  const chooseListView = (v: EmailListView) => {
+    try {
+      localStorage.setItem(EMAIL_LIST_VIEW_STORAGE_KEY, v);
+      // Still written, so an older build of this page (which only knows the
+      // two-value key) opens on the view the person last chose.
+      localStorage.setItem(EMAIL_SHOW_ALL_STORAGE_KEY, String(listViewShowsAllMail(v)));
+    } catch {
+      // ignore quota / disabled-storage errors
+    }
+    setListView(v);
   };
+  // What a person was told after taking a message back from an agent. Kept
+  // here rather than in the panel that started it, because that panel is
+  // gone the moment the message stops being held, and a warning that the
+  // agent could not be stopped must outlive it.
+  const [takeOverNotice, setTakeOverNotice] = useState<
+    { result: TakeOverHandoffResult; agentName: string } | null
+  >(null);
   // The message shown at full size on top of the three-pane layout.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
@@ -480,6 +534,18 @@ export function Email() {
   const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(() => {
     try { return localStorage.getItem("email-leftPaneCollapsed") === "true"; } catch { return false; }
   });
+  // On a phone there is no room for three columns side by side, so the page
+  // shows one at a time: the mailbox and folder tree slides in over the list,
+  // and opening a message replaces the list. Same tree, same list, same
+  // reading pane; only where they sit changes. The switch is the app's own
+  // one, so Email changes shape at the same width as everything else.
+  const { isMobile } = useSidebar();
+  const [mailboxSheetOpen, setMailboxSheetOpen] = useState(false);
+  // The drawer's button lives in the list header and the drawer itself is
+  // built further down, so Radix has no trigger of its own to hand focus back
+  // to when the drawer closes. Without this, closing it drops focus on the
+  // page body and the next Tab starts again from the top of the document.
+  const mailboxSheetOpenerRef = useRef<HTMLButtonElement | null>(null);
   const setLeftPaneCollapsedPersist = (v: boolean) => {
     setLeftPaneCollapsed(v);
     try { localStorage.setItem("email-leftPaneCollapsed", String(v)); } catch {}
@@ -698,6 +764,48 @@ export function Email() {
   const messages = applyImapOverrides(allMessages, overrides, {
     unseenOnly: !showAllMessages,
   });
+
+  // ── What agents are holding ───────────────────────────────────────────────
+  //
+  // Asked for once per company rather than per message: the mailbox knows
+  // nothing about handovers, so the list is told the whole open set and
+  // matches its own rows against it locally (lib/email-agent-holds.ts).
+  // Scope is the company, not the mailbox, because the "With agents" view is
+  // meant to answer "what is out with agents" across all of them.
+  // `isPending`, not `isLoading`, on purpose. A request that has failed and is
+  // waiting to be tried again reports isLoading false with no error yet, and
+  // the list would then say "no agent is holding any mail" when the honest
+  // answer is that we have not been told. Anything short of a real answer
+  // counts as still checking.
+  const {
+    data: agentHoldsData,
+    isPending: agentHoldsLoading,
+    error: agentHoldsError,
+  } = useQuery({
+    queryKey: queryKeys.issues.emailHandoffsForCompany(selectedCompanyId ?? ""),
+    queryFn: () => emailHandoffsApi.listForCompany(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 60_000,
+  });
+  const agentHolds = useMemo(() => agentHoldsData ?? [], [agentHoldsData]);
+  const agentHoldIndex = useMemo(() => indexHoldsBySource(agentHolds), [agentHolds]);
+  const agentHoldLocation = useMemo(
+    () => ({ pluginId, mailbox: selectedMailbox, folder: selectedFolder }),
+    [pluginId, selectedMailbox, selectedFolder],
+  );
+  function holdForMessage(msg: { uid: number; messageId: string | null }) {
+    return findHoldForMessage(agentHoldIndex, agentHoldLocation, msg);
+  }
+  function onTookOverMessage(result: TakeOverHandoffResult, agentName: string) {
+    setTakeOverNotice({ result, agentName });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.issues.emailHandoffsForCompany(selectedCompanyId ?? ""),
+    });
+    // The message is unread again as far as the person is concerned only if
+    // they make it so; what changes here is who holds it, so only the lists
+    // are refreshed.
+    invalidateMessageLists();
+  }
 
   // Reset the open message + transient compose state when the operator
   // switches mailbox or folder. We track the previous (mailbox, folder) and
@@ -1001,6 +1109,125 @@ export function Email() {
     });
   }
 
+  // ── What one message does, so several can do the same thing ──────────────
+  //
+  // These two are the whole of "mark this read" and "file this in a folder"
+  // against the mailbox: hide the row straight away, make the call, and in
+  // the mark-read case remember that this sender matters. The row buttons,
+  // the reading pane and the new selection bar all go through them, so
+  // ticking four messages and marking them read is four of exactly the call
+  // the single button makes. Nothing was added on the server for the
+  // selection: there is no endpoint that takes a list of messages, so a
+  // selection is a run of single calls, which is why the bar reports how many
+  // of them worked.
+  //
+  // Neither undoes its own optimistic hide on failure. The single-message
+  // mutations already do that in their own onError, and the selection wraps
+  // them with the same undo before letting the error travel.
+
+  async function markMessageRead(msg: MailHeader): Promise<void> {
+    noteOverride(msg.uid, "read");
+    await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
+    await maybeAddImplicitKeepAlways(msg);
+  }
+
+  async function moveMessageToFolder(msg: MailHeader, targetFolder: string): Promise<void> {
+    noteOverride(msg.uid, "gone");
+    await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
+  }
+
+  const bulk = useEmailBulkSelection({
+    markRead: async (msg) => {
+      try {
+        await markMessageRead(msg);
+      } catch (err) {
+        clearOverride(msg.uid);
+        throw err;
+      }
+    },
+    moveToFolder: async (msg, targetFolder) => {
+      try {
+        await moveMessageToFolder(msg, targetFolder);
+      } catch (err) {
+        clearOverride(msg.uid);
+        throw err;
+      }
+    },
+    invalidateLists: () => {
+      invalidateRules();
+      invalidateMessageLists();
+    },
+  });
+
+  // Sender groups are worked out here rather than inside the list, because
+  // ticking messages needs to know the order the rows appear in: it is what a
+  // shift-click measures a range against and what "Select visible messages"
+  // means. Grouping changes that order, so it cannot be left until render.
+  const senderGroups = useMemo(() => {
+    const groupsMap = new Map<string, MailHeader[]>();
+    for (const msg of messages) {
+      const sender = extractSender(msg);
+      const existing = groupsMap.get(sender);
+      if (existing) existing.push(msg);
+      else groupsMap.set(sender, [msg]);
+    }
+    return Array.from(groupsMap.entries())
+      .map(([sender, msgs]) => ({
+        sender,
+        msgs: msgs.slice().sort((a, b) => (b.date < a.date ? -1 : 1)),
+        latestDate: msgs.reduce((max, m) => (m.date > max ? m.date : max), msgs[0]!.date),
+      }))
+      .sort((a, b) => (b.latestDate < a.latestDate ? -1 : 1));
+  }, [messages]);
+
+  const selectingPossible = canSelectMessages({ view: listView, searchActive });
+  const orderedVisibleMessages = groupBySender
+    ? senderGroups.flatMap((g) => g.msgs)
+    : messages;
+  const orderedVisibleIds = orderedVisibleMessages.map((m) => messageSelectionId(m.uid));
+  const visibleSelectionKey = orderedVisibleIds.join(",");
+
+  // Rows leave underneath the operator: the list refetches every thirty
+  // seconds and each action takes its own row away. A tick pointing at a row
+  // that has gone would act on a message that is no longer there, so ticks
+  // are matched against what is on screen whenever that changes. The joined
+  // key is the dependency because the list array itself is rebuilt on every
+  // render.
+  const syncVisibleSelection = bulk.syncVisible;
+  useEffect(() => {
+    syncVisibleSelection(visibleSelectionKey === "" ? [] : visibleSelectionKey.split(","));
+  }, [visibleSelectionKey, syncVisibleSelection]);
+
+  // Ticks never outlive the thing they were made against. A different tab
+  // shows a different set of messages, a different mailbox or folder means
+  // the uid on a tick refers to something else entirely, and a company switch
+  // has to leave nothing of the previous company behind. Which of those also
+  // switches the checkboxes back off is decided in lib/email-selection.ts.
+  const prevSelectionContextRef = useRef<EmailSelectionContext | null>(null);
+  const resetSelectionFor = bulk.resetFor;
+  useEffect(() => {
+    const now: EmailSelectionContext = {
+      company: selectedCompanyId,
+      mailbox: selectedMailbox,
+      folder: selectedFolder,
+      view: listView,
+    };
+    const prev = prevSelectionContextRef.current;
+    prevSelectionContextRef.current = now;
+    if (prev === null) return;
+    const change = selectionContextChange(prev, now);
+    if (change) resetSelectionFor(change, now.view);
+  }, [selectedCompanyId, selectedMailbox, selectedFolder, listView, resetSelectionFor]);
+
+  // A search answers from every mailbox and folder this company can see, and
+  // these actions only know how to work on the one folder the page has open,
+  // so starting a search puts the checkboxes away rather than leaving ticks
+  // that would fire at the wrong message.
+  const stopSelectingMessages = bulk.stopSelecting;
+  useEffect(() => {
+    if (searchActive) stopSelectingMessages();
+  }, [searchActive, stopSelectingMessages]);
+
   // ── Triage mutations ──────────────────────────────────────────────────────
 
   const autoTriageMutation = useMutation({
@@ -1039,11 +1266,7 @@ export function Email() {
   });
 
   const markReadMutation = useMutation({
-    mutationFn: async (msg: MailHeader) => {
-      noteOverride(msg.uid, "read");
-      await emailApi!.markRead(selectedMailbox!, msg.uid, selectedFolder);
-      await maybeAddImplicitKeepAlways(msg);
-    },
+    mutationFn: markMessageRead,
     onSuccess: (_, msg) => {
       invalidateRules();
       invalidateMessageLists();
@@ -1089,10 +1312,8 @@ export function Email() {
   });
 
   const moveToFolderMutation = useMutation({
-    mutationFn: async ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) => {
-      noteOverride(msg.uid, "gone");
-      await emailApi!.moveMessage(selectedMailbox!, msg.uid, selectedFolder, targetFolder);
-    },
+    mutationFn: ({ msg, targetFolder }: { msg: MailHeader; targetFolder: string }) =>
+      moveMessageToFolder(msg, targetFolder),
     onSuccess: () => invalidateMessageLists(),
     onError: (err, { msg }) => {
       clearOverride(msg.uid);
@@ -1352,16 +1573,20 @@ export function Email() {
   const helpScoutAvailableHere = enrichedHelpScoutMailboxes.length > 0;
 
   if (!imapAvailableHere && !helpScoutAvailableHere) {
+    // A mailbox belongs to particular companies, so this is the page most
+    // often reached in a company that cannot open it: changing company now
+    // keeps you on the page you were reading, and Email is one of the two
+    // lines every company shows. Said with the same component every other
+    // unavailable workspace uses, so the answer looks the same wherever you
+    // meet it.
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="text-center space-y-2">
-          <Mail className="mx-auto h-8 w-8 text-muted-foreground" />
-          <p className="text-sm font-medium">Email not configured</p>
-          <p className="text-xs text-muted-foreground max-w-xs">
-            Install the email-tools or help-scout plugin and add a mailbox with this company in
-            its Allowed Companies list.
-          </p>
-        </div>
+        <WorkspaceUnavailable
+          title="Email"
+          icon={Mail}
+          reason="No mailbox in this company has been set up yet."
+          whatToDo="Install the email-tools or help-scout plugin and add a mailbox with this company in its Allowed Companies list."
+        />
       </div>
     );
   }
@@ -1390,6 +1615,130 @@ export function Email() {
     const m = mb.name?.match(/^(.+?)\s+-\s+\S+@\S+$/);
     return m ? m[1] : mb.name || mb.key;
   };
+
+  // Which of the three parts of the page are on screen at once. See
+  // email-pane-layout.ts: a desktop shows all three side by side, a phone
+  // shows one at a time.
+  const panes = emailPaneLayout({ isMobile, messageOpen: selectedUid !== null });
+
+  // ── Shared: the mailbox and folder tree ───────────────────────────────────
+
+  // Written once. The desktop column holds it beside the list; the phone
+  // drawer holds the very same thing over the list. Two copies would be two
+  // places for a mailbox to go missing.
+  const mailboxTree = (
+    <ScrollArea className="flex-1">
+      {mailboxesLoading ? (
+        <div className="px-3 py-4 flex items-center gap-2 text-muted-foreground text-xs">
+          <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+        </div>
+      ) : (
+        <div className="space-y-0.5 px-2 pb-2">
+          {mailboxes.map((mb) => (
+            <button
+              key={mb.key}
+              type="button"
+              onClick={() => {
+                setSelectedHelpScoutRef(null);
+                setSelectedMailbox(mb.key);
+                setSelectedFolder(mb.pollFolder || "INBOX");
+                setSelectedUid(null);
+                setMailboxSheetOpen(false);
+              }}
+              title={mailboxEmail(mb)}
+              className={cn(
+                "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
+                !selectedHelpScoutRef &&
+                  selectedMailbox === mb.key &&
+                  "bg-accent font-medium",
+              )}
+            >
+              <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{mailboxEmail(mb)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {enrichedHelpScoutMailboxes.length > 0 && (
+        <>
+          <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Help Scout
+          </div>
+          <div className="space-y-0.5 px-2 pb-2">
+            {enrichedHelpScoutMailboxes.map((hs) => {
+              const isSelected =
+                !!selectedHelpScoutRef &&
+                selectedHelpScoutRef.accountKey === hs.accountKey &&
+                selectedHelpScoutRef.mailboxId === hs.mailboxId;
+              return (
+                <button
+                  key={`${hs.accountKey}:${hs.mailboxId}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedMailbox(null);
+                    setSelectedUid(null);
+                    setSelectedHelpScoutRef(hs);
+                    setMailboxSheetOpen(false);
+                  }}
+                  title={hs.email || hs.name}
+                  className={cn(
+                    "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
+                    isSelected && "bg-accent font-medium",
+                  )}
+                >
+                  <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{hs.email || hs.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {selectedMailbox && !selectedHelpScoutRef && folders.length > 0 && (
+        <>
+          <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center justify-between">
+            Folders
+            <button
+              type="button"
+              onClick={() => refetchFolders()}
+              disabled={foldersFetching}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+              // A name as well as a tooltip. The tooltip alone is what a
+              // screen reader falls back to, and a fallback is a poor way to
+              // name a button that is only an icon.
+              aria-label="Refresh folder list"
+              title="Refresh folder list"
+            >
+              <RefreshCw className={cn("h-3 w-3", foldersFetching && "animate-spin")} />
+            </button>
+          </div>
+          <div className="space-y-0.5 px-2 pb-2">
+            {folders.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => {
+                  setSelectedFolder(f);
+                  setSelectedUid(null);
+                  setMailboxSheetOpen(false);
+                }}
+                title={f}
+                className={cn(
+                  "w-full text-left px-2 py-1 rounded text-xs flex items-center gap-2 hover:bg-accent",
+                  selectedFolder === f && "bg-accent",
+                )}
+              >
+                <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{f}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </ScrollArea>
+  );
 
   // ── Shared: left pane ─────────────────────────────────────────────────────
 
@@ -1432,108 +1781,34 @@ export function Email() {
           <TooltipContent>Collapse column</TooltipContent>
         </Tooltip>
       </div>
-      <ScrollArea className="flex-1">
-        {mailboxesLoading ? (
-          <div className="px-3 py-4 flex items-center gap-2 text-muted-foreground text-xs">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
-          </div>
-        ) : (
-          <div className="space-y-0.5 px-2 pb-2">
-            {mailboxes.map((mb) => (
-              <button
-                key={mb.key}
-                type="button"
-                onClick={() => {
-                  setSelectedHelpScoutRef(null);
-                  setSelectedMailbox(mb.key);
-                  setSelectedFolder(mb.pollFolder || "INBOX");
-                  setSelectedUid(null);
-                }}
-                className={cn(
-                  "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
-                  !selectedHelpScoutRef &&
-                    selectedMailbox === mb.key &&
-                    "bg-accent font-medium",
-                )}
-              >
-                <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{mailboxEmail(mb)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {enrichedHelpScoutMailboxes.length > 0 && (
-          <>
-            <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Help Scout
-            </div>
-            <div className="space-y-0.5 px-2 pb-2">
-              {enrichedHelpScoutMailboxes.map((hs) => {
-                const isSelected =
-                  !!selectedHelpScoutRef &&
-                  selectedHelpScoutRef.accountKey === hs.accountKey &&
-                  selectedHelpScoutRef.mailboxId === hs.mailboxId;
-                return (
-                  <button
-                    key={`${hs.accountKey}:${hs.mailboxId}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedMailbox(null);
-                      setSelectedUid(null);
-                      setSelectedHelpScoutRef(hs);
-                    }}
-                    className={cn(
-                      "w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 hover:bg-accent",
-                      isSelected && "bg-accent font-medium",
-                    )}
-                  >
-                    <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{hs.email || hs.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {selectedMailbox && !selectedHelpScoutRef && folders.length > 0 && (
-          <>
-            <div className="px-3 pt-3 pb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center justify-between">
-              Folders
-              <button
-                type="button"
-                onClick={() => refetchFolders()}
-                disabled={foldersFetching}
-                className="text-muted-foreground hover:text-foreground disabled:opacity-40"
-                title="Refresh folder list"
-              >
-                <RefreshCw className={cn("h-3 w-3", foldersFetching && "animate-spin")} />
-              </button>
-            </div>
-            <div className="space-y-0.5 px-2 pb-2">
-              {folders.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => {
-                    setSelectedFolder(f);
-                    setSelectedUid(null);
-                  }}
-                  className={cn(
-                    "w-full text-left px-2 py-1 rounded text-xs flex items-center gap-2 hover:bg-accent",
-                    selectedFolder === f && "bg-accent",
-                  )}
-                >
-                  <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{f}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </ScrollArea>
+      {mailboxTree}
     </div>
+  );
+
+  // ── Shared: the phone mailbox drawer ──────────────────────────────────────
+
+  // The same tree the desktop column holds, over the list instead of beside
+  // it. Written once and used in both places so a mailbox, a Help Scout
+  // mailbox or a folder can never appear in one and not the other. Radix does
+  // the rest: it moves focus in, keeps Tab inside, closes on Escape and puts
+  // focus back on the button that opened it.
+  const mailboxDrawer = (
+    <Sheet open={mailboxSheetOpen} onOpenChange={setMailboxSheetOpen}>
+      <SheetContent
+        side="left"
+        aria-describedby={undefined}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          mailboxSheetOpenerRef.current?.focus();
+        }}
+        className="flex w-[85vw] max-w-sm flex-col gap-0 bg-sidebar p-0 pt-[env(safe-area-inset-top)] sm:max-w-sm"
+      >
+        <SheetTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
+          Mailboxes and folders
+        </SheetTitle>
+        {mailboxTree}
+      </SheetContent>
+    </Sheet>
   );
 
   // ── Shared: message list header ───────────────────────────────────────────
@@ -1575,7 +1850,22 @@ export function Email() {
   );
 
   const listHeader = (
-    <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+    <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-border shrink-0">
+      {/* When the tree is in a drawer rather than beside the list, this is the
+          way to it. It sits next to the name of the mailbox you are in, which
+          is the thing it changes. */}
+      {panes.mailboxDrawer && (
+        <Button
+          ref={mailboxSheetOpenerRef}
+          variant="ghost"
+          size="icon-sm"
+          className="-ml-1 shrink-0"
+          onClick={() => setMailboxSheetOpen(true)}
+          aria-label="Show mailboxes and folders"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </Button>
+      )}
       <span className="text-sm font-medium truncate">
         {searchActive
           ? "Search results"
@@ -1583,7 +1873,10 @@ export function Email() {
             ? mailboxLabel(selectedMailboxInfo)
             : selectedMailbox || "Select a mailbox"}
       </span>
-      <div className="flex items-center gap-1">
+      {/* The buttons keep their size and the mailbox name gives way, rather
+          than the other way round: a name cut short still reads, a button cut
+          short cannot be pressed. */}
+      <div className="flex shrink-0 items-center gap-1">
         {selectedUid && (
           <Button
             variant="ghost"
@@ -1594,18 +1887,26 @@ export function Email() {
             <X className="h-3.5 w-3.5" />
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => toggleShowAllMessages(!showAllMessages)}
-          title={showAllMessages ? "Showing all — click for unread only" : "Showing unread only — click for all"}
-        >
-          {showAllMessages ? (
-            <Eye className="h-3.5 w-3.5" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5" />
-          )}
-        </Button>
+        {/* Turns the checkboxes on. Hidden where ticking cannot work: search
+            results come from other folders, and the handover list is not the
+            mailbox. */}
+        {selectedMailbox && selectingPossible && (
+          <Button
+            variant={bulk.selectMode ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 px-2 text-xs"
+            aria-pressed={bulk.selectMode}
+            onClick={() => (bulk.selectMode ? bulk.stopSelecting() : bulk.startSelecting())}
+            title={
+              bulk.selectMode
+                ? "Stop selecting messages"
+                : "Select several messages and act on them together"
+            }
+          >
+            <ListChecks className="mr-1 h-3.5 w-3.5" />
+            Select
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -1631,6 +1932,66 @@ export function Email() {
       </div>
     </div>
   );
+
+  /**
+   * The three views of the list.
+   *
+   * These replace the eye-shaped button that flipped between all mail and
+   * unread only: the same two views, now named, plus the one that was
+   * missing. "With agents" carries a count because the whole point of it is
+   * knowing whether anything is out there at all without opening it.
+   */
+  const listViewTabs = (
+    <div className="px-2 py-1.5 border-b border-border shrink-0 overflow-hidden">
+      <Tabs value={listView} onValueChange={(v) => chooseListView(v as EmailListView)}>
+        {/* Each tab keeps its own text on one line, which makes it as wide as
+            its longest word by default and lets the three of them paint out
+            over the mailbox column beside them when the column is narrow.
+            `min-w-0` lets a tab give way instead, and the label then cuts
+            short with three dots inside its own tab. */}
+        <TabsList className="w-full min-w-0">
+          {EMAIL_LIST_VIEWS.map((view) => (
+            <TabsTrigger key={view} value={view} className="min-w-0 text-xs">
+              <span className="truncate">{EMAIL_LIST_VIEW_LABEL[view]}</span>
+              {view === "agents" && agentHolds.length > 0 && (
+                <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
+                  {agentHolds.length}
+                </span>
+              )}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+    </div>
+  );
+
+  // The messages behind the count on the bar, in the order they are on
+  // screen, so what runs is exactly what the person can see ticked.
+  const selectedMessages = orderedVisibleMessages.filter((m) => bulk.isSelected(m.uid));
+
+  const selectionBar =
+    selectingPossible && (bulk.selectMode || bulk.running) ? (
+      <EmailSelectionBar
+        count={bulk.selectedCount}
+        selectAllState={bulk.selectAllState(orderedVisibleIds)}
+        onSelectVisible={() => bulk.selectVisible(orderedVisibleIds)}
+        onMarkRead={() => void bulk.run("read", selectedMessages)}
+        onMove={(targetFolder) => void bulk.run("move", selectedMessages, targetFolder)}
+        folders={folders.filter((f) => f !== selectedFolder)}
+        onDone={() => bulk.stopSelecting()}
+        onCancel={bulk.cancel}
+        progress={bulk.progress}
+        outcome={bulk.outcome}
+      />
+    ) : null;
+
+  const takeOverNoticeBar = takeOverNotice ? (
+    <EmailTakeOverNotice
+      result={takeOverNotice.result}
+      agentName={takeOverNotice.agentName}
+      onDismiss={() => setTakeOverNotice(null)}
+    />
+  ) : null;
 
   // ── Shared: inline row actions ────────────────────────────────────────────
 
@@ -1832,16 +2193,39 @@ export function Email() {
   // ── Message list body (shared between both modes) ─────────────────────────
 
   function renderRow(msg: MailHeader, compact: boolean) {
+    const hold = holdForMessage(msg);
+    const showCheckbox = selectingPossible && (bulk.selectMode || bulk.running);
+    const ticked = bulk.isSelected(msg.uid);
     return (
       <div
         key={msg.uid}
         className={cn(
           "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
-          selectedUid === msg.uid && "bg-accent",
+          ticked ? "bg-accent/60" : selectedUid === msg.uid && "bg-accent",
           compact ? "py-2.5" : "py-3",
         )}
         onClick={() => setSelectedUid(msg.uid)}
       >
+        {/* The whole square is the click target, not just the box itself:
+            disabling the box alone still leaves its padding live, so a click
+            beside it would tick a row in the middle of a run. */}
+        {showCheckbox && (
+          <span
+            className="flex h-6 w-5 shrink-0 items-center justify-center"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (bulk.running) return;
+              bulk.toggle(msg.uid, orderedVisibleIds, event.shiftKey);
+            }}
+          >
+            <Checkbox
+              checked={ticked}
+              disabled={bulk.running}
+              aria-label={`Select message from ${msg.from}`}
+              onCheckedChange={() => {}}
+            />
+          </span>
+        )}
         <span
           className={cn(
             "shrink-0 h-1.5 w-1.5 rounded-full",
@@ -1858,6 +2242,16 @@ export function Email() {
             </span>
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
+          {/* A message an agent has is not free to act on, so the row says so
+              before anyone opens it. */}
+          {hold && (
+            <div className="flex items-center gap-1 mt-0.5 text-[10px] text-muted-foreground truncate">
+              <Bot className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                With {holderName(hold)} · {holdStageLabel(hold.status)}
+              </span>
+            </div>
+          )}
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <RowActions msg={msg} />
@@ -1915,14 +2309,14 @@ export function Email() {
   function SearchListBody({ compact }: { compact: boolean }) {
     if (searchFetching && searchResults.length === 0) {
       return (
-        <div className="flex-1 flex items-center justify-center">
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       );
     }
     if (searchError) {
       return (
-        <div className="flex-1 flex items-center justify-center px-4">
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center px-4")}>
           <div className="text-center space-y-1">
             <AlertCircle className="h-5 w-5 text-destructive mx-auto" />
             <p className="text-xs text-muted-foreground">{(searchError as Error).message}</p>
@@ -1932,7 +2326,7 @@ export function Email() {
     }
     if (searchResults.length === 0) {
       return (
-        <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground px-4 text-center">
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center text-xs text-muted-foreground px-4 text-center")}>
           No messages match “{searchQuery}”.
         </div>
       );
@@ -1948,9 +2342,23 @@ export function Email() {
 
   function MessageListBody({ compact }: { compact: boolean }) {
     if (searchActive) return <SearchListBody compact={compact} />;
+    // Built from the handover records rather than from the mailbox: a message
+    // that has been handed over is usually already read and usually not in
+    // the newest fifty, so re-reading the mailbox would miss most of them.
+    if (listView === "agents") {
+      return (
+        <EmailAgentHoldList
+          companyId={selectedCompanyId ?? ""}
+          holds={agentHolds}
+          loading={agentHoldsLoading}
+          error={(agentHoldsError as Error | null) ?? null}
+          onTakenOver={onTookOverMessage}
+        />
+      );
+    }
     if (messagesError) {
       return (
-        <div className="flex-1 flex items-center justify-center px-4">
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center px-4")}>
           <div className="text-center space-y-1">
             <AlertCircle className="h-5 w-5 text-destructive mx-auto" />
             <p className="text-xs text-muted-foreground">{(messagesError as Error).message}</p>
@@ -1960,15 +2368,15 @@ export function Email() {
     }
     if (messagesLoading) {
       return (
-        <div className="flex-1 flex items-center justify-center">
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       );
     }
     if (messages.length === 0) {
       return (
-        <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground px-4 text-center">
-          {showAllMessages ? "No messages in this folder." : "No unread messages. Toggle the eye to see all."}
+        <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center text-xs text-muted-foreground px-4 text-center")}>
+          {emptyListMessage(listView)}
         </div>
       );
     }
@@ -1983,22 +2391,10 @@ export function Email() {
       );
     }
 
-    // Group by canonical sender email address. Within each group sort by
-    // date desc (newest first), and sort groups by their newest message.
-    const groupsMap = new Map<string, MailHeader[]>();
-    for (const msg of messages) {
-      const sender = extractSender(msg);
-      const existing = groupsMap.get(sender);
-      if (existing) existing.push(msg);
-      else groupsMap.set(sender, [msg]);
-    }
-    const groups = Array.from(groupsMap.entries())
-      .map(([sender, msgs]) => ({
-        sender,
-        msgs: msgs.slice().sort((a, b) => (b.date < a.date ? -1 : 1)),
-        latestDate: msgs.reduce((max, m) => (m.date > max ? m.date : max), msgs[0]!.date),
-      }))
-      .sort((a, b) => (b.latestDate < a.latestDate ? -1 : 1));
+    // Grouped by canonical sender address, each group newest first and the
+    // groups themselves newest first. Worked out above rather than here,
+    // because ticking messages needs the same order (see senderGroups).
+    const groups = senderGroups;
 
     return (
       <ScrollArea className="flex-1">
@@ -2190,35 +2586,63 @@ export function Email() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {leftPane}
+    // On a desktop this is a fixed-height row of columns that each scroll on
+    // their own. On a phone it is a single column and the page itself is what
+    // scrolls, which is how every other page in the app behaves at that width.
+    <div className={cn("flex", isMobile ? "w-full flex-col" : "h-full overflow-hidden")}>
+      {/* Beside the list on a desktop, over it on a phone. */}
+      {panes.mailboxColumn && leftPane}
+      {panes.mailboxDrawer && mailboxDrawer}
 
-      {leftPaneDragHandle}
+      {/* No drag handle on a phone: it resizes a column that is not there, and
+          dragging a 4 pixel wide strip is not something a finger can do. */}
+      {panes.columnDragHandle && leftPaneDragHandle}
 
-      {selectedUid ? (
+      {panes.openMessage ? (
         // ── 3-pane view: narrow list + detail ──────────────────────────────
         <>
-          {/* Center: narrow list */}
+          {/* Center: narrow list. A phone has room for one of these at a time,
+              so the open message takes the whole width and the list comes back
+              when you close it. */}
+          {panes.messageList && (
           <div className="w-72 shrink-0 border-r border-border flex flex-col group">
             {listHeader}
+            {listViewTabs}
+            {takeOverNoticeBar}
             {searchBar}
+            {selectionBar}
             <MessageListBody compact />
           </div>
+          )}
 
           {/* Right: message detail */}
           <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
             {messageLoading ? (
-              <div className="flex-1 flex items-center justify-center">
+              <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             ) : !fullMessage ? (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+              <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center text-muted-foreground text-sm")}>
                 Message not found.
               </div>
             ) : (
               <>
                 {/* Action bar */}
                 <div className="shrink-0 flex items-center gap-1 px-4 py-2 border-b border-border flex-wrap">
+                  {/* When the list is not beside this, the way back to it is
+                      here. The cross in the list header does the same job at
+                      every width where the list is still on screen. */}
+                  {panes.backToListButton && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mr-1 h-7 px-2 text-xs"
+                      onClick={() => setSelectedUid(null)}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Back
+                    </Button>
+                  )}
                   {selectedMsg?.unseen ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -2499,8 +2923,27 @@ export function Email() {
                   </div>
                 </div>
 
-                {/* Message body */}
-                <div className="flex-1 overflow-hidden flex flex-col">
+                {/* An agent has this one. Said here, above the message,
+                    because this is where someone decides whether to reply
+                    themselves. Read from the open message rather than from its
+                    row, since a message opened by link may not be in the list
+                    at all. */}
+                {selectedCompanyId && holdForMessage(fullMessage) && (
+                  <div className="shrink-0 px-4 py-3 border-b border-border">
+                    <EmailAgentHoldPanel
+                      companyId={selectedCompanyId}
+                      hold={holdForMessage(fullMessage)!}
+                      onTakenOver={onTookOverMessage}
+                    />
+                  </div>
+                )}
+
+                {/* Message body. On a desktop it takes whatever height is left
+                    in the pane. On a phone nothing above it has a settled
+                    height, so it is given a reading height of its own and the
+                    page scrolls past it; without that it would be drawn zero
+                    pixels tall and the message would simply not appear. */}
+                <div className={cn("overflow-hidden flex flex-col", !isMobile && "flex-1")}>
                   {fullMessage.html ? (
                     <iframe
                       key={fullMessage.uid}
@@ -2510,11 +2953,19 @@ export function Email() {
                       // color-scheme so the app's dark theme doesn't leak in and flip
                       // unstyled text to near-white (invisible on the white bg).
                       style={{ colorScheme: "light" }}
-                      className="flex-1 w-full border-0 bg-white"
+                      className={cn(
+                        "w-full border-0 bg-white",
+                        isMobile ? PHONE_MESSAGE_BODY_HEIGHT_CLASS : "flex-1",
+                      )}
                       title="Email body"
                     />
                   ) : (
-                    <ScrollArea className="flex-1 px-4 py-3">
+                    <ScrollArea
+                      className={cn(
+                        "px-4 py-3",
+                        isMobile ? PHONE_MESSAGE_BODY_HEIGHT_CLASS : "flex-1",
+                      )}
+                    >
                       <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
                         {fullMessage.text || (
                           <span className="text-muted-foreground italic">(no body)</span>
@@ -2671,7 +3122,10 @@ export function Email() {
         // ── 2-pane view: expanded list with per-row actions ─────────────────
         <div className="flex-1 min-w-0 flex flex-col">
           {listHeader}
+          {listViewTabs}
+          {takeOverNoticeBar}
           {searchBar}
+          {selectionBar}
           <MessageListBody compact={false} />
         </div>
       )}

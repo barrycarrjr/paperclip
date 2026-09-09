@@ -328,6 +328,43 @@ describeEmbeddedPostgres("issue email delegation service", () => {
     ).toHaveLength(0);
   });
 
+  it("lists what agents are holding, with the work and the agent beside it", async () => {
+    await seed();
+    const agentId = randomUUID();
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Ada",
+      role: "worker",
+    });
+    const { delegation } = await delegate({ delegatedToAgentId: agentId });
+
+    const held = await service.listOpenForCompany({ companyId });
+    expect(held).toHaveLength(1);
+    expect(held[0]!.id).toBe(delegation.id);
+    expect(held[0]!.agent).toEqual({ id: agentId, name: "Ada" });
+    expect(held[0]!.issue).toMatchObject({
+      id: issueId,
+      title: "Customer asked about an invoice",
+      status: "todo",
+    });
+
+    // Once it is over, the email is the person's again and must drop out.
+    await service.transition({
+      companyId,
+      delegationId: delegation.id,
+      to: "handed_back",
+      handedBackReason: "Taken back",
+    });
+    expect(await service.listOpenForCompany({ companyId })).toHaveLength(0);
+  });
+
+  it("does not show one company what another company's agents are holding", async () => {
+    await seed();
+    await delegate();
+    expect(await service.listOpenForCompany({ companyId: otherCompanyId })).toHaveLength(0);
+  });
+
   it("finds email issues that never got a delegation row", async () => {
     await seed();
     const gaps = await service.listIssuesMissingDelegation({

@@ -786,9 +786,11 @@ export {
   resolveEmailDelegationSchema,
   handBackEmailDelegationSchema,
   acknowledgeEmailDelegationSchema,
+  takeOverEmailDelegationSchema,
   type ResolveEmailDelegation,
   type HandBackEmailDelegation,
   type AcknowledgeEmailDelegation,
+  type TakeOverEmailDelegation,
   type CreateIssue,
   type CreateChildIssue,
   type CreateIssueLabel,
@@ -1074,6 +1076,12 @@ export {
   isStartWorkOriginKind,
   startWorkInteractionIdempotencyKey,
 } from "./start-work.js";
+export {
+  directivePreviewSummaryLines,
+  type DirectivePreview,
+  type DirectivePreviewRecipient,
+  type DirectivePreviewSkip,
+} from "./portfolio-directive-preview.js";
 export {
   startWorkPlanRequestSchema,
   startWorkPlannerTaskSchema,

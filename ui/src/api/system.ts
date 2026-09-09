@@ -12,6 +12,7 @@ export type SystemUpdateCheckErrorReason =
   | "no_install_marker"
   | "missing_remote"
   | "unsupported_remote"
+  | "branch_not_on_remote"
   | "github_unreachable"
   | "github_error";
 
@@ -21,6 +22,22 @@ export type SystemUpdateCheckErrorReason =
  */
 export type SystemUpdateCheckReason = "remote_ahead" | "build_behind";
 
+/**
+ * Which way round this copy and GitHub are.
+ *
+ * Only `behind` has anything to pull. `ahead` means this copy is newer than
+ * what is published, `diverged` means both sides have changed, and
+ * `no_remote_branch` means GitHub has never seen this branch. `unknown` means
+ * the answer could not be worked out, and is never dressed up as anything else.
+ */
+export type SystemRemoteRelation =
+  | "level"
+  | "behind"
+  | "ahead"
+  | "diverged"
+  | "no_remote_branch"
+  | "unknown";
+
 export interface SystemUpdateCheck {
   available: boolean;
   /** What the checkout is on. */
@@ -29,7 +46,15 @@ export interface SystemUpdateCheck {
   remoteCommit: string | null;
   /** What was last built and installed. */
   installedCommit: string | null;
+  /**
+   * Whether this copy runs the working tree's own source rather than a build
+   * of it. When it is true there is no build in the path, so no rebuild is
+   * ever offered and the account card says so.
+   */
+  runningFromSource: boolean;
   reason: SystemUpdateCheckReason | null;
+  /** Which way round this copy and GitHub are, or null when nothing was compared. */
+  remoteRelation: SystemRemoteRelation | null;
   branch: string | null;
   lastChecked: string;
   error?: SystemUpdateCheckErrorReason;

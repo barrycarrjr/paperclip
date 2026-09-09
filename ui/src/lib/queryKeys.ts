@@ -59,6 +59,9 @@ export const queryKeys = {
     activeRun: (issueId: string) => ["issues", "active-run", issueId] as const,
     workProducts: (issueId: string) => ["issues", "work-products", issueId] as const,
     emailHandoffs: (issueId: string) => ["issues", "email-handoffs", issueId] as const,
+    /** Every message an agent is holding in a company, for the mail list. */
+    emailHandoffsForCompany: (companyId: string) =>
+      ["issues", "email-handoffs", "company", companyId] as const,
   },
   routines: {
     list: (companyId: string) => ["routines", companyId] as const,

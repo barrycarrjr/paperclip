@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Paperclip, Plus } from "lucide-react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -32,86 +32,324 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { isLiveRunStatus } from "../lib/liveIssueIds";
-import { SidebarMenu } from "./SidebarMenu";
+// SidebarMenu is no longer drawn inside the rail's flyout (see
+// CompanyPeekContent below). Its peek mode is left in place so the whole menu
+// can be put back here in one edit if the short list turns out to be too
+// short.
+import { SidebarNavItem } from "./SidebarNavItem";
+import { SidebarSection } from "./SidebarSection";
+import { SidebarPeekProvider } from "../context/SidebarPeekContext";
+import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
+import { usePhoneToolsPlugin } from "../hooks/usePhoneToolsPlugin";
+import { useRememberedCompanyPage } from "../hooks/useRememberedCompanyPage";
+import { usePluginSlots } from "../plugins/slots";
+import { resolveCompanyShortcuts } from "../lib/company-shortcuts";
+import {
+  companyPathForPortfolioPage,
+  resolveScopeChoiceDescription,
+} from "../lib/scope-kind";
 
 /**
- * Body shown inside a CompanyRail hover-peek flyout: company name header
- * (replaces what the simple name-tooltip used to show) plus the full
- * SidebarMenu in peek mode. Lives in `HoverCardContent`.
+ * Body of the panel that opens beside a company logo on the rail.
+ *
+ * It shows the company's full name, one line saying what that company is, the
+ * page you last had open in it, and a short list of shortcut buttons. That is
+ * the shape the mockup asks for (docs/plans/2026-09-07-mockup-vs-app.md,
+ * difference 12); it used to be the company's whole menu, which was richer
+ * than the mockup and slower to read.
+ *
+ * The one line note is the same sentence the company picker in the top bar
+ * uses for the same company, so the two cannot end up describing a company
+ * differently.
+ *
+ * "Where you left off" stays. Switching company now keeps you on the page you
+ * are reading, so this row is the only explicit way back to the page a company
+ * had open last time you were in it, and the scope document allows it on
+ * exactly those terms.
+ *
+ * Every row is a SidebarNavItem inside a SidebarPeekProvider, which is what
+ * makes a click here switch to this company with the "shortcut" source. That
+ * source is what stops the remembered page overriding where you asked to go.
  */
 function CompanyPeekContent({
   company,
+  portfolioCompanyCount,
   onItemClick,
 }: {
   company: Company;
+  portfolioCompanyCount: number;
   onItemClick: () => void;
 }) {
+  const location = useLocation();
+  const isPortfolioRoot = company.isPortfolioRoot === true;
+  const { hasMailboxForCompany } = useEmailToolsPlugin(company.id);
+  const { hasAccountForCompany } = usePhoneToolsPlugin(company.id);
+  const { slots: pluginPageSlots } = usePluginSlots({
+    slotTypes: ["page"],
+    companyId: company.id,
+  });
+  const shortcuts = useMemo(
+    () =>
+      resolveCompanyShortcuts({
+        isPortfolioRoot,
+        hasMailbox: hasMailboxForCompany,
+        phone: {
+          installedRoutePaths: pluginPageSlots
+            .map((slot) => slot.routePath)
+            .filter((routePath): routePath is string => !!routePath),
+          coversCompany: hasAccountForCompany,
+        },
+      }),
+    [isPortfolioRoot, hasMailboxForCompany, hasAccountForCompany, pluginPageSlots],
+  );
+  const rememberedPage = useRememberedCompanyPage(company, location.pathname);
+  const note = resolveScopeChoiceDescription({
+    scopeKind: isPortfolioRoot ? "hq" : company.kind === "personal" ? "personal" : "company",
+    companyName: company.name,
+    portfolioCompanyCount,
+  });
+
   return (
-    <>
-      <div className="flex items-center gap-2 px-3 h-12 border-b border-border shrink-0">
-        {company.brandColor ? (
-          <span
-            className="size-4 shrink-0 rounded-sm"
-            style={{ backgroundColor: company.brandColor }}
-          />
-        ) : null}
-        <span className="truncate text-sm font-bold text-foreground">
-          {company.name}
-        </span>
-        {company.isPortfolioRoot && (
-          <span className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80">
-            Root
+    <SidebarPeekProvider peekCompanyId={company.id} onItemClick={onItemClick}>
+      <div className="border-b border-border px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          {company.brandColor ? (
+            <span
+              className="size-3.5 shrink-0 rounded-sm"
+              style={{ backgroundColor: company.brandColor }}
+            />
+          ) : null}
+          <span className="truncate text-sm font-semibold text-foreground">
+            {company.name}
           </span>
-        )}
-        {company.kind === "personal" && (
-          // Worth saying out loud. Personal looks like every other company in
-          // this list, and the one thing that matters about it — that nobody
-          // else can see it — is invisible otherwise.
-          <span
-            className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80"
-            title="Private to you. Nobody else on this instance can see it, including administrators."
-          >
-            Private
-          </span>
-        )}
+          {isPortfolioRoot && (
+            <span className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80">
+              Root
+            </span>
+          )}
+          {company.kind === "personal" && (
+            // Worth saying out loud. Personal looks like every other company in
+            // this list, and the one thing that matters about it, that nobody
+            // else can see it, is invisible otherwise.
+            <span
+              className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80"
+              title="Private to you. Nobody else on this instance can see it, including administrators."
+            >
+              Private
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">{note}</p>
       </div>
-      <nav className="max-h-[70vh] overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-3">
-        <SidebarMenu
-          company={company}
-          peekMode
-          onPeekItemClick={onItemClick}
-        />
+      {rememberedPage && (
+        <div className="border-b border-border py-2">
+          <SidebarSection
+            label="Where you left off"
+            info="The last page you had open in this company. Clicking the company logo itself keeps you on the page you are reading instead."
+          >
+            <SidebarNavItem
+              to={rememberedPage.to}
+              label={rememberedPage.pageLabel ?? "The page you had open"}
+              icon={rememberedPage.icon}
+            />
+          </SidebarSection>
+        </div>
+      )}
+      <nav
+        className="flex flex-col gap-0.5 py-2"
+        aria-label={`Shortcuts for ${company.name}`}
+      >
+        {shortcuts.map((shortcut) => (
+          <SidebarNavItem
+            key={shortcut.id}
+            to={shortcut.to}
+            label={shortcut.label}
+            icon={shortcut.icon}
+          />
+        ))}
       </nav>
-    </>
+    </SidebarPeekProvider>
   );
 }
 
+/** How a panel came to be open, which decides whether it takes focus. */
+type PeekOpenedBy = "pointer" | "keyboard" | "touch";
+
+/** How long the pointer rests on a logo before the panel opens. */
+const PEEK_OPEN_DELAY_MS = 500;
+/** Grace period so the pointer can travel from the logo across to the panel. */
+const PEEK_CLOSE_DELAY_MS = 200;
+/** How long a finger stays down before the panel opens. */
+const PEEK_LONG_PRESS_MS = 500;
+
 /**
- * Hook for the per-avatar hover-peek state and gating rules. Peek only fires
- * when the wide sidebar is collapsed — otherwise the same menu is already
- * visible and the flyout would be redundant. Also suppressed on mobile (no
- * hover) and while a drag is in flight. The name tooltip is hidden while the
- * peek is open so the two popovers don't overlap.
+ * The state and the event handlers for one company logo's shortcut panel.
+ *
+ * The panel is only offered when the wide menu is not already on screen beside
+ * the rail, because then the same destinations are two clicks away in plain
+ * sight, and never while a logo is being dragged. On a phone the wide menu
+ * lives in the same slide-out drawer as the rail, so the same rule leaves the
+ * panel out there.
+ *
+ * Three ways in, and they are deliberately different, because a panel of
+ * buttons is not a tooltip:
+ *
+ * - Pointer: rest on the logo. The panel does NOT take focus, so it cannot
+ *   interrupt someone typing somewhere else on the page.
+ * - Keyboard: focus the logo and press the right arrow key, which reads as
+ *   "go into the thing to my right". The panel takes focus, so the next Tab
+ *   lands on the first shortcut, Escape closes it, and focus comes back to the
+ *   logo it opened from. The logo's own tooltip says the key out loud so it
+ *   does not have to be guessed.
+ * - Touch: press and hold the logo. There is no hover on a touch screen, and
+ *   an ordinary tap has to keep meaning "open this company". The tap that ends
+ *   a long press is swallowed so holding a logo does not also switch company.
+ *
+ * This used to be a hover card. A hover card sets tabindex="-1" on everything
+ * inside it, by design, because it is meant for a preview rather than for
+ * controls; that made every shortcut unreachable by keyboard. A popover is the
+ * primitive for content you can actually click.
  */
 function useCompanyPeek(isDragging: boolean) {
   const { isMobile, sidebarOpen } = useSidebar();
-  const [peekOpen, setPeekOpen] = useState(false);
+  const [openedBy, setOpenedBy] = useState<PeekOpenedBy | null>(null);
+  const anchorRef = useRef<HTMLAnchorElement | null>(null);
+  const openTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  // Read while the panel is closing, when openedBy has already gone back to
+  // null, to decide whether focus should return to the logo.
+  const lastOpenedBy = useRef<PeekOpenedBy | null>(null);
+  const swallowNextClick = useRef(false);
+
   const peekEnabled = !isMobile && !isDragging && !sidebarOpen;
-  const effectivePeekOpen = peekEnabled && peekOpen;
+  const peekOpen = peekEnabled && openedBy !== null;
+
+  const clearTimers = useCallback(() => {
+    for (const timer of [openTimer, closeTimer, longPressTimer]) {
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current);
+        timer.current = null;
+      }
+    }
+  }, []);
+
+  const openPeek = useCallback(
+    (by: PeekOpenedBy) => {
+      clearTimers();
+      lastOpenedBy.current = by;
+      setOpenedBy(by);
+    },
+    [clearTimers],
+  );
+
+  const closePeek = useCallback(() => {
+    clearTimers();
+    setOpenedBy(null);
+  }, [clearTimers]);
+
+  const closeAfterDelay = useCallback(() => {
+    clearTimers();
+    closeTimer.current = window.setTimeout(() => setOpenedBy(null), PEEK_CLOSE_DELAY_MS);
+  }, [clearTimers]);
+
+  useEffect(() => clearTimers, [clearTimers]);
+  // Starting a drag, or opening the wide menu, takes the panel with it.
+  useEffect(() => {
+    if (!peekEnabled) {
+      clearTimers();
+      setOpenedBy(null);
+    }
+  }, [peekEnabled, clearTimers]);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  /** True when this click only happened because a long press ended. */
+  const consumeSwallowedClick = useCallback(() => {
+    if (!swallowNextClick.current) return false;
+    swallowNextClick.current = false;
+    return true;
+  }, []);
+
+  const anchorProps = {
+    "aria-haspopup": peekEnabled ? ("menu" as const) : undefined,
+    "aria-expanded": peekEnabled ? peekOpen : undefined,
+    onPointerEnter: (event: React.PointerEvent) => {
+      // A touch screen reports a pointer too, and it means a tap, not a hover.
+      if (!peekEnabled || event.pointerType === "touch") return;
+      // A hold whose finger lifted somewhere else can leave this set. Any
+      // fresh approach to the logo means the next click is a real one.
+      swallowNextClick.current = false;
+      clearTimers();
+      openTimer.current = window.setTimeout(() => openPeek("pointer"), PEEK_OPEN_DELAY_MS);
+    },
+    onPointerLeave: (event: React.PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      closeAfterDelay();
+    },
+    onKeyDown: (event: React.KeyboardEvent) => {
+      if (!peekEnabled || event.key !== "ArrowRight") return;
+      event.preventDefault();
+      openPeek("keyboard");
+    },
+    onTouchStart: () => {
+      if (!peekEnabled) return;
+      swallowNextClick.current = false;
+      clearTimers();
+      longPressTimer.current = window.setTimeout(() => {
+        swallowNextClick.current = true;
+        openPeek("touch");
+      }, PEEK_LONG_PRESS_MS);
+    },
+    onTouchEnd: cancelLongPress,
+    onTouchMove: cancelLongPress,
+    onTouchCancel: cancelLongPress,
+  };
+
+  const contentProps = {
+    onOpenAutoFocus: (event: Event) => {
+      // A panel that opened because the pointer happened to rest on a logo
+      // must not take focus away from whatever the person was doing.
+      if (lastOpenedBy.current === "pointer") event.preventDefault();
+    },
+    onCloseAutoFocus: (event: Event) => {
+      event.preventDefault();
+      if (lastOpenedBy.current !== "pointer") anchorRef.current?.focus();
+    },
+    onPointerEnter: (event: React.PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      clearTimers();
+    },
+    onPointerLeave: (event: React.PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      closeAfterDelay();
+    },
+  };
+
   return {
     peekEnabled,
-    peekOpen: effectivePeekOpen,
-    setPeekOpen: (next: boolean) => {
-      if (peekEnabled) setPeekOpen(next);
+    peekOpen,
+    anchorRef,
+    anchorProps,
+    contentProps,
+    consumeSwallowedClick,
+    closePeek,
+    /** Radix asks to close on Escape and on a click outside. Nothing else opens it. */
+    onOpenChange: (next: boolean) => {
+      if (!next) closePeek();
     },
-    closePeek: () => setPeekOpen(false),
   };
 }
 
@@ -120,12 +358,14 @@ function SortableCompanyItem({
   isSelected,
   hasLiveAgents,
   inboxCount,
+  portfolioCompanyCount,
   onSelect,
 }: {
   company: Company;
   isSelected: boolean;
   hasLiveAgents: boolean;
   inboxCount: number;
+  portfolioCompanyCount: number;
   onSelect: () => void;
 }) {
   const {
@@ -150,13 +390,16 @@ function SortableCompanyItem({
 
   const avatar = (
     <a
+      ref={peek.anchorRef}
       href={`/${company.issuePrefix}/dashboard`}
+      {...peek.anchorProps}
       onClick={(e) => {
-        if (isDragging) {
-          e.preventDefault();
-          return;
-        }
         e.preventDefault();
+        if (isDragging) return;
+        // The tap that ends a press and hold opened the panel; it must not
+        // also switch company underneath it.
+        if (peek.consumeSwallowedClick()) return;
+        peek.closePeek();
         onSelect();
       }}
       className="relative flex items-center justify-center group overflow-visible"
@@ -191,7 +434,7 @@ function SortableCompanyItem({
         {inboxCount > 0 && (
           <span
             className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+            aria-label={`${inboxCount} unread item${inboxCount === 1 ? "" : "s"} waiting for you`}
           >
             {inboxCount > 99 ? "99+" : inboxCount}
           </span>
@@ -202,43 +445,125 @@ function SortableCompanyItem({
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="overflow-visible">
-      <HoverCard
-        openDelay={1200}
-        closeDelay={150}
-        open={peek.peekOpen}
-        onOpenChange={peek.setPeekOpen}
-      >
+      <Popover open={peek.peekOpen} onOpenChange={peek.onOpenChange}>
         <Tooltip
           delayDuration={300}
           open={tooltipOpen}
           onOpenChange={setTooltipHoverOpen}
         >
-          <HoverCardTrigger asChild>
+          <PopoverAnchor asChild>
             <TooltipTrigger asChild>{avatar}</TooltipTrigger>
-          </HoverCardTrigger>
+          </PopoverAnchor>
           <TooltipContent side="right" sideOffset={8}>
             <p>{company.name}</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
-                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+                {inboxCount} item{inboxCount === 1 ? "" : "s"} waiting for you
+              </p>
+            )}
+            {peek.peekEnabled && (
+              <p className="text-xs text-muted-foreground">
+                Right arrow key for shortcuts
               </p>
             )}
           </TooltipContent>
         </Tooltip>
         {peek.peekEnabled && (
-          <HoverCardContent
+          <PopoverContent
             side="right"
             align="start"
             sideOffset={8}
-            className="w-60 p-0"
+            className="w-64 p-0"
+            {...peek.contentProps}
           >
-            <CompanyPeekContent company={company} onItemClick={peek.closePeek} />
-          </HoverCardContent>
+            <CompanyPeekContent
+              company={company}
+              portfolioCompanyCount={portfolioCompanyCount}
+              onItemClick={peek.closePeek}
+            />
+          </PopoverContent>
         )}
-      </HoverCard>
+      </Popover>
     </div>
   );
 }
+
+/* -----------------------------------------------------------------------
+ * Portfolio as a second rail button, above HQ — DISABLED 2026-09-08, kept
+ * here as the put-back path rather than deleted.
+ *
+ * This shipped on the premise that HQ is a real company with its own team
+ * and work, separate from "the bird's-eye view of everything else" (see
+ * docs/plans/2026-09-02-ux-control-center-scope.md, decision D05). Barry
+ * corrected that premise the same day this landed: HQ was never meant to be
+ * its own operating company, it IS the bird's-eye view. Checking the live
+ * data backed this up — HQ's two real agents (Builder, Steward) and its 345
+ * real issues are all oversight/housekeeping work ("Steward — daily sweep",
+ * "Confirm backups ran", "Reply to new Google reviews"), not a second
+ * business HQ runs on its own. So a second icon for "the bird's-eye view"
+ * duplicated the job the single HQ icon already does. HQ's own Overview page
+ * still shows that oversight backlog, and the Portfolio aggregate pages are
+ * still one click away from there as pinned workspaces (seeded by
+ * hooks/useHqDefaultPins.ts the first time HQ opens).
+ *
+ * Putting this back needs, in CompanyRail.tsx:
+ * - `Globe2` re-added to the lucide-react import at the top of the file.
+ * - `isPortfolioRoutePath`, `isPortfolioScopeAvailable`, `portfolioPathForPage`
+ *   re-added to the `../lib/scope-kind` import.
+ * - `inPortfolioScope`, `showPortfolio`, and `portfolioDescription` computed
+ *   again in CompanyRail() (they read `location.pathname`/`hqCompany`/
+ *   `reorderableCompanies.length`, same as `hqDescription` still does).
+ * - The block below rendered again above `<PinnedHqItem>`, and
+ *   PinnedHqItem's `isSelected` reverted to
+ *   `hqCompany.id === highlightedCompanyId && !inPortfolioScope`.
+ *
+ * function PortfolioRailItem({
+ *   isSelected,
+ *   description,
+ *   onSelect,
+ * }: {
+ *   isSelected: boolean;
+ *   description: string;
+ *   onSelect: () => void;
+ * }) {
+ *   return (
+ *     <div className="overflow-visible">
+ *       <Tooltip delayDuration={300}>
+ *         <TooltipTrigger asChild>
+ *           <button
+ *             type="button"
+ *             onClick={onSelect}
+ *             aria-label="Portfolio"
+ *             aria-pressed={isSelected}
+ *             className="relative flex items-center justify-center group overflow-visible"
+ *           >
+ *             <div
+ *               className={cn(
+ *                 "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
+ *                 isSelected ? "h-5" : "h-0 group-hover:h-2",
+ *               )}
+ *             />
+ *             <div
+ *               className={cn(
+ *                 "flex h-11 w-11 items-center justify-center rounded-[14px] border transition-colors duration-150",
+ *                 isSelected
+ *                   ? "border-foreground/20 bg-accent text-accent-foreground"
+ *                   : "border-border text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+ *               )}
+ *             >
+ *               <Globe2 className="h-5 w-5" />
+ *             </div>
+ *           </button>
+ *         </TooltipTrigger>
+ *         <TooltipContent side="right" sideOffset={8}>
+ *           <p className="font-medium">Portfolio</p>
+ *           <p className="text-xs text-muted-foreground">{description}</p>
+ *         </TooltipContent>
+ *       </Tooltip>
+ *     </div>
+ *   );
+ * }
+ * ----------------------------------------------------------------------- */
 
 /**
  * HQ pinned at the top — always rendered first, never draggable, always
@@ -250,12 +575,16 @@ function PinnedHqItem({
   isSelected,
   hasLiveAgents,
   inboxCount,
+  portfolioCompanyCount,
+  description,
   onSelect,
 }: {
   company: Company;
   isSelected: boolean;
   hasLiveAgents: boolean;
   inboxCount: number;
+  portfolioCompanyCount: number;
+  description: string;
   onSelect: () => void;
 }) {
   const peek = useCompanyPeek(false);
@@ -264,9 +593,13 @@ function PinnedHqItem({
 
   const avatar = (
     <a
+      ref={peek.anchorRef}
       href={`/${company.issuePrefix}/dashboard`}
+      {...peek.anchorProps}
       onClick={(e) => {
         e.preventDefault();
+        if (peek.consumeSwallowedClick()) return;
+        peek.closePeek();
         onSelect();
       }}
       className="relative flex items-center justify-center group overflow-visible"
@@ -297,7 +630,7 @@ function PinnedHqItem({
         {inboxCount > 0 && (
           <span
             className="pointer-events-none absolute -bottom-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-background tabular-nums"
-            aria-label={`${inboxCount} unread inbox item${inboxCount === 1 ? "" : "s"}`}
+            aria-label={`${inboxCount} unread item${inboxCount === 1 ? "" : "s"} waiting for you`}
           >
             {inboxCount > 99 ? "99+" : inboxCount}
           </span>
@@ -308,41 +641,50 @@ function PinnedHqItem({
 
   return (
     <div className="overflow-visible">
-      <HoverCard
-        openDelay={1200}
-        closeDelay={150}
-        open={peek.peekOpen}
-        onOpenChange={peek.setPeekOpen}
-      >
+      <Popover open={peek.peekOpen} onOpenChange={peek.onOpenChange}>
         <Tooltip
           delayDuration={300}
           open={tooltipOpen}
           onOpenChange={setTooltipHoverOpen}
         >
-          <HoverCardTrigger asChild>
+          <PopoverAnchor asChild>
             <TooltipTrigger asChild>{avatar}</TooltipTrigger>
-          </HoverCardTrigger>
+          </PopoverAnchor>
           <TooltipContent side="right" sideOffset={8}>
             <p className="font-medium">{company.name}</p>
-            <p className="text-xs text-muted-foreground">Portfolio root</p>
+            {/* Was "Portfolio root", which read as "this button is the
+                portfolio". It is the one entry point for both HQ's own
+                oversight work and the portfolio aggregate view, so this says
+                what it actually opens. */}
+            <p className="text-xs text-muted-foreground">{description}</p>
             {inboxCount > 0 && (
               <p className="text-xs text-muted-foreground">
-                {inboxCount} inbox item{inboxCount === 1 ? "" : "s"} waiting
+                {inboxCount} item{inboxCount === 1 ? "" : "s"} waiting for you
+              </p>
+            )}
+            {peek.peekEnabled && (
+              <p className="text-xs text-muted-foreground">
+                Right arrow key for shortcuts
               </p>
             )}
           </TooltipContent>
         </Tooltip>
         {peek.peekEnabled && (
-          <HoverCardContent
+          <PopoverContent
             side="right"
             align="start"
             sideOffset={8}
-            className="w-60 p-0"
+            className="w-64 p-0"
+            {...peek.contentProps}
           >
-            <CompanyPeekContent company={company} onItemClick={peek.closePeek} />
-          </HoverCardContent>
+            <CompanyPeekContent
+              company={company}
+              portfolioCompanyCount={portfolioCompanyCount}
+              onItemClick={peek.closePeek}
+            />
+          </PopoverContent>
         )}
-      </HoverCard>
+      </Popover>
     </div>
   );
 }
@@ -365,6 +707,15 @@ export function CompanyRail() {
   const reorderableCompanies = useMemo(
     () => sidebarCompanies.filter((c) => !c.isPortfolioRoot),
     [sidebarCompanies],
+  );
+  const hqDescription = useMemo(
+    () =>
+      resolveScopeChoiceDescription({
+        scopeKind: "hq",
+        companyName: hqCompany?.name ?? null,
+        portfolioCompanyCount: reorderableCompanies.length,
+      }),
+    [hqCompany?.name, reorderableCompanies.length],
   );
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -448,10 +799,27 @@ export function CompanyRail() {
           <>
             <PinnedHqItem
               company={hqCompany}
+              // HQ is the one entry point for both its own oversight work and
+              // the Portfolio aggregate pages (see the disabled
+              // PortfolioRailItem block above), so it lights up on a
+              // portfolio page too — there is no second button left to
+              // confuse it with.
               isSelected={hqCompany.id === highlightedCompanyId}
               hasLiveAgents={hasLiveAgentsByCompanyId.get(hqCompany.id) ?? false}
               inboxCount={inboxCountByCompanyId.get(hqCompany.id) ?? 0}
+              portfolioCompanyCount={reorderableCompanies.length}
+              description={hqDescription}
               onSelect={() => {
+                // Coming back from a portfolio page is not a company switch,
+                // so nothing would happen without an explicit destination:
+                // HQ is already selected, and its remembered page can be the
+                // portfolio page you are trying to leave.
+                const leavingPortfolio = companyPathForPortfolioPage(location.pathname);
+                if (leavingPortfolio) {
+                  setSelectedCompanyId(hqCompany.id, { source: "shortcut" });
+                  navigate(`/${hqCompany.issuePrefix}${leavingPortfolio}`);
+                  return;
+                }
                 setSelectedCompanyId(hqCompany.id);
                 if (isInstanceRoute) {
                   navigate(`/${hqCompany.issuePrefix}/dashboard`);
@@ -479,6 +847,7 @@ export function CompanyRail() {
                 isSelected={company.id === highlightedCompanyId}
                 hasLiveAgents={hasLiveAgentsByCompanyId.get(company.id) ?? false}
                 inboxCount={inboxCountByCompanyId.get(company.id) ?? 0}
+                portfolioCompanyCount={reorderableCompanies.length}
                 onSelect={() => {
                   setSelectedCompanyId(company.id);
                   if (isInstanceRoute) {

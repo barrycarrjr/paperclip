@@ -427,15 +427,87 @@ const addCommentTool: ChatToolDefinition<{ issueId: string; body: string }> = {
   },
 };
 
-const broadcastDirectiveTool: ChatToolDefinition<{
+/**
+ * The preview step for the path with no screen.
+ *
+ * On the Directives page the operator reads what a broadcast would do before
+ * pressing send. In a chat turn there is no panel to show that on, so the
+ * preview is a tool of its own: it asks the same service the same question,
+ * changes nothing, and puts the plain-words answer into the conversation
+ * where the owner can read it. `broadcast_directive` will not send without
+ * the `previewId` this returns, so the facts are always stated first, and in
+ * the ordinary "ask" permission mode the send still stops for the owner's
+ * yes or no afterwards.
+ */
+const previewDirectiveTool: ChatToolDefinition<{
   intent: string;
   title?: string;
   companyIds?: string[];
   includePortfolioRoot?: boolean;
 }> = {
+  name: "preview_directive",
+  description:
+    "Say what broadcasting a directive WOULD do, without doing any of it. Returns the companies that would receive it, who in each one receives it by name, the companies left out and why, whether the agents' outbound emails, messages, calls and public posts will wait for approval, and plain-words summary lines to read back to the operator. Creates nothing and wakes nobody. Call this first and show the operator summaryLines, willReceive and skipped before you ever call broadcast_directive, which refuses to send without the previewId this returns.",
+  mutating: false,
+  inputSchema: z.object({
+    intent: z.string().min(1).max(4000),
+    title: z.string().max(200).optional(),
+    companyIds: z.array(z.string()).min(1).max(500).optional(),
+    includePortfolioRoot: z.boolean().optional(),
+  }),
+  spec: {
+    name: "preview_directive",
+    description:
+      "Read-only. Say which companies a directive would reach, who receives it in each one, who is left out and why, and whether outbound messages will wait for approval. Creates nothing. Required before broadcast_directive.",
+    input_schema: {
+      type: "object",
+      properties: {
+        intent: {
+          type: "string",
+          description:
+            "The high-level directive, in plain language, exactly as it would be broadcast.",
+        },
+        title: {
+          type: "string",
+          description: "Optional short task title. Derived from intent when omitted.",
+        },
+        companyIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Restrict the fan-out to these company ids. Omit to target every active operating company the board can write to.",
+        },
+        includePortfolioRoot: {
+          type: "boolean",
+          description:
+            "Optional. Include the HQ (portfolio-root) company as a target. Defaults to false.",
+        },
+      },
+      required: ["intent"],
+    },
+  },
+  async handler({ intent, title, companyIds, includePortfolioRoot }, ctx) {
+    const svc = portfolioDirectiveService(ctx.db);
+    return svc.preview({
+      actor: ctx.actor,
+      intent,
+      title,
+      companyIds,
+      includePortfolioRoot,
+    });
+  },
+};
+
+const broadcastDirectiveTool: ChatToolDefinition<{
+  intent: string;
+  title?: string;
+  companyIds?: string[];
+  includePortfolioRoot?: boolean;
+  previewId: string;
+}> = {
   name: "broadcast_directive",
   description:
-    "Fan out ONE high-level, cross-company intent to each company's CEO agent. For every targeted company this creates a task assigned to that company's CEO (who then decomposes it and delegates to the right sub-agent) and wakes them to start. Use this — not repeated create_issue calls — when the board expresses something they want done across all or several companies (e.g. 'get every company's Google reviews replied to', 'chase all overdue invoices'). Mutating — requires permission. Returns which CEOs it reached and which companies were skipped (and why).",
+    "Fan out ONE high-level, cross-company intent to each company's CEO agent. For every targeted company this creates a task assigned to that company's CEO (who then decomposes it and delegates to the right sub-agent) and wakes them to start. Use this, not repeated create_issue calls, when the board expresses something they want done across all or several companies (e.g. 'get every company's Google reviews replied to', 'chase all overdue invoices'). Mutating, so it requires permission. You must call preview_directive first with the SAME intent and companyIds, show the operator what it said, and pass the previewId it returned; this tool refuses to send without one, and refuses again if anything has changed since that preview. Returns which CEOs it reached and which companies were skipped (and why).",
   mutating: true,
   inputSchema: z.object({
     intent: z.string().min(1).max(4000),
@@ -445,11 +517,15 @@ const broadcastDirectiveTool: ChatToolDefinition<{
     // omitted (P4 audit, 2026-09-03 — see portfolio-directive.ts).
     companyIds: z.array(z.string()).min(1).max(500).optional(),
     includePortfolioRoot: z.boolean().optional(),
+    // The gate. A chat turn has no screen, so preview_directive is how the
+    // facts reach the operator, and this is how the send proves they were
+    // produced and still hold.
+    previewId: z.string().min(1).max(200),
   }),
   spec: {
     name: "broadcast_directive",
     description:
-      "Fan out one high-level intent to each company's CEO as an assigned, woken task; each CEO decomposes and delegates. Prefer this over creating issues one-by-one for portfolio-wide intents.",
+      "Fan out one high-level intent to each company's CEO as an assigned, woken task; each CEO decomposes and delegates. Prefer this over creating issues one-by-one for portfolio-wide intents. Requires the previewId from a preview_directive call for the same intent and companies.",
     input_schema: {
       type: "object",
       properties: {
@@ -473,11 +549,16 @@ const broadcastDirectiveTool: ChatToolDefinition<{
           description:
             "Optional. Include the HQ (portfolio-root) company as a target. Defaults to false — HQ is the cockpit, not an operating company.",
         },
+        previewId: {
+          type: "string",
+          description:
+            "Required. The previewId returned by preview_directive for this same intent and set of companies, after you have shown the operator what it said.",
+        },
       },
-      required: ["intent"],
+      required: ["intent", "previewId"],
     },
   },
-  async handler({ intent, title, companyIds, includePortfolioRoot }, ctx) {
+  async handler({ intent, title, companyIds, includePortfolioRoot, previewId }, ctx) {
     const svc = portfolioDirectiveService(ctx.db);
     return svc.broadcast({
       actor: ctx.actor,
@@ -485,6 +566,7 @@ const broadcastDirectiveTool: ChatToolDefinition<{
       title,
       companyIds,
       includePortfolioRoot,
+      previewId,
     });
   },
 };
@@ -970,6 +1052,7 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   listIssuesTool,
   getIssueTool,
   createIssueTool,
+  previewDirectiveTool,
   broadcastDirectiveTool,
   addCommentTool,
   webFetchTool,

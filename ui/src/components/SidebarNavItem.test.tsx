@@ -18,7 +18,22 @@ const companiesState = vi.hoisted(() => ({
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
-  NavLink: () => null,
+  // Rendered as a plain anchor so the normal (non-peek) path can be asserted
+  // too. Peek mode never renders NavLink at all, so the tests below are
+  // unaffected by this.
+  NavLink: ({
+    to,
+    children,
+    className,
+  }: {
+    to: string;
+    children: React.ReactNode;
+    className?: string | ((state: { isActive: boolean }) => string);
+  }) => (
+    <a href={to} className={typeof className === "function" ? className({ isActive: false }) : className}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("../context/SidebarContext", () => ({
@@ -101,6 +116,38 @@ describe("SidebarNavItem peek mode", () => {
     });
 
     expect(mockNavigate).toHaveBeenCalledWith("/clippy");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+});
+
+describe("SidebarNavItem labels", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("shows the label it is given without touching the route", () => {
+    // The 2026-09-07 rename changed words, not addresses: the menu entry that
+    // reads "Work" still points at /issues, so an existing saved link keeps
+    // working and lands on a page that now reads Tasks.
+    const root = createRoot(container);
+    act(() => {
+      root.render(<SidebarNavItem to="/issues" label="Work" icon={MessageSquare} />);
+    });
+
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("/issues");
+    expect(link?.textContent).toContain("Work");
+    expect(link?.textContent).not.toContain("Issues");
 
     act(() => {
       root.unmount();

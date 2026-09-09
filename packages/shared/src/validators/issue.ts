@@ -533,6 +533,20 @@ export const acknowledgeEmailDelegationSchema = z.object({
   expectedVersion: z.number().int().min(0).nullable().optional(),
 });
 
+/**
+ * A person taking a handed-over email back from the agent.
+ *
+ * The mirror image of a hand back: same required reason, for the same
+ * reason (the record has to say why the agent stopped), but started by a
+ * person rather than by the agent. Nothing is sent to the sender, which is
+ * why there is no reply field here at all.
+ */
+export const takeOverEmailDelegationSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
 export type ResolveEmailDelegation = z.infer<typeof resolveEmailDelegationSchema>;
 export type HandBackEmailDelegation = z.infer<typeof handBackEmailDelegationSchema>;
 export type AcknowledgeEmailDelegation = z.infer<typeof acknowledgeEmailDelegationSchema>;
+export type TakeOverEmailDelegation = z.infer<typeof takeOverEmailDelegationSchema>;

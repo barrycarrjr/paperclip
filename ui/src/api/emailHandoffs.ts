@@ -28,6 +28,46 @@ export interface EmailHandoff {
   updatedAt: string;
 }
 
+/**
+ * A handover with the two things the mail list always has to show beside it:
+ * who has the message, and what work it turned into.
+ *
+ * Both can be null. An agent can be deleted after it was handed something,
+ * and the work item can be gone too, so the screen says what it knows rather
+ * than inventing a name.
+ */
+export interface EmailHandoffSummary extends EmailHandoff {
+  issue: {
+    id: string;
+    identifier: string | null;
+    title: string;
+    status: string | null;
+  } | null;
+  agent: { id: string; name: string | null } | null;
+}
+
+/**
+ * What happened when a person took a message back.
+ *
+ * The three parts are reported separately on purpose: the handover always
+ * ends, but stopping the agent and freeing the work item can each fail on
+ * their own, and a person who is told an agent stopped when it did not is
+ * worse off than one who is told the truth.
+ */
+export interface TakeOverHandoffResult {
+  delegation: EmailHandoff;
+  run:
+    | { state: "none" }
+    | { state: "stopped"; runId: string }
+    | { state: "failed"; error: string; runId: string | null };
+  workItem: {
+    state: "updated" | "unchanged" | "failed";
+    unassignedAgent: boolean;
+    statusChangedTo: string | null;
+    error: string | null;
+  };
+}
+
 export interface ResolveHandoffResult {
   delegation: EmailHandoff;
   reply:
@@ -43,6 +83,21 @@ const base = (companyId: string, issueId: string) =>
 export const emailHandoffsApi = {
   listForIssue: (companyId: string, issueId: string) =>
     api.get<EmailHandoff[]>(base(companyId, issueId)),
+
+  /** Every message an agent is holding in this company right now. */
+  listForCompany: (companyId: string) =>
+    api.get<EmailHandoffSummary[]>(`/companies/${companyId}/email-delegations`),
+
+  /**
+   * Take a message back from the agent. Sends nothing to anyone; the reason
+   * is required because the record has to say why the agent stopped.
+   */
+  takeOver: (
+    companyId: string,
+    issueId: string,
+    id: string,
+    data: { reason: string; expectedVersion?: number },
+  ) => api.post<TakeOverHandoffResult>(`${base(companyId, issueId)}/${id}/take-over`, data),
 
   acknowledge: (companyId: string, issueId: string, id: string, expectedVersion?: number) =>
     api.post<EmailHandoff>(`${base(companyId, issueId)}/${id}/acknowledge`, { expectedVersion }),

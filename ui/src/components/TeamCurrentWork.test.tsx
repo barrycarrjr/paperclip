@@ -1,0 +1,202 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TeamCurrentWork } from "./TeamCurrentWork";
+
+vi.mock("@/lib/router", () => ({
+  Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}));
+
+const listAgents = vi.fn();
+const liveRuns = vi.fn();
+const listIssues = vi.fn();
+const pendingInteractions = vi.fn();
+
+vi.mock("../api/agents", () => ({
+  agentsApi: { list: (companyId: string) => listAgents(companyId) },
+}));
+
+vi.mock("../api/heartbeats", () => ({
+  heartbeatsApi: { liveRunsForCompany: (companyId: string) => liveRuns(companyId) },
+}));
+
+vi.mock("../api/issues", () => ({
+  issuesApi: {
+    list: (companyId: string) => listIssues(companyId),
+    listPendingInteractions: (companyId: string) => pendingInteractions(companyId),
+  },
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function agent(overrides: Record<string, unknown>): any {
+  return {
+    companyId: "company-1",
+    role: "worker",
+    title: null,
+    status: "active",
+    reportsTo: null,
+    adapterType: "claude",
+    pauseReason: null,
+    pausedAt: null,
+    lastHeartbeatAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+/**
+ * Four queries have to resolve before the list appears; a single microtask
+ * turn only gets through the first of them, and a skeleton has no text, so
+ * an under-flushed test reads as an empty page rather than a failure.
+ */
+async function settle() {
+  for (let index = 0; index < 10; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+describe("TeamCurrentWork", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    listAgents.mockReset();
+    liveRuns.mockReset();
+    listIssues.mockReset();
+    pendingInteractions.mockReset();
+    liveRuns.mockResolvedValue([]);
+    listIssues.mockResolvedValue([]);
+    pendingInteractions.mockResolvedValue([]);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  async function render() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TeamCurrentWork companyId="company-1" />
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+  }
+
+  it("leads with a sentence about what each agent is doing", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Mail triage", urlKey: "mail-triage" }),
+      agent({ id: "a2", name: "Operations", urlKey: "operations" }),
+    ]);
+    liveRuns.mockResolvedValue([
+      { id: "r1", agentId: "a1", agentName: "Mail triage", status: "running", issueId: "i1", createdAt: new Date().toISOString() },
+    ]);
+    listIssues.mockResolvedValue([
+      { id: "i1", identifier: "PAP-42", title: "Prepare the customer reply", status: "in_progress", assigneeAgentId: "a1", updatedAt: new Date().toISOString() },
+    ]);
+
+    await render();
+
+    expect(container.textContent).toContain("Mail triage");
+    expect(container.textContent).toContain("Running now.");
+    expect(container.textContent).toContain("PAP-42");
+    expect(container.textContent).toContain("Prepare the customer reply");
+    expect(container.textContent).toContain("Working");
+    expect(container.textContent).toContain("Operations");
+    expect(container.textContent).toContain("Nothing running.");
+  });
+
+  it("links the agent's name to that agent's own page", async () => {
+    listAgents.mockResolvedValue([agent({ id: "a1", name: "Mail triage", urlKey: "mail-triage" })]);
+
+    await render();
+
+    const link = Array.from(container.querySelectorAll("a")).find(
+      (anchor) => anchor.textContent === "Mail triage",
+    );
+    expect(link?.getAttribute("href")).toBe("/agents/mail-triage");
+  });
+
+  it("puts an agent waiting on an answer above one that is simply running", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Aardvark", urlKey: "aardvark" }),
+      agent({ id: "a2", name: "Zebra", urlKey: "zebra" }),
+    ]);
+    liveRuns.mockResolvedValue([
+      { id: "r1", agentId: "a1", agentName: "Aardvark", status: "running", createdAt: new Date().toISOString() },
+    ]);
+    pendingInteractions.mockResolvedValue([
+      { id: "q1", createdByAgentId: "a2", issueId: "i9", issueIdentifier: "PAP-9", issueTitle: "Choose a supplier", status: "pending" },
+    ]);
+
+    await render();
+
+    const names = Array.from(container.querySelectorAll("a"))
+      .map((anchor) => anchor.textContent)
+      .filter((text) => text === "Aardvark" || text === "Zebra");
+    expect(names[0]).toBe("Zebra");
+    expect(container.textContent).toContain("Asked you a question and is waiting for the answer.");
+    expect(container.textContent).toContain("Needs you");
+  });
+
+  it("offers a filter only for the states some agent is actually in", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Mail triage", urlKey: "mail-triage" }),
+      agent({ id: "a2", name: "Operations", urlKey: "operations", status: "paused" }),
+    ]);
+
+    await render();
+
+    const filters = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
+    expect(filters.some((label) => label?.startsWith("Everyone"))).toBe(true);
+    expect(filters.some((label) => label?.startsWith("Paused"))).toBe(true);
+    expect(filters.some((label) => label?.startsWith("Working"))).toBe(false);
+  });
+
+  it("narrows the list when a filter is picked", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Mail triage", urlKey: "mail-triage" }),
+      agent({ id: "a2", name: "Operations", urlKey: "operations", status: "paused" }),
+    ]);
+
+    await render();
+
+    const pausedFilter = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.startsWith("Paused"),
+    )!;
+    await act(async () => {
+      pausedFilter.click();
+    });
+
+    expect(container.textContent).toContain("Operations");
+    expect(container.textContent).not.toContain("Mail triage");
+  });
+
+  it("says so plainly when the company has no agents", async () => {
+    listAgents.mockResolvedValue([]);
+
+    await render();
+
+    expect(container.textContent).toContain("No agents in this company yet");
+  });
+});

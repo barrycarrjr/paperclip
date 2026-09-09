@@ -46,6 +46,7 @@ import {
 } from "../components/ActivityCharts";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -93,7 +94,7 @@ export function MorningBrief() {
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Brief" }]);
+    setBreadcrumbs([{ label: "Overview" }]);
   }, [setBreadcrumbs]);
 
   const { data: session } = useQuery({
@@ -617,7 +618,7 @@ export function MorningBrief() {
           <div className="border border-border bg-card p-8 text-center">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Nothing waiting on you. Inbox zero.
+              Nothing waiting on you.
             </p>
           </div>
         ) : (
@@ -919,7 +920,12 @@ function ReviewQueueRow({
       onMouseLeave={() => onHoverChange(false)}
     >
       <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
-      <div className="flex items-start gap-3">
+      {/* Same card as the one on the Portfolio Brief, and the same fix: the
+          five actions come to more than the card is wide on anything narrower
+          than a laptop, and the card clips what does not fit, so the last two
+          could not be reached by finger. Below `lg` they take a line of their
+          own and wrap on it. */}
+      <div className={WRAPPING_ROW_CLASS}>
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
@@ -991,7 +997,7 @@ function ReviewQueueRow({
             </TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className={OWN_LINE_ACTIONS_CLASS}>
           <button
             type="button"
             onClick={onGraduate}

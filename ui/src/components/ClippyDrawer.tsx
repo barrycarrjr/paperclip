@@ -13,10 +13,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
+import { ABOVE_MOBILE_BOTTOM_NAV_CLASS } from "../lib/narrow-layout";
 import {
   reconcileClippyDrawerSession,
   shouldReconcileClippyDrawerSession,
@@ -30,20 +31,36 @@ const DRAWER_WIDTH_KEY = "paperclip.clippy.drawerWidth";
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 448;
 
-function readActiveSessionId(): string | null {
+/**
+ * One remembered chat per company, the same way NewIssueDialog stores its
+ * draft under a key that carries the company (see its draftStorageKey).
+ *
+ * A chat belongs to one company. This drawer is mounted once for the whole
+ * app, and it only tidies up the open chat while it is on screen, so a single
+ * shared key left the chat you had open in one company remembered under every
+ * other one: reopen the drawer, or reload the page, in a different company and
+ * the other company's conversation is what you are looking at and typing into
+ * until the chat list finishes loading. Keyed by company, each company reads
+ * back only its own.
+ */
+export function activeSessionStorageKey(companyId: string | null): string {
+  return `${ACTIVE_SESSION_KEY}:${companyId ?? "none"}`;
+}
+
+function readActiveSessionId(companyId: string | null): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(ACTIVE_SESSION_KEY);
+    return window.localStorage.getItem(activeSessionStorageKey(companyId));
   } catch {
     return null;
   }
 }
 
-function writeActiveSessionId(id: string | null) {
+function writeActiveSessionId(companyId: string | null, id: string | null) {
   if (typeof window === "undefined") return;
   try {
-    if (id) window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
-    else window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+    if (id) window.localStorage.setItem(activeSessionStorageKey(companyId), id);
+    else window.localStorage.removeItem(activeSessionStorageKey(companyId));
   } catch {
     /* ignore */
   }
@@ -88,19 +105,37 @@ function popOutChat(sessionId: string | null) {
 
 export function ClippyDrawer() {
   const [open, setOpen] = useState(false);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(() =>
-    readActiveSessionId(),
-  );
+  const [activeSessionId, setActiveSessionIdState] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => readDrawerWidth());
   const widthRef = useRef<number>(width);
   widthRef.current = width;
   const draggingRef = useRef(false);
-  const { selectedCompanyId } = useCompany();
+  // The round launcher is the only way this drawer opens, so it is the button
+  // to put focus back on when the drawer closes. See the Sheet below.
+  const launcherRef = useRef<HTMLButtonElement | null>(null);
+  // Read from the address rather than the context selection: the selection is
+  // synced from the route by an effect, so it is one render behind on the
+  // first render after a company change (see hooks/useRouteCompany.ts).
+  const activeCompanyId = useActiveCompanyId();
+  const activeCompanyIdRef = useRef<string | null>(activeCompanyId);
+  activeCompanyIdRef.current = activeCompanyId;
   const qc = useQueryClient();
 
+  const setActiveSessionId = useCallback((id: string | null) => {
+    setActiveSessionIdState(id);
+    writeActiveSessionId(activeCompanyIdRef.current, id);
+  }, []);
+
+  // Change company and the drawer picks up that company's own remembered
+  // chat, whether it is open at the time or not. Without this, the chat from
+  // the company you left stays selected while the drawer is closed, and is
+  // what you see for a moment when you open it again.
+  const loadedForCompanyIdRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    writeActiveSessionId(activeSessionId);
-  }, [activeSessionId]);
+    if (loadedForCompanyIdRef.current === activeCompanyId) return;
+    loadedForCompanyIdRef.current = activeCompanyId;
+    setActiveSessionIdState(readActiveSessionId(activeCompanyId));
+  }, [activeCompanyId]);
 
   // Re-fetch sessions when drawer opens or after a create. The dropdown is a
   // "recent chats" affordance — archived chats only live on the full Clippy
@@ -183,7 +218,7 @@ export function ClippyDrawer() {
 
     const { run, nextGate } = shouldReconcileClippyDrawerSession({
       gate: reconcileGateRef.current,
-      selectedCompanyId,
+      selectedCompanyId: activeCompanyId,
       activeSessionId,
       sessions,
     });
@@ -193,13 +228,13 @@ export function ClippyDrawer() {
     const result = reconcileClippyDrawerSession({
       activeSessionId,
       sessions,
-      selectedCompanyId,
+      selectedCompanyId: activeCompanyId,
       isCreating: createMutation.isPending,
     });
     if (result.action === "select") setActiveSessionId(result.id);
-    else if (result.action === "create") createMutation.mutate(selectedCompanyId);
+    else if (result.action === "create") createMutation.mutate(activeCompanyId);
     else if (result.action === "clear") setActiveSessionId(null);
-  }, [open, activeSessionId, sessionsQuery.data, sessions, createMutation, selectedCompanyId]);
+  }, [open, activeSessionId, sessionsQuery.data, sessions, createMutation, setActiveSessionId, activeCompanyId]);
 
   // Resize handle: pointer-driven drag on the left edge of the drawer.
   const onResizePointerDown = useCallback(
@@ -271,10 +306,19 @@ export function ClippyDrawer() {
 
   return (
     <>
+      {/* The launcher sits above the phone bottom bar, not on it. At
+          `bottom-4` it covered the last button in that bar exactly, on a
+          higher layer, so on a phone that button could not be tapped at all:
+          every tap opened Clippy instead. The offset comes from
+          lib/narrow-layout so it stays tied to the bar's own height. */}
       <Button
+        ref={launcherRef}
         variant="default"
         size="icon"
-        className="fixed bottom-4 right-4 z-40 h-12 w-12 rounded-full shadow-lg"
+        className={cn(
+          "fixed right-4 z-40 h-12 w-12 rounded-full shadow-lg",
+          ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+        )}
         onClick={() => setOpen(true)}
         aria-label={launcherLabel}
         title={launcherLabel}
@@ -292,6 +336,18 @@ export function ClippyDrawer() {
           style={{ width: `${width}px`, maxWidth: "100vw" }}
           className="flex flex-col gap-0 p-0 sm:max-w-none"
           showCloseButton={false}
+          // Put focus back on the round launcher when the drawer closes. Radix
+          // does this by itself from its own Trigger, and there is no Trigger
+          // here: the launcher opens the drawer through state instead. Without
+          // this, closing left focus on the page body, so the next Tab press
+          // started again from the very top of the document. This is the same
+          // shape the phone sidebar drawer uses in Layout.tsx.
+          onCloseAutoFocus={(event) => {
+            const launcher = launcherRef.current;
+            if (!launcher || !launcher.isConnected) return;
+            event.preventDefault();
+            launcher.focus();
+          }}
         >
           {/* Resize handle on the left edge */}
           <div
@@ -382,7 +438,7 @@ export function ClippyDrawer() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => createMutation.mutate(selectedCompanyId)}
+                onClick={() => createMutation.mutate(activeCompanyId)}
                 disabled={createMutation.isPending}
                 title="Start a new chat"
               >

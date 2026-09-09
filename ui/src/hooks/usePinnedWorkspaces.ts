@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { sidebarPreferencesApi } from "../api/sidebarPreferences";
 import { queryKeys } from "../lib/queryKeys";
+import { reorderPinnedIds } from "../lib/pinned-workspace-order";
 import { useCurrentUserId } from "./useCurrentUserId";
 
 /**
@@ -66,13 +67,48 @@ export function usePinnedWorkspaces() {
     [enabled, mutation, pinned, pinnedSet],
   );
 
+  // Drag-and-drop reordering; the merge math is in lib/pinned-workspace-order.ts
+  // (tested there) since it doesn't need any of this hook's react-query state.
+  const reorder = useCallback(
+    (activeId: string, overId: string, visibleIds: string[]) => {
+      if (!enabled) return;
+      const next = reorderPinnedIds(pinned, activeId, overId, visibleIds);
+      if (next === pinned) return;
+      mutation.mutate(next);
+    },
+    [enabled, mutation, pinned],
+  );
+
+  // Save a whole list in one write. Used for seeding HQ's starting pins, where
+  // eleven separate toggle calls would each race the others and fire eleven
+  // round trips. Resolves when the server has accepted it and rejects if it
+  // has not, so a caller can wait for the real outcome rather than guess.
+  const replaceAll = useCallback(
+    async (orderedIds: string[]) => {
+      if (!enabled) return;
+      await mutation.mutateAsync(orderedIds);
+    },
+    [enabled, mutation],
+  );
+
   return {
     pinned,
     isPinned: useCallback((id: string) => pinnedSet.has(id), [pinnedSet]),
     toggle,
+    reorder,
+    replaceAll,
     /** False when there is no signed-in user to store a pin against. */
     canPin: enabled,
+    /** The person the pins belong to, or null when nobody can be resolved. */
+    ownerId: userId,
     isLoading: enabled && isLoading,
+    /**
+     * True only once the saved list has actually arrived. `!isLoading` is not
+     * the same thing: a disabled or failed query is not loading and still has
+     * no list, and treating that as "they have no pins" would let a caller
+     * write over pins that were simply never fetched.
+     */
+    pinsLoaded: enabled && data !== undefined,
     isSaving: mutation.isPending,
   };
 }

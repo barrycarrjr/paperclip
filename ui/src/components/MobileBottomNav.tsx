@@ -8,8 +8,10 @@ import {
   Inbox,
   Mail,
 } from "lucide-react";
+import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { MOBILE_BOTTOM_NAV_HEIGHT_CLASS } from "../lib/narrow-layout";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useInboxBadge } from "../hooks/useInboxBadge";
@@ -26,6 +28,13 @@ import { CORE_WORKSPACE_CATALOG } from "@/lib/workspace-catalog";
 // workspace-catalog.test.ts should catch, not something worth crashing the
 // whole mobile shell over.
 const emailCatalogEntry = CORE_WORKSPACE_CATALOG.find((entry) => entry.id === "email");
+// Same reasoning for the two destinations that were renamed on 2026-09-07
+// (Issues became Tasks, Inbox became Attention): read the label from the
+// catalog so the mobile bar cannot end up saying a different word from the
+// sidebar and the search box, which is exactly what the catalog's own comment
+// warns about. The routes and icons are unchanged.
+const tasksCatalogEntry = CORE_WORKSPACE_CATALOG.find((entry) => entry.id === "issues");
+const attentionCatalogEntry = CORE_WORKSPACE_CATALOG.find((entry) => entry.id === "inbox");
 
 interface MobileBottomNavProps {
   visible: boolean;
@@ -56,20 +65,31 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   // not, and briefly showed the previous company's count after a switch. Same
   // fix as the rest of the app — see useRouteCompany.ts.
   const selectedCompanyId = useActiveCompanyId();
+  const { companies } = useCompany();
   const { openNewIssue } = useDialog();
   const inboxBadge = useInboxBadge(selectedCompanyId);
+  // HQ has no mailbox of its own, so an Email tab there opens an empty page.
+  // The sidebar already leaves Email out in HQ for the same reason, and the
+  // two have to agree or the same app says different things on two screens.
+  const isPortfolioRoot =
+    companies.find((c) => c.id === selectedCompanyId)?.isPortfolioRoot === true;
 
   const items = useMemo<MobileNavItem[]>(
     () => [
       { type: "link", to: "/dashboard", label: "Home", icon: House },
-      { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
+      {
+        type: "link",
+        to: "/issues",
+        label: tasksCatalogEntry?.label ?? "Tasks",
+        icon: tasksCatalogEntry?.icon ?? CircleDot,
+      },
       { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
       { type: "link", to: "/agents/all", label: "Agents", icon: Users },
       {
         type: "link",
         to: "/inbox",
-        label: "Inbox",
-        icon: Inbox,
+        label: attentionCatalogEntry?.label ?? "Attention",
+        icon: attentionCatalogEntry?.icon ?? Inbox,
         badge: inboxBadge.inbox,
       },
       // Added 2026-09-02 (docs/plans/2026-09-02-ux-control-center-preservation.md
@@ -77,14 +97,18 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
       // (2026-09-02-ux-control-center-scope.md) but was completely absent
       // from mobile navigation. Appended rather than swapped in for an
       // existing item, so no current one-tap destination is lost.
-      {
-        type: "link",
-        to: `/${emailCatalogEntry?.routeRoot ?? "email"}`,
-        label: emailCatalogEntry?.label ?? "Email",
-        icon: emailCatalogEntry?.icon ?? Mail,
-      },
+      ...(isPortfolioRoot
+        ? []
+        : [
+            {
+              type: "link" as const,
+              to: `/${emailCatalogEntry?.routeRoot ?? "email"}`,
+              label: emailCatalogEntry?.label ?? "Email",
+              icon: emailCatalogEntry?.icon ?? Mail,
+            },
+          ]),
     ],
-    [openNewIssue, inboxBadge.inbox],
+    [openNewIssue, inboxBadge.inbox, isPortfolioRoot],
   );
 
   return (
@@ -95,7 +119,15 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
       )}
       aria-label="Mobile navigation"
     >
-      <div className="grid h-16 grid-cols-6 px-1">
+      {/* The column count follows the item count, because HQ drops Email and a
+          fixed six would leave an empty slot where it used to be. */}
+      <div
+        className={cn(
+          "grid px-1",
+          MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
+          items.length === 6 ? "grid-cols-6" : "grid-cols-5",
+        )}
+      >
         {items.map((item) => {
           if (item.type === "action") {
             const Icon = item.icon;

@@ -497,4 +497,60 @@ describe("NewIssueDialog", () => {
 
     act(() => root.unmount());
   });
+  // Kept as a guard rather than a fix. DialogContext hands this dialog the
+  // defaults it was opened with (a parent task, a project, a goal) and never
+  // re-scopes them when you change company, which reads like a defect on its
+  // own. It is not one, because the dialog fixes its company at the moment it
+  // opens and files the issue there: the defaults and the company still match.
+  // If that pinning is ever removed, this test is what fails.
+  it("creates the issue in the company it was opened in after a company change", async () => {
+    const originalCompanies = companyState.companies;
+    const originalSelectedId = companyState.selectedCompanyId;
+    const originalSelected = companyState.selectedCompany;
+    const acme = {
+      id: "company-2",
+      name: "Acme",
+      status: "active",
+      brandColor: "#654321",
+      issuePrefix: "ACM",
+    };
+    companyState.companies = [...originalCompanies, acme];
+
+    dialogState.newIssueDefaults = { projectId: "project-1" };
+    const { root } = renderDialog(container);
+    await flush();
+
+    // The person changes company while the half filled form is still open.
+    companyState.selectedCompanyId = "company-2";
+    companyState.selectedCompany = acme;
+
+    const titleInput = container.querySelector<HTMLTextAreaElement>('textarea[placeholder="Issue title"]');
+    expect(titleInput).not.toBeNull();
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(titleInput!, "Reprint the flyers");
+      titleInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await flush();
+
+    const submitButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Create Issue"));
+    await act(async () => {
+      submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(mockIssuesApi.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({ title: "Reprint the flyers" }),
+    );
+
+    companyState.companies = originalCompanies;
+    companyState.selectedCompanyId = originalSelectedId;
+    companyState.selectedCompany = originalSelected;
+    act(() => root.unmount());
+  });
 });

@@ -135,8 +135,34 @@ describe("issueDetailBreadcrumb", () => {
 
   it("falls back to the source query param when route state is unavailable", () => {
     expect(readIssueDetailBreadcrumb("PAP-465", null, "?from=inbox")).toEqual({
-      label: "Inbox",
+      label: "Attention",
       href: "/inbox",
+    });
+  });
+
+  it("uses the current names when it builds a breadcrumb itself", () => {
+    // Renamed 2026-09-07: Inbox became Attention and Issues became Tasks. The
+    // routes deliberately did not change.
+    expect(readIssueDetailBreadcrumb("PAP-465", null, "?from=issues")).toEqual({
+      label: "Tasks",
+      href: "/issues",
+    });
+  });
+
+  it("still understands state saved under the old names", () => {
+    // Someone's tab can be holding a breadcrumb saved before the rename. It
+    // has no source of its own, so the label is the only clue to where they
+    // came from, and losing it would lose their way back.
+    const savedBeforeTheRename = { issueDetailBreadcrumb: { label: "Inbox", href: "/PAP/inbox/mine" } };
+    expect(readIssueDetailBreadcrumb("PAP-465", savedBeforeTheRename)).toEqual({
+      label: "Inbox",
+      href: "/PAP/inbox/mine",
+    });
+
+    const oldIssuesState = { issueDetailBreadcrumb: { label: "Issues", href: "/PAP/issues" } };
+    expect(readIssueDetailBreadcrumb("PAP-465", oldIssuesState)).toEqual({
+      label: "Issues",
+      href: "/PAP/issues",
     });
   });
 
@@ -149,7 +175,7 @@ describe("issueDetailBreadcrumb", () => {
     expect(
       readIssueDetailBreadcrumb("PAP-465", null, "?from=inbox&fromHref=%2FPAP%2Finbox%2Funread"),
     ).toEqual({
-      label: "Inbox",
+      label: "Attention",
       href: "/PAP/inbox/unread",
     });
   });
