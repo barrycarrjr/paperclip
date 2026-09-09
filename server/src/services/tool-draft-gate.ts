@@ -27,7 +27,7 @@
 
 import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { heartbeatRuns } from "@paperclipai/db";
+import { heartbeatRuns, issueApprovals } from "@paperclipai/db";
 import {
   DEFAULT_SELF_NOTIFY_SETTINGS,
   OUTBOUND_SELF_RECIPIENT_RULES,
@@ -136,6 +136,15 @@ export interface DraftGate {
  * call, so no plugin, adapter or SDK type has to change to get it right.
  * Returns null for chat turns and for runs with no issue, which is correct:
  * there is nothing to link to.
+ *
+ * The second lookup is what stops a loop rather than merely recording one. A
+ * run woken by `approval_approved` carries the issue of the approval it is
+ * about — but only when that approval was itself linked. An unlinked approval
+ * therefore wakes the agent with no issue at all, the agent finds no work to
+ * return to, drafts another message to say so, and that draft is unlinked for
+ * the same reason. Four identical Slack DMs in three minutes came out of
+ * exactly that. Following the wake's `approvalId` back to its issue lets the
+ * link survive the hop, so the chain re-attaches instead of restarting empty.
  */
 async function issueIdForRun(db: Db, runId: string | null): Promise<string | null> {
   if (!runId) return null;
@@ -147,11 +156,44 @@ async function issueIdForRun(db: Db, runId: string | null): Promise<string | nul
       .then((rows) => rows[0] ?? null);
     const snapshot = (row?.contextSnapshot ?? null) as Record<string, unknown> | null;
     const candidate = snapshot?.issueId ?? snapshot?.taskId;
-    return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+
+    const wakingApprovalId = snapshot?.approvalId;
+    if (typeof wakingApprovalId !== "string" || !wakingApprovalId.trim()) return null;
+    const linked = await db
+      .select({ issueId: issueApprovals.issueId })
+      .from(issueApprovals)
+      .where(eq(issueApprovals.approvalId, wakingApprovalId.trim()))
+      .then((rows) => rows[0] ?? null);
+    return linked?.issueId ?? null;
   } catch (err) {
     log.warn({ err, runId }, "could not read the run's issue for draft linking");
     return null;
   }
+}
+
+/**
+ * A stable identity for "this exact outbound call", used to recognise a repeat.
+ *
+ * Object key order is not meaningful in a tool call but is not guaranteed
+ * stable either, so keys are sorted before stringifying. Anything that is not
+ * a plain object falls back to its JSON form, which is enough: two calls are
+ * only ever treated as the same draft when their parameters serialise
+ * identically.
+ */
+function draftIdentity(namespacedName: string, parameters: unknown): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => [key, normalize(entry)]),
+      );
+    }
+    return value;
+  };
+  return `${namespacedName}::${JSON.stringify(normalize(parameters ?? null))}`;
 }
 
 const CLIPPY_AGENT_PREFIX = "clippy:";
@@ -436,6 +478,59 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
 
       const summary = buildSummary(namespacedName, parameters);
       const actor = resolveRunActor(runContext);
+
+      // An identical call that is already waiting is the same request, not a
+      // new one.
+      //
+      // Approving a draft wakes the agent that asked for it. An agent that
+      // wakes with no new work sometimes decides the useful thing to do is
+      // send another status message — which is drafted, approved, wakes it
+      // again, and so on. That produced four identical Slack DMs in three
+      // minutes, each needing its own tap. Handing back the pending draft
+      // instead of queueing a second one makes the loop terminate: the agent
+      // is told the message is already waiting, and the operator has one
+      // decision to make rather than a growing pile of the same one.
+      const identity = draftIdentity(namespacedName, parameters);
+      try {
+        const pending = await approvals.list(runContext.companyId, "pending");
+        const duplicate = pending.find((row) => {
+          const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
+          if (row.type !== "outbound_tool_draft") return false;
+          if (rowPayload.toolName !== namespacedName) return false;
+          return draftIdentity(namespacedName, rowPayload.parameters) === identity;
+        });
+        if (duplicate) {
+          log.info(
+            { approvalId: duplicate.id, tool: namespacedName, companyId: runContext.companyId },
+            "identical outbound draft already awaiting approval; not queueing another",
+          );
+          return {
+            intercepted: true,
+            result: {
+              content: [
+                DRAFT_RESULT_HEADER,
+                `Tool: ${namespacedName}`,
+                `Approval ID: ${duplicate.id}`,
+                "",
+                "This exact message is ALREADY waiting for approval from an earlier attempt. " +
+                  "Nothing has been sent and nothing new has been queued. Do not draft it again " +
+                  "and do not rephrase it to get around this — say it is waiting and stop.",
+              ].join("\n"),
+              data: {
+                drafted: true,
+                duplicateOf: duplicate.id,
+                approvalId: duplicate.id,
+                status: "pending",
+                tool: namespacedName,
+                summary,
+              },
+            },
+          };
+        }
+      } catch (err) {
+        // Better to risk a second draft than to drop the call entirely.
+        log.warn({ err, tool: namespacedName }, "could not check for a duplicate pending draft");
+      }
       const payload = {
         toolName: namespacedName,
         parameters: parameters ?? null,
