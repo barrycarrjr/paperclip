@@ -299,6 +299,11 @@ const noopLog: LogFn = () => {};
 export async function stopEmbeddedPostgresCompletely(input: {
   dataDir: string;
   stop: () => Promise<void>;
+  /**
+   * Optional ceiling for a vendor stop implementation that never settles.
+   * Once elapsed, the snapshotted process family is force-ended below.
+   */
+  stopTimeoutMs?: number;
   tools?: ProcessTools;
   log?: LogFn;
 }): Promise<{ killedPids: number[] }> {
@@ -312,7 +317,30 @@ export async function stopEmbeddedPostgresCompletely(input: {
     log("Could not list postgres processes before stopping; continuing", { err });
   }
 
-  await input.stop();
+  const stopPromise = Promise.resolve().then(input.stop);
+  if (input.stopTimeoutMs === undefined) {
+    await stopPromise;
+  } else {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      stopPromise.then(
+        () => ({ kind: "stopped" as const }),
+        (error: unknown) => ({ kind: "failed" as const, error }),
+      ),
+      new Promise<{ kind: "timedOut" }>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "timedOut" }), input.stopTimeoutMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+
+    if (outcome.kind === "failed") throw outcome.error;
+    if (outcome.kind === "timedOut") {
+      log("Embedded PostgreSQL stop timed out; ending its process family", {
+        timeoutMs: input.stopTimeoutMs,
+        pids: family,
+      });
+    }
+  }
 
   const survivors = family.filter((pid) => tools.isAlive(pid));
   if (survivors.length === 0) return { killedPids: [] };

@@ -3,7 +3,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { ensurePostgresDatabase, getPostgresDataDirectory } from "./client.js";
 import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
+import { stopEmbeddedPostgresCompletely } from "./embedded-postgres-processes.js";
 import { resolveDatabaseTarget } from "./runtime-config.js";
+
+const MIGRATION_POSTGRES_STOP_TIMEOUT_MS = 10_000;
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -175,7 +178,19 @@ async function ensureEmbeddedPostgresConnection(
     connectionString: `postgres://paperclip:paperclip@127.0.0.1:${selectedPort}/paperclip`,
     source: `embedded-postgres@${selectedPort}`,
     stop: async () => {
-      await instance.stop();
+      // embedded-postgres waits indefinitely for its postmaster's `exit`
+      // event on Windows. In practice taskkill can leave that promise pending
+      // even after the migration itself completed, which strands maintenance
+      // scripts before they can restart Paperclip. Bound the polite stop and
+      // then use the already-verified process-family cleanup as the fallback.
+      await stopEmbeddedPostgresCompletely({
+        dataDir,
+        stop: () => instance.stop(),
+        stopTimeoutMs: MIGRATION_POSTGRES_STOP_TIMEOUT_MS,
+        log: (message, detail) => {
+          console.warn(`[paperclip-db] ${message}`, detail ?? {});
+        },
+      });
     },
   };
 }

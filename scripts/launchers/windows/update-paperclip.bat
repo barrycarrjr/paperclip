@@ -10,7 +10,7 @@ REM   3. pnpm install if pnpm-lock.yaml changed.
 REM   4. pnpm build.
 REM   5. pnpm db:migrate.
 REM   6. Refresh %USERPROFILE%\.paperclip\install.json.
-REM   7. 5-second auto-restart with cancel option, then launch-paperclip.bat.
+REM   7. 5-second auto-restart with cancel option, then relaunch paperclip.exe.
 
 setlocal EnableDelayedExpansion
 title Update Paperclip
@@ -111,22 +111,13 @@ if errorlevel 2 (
   exit /b 0
 )
 
-REM Exit any running tray instance before spawning a fresh one. paperclip.exe
-REM holds a single-instance lock (a named mutex); a second launch finds it held,
-REM treats it as a duplicate, and silently opens the dead browser tab instead of
-REM starting the server. Killing the tray here releases that lock cleanly.
-powershell -NoProfile -Command "Get-Process -Name paperclip -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+echo.
+echo Restarting Paperclip and waiting for it to become healthy...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-paperclip.ps1" -Port 3100 -RestartAfterMaintenance
+if errorlevel 1 goto :restart_failed
 
-REM Wait for port 3100 to actually be free before re-launching. paperclip.exe
-REM does a one-shot port-bound check at startup; if it sees a still-shutting-
-REM down server (or a postgres on its way out) it assumes the server is fine,
-REM opens the browser, and exits without spawning anything. A moment later
-REM the lingering process dies and the tab points at a dead port. Polling here
-REM closes that race.
-powershell -NoProfile -Command "for ($i=0; $i -lt 15; $i++) { if (-not (Get-NetTCPConnection -LocalPort 3100 -State Listen -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Seconds 1 }" >nul 2>&1
-
+echo Update and restart complete.
 endlocal
-start "" "%~dp0paperclip.exe"
 exit /b 0
 
 :update_failed
@@ -148,14 +139,36 @@ echo         Add-MpPreference -ExclusionPath '%PAPERCLIP_SRC%'
 echo         Add-MpPreference -ExclusionPath '%USERPROFILE%\.paperclip'
 echo.
 echo   2. A leftover Paperclip child process is holding files open.
-echo      Fix: open Task Manager, end every node.exe process,
-echo           then re-run this update.
+echo      Fix: run stop-paperclip.bat, then re-run this update. That script
+echo           targets only verified Paperclip process trees.
 echo.
 echo   3. pnpm install needed elevated rights ^(rare^).
 echo      Fix: re-run paperclip-update from an elevated terminal.
 echo.
-echo   This window will stay open. Resolve the issue, then
-echo   re-run paperclip-update.
+echo   Paperclip will now attempt to come back online using the files that are
+echo   currently installed. The update error above will remain on screen.
+echo ==========================================================
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-paperclip.ps1" -Port 3100 -RestartAfterMaintenance
+if errorlevel 1 (
+  echo.
+  echo [!] Automatic recovery also failed. Double-click paperclip.exe after
+  echo     resolving the update error above.
+) else (
+  echo.
+  echo Paperclip is back online; the update itself still needs attention.
+)
+pause
+endlocal
+exit /b 1
+
+:restart_failed
+echo.
+echo ==========================================================
+echo   [!] UPDATE FINISHED, BUT PAPERCLIP DID NOT RESTART
+echo ==========================================================
+echo   The build and migrations completed successfully.
+echo   Double-click paperclip.exe or inspect the launcher log under:
+echo   %USERPROFILE%\.paperclip\logs\
 echo ==========================================================
 pause
 endlocal

@@ -307,6 +307,30 @@ describe("stopEmbeddedPostgresCompletely", () => {
       }),
     ).rejects.toThrow("taskkill failed");
   });
+
+  it("bounds a stuck stop and force-ends the snapshotted family", async () => {
+    const log = vi.fn();
+    const t = tools({
+      list: async () => [postmaster(), worker(51128, "io_worker")],
+      isAlive: () => true,
+    });
+
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      tools: t,
+      stop: async () => await new Promise<void>(() => {}),
+      stopTimeoutMs: 5,
+      log,
+    });
+
+    expect(result.killedPids).toEqual([19624, 51128]);
+    expect(t.kill).toHaveBeenCalledWith(19624);
+    expect(t.kill).toHaveBeenCalledWith(51128);
+    expect(log).toHaveBeenCalledWith(
+      "Embedded PostgreSQL stop timed out; ending its process family",
+      expect.objectContaining({ timeoutMs: 5, pids: [19624, 51128] }),
+    );
+  });
 });
 
 describe("sweepStaleEmbeddedPostgres", () => {

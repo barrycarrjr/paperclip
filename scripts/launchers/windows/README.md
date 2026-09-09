@@ -65,6 +65,11 @@ the file; the file overrides the built-in defaults.
   embedded postgres, stale fallback-port siblings from this checkout, and any
   zombie dev-runner children. Works regardless of which launcher started it.
   Leaves your data dir alone.
+  Update and Rebuild use its internal `-RestartAfterMaintenance` mode after
+  stopping. That mode waits for the old tray's single-instance lock to be
+  released, launches one replacement, and does not report success until both
+  the tray and `/api/health` are back. Maintenance failures also use it, so a
+  failed build no longer leaves an otherwise recoverable Paperclip offline.
 - **`backup-data.bat`** — Snapshot `%USERPROFILE%\.paperclip\` to a timestamped
   folder under `%USERPROFILE%\paperclip-backups\`. Run before risky operations
   (upgrades, migrations, schema changes).
@@ -79,7 +84,10 @@ the file; the file overrides the built-in defaults.
 - **`update-paperclip.bat`** — Pull the latest from `origin/master`,
   rebuild, run new migrations, and auto-restart. Stops the server first,
   reinstalls only if `pnpm-lock.yaml` changed, refreshes the install
-  marker, gives you a 5-second cancel before the auto-restart kicks in.
+  marker, gives you a 5-second cancel before the auto-restart kicks in, and
+  verifies that Paperclip is healthy before declaring the restart complete.
+  If an earlier step fails, it preserves the error on screen while attempting
+  to restore the server from the files already present.
 
 > **Note on `build:runtime` vs `build`:** the launchers use `pnpm
 > build:runtime`, which skips the in-repo plugin packages

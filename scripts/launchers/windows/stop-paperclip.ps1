@@ -26,7 +26,12 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [ValidateRange(1, 65535)]
-    [int]$Port = 3100
+    [int]$Port = 3100,
+
+    [switch]$RestartAfterMaintenance,
+
+    [ValidateRange(1, 600)]
+    [int]$StartupTimeoutSeconds = 90
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -303,3 +308,85 @@ if (-not $WhatIfPreference) {
 }
 
 Write-Host "  total killed: $killed"
+
+if (-not $RestartAfterMaintenance) { return }
+if ($WhatIfPreference) {
+    Write-Host "  would relaunch Paperclip and wait for health on port $Port"
+    return
+}
+
+# Maintenance runs in a separate console, so it is safe to replace the tray.
+# Wait for the exact executable to exit before launching its successor:
+# paperclip.exe owns a named mutex, and launching too quickly makes the new
+# process mistake the dying tray for a live instance and exit without starting
+# either a tray or the server.
+function Test-SamePath {
+    param([string]$Left, [string]$Right)
+    if (-not $Left -or -not $Right) { return $false }
+    try {
+        return [IO.Path]::GetFullPath($Left).Equals(
+            [IO.Path]::GetFullPath($Right),
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    } catch {
+        return $false
+    }
+}
+
+function Get-PaperclipTrayProcesses {
+    return @(Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -ieq 'paperclip.exe' -and
+        (Test-SamePath -Left $_.ExecutablePath -Right $script:launcherPath)
+    })
+}
+
+function Test-PaperclipHealth {
+    try {
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$script:Port/api/health" -TimeoutSec 2
+        return $response.status -eq 'ok'
+    } catch {
+        return $false
+    }
+}
+
+$ErrorActionPreference = 'Stop'
+try {
+    $launcherPath = (Resolve-Path (Join-Path $PSScriptRoot 'paperclip.exe')).Path
+    $launcherDir = Split-Path -Parent $launcherPath
+    $oldTrays = @(Get-PaperclipTrayProcesses)
+    foreach ($oldTray in $oldTrays) {
+        Write-Host "  ending old Paperclip tray PID $($oldTray.ProcessId)"
+        Stop-Process -Id ([int]$oldTray.ProcessId) -Force -ErrorAction Stop
+    }
+
+    $trayExitDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    while (@(Get-PaperclipTrayProcesses).Count -gt 0 -and [DateTime]::UtcNow -lt $trayExitDeadline) {
+        Start-Sleep -Milliseconds 200
+    }
+    if (@(Get-PaperclipTrayProcesses).Count -gt 0) {
+        throw 'The previous Paperclip tray did not exit within 15 seconds.'
+    }
+
+    $portOwner = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($portOwner -and -not (Test-PaperclipHealth)) {
+        throw "Port $Port is occupied by PID $($portOwner.OwningProcess), but it is not a healthy Paperclip server."
+    }
+
+    Write-Host '  starting Paperclip tray and server'
+    Start-Process -FilePath $launcherPath -WorkingDirectory $launcherDir -WindowStyle Hidden
+
+    $startupDeadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $startupDeadline) {
+        if ((Test-PaperclipHealth) -and @(Get-PaperclipTrayProcesses).Count -eq 1) {
+            Write-Host "  Paperclip is healthy on port $Port"
+            exit 0
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    throw "Paperclip did not become healthy on port $Port within $StartupTimeoutSeconds seconds."
+} catch {
+    Write-Error "Could not restart Paperclip after maintenance: $($_.Exception.Message)"
+    exit 1
+}
