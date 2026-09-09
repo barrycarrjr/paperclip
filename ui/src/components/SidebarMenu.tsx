@@ -5,6 +5,7 @@ import {
   LayoutGrid,
   Mail,
   CalendarClock,
+  PinOff,
   Sunrise,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
@@ -36,6 +37,7 @@ import { usePluginSlots } from "../plugins/slots";
 import { resolvePinnedWorkspaceItems, type PinnedWorkspaceItem } from "../lib/workspace-catalog";
 import { isTeamPath } from "../lib/team-tabs";
 import { isWorkPath } from "../lib/work-tabs";
+import { cn } from "../lib/utils";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarPeekProvider } from "../context/SidebarPeekContext";
@@ -47,7 +49,13 @@ import { SidebarPeekProvider } from "../context/SidebarPeekContext";
  * `activationConstraint` distance so a plain click still lands as a click,
  * and touch is left alone so it can scroll/tap instead of triggering a drag.
  */
-function SortablePinnedItem({ item }: { item: PinnedWorkspaceItem }) {
+function SortablePinnedItem({
+  item,
+  onUnpin,
+}: {
+  item: PinnedWorkspaceItem;
+  onUnpin: (id: string) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
   });
@@ -58,8 +66,40 @@ function SortablePinnedItem({ item }: { item: PinnedWorkspaceItem }) {
     opacity: isDragging ? 0.6 : 1,
   };
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <SidebarNavItem to={item.to} label={item.label} icon={item.icon} info={item.info} />
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="group/pinned relative"
+      {...attributes}
+      {...listeners}
+    >
+      <SidebarNavItem
+        to={item.to}
+        label={item.label}
+        icon={item.icon}
+        info={item.info}
+        className={item.info ? "pr-14" : "pr-8"}
+      />
+      <button
+        type="button"
+        className={cn(
+          "absolute top-1/2 z-[1] -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition-[color,background-color,opacity]",
+          "hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/pinned:opacity-100",
+          item.info ? "right-7" : "right-2",
+        )}
+        aria-label={`Unpin ${item.label}`}
+        title="Unpin from the sidebar"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          // The control sits over the navigation row. Keep the click from
+          // following the link or becoming the start of a drag operation.
+          event.preventDefault();
+          event.stopPropagation();
+          onUnpin(item.id);
+        }}
+      >
+        <PinOff className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -137,7 +177,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
   // about a company), so the same pin can be shown here and hidden in a
   // company whose plugin is not installed — hiding it is right, dropping the
   // pin would not be.
-  const { pinned, reorder } = usePinnedWorkspaces();
+  const { pinned, toggle: togglePin, reorder } = usePinnedWorkspaces();
   const { slots: pinnablePluginSlots } = usePluginSlots({
     slotTypes: ["page"],
     companyId: company.id,
@@ -260,7 +300,7 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
               strategy={verticalListSortingStrategy}
             >
               {pinnedItems.map((item) => (
-                <SortablePinnedItem key={item.id} item={item} />
+                <SortablePinnedItem key={item.id} item={item} onUnpin={togglePin} />
               ))}
             </SortableContext>
           </DndContext>

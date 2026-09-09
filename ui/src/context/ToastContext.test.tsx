@@ -159,6 +159,16 @@ describe("ToastContext, how long a message lasts", () => {
     expect(titles()).toEqual([]);
   });
 
+  it("replaces a toast with the same explicit id instead of stacking it", () => {
+    act(() => {
+      push?.({ id: "company-switch", title: "Now in Acme", tone: "info" });
+      push?.({ id: "company-switch", title: "Now in Paperclip", tone: "info" });
+    });
+
+    expect(latest).toHaveLength(1);
+    expect(titles()).toEqual(["Now in Paperclip"]);
+  });
+
   it("lets the caller put a time limit on a failure after all", () => {
     // LiveUpdatesProvider does this for an agent run that failed on its own,
     // because that run and its error are kept on the run's own page.

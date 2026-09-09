@@ -114,11 +114,13 @@ vi.mock("@/plugins/slots", () => ({
 // "Pinned tools" block. Nothing pinned means that block renders nothing, which
 // is the state every other assertion in this file assumes.
 const pinnedState: { value: string[] } = { value: [] };
+const togglePinnedWorkspace = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/usePinnedWorkspaces", () => ({
   usePinnedWorkspaces: () => ({
     pinned: pinnedState.value,
     isPinned: (id: string) => pinnedState.value.includes(id),
-    toggle: () => {},
+    toggle: togglePinnedWorkspace,
+    reorder: () => {},
     replaceAll: async () => {},
     canPin: true,
     ownerId: "user-1",
@@ -476,6 +478,27 @@ describe("Sidebar", () => {
     expect(labels.filter((label) => label === "Goals")).toHaveLength(1);
     expect(labels.indexOf("Goals")).toBeGreaterThan(labels.indexOf("Calendar"));
     expect(labels.indexOf("Goals")).toBeLessThan(labels.indexOf("Overview"));
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("can unpin a workspace directly from its sidebar row", async () => {
+    pinnedState.value = ["goals"];
+    const root = await renderSidebar();
+
+    const unpinButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Unpin Goals"]',
+    );
+    expect(unpinButton).not.toBeNull();
+
+    await act(async () => {
+      unpinButton?.click();
+    });
+
+    expect(togglePinnedWorkspace).toHaveBeenCalledTimes(1);
+    expect(togglePinnedWorkspace).toHaveBeenCalledWith("goals");
 
     await act(async () => {
       root.unmount();

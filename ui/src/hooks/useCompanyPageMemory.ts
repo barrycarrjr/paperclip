@@ -17,6 +17,8 @@ import { registerPluginRouteRoots } from "../lib/plugin-route-registry";
 import { pluginsApi } from "../api/plugins";
 import { queryKeys } from "../lib/queryKeys";
 
+const COMPANY_SWITCH_TOAST_ID = "company-switch";
+
 /**
  * Keeps plugin-route-registry.ts current with the plugin page routes that
  * are actually installed, so toCompanyRelativePath can recognize them as
@@ -131,11 +133,13 @@ export function useCompanyPageMemory() {
           : null;
         const rememberedIsElsewhere = !!remembered && remembered !== destination.path;
         pushToast({
+          // Every company switch describes the current selection, so an older
+          // switch message becomes stale immediately instead of stacking.
+          id: COMPANY_SWITCH_TOAST_ID,
           title: destination.title,
           body: destination.body ?? undefined,
           tone: "info",
-          ttlMs: 8000,
-          dedupeKey: `company-switch:${selectedCompanyId}:${destination.path}`,
+          ttlMs: 5000,
           action: rememberedIsElsewhere
             ? {
               label: "Go to where you left off",

@@ -113,7 +113,12 @@ describe("changing company", () => {
     await pickCompany("acme");
 
     expect(mockNavigate).toHaveBeenCalledWith("/ACME/issues", { replace: true });
-    expect(lastToast()).toMatchObject({ title: "Now in Acme", body: "Kept you on Tasks." });
+    expect(lastToast()).toMatchObject({
+      id: "company-switch",
+      title: "Now in Acme",
+      body: "Kept you on Tasks.",
+      ttlMs: 5000,
+    });
   });
 
   it("leaves the previous company's record behind and says so", async () => {

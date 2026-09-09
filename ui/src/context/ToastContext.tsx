@@ -17,6 +17,10 @@ export interface ToastAction {
 }
 
 export interface ToastInput {
+  /**
+   * Stable identity for a replaceable message. Pushing the same id again
+   * updates that toast in place and restarts its dismissal timer.
+   */
   id?: string;
   dedupeKey?: string;
   title: string;
@@ -156,22 +160,29 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       const now = Date.now();
       const tone = input.tone ?? "info";
       const ttlMs = normalizeTtl(input.ttlMs, tone);
-      const dedupeKey =
-        input.dedupeKey ?? input.id ?? `${tone}|${input.title}|${input.body ?? ""}|${input.action?.href ?? ""}`;
-
-      for (const [key, ts] of dedupeRef.current.entries()) {
-        if (now - ts > DEDUPE_MAX_AGE_MS) {
-          dedupeRef.current.delete(key);
-        }
-      }
-
-      const lastSeen = dedupeRef.current.get(dedupeKey);
-      if (lastSeen && now - lastSeen < DEDUPE_WINDOW_MS) {
-        return null;
-      }
-      dedupeRef.current.set(dedupeKey, now);
-
       const id = input.id ?? generateToastId();
+
+      // An explicit id is a caller's request to keep one live message and
+      // update it in place. Do not dedupe those updates: rapid company
+      // switches, for example, must replace the previous company's message
+      // even when the person returns to a company they just viewed.
+      if (!input.id) {
+        const dedupeKey =
+          input.dedupeKey ?? `${tone}|${input.title}|${input.body ?? ""}|${input.action?.href ?? ""}`;
+
+        for (const [key, ts] of dedupeRef.current.entries()) {
+          if (now - ts > DEDUPE_MAX_AGE_MS) {
+            dedupeRef.current.delete(key);
+          }
+        }
+
+        const lastSeen = dedupeRef.current.get(dedupeKey);
+        if (lastSeen && now - lastSeen < DEDUPE_WINDOW_MS) {
+          return null;
+        }
+        dedupeRef.current.set(dedupeKey, now);
+      }
+
       clearTimer(id);
 
       setToasts((prev) => {
