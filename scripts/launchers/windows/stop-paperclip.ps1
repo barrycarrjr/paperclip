@@ -1,43 +1,60 @@
-# Stop paperclip — strictly port-based + process-tree-based.
+# Stop paperclip — port-based + verified process-tree-based.
 # Kills:
-#   1. The PID listening on port 3100 (the paperclip server) and ALL its
-#      descendant processes.
-#   2. The pnpm/tsx wrapper chain BETWEEN the listener and paperclip.exe.
-#      We walk parents up from the listener and kill any ancestor whose
-#      command line contains the paperclip launch signature
-#      ("--filter paperclipai exec tsx" or "tsx src/index.ts run").
-#      Without this, when we kill the listener the orphaned pnpm sees its
-#      tsx child died and prints a misleading
-#      `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "tsx" not found`
-#      into the daily log. Killing the whole launch chain at once avoids
-#      that. We deliberately stop walking before paperclip.exe (the tray)
-#      and before any process that doesn't carry the launch signature, so
-#      a stray cmd / powershell / IDE the user is in never gets touched.
+#   1. The PID listening on the configured port (3100 by default), ALL its
+#      descendants, and the verified pnpm/tsx wrapper chain between that PID
+#      and paperclip.exe.
+#   2. Every launch tree from this checkout carrying the exact production
+#      command signature. This catches a stale sibling that previously fell
+#      forward to 3101 during a restart race, without touching `pnpm dev` or
+#      unrelated Node/tsx processes.
+#      Without the wrapper cleanup, an orphaned pnpm can print a misleading
+#      `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "tsx" not found` after its
+#      child dies. The tray itself and unrelated shells/IDEs are excluded.
 #   3. The embedded postgres: the postmaster (identified by the paperclip data
 #      dir on its command line), its worker children, and separately any
 #      orphaned embedded-postgres worker, whether left behind by an earlier
 #      crashed or half-finished run or orphaned by this stop itself.
 #
-# Does NOT regex-match command lines globally for "tsx" / "esbuild" /
-# "paperclip" — that previous approach was too broad and would kill
-# Claude Code, JetBrains TS server, and unrelated build watchers. The
-# parent-chain walk above is anchored at the listener PID, so it can
-# only reach our own spawn chain.
+# Does NOT broadly match command lines for "tsx" / "esbuild" / "paperclip" —
+# that would kill Claude Code, JetBrains TS server, and unrelated build
+# watchers. The only global launch scan requires both this checkout's absolute
+# path and the complete Paperclip production command signature.
 
 # Run with -WhatIf to see exactly what would be killed without touching
 # anything. Worth doing before assuming this script is the reason something
 # died, and it is how the process-matching above is verified by hand.
 [CmdletBinding(SupportsShouldProcess)]
-param()
+param(
+    [ValidateRange(1, 65535)]
+    [int]$Port = 3100
+)
 
 $ErrorActionPreference = 'SilentlyContinue'
 
 $paperclipDir = Join-Path $env:USERPROFILE '.paperclip'
 $victims = [System.Collections.Generic.HashSet[int]]::new()
 
+# Build one process graph up front. The old recursive walk queried every
+# Windows process again for every child it visited; a normal Paperclip tree
+# includes the server, plugin workers, esbuild, and postgres workers, so that
+# turned a restart into roughly a minute of apparent inactivity.
+$processSnapshot = @(Get-CimInstance Win32_Process)
+$processById = @{}
+$childrenByParent = @{}
+foreach ($process in $processSnapshot) {
+    $processId = [int]$process.ProcessId
+    $parentId = [int]$process.ParentProcessId
+    $processById[$processId] = $process
+    if (-not $childrenByParent.ContainsKey($parentId)) {
+        $childrenByParent[$parentId] = [System.Collections.Generic.List[object]]::new()
+    }
+    $childrenByParent[$parentId].Add($process)
+}
+
 # This script lives at <repo>\scripts\launchers\windows\, so go up 3 levels to
-# reach the checkout that owns the embedded-postgres binaries.
-$repoModulesDir = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'node_modules'
+# reach the checkout that owns the server and embedded-postgres binaries.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repoModulesDir = Join-Path $repoRoot 'node_modules'
 
 # Case-insensitive substring test that treats / and \ as the same separator.
 # embedded-postgres is inconsistent about this: the postmaster is spawned with
@@ -89,9 +106,10 @@ function Test-RealParent {
 # Recursive descendants of a given PID, skipping reused-PID impostors.
 function Get-AllDescendants {
     param([int]$ParentPid)
-    $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$ParentPid"
+    $parent = $script:processById[$ParentPid]
     if (-not $parent) { return }
-    $kids = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $ParentPid }
+    $kids = $script:childrenByParent[$ParentPid]
+    if (-not $kids) { return }
     foreach ($k in $kids) {
         if (-not (Test-RealParent -Parent $parent -Child $k)) {
             Write-Host "  skipping PID $($k.ProcessId) ($($k.Name)): older than the PID $ParentPid that claims it"
@@ -111,9 +129,9 @@ function Get-AllDescendants {
 # the manual-launch flow. Both correctly survive the kill.
 function Get-LaunchChainAncestors {
     param([int]$ChildPid)
-    $current = Get-CimInstance Win32_Process -Filter "ProcessId=$ChildPid"
+    $current = $script:processById[$ChildPid]
     while ($current -and $current.ParentProcessId -gt 4) {
-        $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)"
+        $parent = $script:processById[[int]$current.ParentProcessId]
         if (-not $parent -or -not $parent.CommandLine) { break }
         if (-not (Test-RealParent -Parent $parent -Child $current)) { break }
         if ($parent.CommandLine.ToLower().IndexOf('tsx') -lt 0) { break }
@@ -122,24 +140,65 @@ function Get-LaunchChainAncestors {
     }
 }
 
-# Snapshot of the postgres processes for pass 2a below.
-$pgProcs = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^postgres' })
+# True only for the launcher production command from THIS checkout. Matching
+# both the repo path and the complete command signature is deliberately much
+# narrower than looking globally for `node`, `tsx`, or `paperclip`.
+function Test-IsPaperclipLaunchProcess {
+    param($Process)
+    if (-not $Process -or -not $Process.CommandLine) { return $false }
+    if (-not (Test-PathTextContains -Haystack $Process.CommandLine -Needle $script:repoRoot)) {
+        return $false
+    }
+    $normalized = (($Process.CommandLine.ToLower() -replace '["'']', '') -replace '\s+', ' ').Trim()
+    return $normalized.Contains('--filter paperclipai exec tsx src/index.ts run')
+}
 
-# 1. Server on port 3100 + descendants + launch-chain ancestors
-$serverConn = Get-NetTCPConnection -LocalPort 3100 -State Listen | Select-Object -First 1
+# Snapshot of the postgres processes for pass 3a below.
+$pgProcs = @($processSnapshot | Where-Object { $_.Name -match '^postgres' })
+
+# 1. Server on the configured port + descendants + launch-chain ancestors.
+$serverConn = Get-NetTCPConnection -LocalPort $Port -State Listen | Select-Object -First 1
 if ($serverConn) {
     $serverPid = [int]$serverConn.OwningProcess
     [void]$victims.Add($serverPid)
     Get-AllDescendants -ParentPid $serverPid
     Get-LaunchChainAncestors -ChildPid $serverPid
-    Write-Host "  found server PID $serverPid on port 3100"
+    Write-Host "  found server PID $serverPid on port $Port"
 } else {
-    Write-Host "  nothing listening on port 3100"
+    Write-Host "  nothing listening on port $Port"
 }
 
-# 2. Postgres. Two cases, because they present very differently.
+# 2. Exact launcher production trees from this checkout. Normally this finds
+# the same chain as step 1. It also finds stale siblings on a fallback port,
+# which is the state an interrupted or older restart could leave behind.
+$launchRootPids = [System.Collections.Generic.HashSet[int]]::new()
+$launchProcesses = @($processSnapshot | Where-Object {
+    Test-IsPaperclipLaunchProcess -Process $_
+})
+$launchCandidatePids = [System.Collections.Generic.HashSet[int]]::new()
+foreach ($launchProcess in $launchProcesses) {
+    [void]$launchCandidatePids.Add([int]$launchProcess.ProcessId)
+}
+foreach ($launchProcess in $launchProcesses) {
+    # Both the outer cmd.exe and its pnpm node child carry the full signature.
+    # Keep only the highest matching process so each tree is traversed once.
+    $parent = $processById[[int]$launchProcess.ParentProcessId]
+    if ($parent -and
+        $launchCandidatePids.Contains([int]$parent.ProcessId) -and
+        (Test-RealParent -Parent $parent -Child $launchProcess)) {
+        continue
+    }
+    $launchPid = [int]$launchProcess.ProcessId
+    if ($launchRootPids.Add($launchPid)) {
+        Write-Host "  found Paperclip launch process PID $launchPid"
+    }
+    [void]$victims.Add($launchPid)
+    Get-AllDescendants -ParentPid $launchPid
+}
+
+# 3. Postgres. Two cases, because they present very differently.
 #
-# 2a. A live database. Only the postmaster carries the data dir on its command
+# 3a. A live database. Only the postmaster carries the data dir on its command
 #     line (`postgres.exe -D <datadir> -p <port>`); its worker children are
 #     spawned as `postgres.exe --forkchild="io_worker" <n>` with no data dir on
 #     them at all, so they never match here on their own. Stop-Process does not
@@ -153,7 +212,7 @@ foreach ($pg in $pgProcs) {
     Get-AllDescendants -ParentPid $pg.ProcessId
 }
 
-# 2b. An orphan left behind by an earlier half-finished run. When a postmaster
+# 3b. An orphan left behind by an earlier half-finished run. When a postmaster
 #     dies without taking its workers with it (a killed `pnpm db:migrate`, an
 #     update console that was closed mid-build), the surviving io_worker keeps
 #     the postgres port bound and the data dir's postmaster.pid in place, which
@@ -183,9 +242,9 @@ foreach ($pg in (Get-OrphanedEmbeddedPostgres)) {
 # get the chance to observe the death and emit the noise.
 $ancestorPids = [System.Collections.Generic.HashSet[int]]::new()
 if ($serverConn) {
-    $cur = Get-CimInstance Win32_Process -Filter "ProcessId=$serverPid"
+    $cur = $processById[$serverPid]
     while ($cur -and $cur.ParentProcessId -gt 4) {
-        $par = Get-CimInstance Win32_Process -Filter "ProcessId=$($cur.ParentProcessId)"
+        $par = $processById[[int]$cur.ParentProcessId]
         if (-not $par -or -not $par.CommandLine) { break }
         if (-not (Test-RealParent -Parent $par -Child $cur)) { break }
         if ($par.CommandLine.ToLower().IndexOf('tsx') -lt 0) { break }
@@ -214,11 +273,16 @@ function Kill-Pid {
     }
 }
 
-# Phase 1: ancestors — silences the misleading log noise.
-foreach ($vpid in $ancestorPids) { Kill-Pid -Target $vpid }
+# Phase 1: launch roots and listener ancestors — silences misleading wrapper
+# errors before any child notices that the listener disappeared.
+foreach ($vpid in $launchRootPids) { Kill-Pid -Target $vpid }
+foreach ($vpid in $ancestorPids) {
+    if ($launchRootPids.Contains([int]$vpid)) { continue }
+    Kill-Pid -Target $vpid
+}
 # Phase 2: everything else (listener, descendants, postgres).
 foreach ($vpid in $victims) {
-    if ($ancestorPids.Contains([int]$vpid)) { continue }
+    if ($launchRootPids.Contains([int]$vpid) -or $ancestorPids.Contains([int]$vpid)) { continue }
     Kill-Pid -Target $vpid
 }
 

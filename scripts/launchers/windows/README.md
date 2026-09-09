@@ -25,6 +25,11 @@ wherever you cloned this — no path edits needed.
   Single-instance: re-running `paperclip.exe` while the tray is up just
   opens the browser instead of stacking trays.
 
+  Restart feedback: choosing *Restart Paperclip* immediately shows a Windows
+  notification, then reports success when the configured port is healthy
+  again. A restart is aborted with a visible error if the old server does not
+  release its port; Paperclip will not silently start a duplicate on 3101.
+
   Source lives at [`tools/paperclip-launcher/`](../../../tools/paperclip-launcher/) —
   Rust binary, GUI subsystem, no console flash. Rebuild via
   `tools\paperclip-launcher\build.bat` only if you change the launcher
@@ -57,8 +62,9 @@ the file; the file overrides the built-in defaults.
   Use this when troubleshooting startup issues or when you want to see
   embedded-postgres + server logs streaming in real time.
 - **`stop-paperclip.bat`** — Kill the running paperclip server, including
-  embedded postgres and any zombie dev-runner children. Works regardless of
-  which launcher started it. Leaves your data dir alone.
+  embedded postgres, stale fallback-port siblings from this checkout, and any
+  zombie dev-runner children. Works regardless of which launcher started it.
+  Leaves your data dir alone.
 - **`backup-data.bat`** — Snapshot `%USERPROFILE%\.paperclip\` to a timestamped
   folder under `%USERPROFILE%\paperclip-backups\`. Run before risky operations
   (upgrades, migrations, schema changes).

@@ -16,6 +16,9 @@ hidden-window launcher and system-tray for paperclip on Windows.
    `%USERPROFILE%\.paperclip\logs\paperclip-YYYYMMDD.log`.
 3. **Polls the port** for up to 90 seconds. Opens the browser when the
    server binds, or shows a MessageBox pointing at the log if it times out.
+   Tray restarts show native starting/completed feedback and refuse to launch
+   if the configured port never becomes free, rather than silently creating a
+   second server on a fallback port.
 4. **Stays in the tray** with a menu that mirrors the browser's
    account-menu lifecycle strip: Open / Update / Rebuild / Restart / Logs /
    Docs / Shut down / Quit launcher.
@@ -79,6 +82,7 @@ The launcher is a thin wrapper. It doesn't know or care what paperclip
 itself does. Things that DO require a rebuild:
 
 - Adding a tray menu item or changing menu labels.
+- Changing tray lifecycle behavior or native status notifications.
 - Changing built-in defaults (port, URL).
 - Adding new config keys.
 - Bumping crate dependencies.

@@ -147,6 +147,7 @@ struct DesktopNotification {
 /// User event injected into tao's event loop by the poll thread.
 enum UserEvent {
     Notify(DesktopNotification),
+    RestartFinished(Result<(), String>),
 }
 
 /// Shape of GET /api/internal/desktop-notifications/pending.
@@ -388,6 +389,7 @@ fn run_tray(paths: Paths, config: Config) {
     // toast and the queue would pile up forever. `config.url` is still used for
     // opening the browser and as the toast deep-link target below.
     let internal_port = config.port;
+    let notification_proxy = proxy.clone();
     std::thread::spawn(move || {
         let loopback_base = format!("http://127.0.0.1:{}/", internal_port);
         let pending_url = join_url(&loopback_base, "api/internal/desktop-notifications/pending?limit=20");
@@ -400,7 +402,7 @@ fn run_tray(paths: Paths, config: Config) {
                     // Only raise a toast the first time we see an id; still ack
                     // it every time so the server can retire the row.
                     if shown.insert(n.id.clone()) {
-                        let _ = proxy.send_event(UserEvent::Notify(n.clone()));
+                        let _ = notification_proxy.send_event(UserEvent::Notify(n.clone()));
                     }
                     to_ack.push(n.id);
                 }
@@ -420,18 +422,36 @@ fn run_tray(paths: Paths, config: Config) {
         // A notification arrived from the poll thread — show a native toast.
         // Clicking it opens the notification's deep link, falling back to the
         // app URL when the server didn't attach one.
-        if let tao::event::Event::UserEvent(UserEvent::Notify(n)) = &event {
-            let target = n.url.clone().unwrap_or_else(|| config.url.clone());
-            let _ = tauri_winrt_notification::Toast::new(
-                tauri_winrt_notification::Toast::POWERSHELL_APP_ID,
-            )
-            .title(&n.title)
-            .text1(&n.body)
-            .on_activated(move |_action| {
-                open_url(&target);
-                Ok(())
-            })
-            .show();
+        if let tao::event::Event::UserEvent(user_event) = &event {
+            match user_event {
+                UserEvent::Notify(n) => {
+                    let target = n.url.clone().unwrap_or_else(|| config.url.clone());
+                    let _ = tauri_winrt_notification::Toast::new(
+                        tauri_winrt_notification::Toast::POWERSHELL_APP_ID,
+                    )
+                    .title(&n.title)
+                    .text1(&n.body)
+                    .on_activated(move |_action| {
+                        open_url(&target);
+                        Ok(())
+                    })
+                    .show();
+                }
+                UserEvent::RestartFinished(Ok(())) => {
+                    show_status_toast(
+                        "Paperclip restarted",
+                        "The server is back online and ready to use.",
+                    );
+                    open_url(&config.url);
+                }
+                UserEvent::RestartFinished(Err(message)) => {
+                    show_status_toast(
+                        "Paperclip restart failed",
+                        "The server was not restarted. See the error message for details.",
+                    );
+                    warn_box(message);
+                }
+            }
         }
 
         while let Ok(event) = menu_channel.try_recv() {
@@ -448,42 +468,71 @@ fn run_tray(paths: Paths, config: Config) {
                 spawn_visible_bat(&paths.launcher_dir, "rebuild-paperclip.bat");
             } else if id == &id_restart {
                 if !restart_in_progress.swap(true, Ordering::SeqCst) {
+                    show_status_toast(
+                        "Restarting Paperclip",
+                        "Stopping the server and starting it again…",
+                    );
                     let paths_clone = clone_paths(&paths);
                     let cfg_clone = config.clone();
                     let flag = restart_in_progress.clone();
+                    let restart_proxy = proxy.clone();
                     thread::spawn(move || {
-                        do_restart(&paths_clone, &cfg_clone);
+                        let result = do_restart(&paths_clone, &cfg_clone);
                         flag.store(false, Ordering::SeqCst);
+                        let _ = restart_proxy.send_event(UserEvent::RestartFinished(result));
                     });
+                } else {
+                    show_status_toast(
+                        "Restart already in progress",
+                        "Paperclip is still restarting. You'll be notified when it is ready.",
+                    );
                 }
             } else if id == &id_shutdown {
-                spawn_hidden_ps1(&paths.launcher_dir, "stop-paperclip.ps1");
+                spawn_hidden_stop(&paths.launcher_dir, config.port);
                 *control_flow = ControlFlow::Exit;
             }
         }
     });
 }
 
-fn do_restart(paths: &Paths, config: &Config) {
+fn do_restart(paths: &Paths, config: &Config) -> Result<(), String> {
     // Stop the server: invoke stop-paperclip.ps1 directly so we don't fight
     // the .bat's interactive `pause`.
-    let _ = Command::new("powershell")
+    let stop_script = paths.launcher_dir.join("stop-paperclip.ps1");
+    if !stop_script.exists() {
+        return Err(format!(
+            "Restart script not found:\n{}",
+            stop_script.display()
+        ));
+    }
+    let port = config.port.to_string();
+    let status = Command::new("powershell")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            paths
-                .launcher_dir
-                .join("stop-paperclip.ps1")
-                .to_str()
-                .unwrap_or(""),
+            stop_script.to_str().unwrap_or(""),
+            "-Port",
+            &port,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
-        .status();
+        .status()
+        .map_err(|error| format!("Could not run the restart script:\n{}", error))?;
+
+    if !status.success() {
+        return Err(format!(
+            "The restart script failed with exit code {}.\n\nCheck the log under:\n{}",
+            status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            paths.logs_dir.display()
+        ));
+    }
 
     // Wait for the port to actually free. stop-paperclip.ps1 exits as soon as
     // it sends the kill, but the OS takes a moment to release the listen.
@@ -494,19 +543,27 @@ fn do_restart(paths: &Paths, config: &Config) {
         thread::sleep(Duration::from_secs(1));
     }
 
-    if let Err(msg) = spawn_server(paths) {
-        warn_box(&format!("Restart failed at spawn step:\n{}", msg));
-        return;
+    // Never start while the requested port is still occupied. The server's
+    // normal fallback is to select the next free port, which is useful for
+    // development but wrong for a tray restart: it leaves a hidden duplicate
+    // on 3101 while the browser still points at 3100.
+    if port_is_bound(config.port) {
+        return Err(format!(
+            "Port {} is still in use after {} seconds.\n\nPaperclip was not started, to avoid creating a duplicate server on another port.",
+            config.port, RESTART_PORT_FREE_TIMEOUT_SECS
+        ));
     }
 
+    spawn_server(paths).map_err(|msg| format!("Restart failed at spawn step:\n{}", msg))?;
+
     if wait_for_port(config.port, STARTUP_TIMEOUT_SECS) {
-        open_url(&config.url);
+        Ok(())
     } else {
-        warn_box(&format!(
+        Err(format!(
             "Server didn't come back within {} seconds after restart.\n\nCheck the log under:\n{}",
             STARTUP_TIMEOUT_SECS,
             paths.logs_dir.display()
-        ));
+        ))
     }
 }
 
@@ -527,12 +584,13 @@ fn spawn_visible_bat(launcher_dir: &Path, script: &str) {
         .spawn();
 }
 
-fn spawn_hidden_ps1(launcher_dir: &Path, script: &str) {
-    let ps1 = launcher_dir.join(script);
+fn spawn_hidden_stop(launcher_dir: &Path, port: u16) {
+    let ps1 = launcher_dir.join("stop-paperclip.ps1");
     if !ps1.exists() {
         warn_box(&format!("Script not found:\n{}", ps1.display()));
         return;
     }
+    let port = port.to_string();
     let _ = Command::new("powershell")
         .args([
             "-NoProfile",
@@ -540,12 +598,22 @@ fn spawn_hidden_ps1(launcher_dir: &Path, script: &str) {
             "Bypass",
             "-File",
             ps1.to_str().unwrap_or(""),
+            "-Port",
+            &port,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
+}
+
+fn show_status_toast(title: &str, body: &str) {
+    let _ =
+        tauri_winrt_notification::Toast::new(tauri_winrt_notification::Toast::POWERSHELL_APP_ID)
+            .title(title)
+            .text1(body)
+            .show();
 }
 
 fn clone_paths(p: &Paths) -> Paths {
