@@ -1,3 +1,4 @@
+import type { PluginOperationPolicy } from "../plugin-operation-policy.js";
 import type {
   PluginStatus,
   PluginCategory,
@@ -9,6 +10,7 @@ import type {
   PluginLauncherAction,
   PluginLauncherBounds,
   PluginLauncherRenderEnvironment,
+  PluginOperationAudience,
   PluginApiRouteAuthMode,
   PluginApiRouteCheckoutPolicy,
   PluginApiRouteMethod,
@@ -88,6 +90,74 @@ export interface PluginToolDeclaration {
   description: string;
   /** JSON Schema describing the tool's input parameters. */
   parametersSchema: JsonSchema;
+  /**
+   * True when running this twice is not the same as running it once. Same
+   * meaning and same protection as `PluginOperationDeclaration.writes`;
+   * available here so an existing tool can opt in without being rewritten as
+   * an operation.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  writes?: boolean;
+}
+
+/**
+ * Declares one thing a plugin can do, published on both lanes at once.
+ *
+ * Before operations existed a plugin had to say the same thing twice: once as
+ * a `tools[]` entry with a handler registered through `ctx.tools.register` so
+ * agents could call it, and again as an undeclared, unschematized
+ * `ctx.actions.register` key so the plugin's own screen could call it. Nothing
+ * checked that the two lists agreed, so they drifted — the kitchen-sink
+ * example shipped 22 actions against 3 tools, meaning almost everything a
+ * person could do there, no agent could.
+ *
+ * An operation is declared once here and registered once through
+ * `ctx.operations.register`. The host publishes it as a namespaced agent tool
+ * (`<pluginId>:<key>`) and as a UI action under the same key, subject to
+ * {@link audience}.
+ *
+ * Requires `agent.tools.register` when the audience includes agents, and
+ * `ui.action.register` when it includes users.
+ *
+ * @see PLUGIN_SPEC.md §11.5 — Operations
+ */
+export interface PluginOperationDeclaration {
+  /**
+   * Stable identifier, unique within the plugin and distinct from every
+   * `tools[].name`. Namespaced by plugin id when published to agents.
+   */
+  key: string;
+  /** Human-readable name shown to agents and in the UI. */
+  displayName: string;
+  /** What this does and when to use it. Read by agents, so write it for one. */
+  description: string;
+  /** JSON Schema describing the operation's input parameters. */
+  parametersSchema: JsonSchema;
+  /**
+   * Which lanes the host publishes this on. Defaults to `"both"`.
+   *
+   * Use `"users"` for anything that only makes sense with a person present
+   * (opening a file picker, exporting the current view), and `"agents"` for
+   * machine-shaped work no operator would ever click.
+   */
+  audience?: PluginOperationAudience;
+  /**
+   * True when running this twice is not the same as running it once — it
+   * sends an email, files a ticket, charges a card, places a call.
+   *
+   * The host protects these from repeating. On the agent lane it derives an
+   * idempotency key from the run and the arguments when the caller supplies
+   * none, so a retried call after a timeout replays the first result instead
+   * of doing the work again.
+   *
+   * Defaults to false. Mark it on anything with a side effect outside
+   * Paperclip; the cost of marking a read-only operation by mistake is one
+   * extra row, and the cost of missing a writing one is a duplicate email.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  writes?: boolean;
 }
 
 /**
@@ -408,8 +478,20 @@ export interface PaperclipPluginManifestV1 {
   jobs?: PluginJobDeclaration[];
   /** Webhook endpoints this plugin declares. Requires `webhooks.receive` capability. */
   webhooks?: PluginWebhookDeclaration[];
-  /** Agent tools this plugin contributes. Requires `agent.tools.register` capability. */
+  /**
+   * Agent tools this plugin contributes. Requires `agent.tools.register`.
+   *
+   * Prefer `operations` for anything a person might also want to trigger —
+   * a `tools[]` entry is only reachable by agents and has to be duplicated as
+   * an action to reach the UI.
+   */
   tools?: PluginToolDeclaration[];
+  /**
+   * Things this plugin can do, each published to agents and to people from a
+   * single declaration. The preferred surface; `tools` and bare
+   * `ctx.actions.register` keys remain supported for existing plugins.
+   */
+  operations?: PluginOperationDeclaration[];
   /** Restricted plugin-owned database namespace declaration. */
   database?: PluginDatabaseDeclaration;
   /**
@@ -468,6 +550,13 @@ export interface PluginRecord {
   categories: PluginCategory[];
   /** Full manifest snapshot persisted at install/upgrade time. */
   manifestJson: PaperclipPluginManifestV1;
+  /**
+   * Operator overrides for individual operations, keyed by operation key.
+   * Can only narrow what the manifest declares, never widen it.
+   *
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  operationPolicyJson?: PluginOperationPolicy;
   /** Current lifecycle status. */
   status: PluginStatus;
   /** Deterministic load order (null if not yet assigned). */

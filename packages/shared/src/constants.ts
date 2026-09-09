@@ -755,6 +755,63 @@ export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 export const PLUGIN_CONNECTOR_SURFACES = ["calendar"] as const;
 export type PluginConnectorSurface = (typeof PLUGIN_CONNECTOR_SURFACES)[number];
 
+/**
+ * Who is allowed to run a plugin operation.
+ *
+ * An operation is one thing a plugin can do, declared once and reachable on
+ * both lanes: an agent calls it as a namespaced tool, a person triggers it
+ * from the plugin's own screen. The audience says which of those two lanes
+ * the host publishes it on.
+ *
+ * - `both` (default) — agents and people
+ * - `agents` — agents only; the UI bridge refuses it
+ * - `users` — people only; it never appears in any agent's tool list
+ *
+ * The operator can narrow this further per install, but never widen it: a
+ * manifest that says `users` cannot be turned into an agent tool by config.
+ *
+ * @see PLUGIN_SPEC.md §11.5 — Operations
+ */
+/**
+ * Why a plugin operation or tool failed, in terms a caller can act on.
+ *
+ * Before this list existed, a failure came back as `error: string` and nothing
+ * more, so an agent could not tell "try again in a minute" from "the login to
+ * Help Scout expired and a person has to reconnect it". Both read as prose, so
+ * agents retried what could never succeed and gave up on what would have.
+ *
+ * Codes, and what a caller should do:
+ *
+ * - `invalid_input` — the parameters were wrong. Fix them and call again;
+ *   the same input will never work.
+ * - `not_found` — the thing named does not exist. Do not retry blind.
+ * - `not_authorized` — this caller may not do this. A person may be able to
+ *   grant it; the caller cannot fix it alone.
+ * - `needs_reconnect` — the outside account's credentials are expired or
+ *   revoked. Nothing retries past this: a person must reconnect the account.
+ * - `unavailable` — the outside system is down, busy, or rate-limiting. Safe
+ *   to retry later, ideally after `retryAfterMs`.
+ * - `timeout` — it took too long. May well succeed on retry, but if the
+ *   operation writes something, only retry with the same idempotency key.
+ * - `failed` — it went wrong for a reason none of the above covers, and
+ *   retrying is not expected to help.
+ *
+ * @see PLUGIN_SPEC.md §11.6 — Operation failures
+ */
+export const PLUGIN_OPERATION_ERROR_CODES = [
+  "invalid_input",
+  "not_found",
+  "not_authorized",
+  "needs_reconnect",
+  "unavailable",
+  "timeout",
+  "failed",
+] as const;
+export type PluginOperationErrorCode = (typeof PLUGIN_OPERATION_ERROR_CODES)[number];
+
+export const PLUGIN_OPERATION_AUDIENCES = ["both", "agents", "users"] as const;
+export type PluginOperationAudience = (typeof PLUGIN_OPERATION_AUDIENCES)[number];
+
 export const PLUGIN_DATABASE_NAMESPACE_MODES = ["schema"] as const;
 export type PluginDatabaseNamespaceMode = (typeof PLUGIN_DATABASE_NAMESPACE_MODES)[number];
 

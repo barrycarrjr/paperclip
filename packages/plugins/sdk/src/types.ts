@@ -15,6 +15,9 @@ import type {
   PluginEventType,
   PluginToolDeclaration,
   PluginLauncherDeclaration,
+  PluginLauncherRenderContextSnapshot,
+  PluginOperationErrorCode,
+  PluginOperationFailureDetail,
   Company,
   Project,
   Issue,
@@ -65,6 +68,8 @@ export type {
   PluginLauncherAction,
   PluginLauncherBounds,
   PluginLauncherRenderEnvironment,
+  PluginOperationErrorCode,
+  PluginOperationFailureDetail,
   PluginStateScopeKind,
   PluginJobStatus,
   PluginJobRunStatus,
@@ -238,6 +243,22 @@ export interface ToolRunContext {
    * rather than guess.
    */
   userId?: string | null;
+  /**
+   * What makes two calls "the same call", for a tool or operation declared
+   * `writes: true`.
+   *
+   * Supply one to say explicitly that a repeat must not do the work twice.
+   * When absent on the agent lane the host derives one from the run and the
+   * arguments, so a retry after a lost response replays the first result
+   * instead of firing again.
+   *
+   * Handlers should pass this on to any outside system that accepts an
+   * idempotency key of its own (Stripe, most payment and messaging APIs), so
+   * the protection reaches past Paperclip's own boundary.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -250,8 +271,103 @@ export interface ToolResult {
   content?: string;
   /** Structured data returned alongside or instead of string content. */
   data?: unknown;
-  /** If present, indicates the tool call failed. */
+  /**
+   * If present, indicates the tool call failed. Carries the human-readable
+   * message.
+   *
+   * Every caller in the host reads this, so it stays populated even when
+   * {@link failure} is set — building a failure through `operationFailure()`
+   * or throwing `OperationFailed` fills both.
+   */
   error?: string;
+  /**
+   * Structured failure detail: the code that says whether retrying could help,
+   * whether a person has to step in, and how long to wait.
+   *
+   * Prefer this over a bare `error` string. Without it an agent cannot tell a
+   * temporary outage from an expired login, so it retries what cannot succeed
+   * and abandons what would have.
+   *
+   * @see PLUGIN_SPEC.md §11.6 — Operation failures
+   */
+  failure?: PluginOperationFailureDetail;
+}
+
+/**
+ * Build a failed {@link ToolResult} with both the structured code and the
+ * plain message every existing caller already reads.
+ *
+ * @example
+ * ```ts
+ * if (res.status === 401) {
+ *   return operationFailure(
+ *     "needs_reconnect",
+ *     "Help Scout rejected the stored credentials for this company.",
+ *   );
+ * }
+ * if (res.status === 429) {
+ *   return operationFailure("unavailable", "Help Scout is rate-limiting us.", {
+ *     retryAfterMs: 30_000,
+ *   });
+ * }
+ * ```
+ */
+export function operationFailure(
+  code: PluginOperationErrorCode,
+  message: string,
+  options: { retryAfterMs?: number; details?: unknown } = {},
+): ToolResult {
+  return {
+    error: message,
+    failure: {
+      code,
+      message,
+      ...(options.retryAfterMs === undefined ? {} : { retryAfterMs: options.retryAfterMs }),
+      ...(options.details === undefined ? {} : { details: options.details }),
+    },
+  };
+}
+
+/**
+ * Throwable form of {@link operationFailure}, for handlers that would rather
+ * abort from deep inside a helper than thread a result back up.
+ *
+ * The worker catches it and converts it into the same `ToolResult` shape, so a
+ * caller cannot tell which style the plugin used. Any other thrown error still
+ * becomes a plain `failed`, because the worker has no way to know whether an
+ * unrecognised exception is safe to retry.
+ *
+ * @example
+ * ```ts
+ * if (!account) {
+ *   throw new OperationFailed("not_found", `No mailbox for company ${companyId}.`);
+ * }
+ * ```
+ */
+export class OperationFailed extends Error {
+  readonly code: PluginOperationErrorCode;
+  readonly retryAfterMs?: number;
+  readonly details?: unknown;
+
+  constructor(
+    code: PluginOperationErrorCode,
+    message: string,
+    options: { retryAfterMs?: number; details?: unknown } = {},
+  ) {
+    super(message);
+    this.name = "OperationFailed";
+    this.code = code;
+    this.retryAfterMs = options.retryAfterMs;
+    this.details = options.details;
+  }
+
+  /** The `ToolResult` this failure becomes on the wire. */
+  toToolResult(): ToolResult {
+    return operationFailure(this.code, this.message, {
+      retryAfterMs: this.retryAfterMs,
+      details: this.details,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -851,6 +967,109 @@ export interface PluginToolsClient {
     name: string,
     declaration: Pick<PluginToolDeclaration, "displayName" | "description" | "parametersSchema">,
     fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>,
+  ): void;
+}
+
+// ---------------------------------------------------------------------------
+// Operations — one declaration, both lanes
+// ---------------------------------------------------------------------------
+
+/**
+ * Context passed to an operation handler, whichever lane the call arrived on.
+ *
+ * An operation is reachable two ways: an agent calls it as a namespaced tool,
+ * or a person triggers it from the plugin's own screen. Those two callers
+ * carry different information — an agent run has an `agentId` and a `runId`
+ * and usually no person behind it, a button click has a person and neither —
+ * so the handler is told which lane it is on and gets whichever fields that
+ * lane can honestly supply.
+ *
+ * Read {@link invokedBy} rather than testing for the presence of `agentId`:
+ * that keeps the intent obvious, and it stays correct if the host later learns
+ * to fill in more fields on either lane.
+ *
+ * @see PLUGIN_SPEC.md §11.5 — Operations
+ */
+export interface PluginOperationContext {
+  /** Which lane this call came in on. */
+  invokedBy: "agent" | "user";
+  /**
+   * UUID of the company this call acts under.
+   *
+   * Host-populated on both lanes: derived from the agent run for `"agent"`,
+   * and from the validated bridge scope (`params.hostScope.companyId`) for
+   * `"user"`. Empty string only for an instance-admin global UI call that has
+   * no company to name — treat that as "no company", not as a company.
+   */
+  companyId: string;
+  /** UUID of the project, when the call has one. */
+  projectId?: string;
+  /**
+   * UUID of the person behind this call, when there is one. Set for a UI click
+   * and for a Clippy turn; absent for an ordinary unattended agent run.
+   *
+   * SECURITY: host-populated only, never accepted from the caller. An
+   * operation that owns per-user data must refuse when this is absent rather
+   * than guess, and must never take an owner as a parameter instead.
+   */
+  userId?: string | null;
+  /** UUID of the calling agent. Present only when `invokedBy === "agent"`. */
+  agentId?: string;
+  /** UUID of the agent run. Present only when `invokedBy === "agent"`. */
+  runId?: string;
+  /** Chat session UUID, when the caller is the in-app chat agent. */
+  chatSessionId?: string;
+  /**
+   * Where the plugin UI is being rendered, when the call came from a launcher
+   * that reports it. Always absent on the agent lane.
+   */
+  renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
+  /**
+   * What makes two calls "the same call", for an operation declared
+   * `writes: true`. Host-derived on the agent lane when the caller supplies
+   * none; present on the user lane only when the caller passed one.
+   *
+   * Pass it on to any outside system that accepts an idempotency key of its
+   * own, so the protection reaches past Paperclip's boundary.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  idempotencyKey?: string;
+}
+
+/**
+ * `ctx.operations` — register a handler once and have it reachable by agents
+ * and by people.
+ *
+ * The handler is looked up for both `executeTool` (agent lane) and
+ * `performAction` (UI lane), so there is exactly one implementation and no
+ * way for the two to drift apart. Which lanes the host actually publishes it
+ * on is decided by the manifest's `operations[].audience`, not here.
+ *
+ * Requires `agent.tools.register` and/or `ui.action.register` to match the
+ * declared audience.
+ *
+ * @example
+ * ```ts
+ * ctx.operations.register("resync", async (params, opCtx) => {
+ *   const { since } = params as { since?: string };
+ *   const count = await resync(opCtx.companyId, since);
+ *   return { content: `Resynced ${count} records.`, data: { count } };
+ * });
+ * ```
+ *
+ * @see PLUGIN_SPEC.md §11.5 — Operations
+ */
+export interface PluginOperationsClient {
+  /**
+   * Register a handler for an operation declared in the manifest.
+   *
+   * @param key - Operation key matching the manifest declaration
+   * @param fn - Async handler receiving the parsed params and the lane-aware context
+   */
+  register(
+    key: string,
+    fn: (params: unknown, opCtx: PluginOperationContext) => Promise<ToolResult>,
   ): void;
 }
 
@@ -1647,6 +1866,13 @@ export interface PluginContext {
 
   /** Register agent tool handlers. Requires `agent.tools.register`. */
   tools: PluginToolsClient;
+
+  /**
+   * Register operation handlers — one implementation reachable by agents and
+   * by people. Prefer this over registering the same work twice as a tool and
+   * an action.
+   */
+  operations: PluginOperationsClient;
 
   /** Write plugin metrics. Requires `metrics.write`. */
   metrics: PluginMetricsClient;

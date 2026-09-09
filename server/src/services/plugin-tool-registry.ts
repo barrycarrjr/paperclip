@@ -21,8 +21,17 @@
 
 import type {
   PaperclipPluginManifestV1,
+  PluginOperationAudience,
+  PluginOperationDeclaration,
   PluginToolDeclaration,
 } from "@paperclipai/shared";
+import {
+  PLUGIN_OPERATION_ERROR_CODES,
+  isPluginOperationFailure,
+  policyAllowsAgents,
+  resolveOperationPolicy,
+} from "@paperclipai/shared";
+import type { PluginOperationPolicy } from "@paperclipai/shared";
 import type { ToolRunContext, ToolResult, ExecuteToolParams } from "@paperclipai/plugin-sdk";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { logger } from "../middleware/logger.js";
@@ -67,6 +76,36 @@ export interface RegisteredTool {
   description: string;
   /** JSON Schema describing the tool's input parameters. */
   parametersSchema: Record<string, unknown>;
+  /**
+   * True when this entry came from `manifest.operations` rather than the older
+   * `manifest.tools`. An operation is the same callable on the agent lane, so
+   * it is registered here identically; the flag exists so the UI and audit
+   * logs can say which surface the plugin author declared.
+   */
+  isOperation: boolean;
+  /**
+   * Who the plugin author said may run this. Always includes agents for an
+   * entry that reached this registry — a `"users"` operation is deliberately
+   * never registered as a tool, so it can never appear in an agent's tool list.
+   */
+  audience: PluginOperationAudience;
+  /**
+   * True when running this twice is not the same as running it once. The
+   * dispatcher gives these repeat protection; everything else runs straight
+   * through, because a read costs nothing to repeat and taking a claim for one
+   * would be a database write per lookup.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  writes: boolean;
+  /**
+   * True when the operator said an agent must get a human yes before this
+   * runs. Set from the install's operation policy, never from the manifest —
+   * a plugin cannot decide how much its host trusts agents.
+   *
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  requiresApproval: boolean;
 }
 
 /**
@@ -111,8 +150,16 @@ export interface PluginToolRegistry {
    * @param manifest - The plugin manifest containing the `tools` array
    * @param pluginDbId - The plugin's database UUID, used for worker routing
    *   and availability checks. If omitted, `pluginId` is used (backwards-compat).
+   * @param operationPolicy - The operator's per-operation overrides for this
+   *   install. Can only narrow what the manifest declares; an override that
+   *   would widen it is logged and ignored.
    */
-  registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1, pluginDbId?: string): void;
+  registerPlugin(
+    pluginId: string,
+    manifest: PaperclipPluginManifestV1,
+    pluginDbId?: string,
+    operationPolicy?: PluginOperationPolicy,
+  ): void;
 
   /**
    * Remove all tool registrations for a plugin.
@@ -255,16 +302,72 @@ export function createPluginToolRegistry(
   }
 
   function addTool(pluginId: string, decl: PluginToolDeclaration, pluginDbId: string): void {
-    const namespacedName = buildName(pluginId, decl.name);
+    // Legacy tools carry no audience and no policy entry: they were only ever
+    // reachable by agents, so there is nothing to narrow.
+    addEntry(pluginId, pluginDbId, {
+      name: decl.name,
+      displayName: decl.displayName,
+      description: decl.description,
+      parametersSchema: decl.parametersSchema,
+      isOperation: false,
+      audience: "agents",
+      writes: decl.writes === true,
+      requiresApproval: false,
+    });
+  }
+
+  /**
+   * Register an operation on the agent lane.
+   *
+   * A `"users"` operation is skipped rather than registered and filtered
+   * later: the safest place to enforce "no agent may call this" is to never
+   * put it in the map agents read from.
+   */
+  function addOperation(
+    pluginId: string,
+    decl: PluginOperationDeclaration,
+    pluginDbId: string,
+    policy: PluginOperationPolicy | undefined,
+  ): boolean {
+    const resolved = resolveOperationPolicy(decl.audience, policy?.[decl.key]);
+
+    if (resolved.overrideIgnored) {
+      // Say so rather than silently obeying or silently dropping it: an
+      // operator who set something that cannot take effect should be able to
+      // find out why from the log.
+      log.warn(
+        { pluginId, key: decl.key, declared: decl.audience ?? "both", requested: policy?.[decl.key]?.audience },
+        "operator audience override would widen what the plugin declared — ignoring it",
+      );
+    }
+
+    if (!policyAllowsAgents(resolved)) return false;
+
+    addEntry(pluginId, pluginDbId, {
+      name: decl.key,
+      displayName: decl.displayName,
+      description: decl.description,
+      parametersSchema: decl.parametersSchema,
+      isOperation: true,
+      audience: resolved.audience as PluginOperationAudience,
+      writes: decl.writes === true,
+      requiresApproval: resolved.requiresApproval,
+    });
+    return true;
+  }
+
+  function addEntry(
+    pluginId: string,
+    pluginDbId: string,
+    fields: Omit<RegisteredTool, "pluginId" | "pluginDbId" | "namespacedName">,
+  ): void {
+    const namespacedName = buildName(pluginId, fields.name);
 
     const entry: RegisteredTool = {
       pluginId,
       pluginDbId,
-      name: decl.name,
       namespacedName,
-      displayName: decl.displayName,
-      description: decl.description,
-      parametersSchema: decl.parametersSchema,
+      ...fields,
     };
 
     byNamespace.set(namespacedName, entry);
@@ -275,6 +378,52 @@ export function createPluginToolRegistry(
       byPlugin.set(pluginId, pluginTools);
     }
     pluginTools.add(namespacedName);
+  }
+
+  /**
+   * Make a worker's result safe to reason about.
+   *
+   * The worker is a separate process, so its output is untrusted in shape: a
+   * plugin can return a `failure` with a code the host has never heard of, or
+   * set a code without a message. A half-formed failure is worse than none,
+   * because callers branch on it. Anything unrecognised is dropped down to the
+   * codes the host does understand, and `error` is kept populated either way
+   * so every existing caller behaves exactly as it did before.
+   */
+  function normalizeToolResult(raw: ToolResult): ToolResult {
+    if (!raw || typeof raw !== "object") return raw;
+
+    const failure = isPluginOperationFailure(raw.failure, PLUGIN_OPERATION_ERROR_CODES)
+      ? raw.failure
+      : undefined;
+
+    if (failure) {
+      return { ...raw, failure, error: raw.error ?? failure.message };
+    }
+
+    if (raw.failure) {
+      // Shaped like a failure but not one we recognise. Keep the fact that it
+      // failed, discard the unusable detail.
+      const message = raw.error
+        ?? (typeof (raw.failure as { message?: unknown }).message === "string"
+          ? (raw.failure as { message: string }).message
+          : "The plugin reported a failure it did not describe.");
+      log.warn(
+        { failure: raw.failure },
+        "plugin returned an unrecognised failure shape — treating it as 'failed'",
+      );
+      return { ...raw, error: message, failure: { code: "failed", message } };
+    }
+
+    if (raw.error) {
+      return { ...raw, failure: { code: "failed", message: raw.error } };
+    }
+
+    return raw;
+  }
+
+  function listPluginNames(pluginId: string): string[] {
+    return Array.from(byPlugin.get(pluginId) ?? []);
   }
 
   function removePluginTools(pluginId: string): number {
@@ -295,7 +444,12 @@ export function createPluginToolRegistry(
   // -----------------------------------------------------------------------
 
   return {
-    registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1, pluginDbId?: string): void {
+    registerPlugin(
+      pluginId: string,
+      manifest: PaperclipPluginManifestV1,
+      pluginDbId?: string,
+      operationPolicy?: PluginOperationPolicy,
+    ): void {
       const dbId = pluginDbId ?? pluginId;
 
       // Remove any previously registered tools for this plugin (idempotent)
@@ -308,8 +462,9 @@ export function createPluginToolRegistry(
       }
 
       const tools = manifest.tools ?? [];
-      if (tools.length === 0) {
-        log.debug({ pluginId }, "plugin declares no tools");
+      const operations = manifest.operations ?? [];
+      if (tools.length === 0 && operations.length === 0) {
+        log.debug({ pluginId }, "plugin declares no tools or operations");
         return;
       }
 
@@ -317,13 +472,39 @@ export function createPluginToolRegistry(
         addTool(pluginId, decl, dbId);
       }
 
+      // Operations reach agents under the same namespace as tools, so a
+      // manifest that names the same string twice would have one silently win.
+      // The manifest validator rejects that, but a plugin can be installed from
+      // an older build or a hand-edited manifest, so refuse here too rather
+      // than trust it.
+      const toolNames = new Set(tools.map((t) => t.name));
+      let publishedOperations = 0;
+      let userOnlyOperations = 0;
+      for (const decl of operations) {
+        if (toolNames.has(decl.key)) {
+          log.error(
+            { pluginId, key: decl.key },
+            "operation key collides with a tool name — skipping the operation; "
+            + "declare it once, as an operation or as a tool",
+          );
+          continue;
+        }
+        if (addOperation(pluginId, decl, dbId, operationPolicy)) {
+          publishedOperations += 1;
+        } else {
+          userOnlyOperations += 1;
+        }
+      }
+
       log.info(
         {
           pluginId,
           toolCount: tools.length,
-          tools: tools.map((t) => buildName(pluginId, t.name)),
+          operationCount: publishedOperations,
+          userOnlyOperationCount: userOnlyOperations,
+          tools: listPluginNames(pluginId),
         },
-        `registered ${tools.length} tool(s) for plugin`,
+        `registered ${tools.length + publishedOperations} agent-callable entr(ies) for plugin`,
       );
     },
 
@@ -422,7 +603,8 @@ export function createPluginToolRegistry(
         runContext,
       };
 
-      const result = await workerManager.call(dbId, "executeTool", rpcParams);
+      const raw = await workerManager.call(dbId, "executeTool", rpcParams);
+      const result = normalizeToolResult(raw);
 
       log.debug(
         {

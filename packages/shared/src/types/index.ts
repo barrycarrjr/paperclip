@@ -354,6 +354,7 @@ export type {
   PluginConnectorDeclaration,
   PluginConnectorCompanyStatus,
   PluginConnectorStatus,
+  PluginOperationDeclaration,
   PaperclipPluginManifestV1,
   PluginRecord,
   PluginDatabaseNamespaceRecord,

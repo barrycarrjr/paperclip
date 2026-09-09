@@ -50,6 +50,13 @@ import {
   upgradePluginSchema,
 } from "@paperclipai/shared";
 import { pluginRegistryService } from "../services/plugin-registry.js";
+import type { PluginOperationIdempotencyStore } from "../services/plugin-operation-idempotency.js";
+import {
+  policyAllowsUsers,
+  resolveOperationPolicy,
+  pluginOperationPolicySchema,
+} from "@paperclipai/shared";
+import type { PluginOperationPolicy } from "@paperclipai/shared";
 import { pluginConnectorService } from "../services/plugin-connectors.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import {
@@ -388,6 +395,18 @@ export interface PluginRouteBridgeDeps {
   workerManager: PluginWorkerManager;
   /** Optional stream bus for SSE push from worker to UI. */
   streamBus?: PluginStreamBus;
+  /**
+   * Optional repeat-protection store.
+   *
+   * The UI lane only uses it when the caller passes an explicit
+   * `idempotencyKey`, unlike the agent lane which derives one. A person
+   * clicking "Resync" twice usually means it, so deduplicating every click
+   * would break more than it fixed; a screen that knows a repeat would be
+   * wrong (a double-submitted send button) says so with a key.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  idempotencyStore?: PluginOperationIdempotencyStore;
 }
 
 interface PluginScopedApiRequest {
@@ -732,6 +751,116 @@ export function pluginRoutes(
       userId: getActorInfo(req).actorId ?? null,
     };
     return { ...params, hostScope };
+  }
+
+  /**
+   * Run a UI-lane action, replaying instead of repeating when the caller named
+   * a key for a writing operation.
+   *
+   * Returns the result to send, or a refusal to send with its status code.
+   */
+  async function callActionWithRepeatProtection(input: {
+    pluginDbId: string;
+    pluginKey: string;
+    manifest: PaperclipPluginManifestV1 | undefined;
+    key: string;
+    params: Record<string, unknown>;
+    renderEnvironment: PluginLauncherRenderContextSnapshot | null;
+    companyId: string | undefined;
+    idempotencyKey: string | undefined;
+  }): Promise<{ ok: true; data: unknown } | { ok: false; status: number; body: unknown }> {
+    const deps = bridgeDeps!;
+    const declared = input.manifest?.operations?.find((op) => op.key === input.key);
+    const store = deps.idempotencyStore;
+
+    const call = () => deps.workerManager.call(input.pluginDbId, "performAction", {
+      key: input.key,
+      params: input.params,
+      renderEnvironment: input.renderEnvironment,
+    });
+
+    if (!store || !input.idempotencyKey || !declared?.writes) {
+      return { ok: true, data: await call() };
+    }
+
+    const claimKey = {
+      pluginId: input.pluginKey,
+      operationKey: input.key,
+      idempotencyKey: input.idempotencyKey,
+      companyId: input.companyId ?? null,
+    };
+
+    const claim = await store.claim(claimKey, { invokedBy: "user" as const });
+
+    if (claim.kind === "replay") return { ok: true, data: claim.result };
+    if (claim.kind === "in_flight") {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          code: "ALREADY_RUNNING",
+          message:
+            `This action is already running (started ${claim.startedAt.toISOString()}). `
+            + "It was not started again.",
+        },
+      };
+    }
+
+    let result: unknown;
+    try {
+      result = await call();
+    } catch (err) {
+      // Nothing ran, so the key must go back — settling it as a failure would
+      // replay that failure to a caller who could have succeeded.
+      await store.release(claimKey).catch(() => {});
+      throw err;
+    }
+
+    const asToolResult = (result && typeof result === "object" ? result : { data: result }) as {
+      error?: string;
+    };
+    await store.settle(claimKey, asToolResult, !asToolResult.error).catch(() => {
+      // The action already happened. Reporting a failure now would be the
+      // more dangerous lie.
+    });
+
+    return { ok: true, data: result };
+  }
+
+  /**
+   * Refuse a UI-lane call the plugin author or the operator has ruled out.
+   *
+   * Two sources, in that order. The author says who an operation is for:
+   * `audience: "agents"` means machine-shaped work nobody should be able to
+   * fire from a screen. The operator can then narrow that further, or switch
+   * the operation off entirely, for their own install.
+   *
+   * Enforced here rather than by the plugin's own UI simply not offering the
+   * button, because that UI runs same-origin in the browser and is not a
+   * boundary. Anything that is not a declared operation — a plain
+   * `ctx.actions.register` key — passes through untouched.
+   *
+   * Returns an error message when the call must be refused, or null to allow.
+   *
+   * @see PLUGIN_SPEC.md §11.5 — Operations
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  function operationBlockedForUsers(
+    manifest: PaperclipPluginManifestV1 | undefined,
+    policy: PluginOperationPolicy | undefined,
+    key: string,
+  ): string | null {
+    const declared = manifest?.operations?.find((op) => op.key === key);
+    if (!declared) return null;
+
+    const resolved = resolveOperationPolicy(declared.audience, policy?.[key]);
+    if (resolved.disabled) {
+      return `Operation "${key}" has been switched off for this installation.`;
+    }
+    if (!policyAllowsUsers(resolved)) {
+      return `Operation "${key}" is not available from the UI on this installation.`;
+    }
+    return null;
   }
 
   /**
@@ -1803,6 +1932,14 @@ export function pluginRoutes(
     params?: Record<string, unknown>;
     /** Optional host launcher/render metadata for the worker bridge call. */
     renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
+    /**
+     * Set by a screen where clicking twice would be wrong, so a repeat replays
+     * the first result instead of doing the work again. Only honoured for an
+     * operation declared `writes: true`.
+     *
+     * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+     */
+    idempotencyKey?: string;
   }
 
   /** Response envelope for bridge errors. */
@@ -2016,21 +2153,32 @@ export function pluginRoutes(
       return;
     }
 
+    const agentOnly = operationBlockedForUsers(plugin.manifestJson, plugin.operationPolicyJson, body.key);
+    if (agentOnly) {
+      res.status(403).json({ error: agentOnly });
+      return;
+    }
+
     const validatedCompanyId = assertPluginBridgeScope(req, body.companyId);
     const params = stampPluginBridgeHostScope(req, body.params ?? {}, validatedCompanyId);
 
     try {
-      const result = await bridgeDeps.workerManager.call(
-        plugin.id,
-        "performAction",
-        {
-          key: body.key,
-          params,
-          renderEnvironment: body.renderEnvironment ?? null,
-        },
-      );
+      const outcome = await callActionWithRepeatProtection({
+        pluginDbId: plugin.id,
+        pluginKey: plugin.pluginKey,
+        manifest: plugin.manifestJson,
+        key: body.key,
+        params,
+        renderEnvironment: body.renderEnvironment ?? null,
+        companyId: validatedCompanyId,
+        idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+      });
+      if (!outcome.ok) {
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       await logPluginBridgeAction(req, plugin.id, validatedCompanyId, body.key, params);
-      res.json({ data: result });
+      res.json({ data: outcome.data });
     } catch (err) {
       const bridgeError = mapRpcErrorToBridgeError(err);
       res.status(502).json(bridgeError);
@@ -2175,23 +2323,36 @@ export function pluginRoutes(
       companyId?: string;
       params?: Record<string, unknown>;
       renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
+      /** Set by a screen where clicking twice would be wrong. See §11.7. */
+      idempotencyKey?: string;
     } | undefined;
+
+    const agentOnly = operationBlockedForUsers(plugin.manifestJson, plugin.operationPolicyJson, key);
+    if (agentOnly) {
+      res.status(403).json({ error: agentOnly });
+      return;
+    }
 
     const validatedCompanyId = assertPluginBridgeScope(req, body?.companyId);
     const params = stampPluginBridgeHostScope(req, body?.params ?? {}, validatedCompanyId);
 
     try {
-      const result = await bridgeDeps.workerManager.call(
-        plugin.id,
-        "performAction",
-        {
-          key,
-          params,
-          renderEnvironment: body?.renderEnvironment ?? null,
-        },
-      );
+      const outcome = await callActionWithRepeatProtection({
+        pluginDbId: plugin.id,
+        pluginKey: plugin.pluginKey,
+        manifest: plugin.manifestJson,
+        key,
+        params,
+        renderEnvironment: body?.renderEnvironment ?? null,
+        companyId: validatedCompanyId,
+        idempotencyKey: typeof body?.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+      });
+      if (!outcome.ok) {
+        res.status(outcome.status).json(outcome.body);
+        return;
+      }
       await logPluginBridgeAction(req, plugin.id, validatedCompanyId, key, params);
-      res.json({ data: result });
+      res.json({ data: outcome.data });
     } catch (err) {
       const bridgeError = mapRpcErrorToBridgeError(err);
       // The reason lives only in the response body, which the request log does
@@ -2440,6 +2601,119 @@ export function pluginRoutes(
       : false;
 
     res.json({ ...plugin, supportsConfigTest });
+  });
+
+  /**
+   * GET /api/plugins/:pluginId/operations
+   *
+   * List a plugin's operations with what the author declared and what this
+   * installation has actually settled on, so the settings screen can show both
+   * and the operator can see when their own override is doing nothing.
+   *
+   * Instance admin only: this is where "may an agent send email on our behalf"
+   * is answered, which is not a per-company decision.
+   *
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  router.get("/plugins/:pluginId/operations", async (req, res) => {
+    assertInstanceAdmin(req);
+    const plugin = await resolvePlugin(registry, req.params.pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    const policy = plugin.operationPolicyJson ?? {};
+    const operations = (plugin.manifestJson?.operations ?? []).map((op) => {
+      const resolved = resolveOperationPolicy(op.audience, policy[op.key]);
+      return {
+        key: op.key,
+        displayName: op.displayName,
+        description: op.description,
+        writes: op.writes === true,
+        declaredAudience: op.audience ?? "both",
+        override: policy[op.key] ?? null,
+        effective: resolved,
+      };
+    });
+
+    res.json({ operations });
+  });
+
+  /**
+   * PUT /api/plugins/:pluginId/operations/policy
+   *
+   * Replace the operator's per-operation overrides.
+   *
+   * The body is the complete map, not a patch: the settings screen sends the
+   * whole picture, and a merge would make "clear this override" the one thing
+   * the caller could not express.
+   *
+   * An override that would WIDEN what the manifest declares is rejected here
+   * rather than stored and quietly ignored later, so the operator finds out
+   * immediately instead of believing they granted something they did not.
+   *
+   * Takes effect at once: the plugin's tools are re-registered before the
+   * response, so an agent mid-run sees the new answer on its next call rather
+   * than at the next restart.
+   *
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  router.put("/plugins/:pluginId/operations/policy", async (req, res) => {
+    assertInstanceAdmin(req);
+    const plugin = await resolvePlugin(registry, req.params.pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    const parsed = pluginOperationPolicySchema.safeParse(req.body?.policy ?? req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid operation policy", details: parsed.error.issues });
+      return;
+    }
+    const policy = parsed.data as PluginOperationPolicy;
+
+    const declaredByKey = new Map(
+      (plugin.manifestJson?.operations ?? []).map((op) => [op.key, op] as const),
+    );
+
+    const unknownKeys = Object.keys(policy).filter((key) => !declaredByKey.has(key));
+    if (unknownKeys.length > 0) {
+      // A typo here would look like a working setting that silently does
+      // nothing, which is the worst outcome for a security control.
+      res.status(400).json({
+        error: `This plugin has no operation named: ${unknownKeys.join(", ")}`,
+      });
+      return;
+    }
+
+    const widening = Object.entries(policy)
+      .filter(([key, entry]) =>
+        resolveOperationPolicy(declaredByKey.get(key)?.audience, entry).overrideIgnored)
+      .map(([key]) => key);
+    if (widening.length > 0) {
+      res.status(400).json({
+        error:
+          `An override can only narrow what the plugin publishes. These would widen it: `
+          + `${widening.join(", ")}.`,
+      });
+      return;
+    }
+
+    const updated = await registry.setOperationPolicy(plugin.id, policy);
+
+    // Re-register so the change reaches agents now rather than at restart.
+    if (toolDeps?.toolDispatcher && plugin.manifestJson) {
+      toolDeps.toolDispatcher.registerPluginTools(
+        plugin.pluginKey,
+        plugin.manifestJson,
+        plugin.id,
+        policy,
+      );
+    }
+
+    res.json({ policy: updated?.operationPolicyJson ?? policy });
   });
 
   /**

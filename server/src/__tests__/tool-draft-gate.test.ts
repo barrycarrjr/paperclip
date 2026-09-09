@@ -101,6 +101,22 @@ async function loadDraftGate(db: never = stubDb) {
   return createDraftGate({ db });
 }
 
+/**
+ * A gate that also treats whatever the operator flagged as needing approval.
+ * The built-in outbound list is fixed at module load and knows nothing about
+ * which plugins are installed, so the answer is asked for at call time.
+ */
+async function loadDraftGateWithOperatorRule(
+  gatedNames: string[],
+  db: never = stubDb,
+) {
+  const { createDraftGate } = await import("../services/tool-draft-gate.js");
+  return createDraftGate({
+    db,
+    isAdditionallyGated: (name) => gatedNames.includes(name),
+  });
+}
+
 function ctx(overrides: Partial<ToolRunContext>): ToolRunContext {
   return {
     agentId: "00000000-0000-0000-0000-000000000000",
@@ -675,5 +691,72 @@ describe("tool draft gate — carrying the issue across an approval wake", () =>
 
     expect(result.intercepted).toBe(true);
     expect(mockIssueApprovalService.link).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An operator can require approval on a plugin operation the built-in outbound
+ * list has never heard of. Replaying an approved draft is already generic — it
+ * re-dispatches the tool name with its stored parameters — so the gate is the
+ * only piece that had to learn anything.
+ *
+ * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+ */
+describe("tool draft gate — operator-required approvals", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApprovalService.create.mockResolvedValue({ id: "approval-op" });
+    mockApprovalService.list.mockResolvedValue([]);
+    mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: true });
+  });
+
+  it("drafts an operation the operator flagged, even though it is not an outbound tool", async () => {
+    const gate = await loadDraftGateWithOperatorRule(["acme.ops:send-invoice"]);
+
+    const result = await gate.intercept("acme.ops:send-invoice", { customerId: "c-1" }, ctx({}));
+
+    expect(result.intercepted).toBe(true);
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports it as gated", async () => {
+    const gate = await loadDraftGateWithOperatorRule(["acme.ops:send-invoice"]);
+
+    expect(gate.isGated("acme.ops:send-invoice")).toBe(true);
+    expect(gate.isGated("acme.ops:read-invoice")).toBe(false);
+  });
+
+  it("holds it even when the instance-wide outbound hold is off", async () => {
+    mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: false });
+    const gate = await loadDraftGateWithOperatorRule(["acme.ops:send-invoice"]);
+
+    // The operator said so about this specific operation, so the general
+    // toggle does not get to overrule them.
+    const result = await gate.intercept("acme.ops:send-invoice", {}, ctx({}));
+
+    expect(result.intercepted).toBe(true);
+  });
+
+  it("leaves everything else alone", async () => {
+    const gate = await loadDraftGateWithOperatorRule(["acme.ops:send-invoice"]);
+
+    const result = await gate.intercept("acme.ops:read-invoice", {}, ctx({}));
+
+    expect(result.intercepted).toBe(false);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("behaves as before when the callback throws", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      isAdditionallyGated: () => { throw new Error("registry not ready"); },
+    });
+
+    // A plugin mid-reload must not turn every tool call in the instance into
+    // an error.
+    const result = await gate.intercept("acme.ops:send-invoice", {}, ctx({}));
+
+    expect(result.intercepted).toBe(false);
   });
 });

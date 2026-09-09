@@ -67,6 +67,22 @@ interface DraftGateOptions {
    * operators can toggle without restart.
    */
   defaultEnabled?: boolean;
+  /**
+   * Extra tool names to treat as gated, on top of the built-in outbound list.
+   *
+   * This is how an operator's "require approval" setting on a plugin operation
+   * reaches the gate. The built-in list is fixed at module load and knows
+   * nothing about which plugins are installed, so the answer has to be asked
+   * for at call time. Wired to the plugin tool registry, which is created
+   * after the gate, hence a callback rather than a set.
+   *
+   * Replaying an approved draft is already generic — it re-dispatches the tool
+   * name with its stored parameters — so nothing else has to know about the
+   * plugin to make this work.
+   *
+   * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+   */
+  isAdditionallyGated?: (namespacedName: string) => boolean;
 }
 
 export interface DraftGateInterceptResult {
@@ -404,6 +420,27 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
   const settings = instanceSettingsService(db);
   const approvals = approvalService(db);
 
+  /**
+   * Whether the operator has separately asked for approval on this tool.
+   *
+   * Wrapped so a throwing callback (the registry not built yet, a plugin
+   * mid-reload) cannot turn every tool call into an error. Failing closed here
+   * would be worse than failing open in one direction and better in the other,
+   * and neither is obviously right, so it does what the gate did before the
+   * callback existed: nothing.
+   */
+  function extraGated(namespacedName: string): boolean {
+    try {
+      return opts.isAdditionallyGated?.(namespacedName) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function isGatedName(namespacedName: string): boolean {
+    return GATED_TOOLS.has(namespacedName) || extraGated(namespacedName);
+  }
+
   async function readGateSettings(): Promise<{
     enabled: boolean;
     selfNotify: SelfNotifySettings;
@@ -430,7 +467,7 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
 
   return {
     isGated(namespacedName: string) {
-      return GATED_TOOLS.has(namespacedName);
+      return isGatedName(namespacedName);
     },
 
     async intercept(
@@ -439,13 +476,18 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       runContext: ToolRunContext,
       options?: DraftGateInterceptOptions,
     ): Promise<DraftGateInterceptResult> {
-      if (!GATED_TOOLS.has(namespacedName)) {
+      const operatorRequired = extraGated(namespacedName);
+      if (!GATED_TOOLS.has(namespacedName) && !operatorRequired) {
         return { intercepted: false };
       }
       // A caller can hold a call the instance would have let through, but not
       // the other way around: `bypassDraftGate` on the dispatcher is what
       // lets something past, and it never reaches here.
-      const force = options?.force === true;
+      //
+      // An operator asking for approval on a specific operation is its own
+      // reason to hold the call: they said so about this operation, so the
+      // instance-wide outbound toggle does not get to overrule them.
+      const force = options?.force === true || operatorRequired;
       const { enabled, selfNotify } = await readGateSettings();
       if (!enabled && !force) {
         return { intercepted: false };

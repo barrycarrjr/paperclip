@@ -91,8 +91,95 @@ Worker:
 - data/actions
 - streams
 - tools
+- operations (one declaration reaching both agents and people — prefer these over a tool plus a matching action)
 - metrics
 - logger
+
+### Operations: reach agents and people with one declaration
+
+Declare the thing once in the manifest:
+
+```ts
+operations: [{
+  key: "resync",
+  displayName: "Resync now",
+  description: "Pull the latest records from the connected account.",
+  parametersSchema: { type: "object", properties: { since: { type: "string" } } },
+  // audience defaults to "both"; use "agents" or "users" to publish one lane
+}]
+```
+
+Register the handler once:
+
+```ts
+ctx.operations.register("resync", async (params, opCtx) => {
+  const count = await resync(opCtx.companyId);
+  return { content: `Resynced ${count} records.`, data: { count } };
+});
+```
+
+An agent now calls `<pluginId>:resync`, and the plugin's own screen calls the
+same key through the action bridge. `opCtx.invokedBy` tells the handler which
+one it is serving.
+
+Do NOT register the same work as a `tools[]` entry and an `actions` key. That
+is the pattern operations replaces, and it is how a plugin ends up with things
+a person can do that no agent can.
+
+Capabilities: `agent.tools.register` for an audience reaching agents,
+`ui.action.register` for one reaching people. Both, for the default.
+
+The test harness drives both lanes against the one handler:
+
+```ts
+await harness.executeTool("resync", { since }); // invokedBy: "agent"
+await harness.performAction("resync", { since }); // invokedBy: "user"
+```
+
+### Say when an operation writes something
+
+If running it twice is not the same as running it once — it sends an email,
+files a ticket, charges a card — mark it:
+
+```ts
+operations: [{ key: "send-invoice", /* ... */ writes: true }]
+```
+
+The host then stops a retried agent call from doing the work twice: it replays
+the first result instead. The key comes from the caller when it supplies one,
+and otherwise from the run plus the arguments.
+
+Pass `opCtx.idempotencyKey` on to any outside system that accepts one of its
+own (Stripe and most messaging APIs do), so the protection reaches past
+Paperclip.
+
+The cost of marking a read-only operation by mistake is one database row. The
+cost of missing a writing one is a duplicate email, so err towards marking it.
+
+### Return a failure code, not just a message
+
+```ts
+import { operationFailure, OperationFailed } from "@paperclipai/plugin-sdk";
+
+if (res.status === 401) {
+  return operationFailure("needs_reconnect", "Help Scout rejected the stored credentials.");
+}
+if (res.status === 429) {
+  return operationFailure("unavailable", "Help Scout is rate-limiting us.", { retryAfterMs: 30_000 });
+}
+```
+
+Codes: `invalid_input`, `not_found`, `not_authorized`, `needs_reconnect`,
+`unavailable`, `timeout`, `failed`.
+
+Why it matters: an agent reading only prose cannot tell "try again in a
+minute" from "a person has to reconnect the account", so it retries what can
+never succeed. The host turns the code into one plain instruction the agent
+reads alongside your message.
+
+`throw new OperationFailed(code, message)` does the same from deep inside a
+helper. Any other exception propagates as before — the host does not guess
+whether an unrecognised crash is retryable.
 
 ### Plugin database declarations
 

@@ -68,6 +68,7 @@ import { createPluginWorkerManager, type PluginWorkerManager } from "./services/
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
+import { createPluginOperationIdempotencyStore } from "./services/plugin-operation-idempotency.js";
 import { createDraftGate } from "./services/tool-draft-gate.js";
 import {
   createPluginMcpBridge,
@@ -214,10 +215,18 @@ export async function createApp(
   // approvals instead of executing them immediately. Created before the
   // tool dispatcher so it can be passed in below; the lazy ref is shared
   // with the approval routes so the approve handler can re-dispatch.
-  const draftGate = createDraftGate({ db });
   const toolDispatcherRef: { current: ReturnType<typeof createPluginToolDispatcher> | null } = {
     current: null,
   };
+  const draftGate = createDraftGate({
+    db,
+    // An operator can require approval on an individual plugin operation. The
+    // gate's own list is fixed at module load and knows nothing about which
+    // plugins are installed, so it asks the registry at call time. The
+    // dispatcher does not exist yet, hence the ref.
+    isAdditionallyGated: (name) =>
+      toolDispatcherRef.current?.getTool(name)?.requiresApproval === true,
+  });
   // Same late-binding trick: the plugin lifecycle is built further down, but
   // the starter catalog needs it at request time (to switch a plugin back on
   // when a card requires one that is installed but disabled), not at mount.
@@ -309,6 +318,8 @@ export async function createApp(
   });
   const externalMcpManager = createExternalMcpServerManager(db);
   const externalMcpSource = createExternalMcpToolSource(db, externalMcpManager);
+  // Stops a retried plugin call that sends an email from sending it twice.
+  const operationIdempotency = createPluginOperationIdempotencyStore(db);
   const toolDispatcher = createPluginToolDispatcher({
     workerManager,
     lifecycleManager: lifecycle,
@@ -316,6 +327,7 @@ export async function createApp(
     externalMcpToolSource: externalMcpSource,
     externalMcpServerManager: externalMcpManager,
     draftGate,
+    idempotencyStore: operationIdempotency,
   });
   toolDispatcherRef.current = toolDispatcher;
   // Plugin MCP bridge — exposes plugin tools to spawned LLM subprocesses
@@ -384,7 +396,7 @@ export async function createApp(
       { scheduler, jobStore },
       { workerManager },
       { toolDispatcher },
-      { workerManager },
+      { workerManager, idempotencyStore: operationIdempotency },
     ),
   );
   api.use(adapterRoutes());

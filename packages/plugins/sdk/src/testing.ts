@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { OperationFailed } from "./types.js";
 import type {
   PaperclipPluginManifestV1,
   PluginCapability,
@@ -22,6 +23,7 @@ import type {
   PluginJobContext,
   PluginLauncherRegistration,
   PluginEvent,
+  PluginOperationContext,
   ScopeKey,
   ToolResult,
   ToolRunContext,
@@ -79,9 +81,20 @@ export interface TestHarness {
   runJob(jobKey: string, partial?: Partial<PluginJobContext>): Promise<void>;
   /** Invoke a `ctx.data.register(...)` handler by key. */
   getData<T = unknown>(key: string, params?: Record<string, unknown>): Promise<T>;
-  /** Invoke a `ctx.actions.register(...)` handler by key. */
+  /**
+   * Invoke a `ctx.actions.register(...)` handler by key, falling back to an
+   * operation of the same key. This is the UI lane — the handler sees
+   * `invokedBy: "user"`.
+   */
   performAction<T = unknown>(key: string, params?: Record<string, unknown>): Promise<T>;
-  /** Execute a registered tool handler via `ctx.tools.execute(...)`. */
+  /**
+   * Execute a registered tool handler, falling back to an operation of the
+   * same key. This is the agent lane — an operation handler sees
+   * `invokedBy: "agent"`.
+   *
+   * Call both this and `performAction` against the same operation key to prove
+   * one handler really does serve both callers.
+   */
   executeTool<T = ToolResult>(name: string, params: unknown, runCtx?: Partial<ToolRunContext>): Promise<T>;
   /** Read raw in-memory state for assertions. */
   getState(input: ScopeKey): unknown;
@@ -445,6 +458,37 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const dataHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const actionHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const toolHandlers = new Map<string, (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>>();
+  const operationHandlers = new Map<
+    string,
+    (params: unknown, opCtx: PluginOperationContext) => Promise<ToolResult>
+  >();
+
+  /**
+   * Mirror of the worker's own failure handling, so a result that looks right
+   * in a plugin's tests looks the same in production.
+   *
+   * A thrown `OperationFailed` becomes the matching result; `error` and
+   * `failure` are kept in step in both directions; any other exception is left
+   * to propagate, because the harness cannot know whether it is retryable
+   * either.
+   */
+  async function captureFailure(fn: () => Promise<ToolResult>): Promise<ToolResult> {
+    let result: ToolResult;
+    try {
+      result = await fn();
+    } catch (err) {
+      if (err instanceof OperationFailed) return err.toToolResult();
+      throw err;
+    }
+    if (!result || typeof result !== "object") return result;
+    if (result.failure && !result.error) {
+      return { ...result, error: result.failure.message };
+    }
+    if (result.error && !result.failure) {
+      return { ...result, failure: { code: "failed", message: result.error } };
+    }
+    return result;
+  }
 
   function issueRelationSummary(issueId: string) {
     const issue = issues.get(issueId);
@@ -1241,6 +1285,24 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         toolHandlers.set(name, fn);
       },
     },
+    operations: {
+      register(key, fn) {
+        // An operation reaches whichever lanes its manifest entry declares, so
+        // the capability it needs depends on that entry rather than being
+        // fixed. An operation with no declaration is treated as the default
+        // audience, "both", which is what an author who forgot to declare it
+        // almost certainly meant.
+        const declared = (manifest.operations ?? []).find((op) => op.key === key);
+        const audience = declared?.audience ?? "both";
+        if (audience === "both" || audience === "agents") {
+          requireCapability(manifest, capabilitySet, "agent.tools.register");
+        }
+        if (audience === "both" || audience === "users") {
+          requireCapability(manifest, capabilitySet, "ui.action.register");
+        }
+        operationHandlers.set(key, fn);
+      },
+    },
     metrics: {
       async write(name, value, tags) {
         requireCapability(manifest, capabilitySet, "metrics.write");
@@ -1331,19 +1393,52 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     },
     async performAction<T = unknown>(key: string, params: Record<string, unknown> = {}) {
       const handler = actionHandlers.get(key);
-      if (!handler) throw new Error(`No action handler registered for '${key}'`);
-      return await handler(params) as T;
+      if (handler) return await handler(params) as T;
+
+      // Mirrors the worker: an operation is reachable on the UI lane under the
+      // same key, so a test that clicks a button and a test that calls the
+      // agent tool exercise the same handler.
+      const operation = operationHandlers.get(key);
+      if (operation) {
+        const scope = params.hostScope as { companyId?: string; userId?: string } | undefined;
+        return await captureFailure(() => operation(params, {
+          invokedBy: "user",
+          companyId: scope?.companyId ?? "company-test",
+          userId: scope?.userId ?? "user-test",
+        })) as T;
+      }
+
+      throw new Error(`No action or operation handler registered for '${key}'`);
     },
     async executeTool<T = ToolResult>(name: string, params: unknown, runCtx: Partial<ToolRunContext> = {}) {
-      const handler = toolHandlers.get(name);
-      if (!handler) throw new Error(`No tool handler registered for '${name}'`);
       const ctxToPass: ToolRunContext = {
         agentId: runCtx.agentId ?? "agent-test",
         runId: runCtx.runId ?? randomUUID(),
         companyId: runCtx.companyId ?? "company-test",
         projectId: runCtx.projectId ?? "project-test",
+        ...(runCtx.idempotencyKey === undefined ? {} : { idempotencyKey: runCtx.idempotencyKey }),
       };
-      return await handler(params, ctxToPass) as T;
+
+      const handler = toolHandlers.get(name);
+      if (handler) {
+        return await captureFailure(() => handler(params, ctxToPass)) as T;
+      }
+
+      const operation = operationHandlers.get(name);
+      if (operation) {
+        return await captureFailure(() => operation(params, {
+          invokedBy: "agent",
+          companyId: ctxToPass.companyId,
+          projectId: ctxToPass.projectId,
+          userId: runCtx.userId ?? null,
+          agentId: ctxToPass.agentId,
+          runId: ctxToPass.runId,
+          chatSessionId: runCtx.chatSessionId,
+          idempotencyKey: runCtx.idempotencyKey,
+        })) as T;
+      }
+
+      throw new Error(`No tool or operation handler registered for '${name}'`);
     },
     getState(input) {
       return state.get(stateMapKey(input));

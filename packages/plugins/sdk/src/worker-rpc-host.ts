@@ -52,6 +52,7 @@ import type {
   PluginConfigValidationResult,
   PluginWebhookInput,
 } from "./define-plugin.js";
+import { OperationFailed } from "./types.js";
 import type {
   PluginContext,
   PluginEvent,
@@ -60,6 +61,7 @@ import type {
   ScopeKey,
   ToolRunContext,
   ToolResult,
+  PluginOperationContext,
   EventFilter,
   AgentSessionEvent,
 } from "./types.js";
@@ -276,6 +278,14 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     declaration: Pick<import("@paperclipai/shared").PluginToolDeclaration, "displayName" | "description" | "parametersSchema">;
     fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>;
   }>();
+  // Operations — one handler per key, reached by BOTH executeTool (agent lane)
+  // and performAction (UI lane). Kept in its own map rather than written into
+  // both of the maps above so a plugin can never half-register: if the key is
+  // here, both lanes resolve to the same function.
+  const operationHandlers = new Map<
+    string,
+    (params: unknown, opCtx: PluginOperationContext) => Promise<ToolResult>
+  >();
 
   // Agent session event callbacks (populated by sendMessage, cleared by close)
   const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
@@ -1004,6 +1014,15 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         },
       },
 
+      operations: {
+        register(
+          key: string,
+          fn: (params: unknown, opCtx: PluginOperationContext) => Promise<ToolResult>,
+        ): void {
+          operationHandlers.set(key, fn);
+        },
+      },
+
       metrics: {
         async write(name: string, value: number, tags?: Record<string, string>): Promise<void> {
           await callHost("metrics.write", { name, value, tags });
@@ -1296,24 +1315,111 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     );
   }
 
+  /**
+   * The `{ companyId, userId }` the host validated and stamped onto every
+   * bridge call. The browser cannot forge it — the routes overwrite the key
+   * rather than merging it — so it is the only trustworthy scope on the UI
+   * lane.
+   */
+  function readHostScope(params: Record<string, unknown>): { companyId: string | null; userId: string | null } {
+    const raw = params.hostScope;
+    if (!raw || typeof raw !== "object") return { companyId: null, userId: null };
+    const scope = raw as { companyId?: unknown; userId?: unknown };
+    return {
+      companyId: typeof scope.companyId === "string" ? scope.companyId : null,
+      userId: typeof scope.userId === "string" ? scope.userId : null,
+    };
+  }
+
   async function handlePerformAction(params: PerformActionParams): Promise<unknown> {
     const handler = actionHandlers.get(params.key);
-    if (!handler) {
-      throw new Error(`No action handler registered for key "${params.key}"`);
+    if (handler) {
+      return handler(
+        params.renderEnvironment === undefined
+          ? params.params
+          : { ...params.params, renderEnvironment: params.renderEnvironment },
+      );
     }
-    return handler(
-      params.renderEnvironment === undefined
-        ? params.params
-        : { ...params.params, renderEnvironment: params.renderEnvironment },
-    );
+
+    // Not a bare action — try the unified operation registry. A plugin that
+    // uses `ctx.operations.register` gets the UI lane for free, with no second
+    // registration to keep in step.
+    const operation = operationHandlers.get(params.key);
+    if (operation) {
+      const scope = readHostScope(params.params);
+      return operation(params.params, {
+        invokedBy: "user",
+        // An instance-admin global call has no company to name. Pass the empty
+        // string rather than inventing one; the handler decides whether it can
+        // work without a company.
+        companyId: scope.companyId ?? "",
+        userId: scope.userId,
+        renderEnvironment: params.renderEnvironment ?? null,
+      });
+    }
+
+    throw new Error(`No action or operation handler registered for key "${params.key}"`);
   }
 
   async function handleExecuteTool(params: ExecuteToolParams): Promise<ToolResult> {
     const entry = toolHandlers.get(params.toolName);
-    if (!entry) {
-      throw new Error(`No tool handler registered for "${params.toolName}"`);
+    if (entry) {
+      return runWithFailureCapture(() => entry.fn(params.parameters, params.runContext));
     }
-    return entry.fn(params.parameters, params.runContext);
+
+    const operation = operationHandlers.get(params.toolName);
+    if (operation) {
+      const runCtx = params.runContext;
+      return runWithFailureCapture(() => operation(params.parameters, {
+        invokedBy: "agent",
+        companyId: runCtx.companyId,
+        projectId: runCtx.projectId,
+        userId: runCtx.userId ?? null,
+        agentId: runCtx.agentId,
+        runId: runCtx.runId,
+        chatSessionId: runCtx.chatSessionId,
+        idempotencyKey: runCtx.idempotencyKey,
+      }));
+    }
+
+    throw new Error(`No tool or operation handler registered for "${params.toolName}"`);
+  }
+
+  /**
+   * Run a handler and make sure whatever comes back is a well-formed result.
+   *
+   * Two jobs. A handler that throws `OperationFailed` becomes the equivalent
+   * returned result, so a plugin can abort from deep inside a helper without
+   * threading a value back up. And a handler that sets `failure` without
+   * `error`, or the other way round, gets the other half filled in — every
+   * existing caller in the host reads `error`, and a result with only a code
+   * would look like a success to all of them.
+   *
+   * An unrecognised exception is deliberately NOT swallowed: the worker cannot
+   * know whether it is safe to retry, and turning it into a `failed` result
+   * would hide a crash behind a tidy-looking failure. It propagates as an RPC
+   * error, exactly as before.
+   */
+  async function runWithFailureCapture(fn: () => Promise<ToolResult>): Promise<ToolResult> {
+    let result: ToolResult;
+    try {
+      result = await fn();
+    } catch (err) {
+      if (err instanceof OperationFailed) return err.toToolResult();
+      throw err;
+    }
+
+    if (!result || typeof result !== "object") return result;
+
+    if (result.failure && !result.error) {
+      return { ...result, error: result.failure.message };
+    }
+    if (result.error && !result.failure) {
+      // A plugin that has not adopted codes still says something went wrong.
+      // "failed" is the honest reading: we do not know if a retry would help.
+      return { ...result, failure: { code: "failed", message: result.error } };
+    }
+    return result;
   }
 
   function methodNotImplemented(method: string): Error & { code: number } {

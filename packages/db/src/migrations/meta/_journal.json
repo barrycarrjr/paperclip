@@ -687,6 +687,20 @@
       "when": 1780120006000,
       "tag": "0097_start_work_request_container",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1780120007000,
+      "tag": "0098_plugin_operation_calls",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1780120008000,
+      "tag": "0099_plugin_operation_policy",
+      "breakpoints": true
     }
   ]
 }

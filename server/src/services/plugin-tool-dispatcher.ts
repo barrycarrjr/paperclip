@@ -25,6 +25,7 @@
 import type { Db } from "@paperclipai/db";
 import type {
   PaperclipPluginManifestV1,
+  PluginOperationPolicy,
   PluginRecord,
 } from "@paperclipai/shared";
 import type { ToolRunContext, ToolResult } from "@paperclipai/plugin-sdk";
@@ -41,6 +42,11 @@ import { pluginRegistryService } from "./plugin-registry.js";
 import type { ExternalMcpToolSource } from "./external-mcp-tool-source.js";
 import type { ExternalMcpServerManager } from "./external-mcp-server-manager.js";
 import type { DraftGate } from "./tool-draft-gate.js";
+import {
+  deriveIdempotencyKey,
+  type OperationCallKey,
+  type PluginOperationIdempotencyStore,
+} from "./plugin-operation-idempotency.js";
 import { EXTERNAL_MCP_TOOL_NAMESPACE, isCompanyAllowed } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
@@ -96,6 +102,17 @@ export interface PluginToolDispatcherOptions {
    * `tool-draft-gate.ts` for policy.
    */
   draftGate?: DraftGate;
+  /**
+   * Optional repeat-protection store. When provided, a tool or operation
+   * declared `writes: true` is claimed before it runs, so an agent retrying a
+   * call whose response was lost replays the first result instead of doing the
+   * work a second time.
+   *
+   * Omitted in tests that do not care, and in any host without a database. The
+   * dispatcher runs writing operations unprotected in that case, which is the
+   * behaviour it had before this existed.
+   */
+  idempotencyStore?: PluginOperationIdempotencyStore;
 }
 
 /**
@@ -221,6 +238,7 @@ export interface PluginToolDispatcher {
     pluginId: string,
     manifest: PaperclipPluginManifestV1,
     pluginDbId?: string,
+    operationPolicy?: PluginOperationPolicy,
   ): void;
 
   /**
@@ -291,6 +309,7 @@ export function createPluginToolDispatcher(
     workerManager,
     lifecycleManager,
     draftGate,
+    idempotencyStore,
     db,
     externalMcpToolSource,
     externalMcpServerManager,
@@ -307,6 +326,111 @@ export function createPluginToolDispatcher(
   const registry = createPluginToolRegistry(workerManager);
 
   const externalMcpPrefix = `${EXTERNAL_MCP_TOOL_NAMESPACE}:`;
+
+  /**
+   * Run a plugin tool, giving anything declared `writes: true` protection
+   * against happening twice.
+   *
+   * Everything else goes straight through. A read costs nothing to repeat, and
+   * claiming one would mean a database write per lookup for no benefit.
+   *
+   * The key comes from the caller when it supplies one, and otherwise from the
+   * run plus the arguments — which makes "the same call repeated inside one
+   * run" the thing that gets caught. That is the failure this exists for: an
+   * agent that never saw a response trying again.
+   *
+   * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
+   */
+  async function executeWithRepeatProtection(
+    namespacedName: string,
+    parameters: unknown,
+    runContext: ToolRunContext,
+  ): Promise<ToolExecutionResult> {
+    const tool = registry.getTool(namespacedName);
+
+    if (!idempotencyStore || !tool?.writes) {
+      return registry.executeTool(namespacedName, parameters, runContext);
+    }
+
+    const idempotencyKey = runContext.idempotencyKey
+      ?? deriveIdempotencyKey({
+        runId: runContext.runId,
+        namespacedName,
+        parameters,
+      });
+
+    const key: OperationCallKey = {
+      pluginId: tool.pluginId,
+      operationKey: tool.name,
+      idempotencyKey,
+      companyId: runContext.companyId || null,
+    };
+
+    const claim = await idempotencyStore.claim(key, {
+      invokedBy: "agent",
+      runId: runContext.runId,
+    });
+
+    if (claim.kind === "replay") {
+      log.info(
+        { tool: namespacedName, idempotencyKey, runId: runContext.runId },
+        "replaying a previous result instead of running a writing operation again",
+      );
+      return { pluginId: tool.pluginId, toolName: tool.name, result: claim.result };
+    }
+
+    if (claim.kind === "in_flight") {
+      // Refused rather than queued: there is no result to replay yet, and
+      // holding the request open for however long the operation takes would
+      // turn one slow call into two.
+      const message =
+        `The same call to "${namespacedName}" is already running (started `
+        + `${claim.startedAt.toISOString()}). It was not run again.`;
+      return {
+        pluginId: tool.pluginId,
+        toolName: tool.name,
+        result: {
+          error: message,
+          failure: { code: "unavailable", message, retryAfterMs: 5_000 },
+        },
+      };
+    }
+
+    // We own the key. Every path out of here must settle or release it, or the
+    // operation stays unrunnable for this key until the stale window passes.
+    let outcome: ToolExecutionResult;
+    try {
+      outcome = await registry.executeTool(
+        namespacedName,
+        parameters,
+        { ...runContext, idempotencyKey },
+      );
+    } catch (err) {
+      // The call did not produce a result at all — the worker was not running,
+      // the RPC blew up. Release rather than settle: recording this as a
+      // failure would replay it to a caller who could legitimately have
+      // succeeded on a later attempt.
+      await idempotencyStore.release(key).catch((releaseErr) => {
+        log.error(
+          { tool: namespacedName, err: String(releaseErr) },
+          "failed to release an operation claim after an execution error",
+        );
+      });
+      throw err;
+    }
+
+    await idempotencyStore.settle(key, outcome.result, !outcome.result.error)
+      .catch((err) => {
+        // The work has already happened. Failing the call now would tell the
+        // agent it did not, which is the more dangerous lie.
+        log.error(
+          { tool: namespacedName, idempotencyKey, err: String(err) },
+          "operation ran but its result could not be recorded for replay",
+        );
+      });
+
+    return outcome;
+  }
   function isExternalMcpName(name: string): boolean {
     return name.startsWith(externalMcpPrefix);
   }
@@ -349,7 +473,7 @@ export function createPluginToolDispatcher(
       return;
     }
 
-    registry.registerPlugin(plugin.pluginKey, manifest, plugin.id);
+    registry.registerPlugin(plugin.pluginKey, manifest, plugin.id, plugin.operationPolicyJson);
   }
 
   /**
@@ -412,9 +536,18 @@ export function createPluginToolDispatcher(
         let totalTools = 0;
         for (const plugin of readyPlugins) {
           const manifest = plugin.manifestJson;
-          if (manifest?.tools && manifest.tools.length > 0) {
-            registry.registerPlugin(plugin.pluginKey, manifest, plugin.id);
-            totalTools += manifest.tools.length;
+          // Operations count as much as tools here. Checking only `tools`
+          // meant a plugin that declared its work as operations came back from
+          // a restart with nothing registered, so agents silently lost it.
+          const declaredCount = (manifest?.tools?.length ?? 0) + (manifest?.operations?.length ?? 0);
+          if (manifest && declaredCount > 0) {
+            registry.registerPlugin(
+              plugin.pluginKey,
+              manifest,
+              plugin.id,
+              plugin.operationPolicyJson,
+            );
+            totalTools += registry.toolCount(plugin.pluginKey);
           }
         }
 
@@ -607,11 +740,7 @@ export function createPluginToolDispatcher(
         };
       }
 
-      const result = await registry.executeTool(
-        namespacedName,
-        parameters,
-        runContext,
-      );
+      const result = await executeWithRepeatProtection(namespacedName, parameters, runContext);
 
       log.debug(
         {
@@ -630,8 +759,9 @@ export function createPluginToolDispatcher(
       pluginId: string,
       manifest: PaperclipPluginManifestV1,
       pluginDbId?: string,
+      operationPolicy?: PluginOperationPolicy,
     ): void {
-      registry.registerPlugin(pluginId, manifest, pluginDbId);
+      registry.registerPlugin(pluginId, manifest, pluginDbId, operationPolicy);
     },
 
     unregisterPluginTools(pluginId: string): void {

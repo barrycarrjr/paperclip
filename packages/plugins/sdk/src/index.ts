@@ -50,6 +50,20 @@
 // ---------------------------------------------------------------------------
 
 export { definePlugin } from "./define-plugin.js";
+// Structured failure helpers — prefer these over returning a bare error string.
+export { operationFailure, OperationFailed } from "./types.js";
+export {
+  PLUGIN_OPERATION_ERROR_CODES,
+  PLUGIN_OPERATION_AUDIENCES,
+  describeOperationFailure,
+  isRetryableOperationError,
+  operationErrorNeedsPerson,
+} from "@paperclipai/shared";
+export type {
+  PluginOperationErrorCode,
+  PluginOperationAudience,
+  PluginOperationFailureDetail,
+} from "@paperclipai/shared";
 export { createTestHarness, createEnvironmentTestHarness, createFakeEnvironmentDriver, filterEnvironmentEvents, assertEnvironmentEventOrder, assertLeaseLifecycle, assertWorkspaceRealizationLifecycle, assertExecutionLifecycle, assertEnvironmentError } from "./testing.js";
 export { createPluginBundlerPresets } from "./bundlers.js";
 export { startPluginDevServer, getUiBuildSnapshot } from "./dev-server.js";
@@ -218,6 +232,8 @@ export type {
   PluginActionsClient,
   PluginStreamsClient,
   PluginToolsClient,
+  PluginOperationsClient,
+  PluginOperationContext,
   PluginMetricsClient,
   PluginTelemetryClient,
   PluginLogger,

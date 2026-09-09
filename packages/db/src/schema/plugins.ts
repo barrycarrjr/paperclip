@@ -8,7 +8,12 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { PluginCategory, PluginStatus, PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import type {
+  PluginCategory,
+  PluginStatus,
+  PaperclipPluginManifestV1,
+  PluginOperationPolicy,
+} from "@paperclipai/shared";
 
 /**
  * `plugins` table — stores one row per installed plugin.
@@ -41,6 +46,23 @@ export const plugins = pgTable(
      * and re-copy them into the managed directory. Null for npm and
      * .pcplugin uploads. */
     localSourcePath: text("local_source_path"),
+    /**
+     * Operator overrides for individual operations, keyed by operation key.
+     *
+     * The manifest says who each operation is FOR; this is how the operator
+     * narrows that for their own install — switch one off, hide it from
+     * agents, or require a human yes before an agent runs it.
+     *
+     * It can only narrow. A manifest that publishes an operation to users only
+     * cannot be turned into an agent tool by config, so installing a plugin
+     * never grants agents something its author did not publish to them.
+     *
+     * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+     */
+    operationPolicyJson: jsonb("operation_policy_json")
+      .$type<PluginOperationPolicy>()
+      .notNull()
+      .default({}),
     lastError: text("last_error"),
     installedAt: timestamp("installed_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

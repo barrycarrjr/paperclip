@@ -16,6 +16,7 @@ import {
   ISSUE_STATUSES,
   type CreateCalendarEvent,
 } from "@paperclipai/shared";
+import { describeOperationFailure } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { calendarService } from "./calendar.js";
@@ -1317,7 +1318,15 @@ export async function executePluginChatTool(
   };
   try {
     const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext);
-    if (exec.result.error) return { ok: false, error: exec.result.error };
+    if (exec.result.error) {
+      // Give the model the failure code's instruction, not just the prose.
+      // Without it "Help Scout returned 401" and "Help Scout returned 503"
+      // read identically, so it retries the one that can never succeed.
+      return {
+        ok: false,
+        error: describeOperationFailure(exec.result.failure, exec.result.error),
+      };
+    }
     // For drafted tools (intercepted by the trust-loop gate), the synthesized
     // result carries the "Do not retry the tool — end your turn" instruction in
     // `content` and the structured metadata in `data`. We must surface the

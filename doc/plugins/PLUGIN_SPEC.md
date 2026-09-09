@@ -440,6 +440,312 @@ Plugin tools appear in the agent's tool list alongside core tools but are visual
 - Tool execution is subject to the same timeout and resource limits as other plugin worker calls.
 - Tool results are included in run logs.
 
+## 11.5 Operations
+
+An **operation** is one thing a plugin can do, declared once and published on
+both lanes: an agent calls it as a namespaced tool, a person triggers it from
+the plugin's own screen.
+
+### 11.5.1 Why this exists
+
+Before operations, a plugin had to say the same thing twice:
+
+- a `tools[]` manifest entry plus a `ctx.tools.register` handler, reachable
+  only by agents, and
+- a separate `ctx.actions.register` key, undeclared and unschematized,
+  reachable only by the plugin's own UI.
+
+Nothing checked that the two lists agreed, so they drifted. The kitchen-sink
+example shipped 22 actions against 3 tools, meaning almost everything a person
+could do there, no agent could. Operations remove the second declaration
+rather than trying to keep two in step.
+
+### 11.5.2 Declaration
+
+```ts
+operations?: Array<{
+  key: string;                 // unique within the plugin; namespaced for agents
+  displayName: string;
+  description: string;         // read by agents — write it for one
+  parametersSchema: JsonSchema;
+  audience?: "both" | "agents" | "users";   // default "both"
+}>;
+```
+
+`audience` is the plugin author's own statement of who the operation is for:
+
+- `both` — agents and people.
+- `agents` — machine-shaped work no operator would click. The UI bridge
+  answers `403` for it.
+- `users` — needs a person present (a file picker, exporting the current
+  view). It is never registered as a tool at all, so it cannot appear in any
+  agent's tool list.
+
+Capability rules, enforced by the manifest validator:
+
+- an audience reaching agents requires `agent.tools.register`
+- an audience reaching users requires `ui.action.register`
+
+Operation keys must be unique within the plugin and must not collide with a
+`tools[].name`, because both share one agent-facing namespace.
+
+### 11.5.3 Registration
+
+```ts
+ctx.operations.register("resync", async (params, opCtx) => {
+  const count = await resync(opCtx.companyId);
+  return { content: `Resynced ${count} records.`, data: { count } };
+});
+```
+
+One handler. The host resolves it for `executeTool` and for `performAction`,
+so the two lanes cannot diverge.
+
+### 11.5.4 Operation context
+
+The handler is told which lane it is on and gets the fields that lane can
+honestly supply:
+
+| field | agent lane | user lane |
+|---|---|---|
+| `invokedBy` | `"agent"` | `"user"` |
+| `companyId` | from the run | from the validated bridge scope |
+| `projectId` | from the run | absent |
+| `userId` | set for a Clippy turn, else absent | the signed-in person |
+| `agentId` / `runId` | set | absent |
+| `chatSessionId` | set for chat | absent |
+| `renderEnvironment` | absent | set when the launcher reports it |
+
+Read `invokedBy` rather than testing for `agentId`. Every field above is
+host-populated; none is accepted from the caller. On the user lane the company
+comes from `params.hostScope`, which the bridge routes overwrite rather than
+merge, so a browser cannot forge it.
+
+`companyId` is the empty string for an instance-admin global UI call that has
+no company to name. Treat that as "no company", not as a company.
+
+### 11.5.5 Compatibility
+
+`tools[]`, `ctx.tools.register` and `ctx.actions.register` all keep working.
+Prefer operations for anything new. A plugin can mix the two — an operation
+and an unrelated legacy tool coexist fine.
+
+## 11.6 Operation failures
+
+A failed operation or tool returns a `ToolResult` carrying both a
+human-readable `error` string and a structured `failure`:
+
+```ts
+{
+  error: "Help Scout rejected the stored credentials for this company.",
+  failure: {
+    code: "needs_reconnect",
+    message: "Help Scout rejected the stored credentials for this company.",
+    retryAfterMs?: number,
+    details?: unknown,
+  }
+}
+```
+
+### 11.6.1 Why this exists
+
+A failure used to be `error: string` and nothing else. "Help Scout returned
+401" and "Help Scout returned 503" are the same shape, so an agent could not
+tell which one was worth retrying. It retried the hopeless ones and abandoned
+the recoverable ones.
+
+### 11.6.2 The codes
+
+| code | means | what the caller should do |
+|---|---|---|
+| `invalid_input` | the parameters were wrong | fix them and call again |
+| `not_found` | the thing named does not exist | do not retry the same id |
+| `not_authorized` | this caller may not do this | stop; a person may grant it |
+| `needs_reconnect` | the outside account's credentials are dead | stop; a person must reconnect it |
+| `unavailable` | the other system is down or throttling | retry later, after `retryAfterMs` if given |
+| `timeout` | it took too long | retry, but only with the same idempotency key if it writes |
+| `failed` | none of the above, and retrying will not help | stop and report |
+
+Only `unavailable` and `timeout` are retryable. `invalid_input` deliberately is
+not: the caller should retry with *different* input, which is a different
+decision.
+
+### 11.6.3 Producing one
+
+```ts
+return operationFailure("unavailable", "Help Scout is rate-limiting us.", {
+  retryAfterMs: 30_000,
+});
+```
+
+or, from deep inside a helper:
+
+```ts
+throw new OperationFailed("not_found", `No mailbox for company ${companyId}.`);
+```
+
+The worker converts a thrown `OperationFailed` into the same result. Any other
+exception is left to propagate as an RPC error: the host cannot know whether an
+unrecognised crash is safe to retry, and dressing it as a `failed` result would
+hide a bug behind a tidy answer.
+
+### 11.6.4 Guarantees
+
+- **`error` and `failure` always agree.** A result with only one gets the other
+  filled in, so every caller that reads `error` today behaves unchanged, and a
+  legacy plugin's bare string becomes `failed`.
+- **An unrecognised code is downgraded to `failed`.** The worker is a separate
+  process; a code outside the list would make callers that branch on it fall
+  through unpredictably.
+- **Agents see the guidance, not just the prose.** Both the chat tool path and
+  the MCP bridge append one plain sentence derived from the code, so the model
+  reads what to do rather than having to infer it.
+
+## 11.7 Repeat-safe operations
+
+An operation or tool declared `writes: true` is protected from happening
+twice.
+
+### 11.7.1 Why this exists
+
+An agent calls an operation that sends an email. The response is lost on the
+way back. The agent — correctly, by its own lights — calls again. The email
+goes out twice and nobody finds out until the customer says so. The same shape
+covers filing a ticket, raising an invoice, placing a call.
+
+### 11.7.2 Declaring it
+
+```ts
+operations: [{
+  key: "send-invoice",
+  displayName: "Send invoice",
+  description: "Email an invoice to the customer.",
+  parametersSchema: { ... },
+  writes: true,
+}]
+```
+
+`writes` is also available on a legacy `tools[]` entry, so an existing tool can
+opt in without being rewritten.
+
+Mark it on anything with a side effect outside Paperclip. Marking a read-only
+operation by mistake costs one database row; missing a writing one costs a
+duplicate email.
+
+### 11.7.3 How the key is chosen
+
+| lane | key |
+|---|---|
+| agent, caller supplied one | the caller's `runContext.idempotencyKey` |
+| agent, no key supplied | derived from the run id, the tool name and the arguments |
+| user, caller supplied one | the request body's `idempotencyKey` |
+| user, no key supplied | none — the call runs, unprotected |
+
+The derived agent-lane key makes "the same call, repeated inside one run" the
+thing that gets caught, which is the actual failure mode. Two different runs
+doing the same thing get different keys and both proceed. One run deliberately
+sending two different emails differs in its arguments, so it also proceeds. A
+run that means to do the identical thing twice must say so with an explicit
+key.
+
+The user lane deliberately does NOT derive one: a person clicking "Resync"
+twice usually means it. A screen that knows a repeat would be wrong sends a
+key.
+
+Arguments are serialised with sorted keys at every level, so `{a,b}` and
+`{b,a}` hash the same. Without that, one agent's argument ordering would slip
+past another's.
+
+The handler receives the key on its context. Pass it on to any outside system
+that accepts an idempotency key of its own, so the protection reaches past
+Paperclip's boundary.
+
+### 11.7.4 What happens on a repeat
+
+- **Already completed** — the stored result is replayed. The operation does not
+  run.
+- **A previous attempt failed** — the failure is replayed, not retried. Silently
+  retrying could succeed the second time, and the caller would never learn the
+  first attempt had also fired.
+- **Still running** — refused with an `unavailable` failure, not queued. There
+  is no result to replay yet, and waiting would turn one slow call into two.
+- **Never returned at all** (worker died, RPC blew up) — the claim is released
+  so a later attempt can proceed. Nothing ran, so replaying a failure would be
+  wrong.
+
+A claim left `in_progress` for fifteen minutes is taken over, so a killed
+worker cannot make an operation permanently unrunnable. Completed claims stay
+replayable for thirty minutes and are then purged.
+
+### 11.7.5 Limits worth knowing
+
+Protection is per Paperclip instance, backed by the `plugin_operation_calls`
+table and a unique index. A host with no database configured runs writing
+operations unprotected, exactly as before this existed.
+
+## 11.8 Operator control over operations
+
+The manifest says who an operation is FOR. This is where the operator says
+what their own install allows.
+
+### 11.8.1 The three controls
+
+Per operation, stored on the install:
+
+```ts
+{
+  "send-invoice": {
+    audience?: "both" | "agents" | "users",  // narrower than the manifest
+    requiresApproval?: boolean,               // agents need a human yes first
+    disabled?: boolean                        // nobody may run it
+  }
+}
+```
+
+### 11.8.2 It can only narrow
+
+A manifest that publishes an operation to users only cannot be turned into an
+agent tool by configuration. An override that would widen is refused by the
+API and, if it somehow reaches the loader, logged and ignored.
+
+That direction is the point: installing a plugin can never give agents reach
+its author did not publish to them, so reviewing a manifest is enough to know
+the ceiling.
+
+### 11.8.3 Enforcement
+
+- **Agents** — an operation the operator has narrowed away from agents, or
+  switched off, is never registered as a tool. It is absent from every tool
+  list rather than filtered at call time, so there is no path to it.
+- **People** — the two bridge action routes refuse it with `403`.
+- **Approval** — `requiresApproval` routes the call through the existing
+  outbound draft gate: the agent gets a "queued for approval" result, and the
+  operation runs when a human approves. Approval replay is generic (it
+  re-dispatches the tool name with its stored parameters), so nothing
+  plugin-specific was needed. An operator's setting on a specific operation
+  overrides the instance-wide outbound toggle being off — they said so about
+  this operation.
+
+`requiresApproval` has no effect on the user lane: a person triggering it IS
+the human approval.
+
+### 11.8.4 API
+
+| method | path | who |
+|---|---|---|
+| `GET` | `/api/plugins/:pluginId/operations` | instance admin |
+| `PUT` | `/api/plugins/:pluginId/operations/policy` | instance admin |
+
+The `GET` returns each operation's declared audience alongside the resolved
+one, so a settings screen can show when an override is doing nothing.
+
+The `PUT` body is the complete map, not a patch — a merge would make "clear
+this override" the one thing the caller could not express. An unknown
+operation key is refused rather than stored, because a typo that looks saved
+and does nothing is the worst outcome for a security control. A saved change
+re-registers the plugin's tools before responding, so an agent mid-run sees
+the new answer on its next call rather than at the next restart.
+
 ## 12. Runtime Model
 
 ## 12.1 Process Model

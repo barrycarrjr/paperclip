@@ -136,6 +136,8 @@ export {
   PLUGIN_CATEGORIES,
   PLUGIN_CAPABILITIES,
   PLUGIN_CONNECTOR_SURFACES,
+  PLUGIN_OPERATION_AUDIENCES,
+  PLUGIN_OPERATION_ERROR_CODES,
   PLUGIN_UI_SLOT_TYPES,
   PLUGIN_UI_SLOT_ENTITY_TYPES,
   PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS,
@@ -239,6 +241,8 @@ export {
   type PluginCategory,
   type PluginCapability,
   type PluginConnectorSurface,
+  type PluginOperationAudience,
+  type PluginOperationErrorCode,
   type PluginUiSlotType,
   type PluginUiSlotEntityType,
   type PluginReservedCompanyRouteSegment,
@@ -545,6 +549,7 @@ export type {
   PluginJobDeclaration,
   PluginWebhookDeclaration,
   PluginToolDeclaration,
+  PluginOperationDeclaration,
   PluginEnvironmentDriverDeclaration,
   PluginUiSlotDeclaration,
   PluginLauncherActionDeclaration,
@@ -966,6 +971,9 @@ export {
   pluginJobDeclarationSchema,
   pluginWebhookDeclarationSchema,
   pluginToolDeclarationSchema,
+  pluginOperationDeclarationSchema,
+  pluginOperationPolicySchema,
+  pluginOperationPolicyEntrySchema,
   pluginEnvironmentDriverDeclarationSchema,
   pluginUiSlotDeclarationSchema,
   pluginLauncherActionDeclarationSchema,
@@ -986,6 +994,7 @@ export {
   type PluginJobDeclarationInput,
   type PluginWebhookDeclarationInput,
   type PluginToolDeclarationInput,
+  type PluginOperationDeclarationInput,
   type PluginEnvironmentDriverDeclarationInput,
   type PluginUiSlotDeclarationInput,
   type PluginLauncherActionDeclarationInput,
@@ -1172,3 +1181,24 @@ export type {
   EnvironmentProviderCapability,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
+
+export {
+  describeOperationFailure,
+  isPluginOperationFailure,
+  isRetryableOperationError,
+  operationErrorNeedsPerson,
+} from "./plugin-operation-errors.js";
+
+export type { PluginOperationFailureDetail } from "./plugin-operation-errors.js";
+
+export {
+  resolveOperationPolicy,
+  policyAllowsAgents,
+  policyAllowsUsers,
+} from "./plugin-operation-policy.js";
+
+export type {
+  PluginOperationPolicy,
+  PluginOperationPolicyEntry,
+  ResolvedOperationPolicy,
+} from "./plugin-operation-policy.js";

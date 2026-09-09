@@ -16,6 +16,7 @@ import {
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_API_ROUTE_METHODS,
   PLUGIN_CONNECTOR_SURFACES,
+  PLUGIN_OPERATION_AUDIENCES,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -106,7 +107,54 @@ export const pluginToolDeclarationSchema = z.object({
   displayName: z.string().min(1),
   description: z.string().min(1),
   parametersSchema: jsonSchemaSchema,
+  writes: z.boolean().optional(),
 });
+
+/**
+ * Validates a {@link PluginOperationDeclaration} — one thing the plugin can
+ * do, published to agents and to people from a single declaration.
+ *
+ * `key` uses the same character rules as a tool name would, because it becomes
+ * one: the host publishes it to agents as `<pluginId>:<key>`.
+ *
+ * @see PLUGIN_SPEC.md §11.5 — Operations
+ */
+export const pluginOperationDeclarationSchema = z.object({
+  key: z.string().min(1).regex(
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/,
+    "Operation key must start with an alphanumeric and contain only letters, digits, dots, hyphens, or underscores",
+  ),
+  displayName: z.string().min(1).max(100),
+  description: z.string().min(1).max(1000),
+  parametersSchema: jsonSchemaSchema,
+  audience: z.enum(PLUGIN_OPERATION_AUDIENCES).optional(),
+  writes: z.boolean().optional(),
+});
+
+export type PluginOperationDeclarationInput = z.infer<typeof pluginOperationDeclarationSchema>;
+
+/**
+ * Validates one operator override for a single operation.
+ *
+ * Deliberately does NOT check that the override narrows rather than widens:
+ * that needs the manifest, which a shape validator does not have. The route
+ * checks it against the declaration and rejects a widening override there.
+ *
+ * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+ */
+export const pluginOperationPolicyEntrySchema = z.object({
+  audience: z.enum(PLUGIN_OPERATION_AUDIENCES).optional(),
+  requiresApproval: z.boolean().optional(),
+  disabled: z.boolean().optional(),
+}).strict();
+
+/** Validates a whole plugin's operator overrides, keyed by operation key. */
+export const pluginOperationPolicySchema = z.record(
+  z.string().min(1),
+  pluginOperationPolicyEntrySchema,
+);
+
+export type PluginOperationPolicyEntryInput = z.infer<typeof pluginOperationPolicyEntrySchema>;
 
 export const pluginEnvironmentDriverDeclarationSchema = z.object({
   driverKey: z.string().min(1).regex(
@@ -453,6 +501,8 @@ export type PluginApiRouteDeclarationInput = z.infer<typeof pluginApiRouteDeclar
  * - duplicate `jobs[].jobKey` values are rejected
  * - duplicate `webhooks[].endpointKey` values are rejected
  * - duplicate `tools[].name` values are rejected
+ * - `agent.tools.register` / `ui.action.register` required per operation audience
+ * - duplicate `operations[].key` values, and keys colliding with tool names, are rejected
  * - duplicate `environmentDrivers[].driverKey` values are rejected
  * - duplicate `ui.slots[].id` values are rejected
  *
@@ -490,6 +540,7 @@ export const pluginManifestV1Schema = z.object({
   jobs: z.array(pluginJobDeclarationSchema).optional(),
   webhooks: z.array(pluginWebhookDeclarationSchema).optional(),
   tools: z.array(pluginToolDeclarationSchema).optional(),
+  operations: z.array(pluginOperationDeclarationSchema).optional(),
   database: pluginDatabaseDeclarationSchema.optional(),
   connectors: z.array(pluginConnectorDeclarationSchema).optional(),
   apiRoutes: z.array(pluginApiRouteDeclarationSchema).optional(),
@@ -573,6 +624,31 @@ export const pluginManifestV1Schema = z.object({
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Capability 'agent.tools.register' is required when tools are declared",
+        path: ["capabilities"],
+      });
+    }
+  }
+
+  // Operations require whichever lane capability they actually publish on
+  // (PLUGIN_SPEC.md §11.5). An operation is one declaration reaching two
+  // audiences, so a plugin that only wants the agent lane still says so with
+  // `audience: "agents"` and only needs `agent.tools.register`.
+  if (manifest.operations && manifest.operations.length > 0) {
+    const audiences = manifest.operations.map((op) => op.audience ?? "both");
+    const reachesAgents = audiences.some((a) => a === "both" || a === "agents");
+    const reachesUsers = audiences.some((a) => a === "both" || a === "users");
+
+    if (reachesAgents && !manifest.capabilities.includes("agent.tools.register")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Capability 'agent.tools.register' is required when operations are declared with audience 'both' or 'agents'",
+        path: ["capabilities"],
+      });
+    }
+    if (reachesUsers && !manifest.capabilities.includes("ui.action.register")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Capability 'ui.action.register' is required when operations are declared with audience 'both' or 'users'",
         path: ["capabilities"],
       });
     }
@@ -707,6 +783,32 @@ export const pluginManifestV1Schema = z.object({
         code: z.ZodIssueCode.custom,
         message: `Duplicate tool names: ${[...new Set(duplicates)].join(", ")}`,
         path: ["tools"],
+      });
+    }
+  }
+
+  // Operation keys must be unique within the plugin, and must not collide
+  // with a legacy `tools[].name`. Both end up in the same agent-facing
+  // namespace (`<pluginId>:<name>`), so a collision would silently give one
+  // of the two to the other's handler.
+  if (manifest.operations) {
+    const opKeys = manifest.operations.map((op) => op.key);
+    const duplicates = opKeys.filter((key, i) => opKeys.indexOf(key) !== i);
+    if (duplicates.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Duplicate operation keys: ${[...new Set(duplicates)].join(", ")}`,
+        path: ["operations"],
+      });
+    }
+
+    const toolNames = new Set((manifest.tools ?? []).map((t) => t.name));
+    const collisions = [...new Set(opKeys.filter((key) => toolNames.has(key)))];
+    if (collisions.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Operation keys collide with tool names: ${collisions.join(", ")}. Declare each capability once — as an operation, or as a tool, not both.`,
+        path: ["operations"],
       });
     }
   }

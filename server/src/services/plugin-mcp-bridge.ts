@@ -43,6 +43,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Db } from "@paperclipai/db";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
+import { describeOperationFailure } from "@paperclipai/shared";
 import type {
   PluginToolDispatcher,
   AgentToolDescriptor,
@@ -361,8 +362,13 @@ export function createPluginMcpBridge(
             runContext,
           );
           if (exec.result.error) {
+            // Same reasoning as chat-tools: the code carries what to do next,
+            // and a spawned agent reading only the prose cannot infer it.
             return {
-              content: [{ type: "text", text: exec.result.error }],
+              content: [{
+                type: "text",
+                text: describeOperationFailure(exec.result.failure, exec.result.error),
+              }],
               isError: true,
             };
           }

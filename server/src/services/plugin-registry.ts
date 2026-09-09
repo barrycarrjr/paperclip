@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/db";
 import type {
   PaperclipPluginManifestV1,
+  PluginOperationPolicy,
   PluginStatus,
   InstallPlugin,
   UpdatePluginStatus,
@@ -224,6 +225,31 @@ export function pluginRegistryService(db: Db) {
       return db
         .update(plugins)
         .set(setClause)
+        .where(eq(plugins.id, id))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+    },
+
+    /**
+     * Replace the operator's per-operation overrides for a plugin.
+     *
+     * Whole-map replace rather than a merge: the settings screen sends the
+     * complete picture, and a merge would make "clear this override" the one
+     * thing the caller could not express.
+     *
+     * Storing it is only half the job — the caller must re-register the
+     * plugin's tools afterwards, or the change does not reach agents until the
+     * next restart.
+     *
+     * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
+     */
+    setOperationPolicy: async (id: string, policy: PluginOperationPolicy) => {
+      const plugin = await getById(id);
+      if (!plugin) throw notFound("Plugin not found");
+
+      return db
+        .update(plugins)
+        .set({ operationPolicyJson: policy, updatedAt: new Date() })
         .where(eq(plugins.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
