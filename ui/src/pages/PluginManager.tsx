@@ -51,6 +51,12 @@ const CATEGORY_LABELS: Record<PluginCategory, string> = {
 
 type AvailabilityFilter = "all" | "available" | "comingSoon";
 
+type BulkUpdateProgress = {
+  current: number;
+  total: number;
+  pluginName: string;
+};
+
 /**
  * PluginManager page component.
  *
@@ -97,7 +103,8 @@ export function PluginManager() {
   const [uninstallPluginId, setUninstallPluginId] = useState<string | null>(null);
   const [uninstallPluginName, setUninstallPluginName] = useState<string>("");
   const [errorDetailsPlugin, setErrorDetailsPlugin] = useState<PluginRecord | null>(null);
-  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkUpdateProgress, setBulkUpdateProgress] = useState<BulkUpdateProgress | null>(null);
+  const bulkUpdating = bulkUpdateProgress !== null;
   const [categoryFilter, setCategoryFilter] = useState<Set<PluginCategory>>(new Set());
   const [availabilityFilter, setAvailabilityFilter] = useState<AvailabilityFilter>("all");
   // When the upgrade path returns a 409 capability_escalation, park the
@@ -380,24 +387,93 @@ export function PluginManager() {
   };
 
   async function handleUpdateAll() {
-    if (bulkUpdating || updatableRows.length === 0) return;
-    setBulkUpdating(true);
-    for (const row of updatableRows) {
-      try {
-        await installFromLibraryMutation.mutateAsync({ id: row.pluginKey });
-      } catch {
-        // individual onError handler already pushed a toast or parked an
-        // escalation prompt; "Update all" continues with the next row.
+    if (bulkUpdating || installFromLibraryMutation.isPending || updatableRows.length === 0) return;
+
+    // Snapshot the queue before invalidations change the row model. Plugin
+    // upgrades are intentionally sequential: each one briefly reloads its own
+    // worker, while the Paperclip host and every other plugin stay available.
+    const queue = [...updatableRows];
+    const failures: Array<{ name: string; message: string }> = [];
+    let updatedCount = 0;
+    let approvalCount = 0;
+    let firstApproval: { pluginKey: string; details: CapabilityEscalationDetails } | null = null;
+
+    try {
+      for (const [index, row] of queue.entries()) {
+        setBulkUpdateProgress({
+          current: index + 1,
+          total: queue.length,
+          pluginName: row.displayName,
+        });
+
+        try {
+          // Do not use the single-plugin mutation here: its callbacks create
+          // one toast and one cache refresh per item. A batch should have one
+          // coherent progress state and one final outcome.
+          await pluginsApi.installFromLibrary(row.pluginKey);
+          updatedCount += 1;
+        } catch (err) {
+          const escalation = asCapabilityEscalationError(err);
+          if (escalation) {
+            approvalCount += 1;
+            firstApproval ??= { pluginKey: row.pluginKey, details: escalation };
+            continue;
+          }
+          failures.push({
+            name: row.displayName,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
+    } finally {
+      setBulkUpdateProgress(null);
+      invalidatePluginQueries();
     }
-    setBulkUpdating(false);
+
+    if (firstApproval) setCapabilityPrompt(firstApproval);
+
+    const outcomeDetails: string[] = [];
+    if (approvalCount > 0) {
+      outcomeDetails.push(
+        `${approvalCount} ${approvalCount === 1 ? "update needs" : "updates need"} permission review`,
+      );
+    }
+    if (failures.length > 0) {
+      const firstFailure = failures[0]!;
+      outcomeDetails.push(
+        `${failures.length} failed; ${firstFailure.name}: ${firstFailure.message}`,
+      );
+    }
+
+    if (failures.length > 0) {
+      pushToast({
+        id: "plugin-bulk-update",
+        title: `Updated ${updatedCount} of ${queue.length} plugins`,
+        body: outcomeDetails.join(". "),
+        tone: "error",
+      });
+    } else if (approvalCount > 0) {
+      pushToast({
+        id: "plugin-bulk-update",
+        title: `Updated ${updatedCount} of ${queue.length} plugins`,
+        body: `${outcomeDetails.join(". ")}. Review the permission request to continue.`,
+        tone: "warn",
+      });
+    } else {
+      pushToast({
+        id: "plugin-bulk-update",
+        title: `Updated ${updatedCount} ${updatedCount === 1 ? "plugin" : "plugins"}`,
+        body: "Plugin workers reloaded in place; Paperclip stayed online.",
+        tone: "success",
+      });
+    }
   }
 
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading plugins...</div>;
   if (error) return <div className="p-4 text-sm text-destructive">Failed to load plugins.</div>;
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 max-w-5xl" aria-busy={bulkUpdating}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Puzzle className="h-6 w-6 text-muted-foreground" />
@@ -411,10 +487,12 @@ export function PluginManager() {
               size="sm"
               className="gap-2"
               onClick={handleUpdateAll}
-              disabled={bulkUpdating}
+              disabled={bulkUpdating || installFromLibraryMutation.isPending}
             >
               <RefreshCw className={cn("h-4 w-4", bulkUpdating && "animate-spin")} />
-              {bulkUpdating ? "Updating…" : `Update All (${updatableRows.length})`}
+              {bulkUpdateProgress
+                ? `Updating ${bulkUpdateProgress.current} of ${bulkUpdateProgress.total}…`
+                : `Update All (${updatableRows.length})`}
             </Button>
           )}
 
@@ -430,7 +508,7 @@ export function PluginManager() {
             }}
           >
             <DialogTrigger asChild>
-              <Button size="sm" className="gap-2">
+              <Button size="sm" className="gap-2" disabled={bulkUpdating}>
                 <Plus className="h-4 w-4" />
                 Install Plugin
               </Button>
@@ -571,6 +649,37 @@ export function PluginManager() {
         </Dialog>
         </div>
       </div>
+
+      {bulkUpdateProgress && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-sky-500/25 bg-sky-500/[0.07] px-4 py-3"
+        >
+          <div className="flex items-start gap-3">
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-sky-600 dark:text-sky-300" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-3 text-sm font-medium">
+                <span className="truncate">Updating {bulkUpdateProgress.pluginName}</span>
+                <span className="shrink-0 text-muted-foreground">
+                  {bulkUpdateProgress.current} of {bulkUpdateProgress.total}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Paperclip stays online. Only this plugin reloads briefly while its update is applied.
+              </p>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-sky-500/15">
+                <div
+                  className="h-full rounded-full bg-sky-500 transition-[width] duration-300"
+                  style={{
+                    width: `${(bulkUpdateProgress.current / bulkUpdateProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
@@ -843,7 +952,7 @@ export function PluginManager() {
                             size="sm"
                             className="gap-2 bg-green-600 text-white hover:bg-green-700"
                             onClick={() => installFromLibraryMutation.mutate({ id: row.pluginKey })}
-                            disabled={libraryInFlight}
+                            disabled={libraryInFlight || bulkUpdating}
                           >
                             <Download className="h-4 w-4" />
                             {libraryInFlight ? "Installing…" : "Install"}
@@ -874,7 +983,7 @@ export function PluginManager() {
                                   enableMutation.mutate(installed.id);
                                 }
                               }}
-                              disabled={enableMutation.isPending || disableMutation.isPending}
+                              disabled={bulkUpdating || enableMutation.isPending || disableMutation.isPending}
                             >
                               <Power
                                 className={cn(
@@ -890,7 +999,7 @@ export function PluginManager() {
                                 className="h-8 w-8"
                                 title="Reinstall from local path (re-reads the manifest after rebuild; preserves config and state)"
                                 onClick={() => reinstallMutation.mutate(installed.id)}
-                                disabled={reinstallMutation.isPending}
+                                disabled={bulkUpdating || reinstallMutation.isPending}
                               >
                                 <RefreshCw
                                   className={cn(
@@ -913,7 +1022,7 @@ export function PluginManager() {
                                   installed.manifestJson.displayName ?? installed.packageName,
                                 );
                               }}
-                              disabled={uninstallMutation.isPending}
+                              disabled={bulkUpdating || uninstallMutation.isPending}
                             >
                               <Trash className="h-4 w-4" />
                             </Button>
@@ -1002,7 +1111,7 @@ export function PluginManager() {
                                   enableMutation.mutate(installedPlugin.id);
                                 }
                               }}
-                              disabled={enableMutation.isPending || disableMutation.isPending}
+                              disabled={bulkUpdating || enableMutation.isPending || disableMutation.isPending}
                             >
                               <Power
                                 className={cn(
@@ -1018,7 +1127,7 @@ export function PluginManager() {
                                 className="h-8 w-8"
                                 title="Reinstall from local path"
                                 onClick={() => reinstallMutation.mutate(installedPlugin.id)}
-                                disabled={reinstallMutation.isPending}
+                                disabled={bulkUpdating || reinstallMutation.isPending}
                               >
                                 <RefreshCw
                                   className={cn(
@@ -1041,7 +1150,7 @@ export function PluginManager() {
                                   installedPlugin.manifestJson.displayName ?? installedPlugin.packageName,
                                 );
                               }}
-                              disabled={uninstallMutation.isPending}
+                              disabled={bulkUpdating || uninstallMutation.isPending}
                             >
                               <Trash className="h-4 w-4" />
                             </Button>
@@ -1057,7 +1166,7 @@ export function PluginManager() {
                         <Button
                           size="sm"
                           className="bg-green-600 text-white hover:bg-green-700"
-                          disabled={installPending || installMutation.isPending}
+                          disabled={bulkUpdating || installPending || installMutation.isPending}
                           onClick={() =>
                             installMutation.mutate({
                               packageName: example.localPath,

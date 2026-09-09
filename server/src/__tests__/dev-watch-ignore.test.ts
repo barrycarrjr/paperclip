@@ -39,4 +39,34 @@ describe("resolveServerDevWatchIgnorePaths", () => {
     expect(ignorePaths).toContain("**/{node_modules,bower_components,vendor}/**");
     expect(ignorePaths).toContain("**/.vite-temp/**");
   });
+
+  it("ignores every runtime plugin store so an update cannot restart the host", () => {
+    const serverRoot = path.join(os.tmpdir(), "paperclip-repo", "server");
+    const paperclipHome = path.join(os.tmpdir(), "paperclip-runtime-home");
+    const previousPaperclipHome = process.env.PAPERCLIP_HOME;
+
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    try {
+      const ignorePaths = resolveServerDevWatchIgnorePaths(serverRoot);
+
+      for (const directory of ["adapter-plugins", "plugins", "installed-plugins"]) {
+        const absolutePath = path.join(paperclipHome, directory);
+        expect(ignorePaths).toContain(absolutePath);
+        expect(ignorePaths).toContain(`${absolutePath.replaceAll(path.sep, "/")}/**`);
+
+        // Keep covering the legacy/default home as well. The plugin loader
+        // may still have active installs there when PAPERCLIP_HOME points at
+        // an isolated worktree runtime.
+        const defaultPath = path.join(os.homedir(), ".paperclip", directory);
+        expect(ignorePaths).toContain(defaultPath);
+        expect(ignorePaths).toContain(`${defaultPath.replaceAll(path.sep, "/")}/**`);
+      }
+    } finally {
+      if (previousPaperclipHome === undefined) {
+        delete process.env.PAPERCLIP_HOME;
+      } else {
+        process.env.PAPERCLIP_HOME = previousPaperclipHome;
+      }
+    }
+  });
 });

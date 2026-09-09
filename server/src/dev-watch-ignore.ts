@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { resolvePaperclipHomeDir } from "./home-paths.js";
 
 function toGlobstarPath(candidate: string): string {
   return `${candidate.replaceAll(path.sep, "/")}/**`;
@@ -23,16 +25,30 @@ export function resolveServerDevWatchIgnorePaths(serverRoot: string): string[] {
     "**/.vite-temp/**",
   ]);
 
-  for (const relativePath of [
-    "../ui/node_modules",
-    "../ui/node_modules/.vite-temp",
-    "../ui/.vite",
-    "../ui/dist",
-    // npm install during reinstall would trigger a restart mid-request
-    // if tsx watch sees the new files. Exclude the managed plugins dir.
-    process.env.HOME + "/.paperclip/adapter-plugins",
+  const defaultPaperclipHome = path.resolve(os.homedir(), ".paperclip");
+  const paperclipHomes = new Set([
+    defaultPaperclipHome,
+    resolvePaperclipHomeDir(),
+  ]);
+  const runtimePluginPaths = [...paperclipHomes].flatMap((paperclipHome) => [
+    path.join(paperclipHome, "adapter-plugins"),
+    path.join(paperclipHome, "plugins"),
+    path.join(paperclipHome, "installed-plugins"),
+  ]);
+
+  for (const candidate of [
+    path.resolve(serverRoot, "../ui/node_modules"),
+    path.resolve(serverRoot, "../ui/node_modules/.vite-temp"),
+    path.resolve(serverRoot, "../ui/.vite"),
+    path.resolve(serverRoot, "../ui/dist"),
+    // Plugin installs deliberately mutate these runtime directories. The
+    // lifecycle manager reloads only the affected worker, so treating those
+    // writes as server-source changes interrupts the request and can strand a
+    // multi-plugin update halfway through. Keep all runtime plugin stores out
+    // of the host server's tsx watcher.
+    ...runtimePluginPaths,
   ]) {
-    addIgnorePath(ignorePaths, path.resolve(serverRoot, relativePath));
+    addIgnorePath(ignorePaths, candidate);
   }
 
   return [...ignorePaths];
