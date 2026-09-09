@@ -654,7 +654,14 @@ describe("claude execute", () => {
     }
   }, 15_000);
 
-  it("classifies Claude 'out of extra usage' failures as transient upstream errors", async () => {
+  // "Out of extra usage" means the paid overage on top of the subscription is
+  // gone, so the same account keeps refusing until its window resets. It used
+  // to be classified transient, which put a spent plan on a two-minute backoff
+  // ladder it could never climb out of; `classifyClaudeFailure` now checks the
+  // plan-exhausted wording BEFORE the transient wording precisely to stop that,
+  // and this test was left behind asserting the old answer. The reset time is
+  // still the part that matters, and it is still checked below.
+  it("classifies Claude 'out of extra usage' failures as a spent plan, with its reset time", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-transient-"));
     const workspace = path.join(root, "workspace");
     await fs.mkdir(workspace, { recursive: true });
@@ -701,15 +708,18 @@ describe("claude execute", () => {
       });
 
       expect(result.exitCode).toBe(1);
-      expect(result.errorCode).toBe("claude_transient_upstream");
-      expect(result.errorFamily).toBe("transient_upstream");
+      expect(result.errorCode).toBe("claude_plan_exhausted");
+      expect(result.errorFamily).toBe("plan_exhausted");
       const expectedRetryNotBefore = "2026-04-22T21:00:00.000Z";
       expect(result.retryNotBefore).toBe(expectedRetryNotBefore);
       expect(result.resultJson?.retryNotBefore).toBe(expectedRetryNotBefore);
       expect(result.errorMessage ?? "").toContain("extra usage");
-      expect(new Date(String(result.resultJson?.transientRetryNotBefore)).getTime()).toBe(
-        new Date("2026-04-22T21:00:00.000Z").getTime(),
+      // The scheduler waits for the real reset rather than retrying on a
+      // ladder, which is the whole point of the reclassification.
+      expect(new Date(String(result.resultJson?.planResetsAt)).getTime()).toBe(
+        new Date(expectedRetryNotBefore).getTime(),
       );
+      expect(result.resultJson?.transientRetryNotBefore).toBeUndefined();
     } finally {
       vi.useRealTimers();
       if (previousHome === undefined) delete process.env.HOME;

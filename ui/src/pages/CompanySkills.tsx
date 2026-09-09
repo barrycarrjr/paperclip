@@ -12,7 +12,7 @@ import type {
   CompanySkillUpdateStatus,
 } from "@paperclipai/shared";
 import { companySkillsApi } from "../api/companySkills";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -757,7 +757,10 @@ export function CompanySkills() {
   const { "*": routePath } = useParams<{ "*": string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (skill import/create/scan/update/install/delete) — see
+  // Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const [skillFilter, setSkillFilter] = useState("");

@@ -4,6 +4,8 @@ const {
   resolveDynamicForbiddenTokens,
   resolveForbiddenTokens,
   runForbiddenTokenCheck,
+  runStagedForbiddenTokenCheck,
+  looksLikeLeakContext,
 } = await import("../../../scripts/check-forbidden-tokens.mjs");
 
 describe("forbidden token check", () => {
@@ -73,5 +75,132 @@ describe("forbidden token check", () => {
     expect(error).toHaveBeenCalledWith("ERROR: Forbidden tokens found in tracked files:\n");
     expect(error).toHaveBeenCalledWith("  server/file.ts:1:found");
     expect(error).toHaveBeenCalledWith("\nBuild blocked. Remove the forbidden token(s) before publishing.");
+  });
+});
+
+describe("staged forbidden token check", () => {
+  // A made-up token, never the real local username. The tests above already
+  // do this, and there is a second reason here: this file is itself scanned
+  // by the check it tests, so a genuine forbidden token would make the test
+  // file permanently uncommittable. Found out exactly that way on 2026-09-04
+  // — the hook rejected the commit that introduced these tests.
+  const TOKEN = "sampleuser";
+
+  function run(diff: string, tokens: string[] = [TOKEN]) {
+    const errors: string[] = [];
+    const logs: string[] = [];
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens,
+      exec: () => diff,
+      log: (m: string) => logs.push(m),
+      error: (m: string) => errors.push(m),
+    });
+    return { exitCode, errors: errors.join("\n"), logs: logs.join("\n") };
+  }
+
+  it("blocks a staged line that adds a forbidden token", () => {
+    const result = run(`+++ b/docs/x.md\n+see /home/${TOKEN}/project\n`);
+    expect(result.exitCode).toBe(1);
+    expect(result.errors).toContain(TOKEN);
+  });
+
+  it("ignores removed lines and untouched context", () => {
+    // Taking a token OUT is the fix, not the offence.
+    const result = run(`+++ b/docs/x.md\n-see /home/${TOKEN}/project\n see something else\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("does not treat the diff's own file headers as content", () => {
+    // Without this, every staged file whose PATH contains the token would look
+    // like a match and nothing under that directory could be committed.
+    const result = run(`+++ b/home/${TOKEN}/notes.md\n+a harmless line\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("matches regardless of case", () => {
+    const result = run(`+++ b/x.md\n+/home/${TOKEN.toUpperCase()}/project\n`);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("passes when the staged changes are clean", () => {
+    const result = run("+++ b/x.md\n+a perfectly ordinary line\n");
+    expect(result.exitCode).toBe(0);
+    expect(result.logs).toContain("No forbidden tokens");
+  });
+
+  it("does nothing when the token list is empty", () => {
+    const result = run(`+++ b/x.md\n+/home/${TOKEN}/project\n`, []);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("does not block when there is nothing staged", () => {
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens: [TOKEN],
+      exec: () => {
+        throw new Error("no staged changes");
+      },
+      log: () => {},
+      error: () => {},
+    });
+    expect(exitCode).toBe(0);
+  });
+});
+
+describe("leak-shaped context", () => {
+  const TOKEN = "sampleuser";
+  const BS = String.fromCharCode(92);
+
+  it("does not flag a document that simply names a person", () => {
+    // The username token is derived automatically and is usually also
+    // somebody's ordinary name. Blocking prose teaches people to commit with
+    // --no-verify, which costs more than it saves.
+    for (const line of [
+      `Confirmed live by ${TOKEN} on Tuesday.`,
+      `${TOKEN} asked for this to be reworded.`,
+      `the ${TOKEN}-confirmed behaviour`,
+    ]) {
+      expect(looksLikeLeakContext(line, TOKEN), line).toBe(false);
+    }
+  });
+
+  it("flags a machine-specific path", () => {
+    expect(looksLikeLeakContext(`/home/${TOKEN}/project`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`C:${BS}Users${BS}${TOKEN}${BS}project`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`cd C:${BS}Users${BS}${TOKEN}`, TOKEN)).toBe(true);
+  });
+
+  it("flags an address or a credential", () => {
+    expect(looksLikeLeakContext(`mail ${TOKEN}@example.com`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`https://${TOKEN}@host/repo`, TOKEN)).toBe(true);
+    expect(looksLikeLeakContext(`username = "${TOKEN}"`, TOKEN)).toBe(true);
+  });
+
+  it("still matches an explicitly listed token anywhere, not only in context", () => {
+    // A token an operator wrote into the tokens file is a deliberate
+    // statement that it must not appear at all, so it is matched plainly.
+    const errors: string[] = [];
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens: ["acme-internal"],
+      contextOnlyTokens: [],
+      exec: () => "+++ b/x.md\n+a mention of acme-internal in prose\n",
+      log: () => {},
+      error: (m: string) => errors.push(m),
+    });
+    expect(exitCode).toBe(1);
+  });
+
+  it("skips only when both lists are empty", () => {
+    const exitCode = runStagedForbiddenTokenCheck({
+      repoRoot: "/repo",
+      tokens: [],
+      contextOnlyTokens: [TOKEN],
+      exec: () => `+++ b/x.md\n+/home/${TOKEN}/project\n`,
+      log: () => {},
+      error: () => {},
+    });
+    expect(exitCode).toBe(1);
   });
 });

@@ -1494,7 +1494,20 @@ export async function pickBestDefaultModel(): Promise<string> {
     if (p?.isConfigured()) return explicit;
   }
   const models = await listAvailableModels();
-  if (models.length === 0) return "claude-opus-4-7";
+  return bestOfAvailableModels(models) ?? "claude-opus-4-7";
+}
+
+/**
+ * Ranks an already-discovered model list the way `pickBestDefaultModel`
+ * does and returns the winner, or null when the list is empty. Kept apart
+ * from the listing so a caller that has already paid for
+ * `listAvailableModels()` (adapter discovery plus the Ollama probe) is not
+ * made to pay for it a second time just to rank the result.
+ */
+function bestOfAvailableModels(
+  models: { provider: string; model: string; source?: string }[],
+): string | null {
+  if (models.length === 0) return null;
 
   function score(m: { provider: string; model: string; source?: string }): number {
     let s = 0;
@@ -1531,6 +1544,47 @@ export async function pickBestDefaultModel(): Promise<string> {
   }
 
   return [...models].sort((a, b) => score(b) - score(a))[0].model;
+}
+
+/**
+ * Native API-key providers a server one-shot call tries first, in order.
+ * Ollama is deliberately absent: its `isConfigured()` is true by default
+ * without any reachability check, so a non-running Ollama would win the
+ * cascade and then fail at fetch time. It still gets its chance in the
+ * discovered-model pass below, where `listModels()` probes it for real.
+ */
+const ONE_SHOT_NATIVE_PREFERENCE = ["anthropic", "openai", "gemini"] as const;
+
+/**
+ * Picks the model for a server-side one-shot call (an inline instructions
+ * rewrite, a plan draft) when the caller did not name one. Prefers a native
+ * API-key provider over adapter routing because a native SDK call returns
+ * in hundreds of milliseconds while an adapter CLI cold-starts in seconds.
+ *
+ * Unlike `pickBestDefaultModel`, this returns null when nothing is
+ * configured and nothing was discovered, so the caller can say "no AI model
+ * is set up" instead of trying the hardcoded `claude-opus-4-7` and failing
+ * for want of an ANTHROPIC_API_KEY.
+ */
+export async function pickOneShotModel(): Promise<string | null> {
+  // A configured native provider wins first, ahead of
+  // PAPERCLIP_CHAT_DEFAULT_MODEL. That env var is the *chat session* default
+  // and is routinely pointed at an adapter model (claude_local and friends);
+  // honouring it here would make every one-shot cold-start a CLI, which is
+  // seconds instead of the native SDK's hundreds of milliseconds. This order
+  // matches the cascade the ai-rewrite route used before it moved here.
+  const configured = listConfiguredProviders();
+  for (const name of ONE_SHOT_NATIVE_PREFERENCE) {
+    const native = configured.find((p) => p.name === name);
+    if (native) return native.defaultModel();
+  }
+
+  // No native key: an explicit operator choice wins whenever its provider can
+  // actually serve it; an unconfigured choice is ignored rather than trusted.
+  const explicit = process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.trim();
+  if (explicit && getProviderForModel(explicit)?.isConfigured()) return explicit;
+
+  return bestOfAvailableModels(await listAvailableModels());
 }
 
 /**

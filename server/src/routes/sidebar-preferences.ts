@@ -4,6 +4,7 @@ import {
   pageKeyParamSchema,
   upsertSidebarOrderPreferenceSchema,
   upsertSidebarSlugOrderPreferenceSchema,
+  upsertPinnedWorkspacesSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { logActivity, sidebarPreferenceService } from "../services/index.js";
@@ -84,6 +85,22 @@ export function sidebarPreferenceRoutes(db: Db) {
       const userId = requireBoardUserId(req, res);
       if (!userId) return;
       res.json(await svc.upsertPortfolioNavOrder(userId, req.body.orderedIds));
+    },
+  );
+
+  router.get("/sidebar-preferences/me/pinned-workspaces", async (req, res) => {
+    const userId = requireBoardUserId(req, res);
+    if (!userId) return;
+    res.json(await svc.getPinnedWorkspaces(userId));
+  });
+
+  router.put(
+    "/sidebar-preferences/me/pinned-workspaces",
+    validate(upsertPinnedWorkspacesSchema),
+    async (req, res) => {
+      const userId = requireBoardUserId(req, res);
+      if (!userId) return;
+      res.json(await svc.upsertPinnedWorkspaces(userId, req.body.orderedIds));
     },
   );
 

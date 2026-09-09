@@ -1,0 +1,3 @@
+server/src/routes/plugins.ts
+packages/plugins/sdk/src/protocol.ts
+server/src/__tests__/plugin-routes-authz.test.ts

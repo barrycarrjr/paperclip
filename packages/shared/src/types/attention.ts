@@ -13,6 +13,7 @@ export const ATTENTION_KINDS = [
   "budget_stop",
   "join_request",
   "email_sender",
+  "email_handoff_stale",
 ] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 

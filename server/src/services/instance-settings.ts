@@ -2,6 +2,7 @@ import type { Db } from "@paperclipai/db";
 import { companies, instanceSettings } from "@paperclipai/db";
 import {
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   DEFAULT_SELF_NOTIFY_SETTINGS,
   instanceAgentDefaultsSchema,
@@ -27,6 +28,8 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       keyboardShortcuts: parsed.data.keyboardShortcuts ?? false,
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
       outboundToolDraftMode: parsed.data.outboundToolDraftMode ?? true,
+      emailHandoffReplyApproval:
+        parsed.data.emailHandoffReplyApproval ?? DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
       selfNotify: parsed.data.selfNotify ?? DEFAULT_SELF_NOTIFY_SETTINGS,
     };
   }
@@ -35,6 +38,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
     keyboardShortcuts: false,
     backupRetention: DEFAULT_BACKUP_RETENTION,
     outboundToolDraftMode: true,
+    emailHandoffReplyApproval: DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
     selfNotify: DEFAULT_SELF_NOTIFY_SETTINGS,
   };
 }

@@ -58,6 +58,10 @@ export const queryKeys = {
     liveRuns: (issueId: string) => ["issues", "live-runs", issueId] as const,
     activeRun: (issueId: string) => ["issues", "active-run", issueId] as const,
     workProducts: (issueId: string) => ["issues", "work-products", issueId] as const,
+    emailHandoffs: (issueId: string) => ["issues", "email-handoffs", issueId] as const,
+    /** Every message an agent is holding in a company, for the mail list. */
+    emailHandoffsForCompany: (companyId: string) =>
+      ["issues", "email-handoffs", "company", companyId] as const,
   },
   routines: {
     list: (companyId: string) => ["routines", companyId] as const,
@@ -128,6 +132,8 @@ export const queryKeys = {
       ["sidebar-preferences", "portfolio-nav-order", userId] as const,
     pageSectionOrder: (userId: string, pageKey: string) =>
       ["sidebar-preferences", "page-section-order", userId, pageKey] as const,
+    pinnedWorkspaces: (userId: string) =>
+      ["sidebar-preferences", "pinned-workspaces", userId] as const,
   },
   instance: {
     generalSettings: ["instance", "general-settings"] as const,

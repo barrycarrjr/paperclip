@@ -34,6 +34,7 @@ import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
@@ -42,6 +43,7 @@ import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { StatusIcon } from "../components/StatusIcon";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { buildReviewSenderGroups } from "../lib/email-triage-rules";
@@ -110,7 +112,6 @@ function groupByCompany<T extends { companyId: string }>(
 
 export function PortfolioBrief() {
   const {
-    selectedCompanyId,
     selectedCompany,
     setSelectedCompanyId,
     companies: allAccessibleCompanies,
@@ -122,20 +123,26 @@ export function PortfolioBrief() {
     setBreadcrumbs([{ label: "Portfolio Brief" }]);
   }, [setBreadcrumbs]);
 
-  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
+  // Both URL-derived, not useCompany()'s selection state (P3 audit,
+  // 2026-09-03) — the identical bug already found and fixed in
+  // Everything.tsx/PortfolioEmail.tsx (useRouteCompany.ts documents it).
+  // `selectedCompany` above is kept from context for the unrelated email-
+  // config resolution further down, which the audit didn't flag.
+  const selectedCompanyId = useActiveCompanyId();
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
 
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
 
-  const { data: dashboardData, isLoading: dashLoading } = useQuery({
+  const { data: dashboardData, isLoading: dashLoading, error: dashError } = useQuery({
     queryKey: ["portfolio-dashboard", selectedCompanyId],
     queryFn: () => dashboardApi.listPortfolio(selectedCompanyId!),
     enabled: !!selectedCompanyId && isPortfolioRoot,
   });
 
-  const { data: activityData } = useQuery({
+  const { data: activityData, isLoading: activityLoading } = useQuery({
     queryKey: ["portfolio-activity", "brief", selectedCompanyId, OUTCOMES_LIMIT],
     queryFn: () =>
       activityApi.listPortfolio(selectedCompanyId!, { limit: OUTCOMES_LIMIT }),
@@ -148,7 +155,7 @@ export function PortfolioBrief() {
   // Held-back rows are a portfolio-wide fact, so the toggle sits with the
   // section rather than inside any one company's block.
   const [showSetAside, setShowSetAside] = useState(false);
-  const { data: attentionData } = useQuery({
+  const { data: attentionData, isLoading: attentionLoading } = useQuery({
     queryKey: [...queryKeys.portfolioAttention(selectedCompanyId!), showSetAside],
     queryFn: () => attentionApi.listPortfolio(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId && isPortfolioRoot,
@@ -156,7 +163,7 @@ export function PortfolioBrief() {
     refetchInterval: 15_000,
   });
 
-  const { data: issuesData } = useQuery({
+  const { data: issuesData, isLoading: issuesLoading } = useQuery({
     queryKey: ["portfolio-issues", "brief", selectedCompanyId],
     queryFn: () =>
       issuesApi.listPortfolio(selectedCompanyId!, {
@@ -637,8 +644,26 @@ export function PortfolioBrief() {
       />
     );
   }
-  if (dashLoading) {
+  // P3 audit, 2026-09-03: this used to gate only on `dashLoading`, so the
+  // hero ("all clear") and the outcome/issue/review sections below could all
+  // render past the skeleton while activity/attention/issues were still in
+  // flight — each defaults to an empty list/0 while loading, indistinguishable
+  // from "genuinely nothing here". Same fix as MorningBrief.tsx.
+  if (dashLoading || activityLoading || attentionLoading || issuesLoading) {
     return <PageSkeleton variant="dashboard" />;
+  }
+
+  if (dashError) {
+    // Previously fell through silently: `totals`/`allClear` below default to
+    // 0/true when `dashboardData` is undefined, so a failed fetch rendered as
+    // an "all clear" hero — actively misrepresenting a fetch failure as
+    // healthy, same bug as MorningBrief.tsx.
+    return (
+      <EmptyState
+        icon={Sunrise}
+        message="Couldn't load the portfolio brief. Check your connection and try reloading."
+      />
+    );
   }
 
   const now = new Date();
@@ -686,7 +711,7 @@ export function PortfolioBrief() {
       {/* Hero */}
       <section
         aria-label="Portfolio brief"
-        className="group relative overflow-hidden border border-border bg-card pl-6 pr-5 py-6"
+        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card py-6 pl-6 pr-5 shadow-sm"
       >
         <span aria-hidden className={cn("absolute left-0 top-0 h-full w-[3px]", heroBarClass)} />
         <div className="flex items-start gap-4">
@@ -977,7 +1002,7 @@ export function PortfolioBrief() {
                 return (
                   <div
                     key={company.id}
-                    className="border border-border bg-card overflow-hidden"
+                    className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm"
                   >
                     <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
                       <Link
@@ -1178,7 +1203,7 @@ function SectionHeader({ label, chip, right }: SectionHeaderProps) {
 
 function EmptySection({ icon: Icon, message, tone }: { icon: typeof Sun; message: string; tone?: "emerald" }) {
   return (
-    <div className="border border-border bg-card p-8 text-center">
+    <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
       <Icon className={cn("mx-auto h-5 w-5", tone === "emerald" ? "text-emerald-500/70" : "text-muted-foreground/40")} />
       <p className="mt-3 text-sm text-muted-foreground">{message}</p>
     </div>
@@ -1194,7 +1219,7 @@ interface CompanyBlockProps {
 
 function CompanyBlock({ company, total, spent, children }: CompanyBlockProps) {
   return (
-    <div className="border border-border bg-card overflow-hidden">
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
       <div className="px-4 py-2 flex items-center justify-between border-b border-border bg-muted/20">
         <Link
           to={`/${company.issuePrefix}/brief`}
@@ -1311,7 +1336,13 @@ function ReviewQueueRow({
       onMouseLeave={() => onHoverChange(false)}
     >
       <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
-      <div className="flex items-start gap-3">
+      {/* The five actions come to more than this card is wide on anything
+          narrower than a laptop, and the card clips whatever does not fit with
+          no scrollbar and no wrap, so on a phone the last two could not be
+          reached by finger at all. Below `lg` the actions take a line of their
+          own and wrap on it; at `lg` and up they sit on the same line as
+          before. */}
+      <div className={WRAPPING_ROW_CLASS}>
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
@@ -1383,7 +1414,7 @@ function ReviewQueueRow({
             </TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className={OWN_LINE_ACTIONS_CLASS}>
           {ruleButtonGate(
             <button
               type="button"
@@ -1563,7 +1594,7 @@ function CompanyHealthCard({ company, summary, onSelect }: CompanyHealthCardProp
       onKeyDown={(e) => {
         if (e.key === "Enter") onSelect();
       }}
-      className="block rounded-lg border border-border bg-card hover:border-primary/40 hover:shadow-sm transition-all p-4 group cursor-pointer"
+      className="group block cursor-pointer rounded-xl border border-border/70 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
     >
       <div className="flex items-center gap-2 mb-3">
         <CompanyPatternIcon

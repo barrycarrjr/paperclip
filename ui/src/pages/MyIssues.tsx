@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { StatusIcon } from "../components/StatusIcon";
@@ -13,7 +13,9 @@ import { formatDate } from "../lib/utils";
 import { ListTodo } from "lucide-react";
 
 export function MyIssues() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, so a company switch cannot leave this page querying the
+  // company you just left for a render. See useRouteCompany.ts.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {

@@ -43,8 +43,8 @@ export function MetricCard({
   const inner = (
     <div
       className={cn(
-        "group relative h-full overflow-hidden border border-border bg-card pl-5 pr-4 py-4 sm:py-5 transition-all",
-        isClickable && "cursor-pointer hover:border-foreground/30 hover:bg-accent/30",
+        "group relative h-full overflow-hidden rounded-xl border border-border/70 bg-card pl-5 pr-4 py-4 shadow-sm sm:py-5 transition-all",
+        isClickable && "cursor-pointer hover:-translate-y-0.5 hover:border-foreground/25 hover:bg-accent/30 hover:shadow-md",
         emphasis && tone === "default" && "bg-accent/20",
       )}
     >

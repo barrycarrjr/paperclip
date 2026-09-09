@@ -1,0 +1,14 @@
+plugins/gbp-reviews/src/ui/index.tsx
+plugins/gbp-reviews/src/manifest.ts
+plugins/gbp-reviews/package.json
+plugins/gbp-reviews/README.md
+plugins/gbp-reviews/tsconfig.json
+plugins/gbp-reviews/src/ui/ReviewList.tsx
+plugins/gbp-reviews/src/ui/ReviewEditor.tsx
+plugins/gbp-reviews/src/ui/editorState.ts
+plugins/gbp-reviews/src/ui/editorState.test.ts
+plugins/gbp-reviews/src/ui/replyErrors.ts
+plugins/gbp-reviews/src/ui/replyErrors.test.ts
+plugins/gbp-reviews/src/ui/shared.tsx
+plugins/gbp-reviews/pnpm-lock.yaml
+plugins/gbp-reviews/src/replyStore.pg.test.ts

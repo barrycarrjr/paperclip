@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { agentUrl } from "../lib/utils";
@@ -227,7 +227,9 @@ const defaultDotColor = "#a3a3a3";
 // ── Main component ──────────────────────────────────────────────────────
 
 export function OrgChart() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
 

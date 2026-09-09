@@ -27,8 +27,19 @@ vi.mock("@/api/access", () => ({
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", name: "Paperclip", issuePrefix: "PAP" },
+    companies: [{ id: "company-1", name: "Paperclip", issuePrefix: "PAP" }],
   }),
+}));
+
+// useActiveCompanyId (P4 sweep, 2026-09-03) reads useParams from @/lib/router;
+// this page also uses its Link directly.
+vi.mock("@/lib/router", () => ({
+  useParams: () => ({}),
+  Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@/context/BreadcrumbContext", () => ({

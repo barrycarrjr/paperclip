@@ -1,0 +1,3 @@
+server/src/services/plugin-host-services.ts
+server/src/services/llm-one-shot.ts
+server/src/__tests__/llm-one-shot.test.ts

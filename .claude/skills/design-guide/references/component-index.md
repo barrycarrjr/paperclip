@@ -254,6 +254,22 @@ Used by the Help Scout and IMAP reply composers on the Email page.
 **File:** `BreadcrumbBar.tsx`
 **Usage:** Top breadcrumb navigation spanning main content + properties panel.
 
+### PageTabBar
+
+**File:** `PageTabBar.tsx`
+**Props:** `label` (required), `items`, `value`, `onValueChange`, `align`
+**Usage:** The tab strip on a page, rendered inside a `Tabs` root. Below the phone
+breakpoint it draws a plain dropdown instead of the strip, which is why `label` is
+required: it is the accessible name for both, and without it a screen reader announces
+the dropdown with no name at all. Write it as what the tabs choose between, in plain
+words, such as "Work section".
+
+When the tabs move to another address rather than switching local state, also set
+`activationMode="manual"` on the `Tabs` root. Left on its default the strip asks to
+change tab twice for one click, once on mouse down and once when the button takes focus,
+so one click puts two entries in the browser history and the back button needs two
+presses. Work.tsx and Team.tsx do this.
+
 ### PropertiesPanel
 
 **File:** `PropertiesPanel.tsx`

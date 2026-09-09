@@ -1,0 +1,7 @@
+packages/shared/src/index.ts
+packages/shared/src/validators/index.ts
+packages/shared/src/validators/text.ts
+packages/shared/src/start-work.ts
+packages/shared/src/validators/start-work.ts
+packages/shared/src/start-work.test.ts
+packages/shared/src/validators/start-work.test.ts

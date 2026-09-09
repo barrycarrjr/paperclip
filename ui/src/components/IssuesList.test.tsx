@@ -11,7 +11,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 const companyState = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
+  companies: [
+    { id: "company-1", issuePrefix: "PAP", isPortfolioRoot: false },
+    { id: "company-2", issuePrefix: "ACME", isPortfolioRoot: false },
+  ],
 }));
+
+// The list resolves its company from the URL, so switching company in a test
+// means changing the prefix, which is what actually happens in the app.
+const routeState = vi.hoisted(() => ({ companyPrefix: "PAP" }));
 
 const dialogState = vi.hoisted(() => ({
   openNewIssue: vi.fn(),
@@ -51,6 +59,7 @@ vi.mock("../context/DialogContext", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
+  useParams: () => ({ companyPrefix: routeState.companyPrefix }),
   Link: ({
     children,
     to,
@@ -253,6 +262,8 @@ describe("IssuesList", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    companyState.selectedCompanyId = "company-1";
+    routeState.companyPrefix = "PAP";
     dialogState.openNewIssue.mockReset();
     mockKanbanBoard.mockReset();
     mockIssuesApi.list.mockReset();
@@ -1275,6 +1286,68 @@ describe("IssuesList", () => {
       expect(mockExecutionWorkspacesApi.listSummaries).toHaveBeenCalledWith("company-1");
       expect(mockExecutionWorkspacesApi.list).not.toHaveBeenCalled();
     });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("clears a typed search when the operator switches company (this page doesn't remount on a switch)", async () => {
+    vi.useFakeTimers();
+
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[createIssue()]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    const input = () => container.querySelector('input[aria-label="Search issues"]') as HTMLInputElement | null;
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    expect(valueSetter).toBeTypeOf("function");
+
+    act(() => {
+      valueSetter!.call(input(), "widget");
+      input()!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input()!.value).toBe("widget");
+
+    // Let the search box's own debounce commit "widget" up to IssuesList's
+    // issueSearch state, so the scenario matches a real operator who typed,
+    // paused, and only then switched company.
+    await act(async () => {
+      vi.advanceTimersByTime(250); // ISSUE_SEARCH_DEBOUNCE_MS in IssuesList.tsx
+      await Promise.resolve();
+    });
+
+    // Simulate switching company via the sidebar — this component instance
+    // stays mounted (App.tsx doesn't key the route on companyPrefix), so
+    // only this effect's own reset logic can clear a stale search term.
+    // The URL prefix is what changes on a real switch, and what this list
+    // now reads.
+    routeState.companyPrefix = "ACME";
+    companyState.selectedCompanyId = "company-2";
+    act(() => {
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <TooltipProvider>
+            <IssuesList
+              issues={[createIssue()]}
+              agents={[]}
+              projects={[]}
+              viewStateKey="paperclip:test-issues"
+              onUpdateIssue={() => undefined}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(input()!.value).toBe("");
 
     act(() => {
       root.unmount();

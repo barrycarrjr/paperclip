@@ -43,6 +43,26 @@ export const DEFAULT_SELF_NOTIFY_SETTINGS: SelfNotifySettings = {
   phoneNumbers: [],
 };
 
+/**
+ * How the reply sent when an email handoff is resolved should be treated.
+ *
+ * "inherit" follows `outboundToolDraftMode`, so someone who has turned the
+ * outbound review step off does not suddenly find this one message still
+ * waiting for them. The other two say so explicitly regardless of that
+ * setting, which is the point: these replies go to a real customer who is
+ * waiting on an answer, so an operator may reasonably want them held when
+ * nothing else is, or sent when everything else is held.
+ */
+export type EmailHandoffReplyApproval = "inherit" | "always" | "never";
+
+export const EMAIL_HANDOFF_REPLY_APPROVAL_VALUES = [
+  "inherit",
+  "always",
+  "never",
+] as const satisfies readonly EmailHandoffReplyApproval[];
+
+export const DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL: EmailHandoffReplyApproval = "inherit";
+
 export interface InstanceGeneralSettings {
   censorUsernameInLogs: boolean;
   keyboardShortcuts: boolean;
@@ -54,7 +74,33 @@ export interface InstanceGeneralSettings {
    * messages, including ones addressed to other people.
    */
   outboundToolDraftMode: boolean;
+  /**
+   * Whether the reply sent on resolving an email handoff waits for approval.
+   * Defaults to "inherit", which means it follows `outboundToolDraftMode`.
+   */
+  emailHandoffReplyApproval: EmailHandoffReplyApproval;
   selfNotify: SelfNotifySettings;
+}
+
+/**
+ * Single place that answers "does this handoff reply wait for approval?".
+ *
+ * Kept as a pure function on purpose: the resolve path, the UI hint and the
+ * tests all have to agree, and the failure mode of them drifting apart is a
+ * message going to a customer without the review the operator thought they
+ * had asked for. Tolerates missing or malformed values by falling back to the
+ * safe answer rather than assuming "send it".
+ */
+export function emailHandoffReplyNeedsApproval(general: {
+  outboundToolDraftMode?: boolean | null;
+  emailHandoffReplyApproval?: EmailHandoffReplyApproval | string | null;
+}): boolean {
+  const mode = general.emailHandoffReplyApproval;
+  if (mode === "always") return true;
+  if (mode === "never") return false;
+  // "inherit", absent, or something unrecognised: follow the global hold,
+  // which itself defaults to on.
+  return general.outboundToolDraftMode !== false;
 }
 
 export interface InstanceExperimentalSettings {

@@ -569,6 +569,7 @@ export function ExecutionWorkspaceDetail() {
 
         <Tabs value={activeTab ?? "configuration"} onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}>
           <PageTabBar
+            label="Workspace section"
             items={[
               { value: "configuration", label: "Configuration" },
               { value: "runtime_logs", label: "Runtime logs" },

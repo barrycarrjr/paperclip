@@ -96,12 +96,17 @@ describe("actorMiddleware: local agent JWT sub handling", () => {
     expect(select).toHaveBeenCalledTimes(2);
   });
 
-  it("falls through to unauthenticated for an unrecognized non-UUID sub", async () => {
+  it("rejects an unrecognized non-UUID sub instead of reaching the agents lookup", async () => {
     // Defensive guard: any sub that is neither a UUID (legacy agent JWT)
     // nor a recognized tool-session prefix must NOT reach the agents
     // lookup, since `eq(agents.id, sub)` against the uuid column would
     // throw `22P02 invalid input syntax for type uuid` and 500 the
-    // request. Such subs fall through to type:none.
+    // request.
+    //
+    // The token itself verified, so it IS one of our agent credentials and
+    // it cannot authenticate. It used to fall through to type:none, which
+    // in a local_trusted deployment lands on the board actor and stores
+    // the agent's writes under the human's identity. It now 401s.
     const failOnAgentsLookup = (): never => {
       throw new Error("agents table must not be queried for unknown non-UUID sub");
     };
@@ -121,8 +126,7 @@ describe("actorMiddleware: local agent JWT sub handling", () => {
 
     const res = await request(app).get("/actor").set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ type: "none" });
+    expect(res.status).toBe(401);
     expect(select).toHaveBeenCalledTimes(2);
   });
 

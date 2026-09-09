@@ -4,11 +4,17 @@ import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { SecretsManager } from "@/components/SecretsManager";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 
 const SECRETS_GUIDE_URL = "https://docs.paperclip.ing/#/reference/guides/board-operator/managing-secrets";
 
 export function CompanySecrets() {
-  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { companies } = useCompany();
+  // Both URL-derived, not useCompany()'s selection state (P4 sweep,
+  // 2026-09-03): this page WRITES (company secrets, via SecretsManager) —
+  // see Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {

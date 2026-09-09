@@ -7,6 +7,8 @@ const mockSidebarPreferenceService = vi.hoisted(() => ({
   upsertCompanyOrder: vi.fn(),
   getProjectOrder: vi.fn(),
   upsertProjectOrder: vi.fn(),
+  getPinnedWorkspaces: vi.fn(),
+  upsertPinnedWorkspaces: vi.fn(),
 }));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
@@ -172,5 +174,90 @@ describe("sidebar preference routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockSidebarPreferenceService.getCompanyOrder).not.toHaveBeenCalled();
+  });
+
+  describe("pinned workspaces", () => {
+    const boardActor = {
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    };
+
+    it("returns this person's pins", async () => {
+      mockSidebarPreferenceService.getPinnedWorkspaces.mockResolvedValue({
+        orderedIds: ["email", "notepad"],
+        updatedAt: null,
+      });
+      const app = await createApp(boardActor);
+
+      const res = await request(app).get("/api/sidebar-preferences/me/pinned-workspaces");
+
+      expect(res.status).toBe(200);
+      expect(res.body.orderedIds).toEqual(["email", "notepad"]);
+      expect(mockSidebarPreferenceService.getPinnedWorkspaces).toHaveBeenCalledWith("user-1");
+    });
+
+    it("saves a new list of pins", async () => {
+      mockSidebarPreferenceService.upsertPinnedWorkspaces.mockResolvedValue({
+        orderedIds: ["email"],
+        updatedAt: null,
+      });
+      const app = await createApp(boardActor);
+
+      const res = await request(app)
+        .put("/api/sidebar-preferences/me/pinned-workspaces")
+        .send({ orderedIds: ["email"] });
+
+      expect(res.status).toBe(200);
+      expect(mockSidebarPreferenceService.upsertPinnedWorkspaces).toHaveBeenCalledWith("user-1", [
+        "email",
+      ]);
+    });
+
+    it("accepts core ids and plugin route paths, and refuses anything else", async () => {
+      mockSidebarPreferenceService.upsertPinnedWorkspaces.mockResolvedValue({
+        orderedIds: [],
+        updatedAt: null,
+      });
+      const app = await createApp(boardActor);
+
+      const ok = await request(app)
+        .put("/api/sidebar-preferences/me/pinned-workspaces")
+        .send({ orderedIds: ["email", "portfolio-brief", "notepad"] });
+      expect(ok.status).toBe(200);
+
+      // A path, not a slug — the column is not a place to store arbitrary
+      // strings, and a stored path would render as a broken link.
+      const bad = await request(app)
+        .put("/api/sidebar-preferences/me/pinned-workspaces")
+        .send({ orderedIds: ["../../etc/passwd"] });
+      expect(bad.status).toBe(400);
+    });
+
+    it("refuses an unreasonably long list", async () => {
+      const app = await createApp(boardActor);
+      const res = await request(app)
+        .put("/api/sidebar-preferences/me/pinned-workspaces")
+        .send({ orderedIds: Array.from({ length: 31 }, (_, i) => `item-${i}`) });
+
+      expect(res.status).toBe(400);
+      expect(mockSidebarPreferenceService.upsertPinnedWorkspaces).not.toHaveBeenCalled();
+    });
+
+    it("rejects agent callers", async () => {
+      const app = await createApp({
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        source: "agent_key",
+      });
+
+      const res = await request(app).get("/api/sidebar-preferences/me/pinned-workspaces");
+
+      expect(res.status).toBe(403);
+      expect(mockSidebarPreferenceService.getPinnedWorkspaces).not.toHaveBeenCalled();
+    });
   });
 });

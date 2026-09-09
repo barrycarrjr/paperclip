@@ -138,6 +138,7 @@ export {
   PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_UI_SLOT_TYPES,
   PLUGIN_UI_SLOT_ENTITY_TYPES,
+  PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS,
   PLUGIN_LAUNCHER_PLACEMENT_ZONES,
   PLUGIN_LAUNCHER_ACTIONS,
   PLUGIN_LAUNCHER_BOUNDS,
@@ -240,6 +241,7 @@ export {
   type PluginConnectorSurface,
   type PluginUiSlotType,
   type PluginUiSlotEntityType,
+  type PluginReservedCompanyRouteSegment,
   type PluginLauncherPlacementZone,
   type PluginLauncherAction,
   type PluginLauncherBounds,
@@ -614,9 +616,11 @@ export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
   upsertSidebarSlugOrderPreferenceSchema,
+  upsertPinnedWorkspacesSchema,
   pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
   type UpsertSidebarSlugOrderPreference,
+  type UpsertPinnedWorkspaces,
 } from "./validators/sidebar-preferences.js";
 
 export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
@@ -633,10 +637,14 @@ export {
   WEEKLY_RETENTION_PRESETS,
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   DEFAULT_SELF_NOTIFY_SETTINGS,
+  EMAIL_HANDOFF_REPLY_APPROVAL_VALUES,
+  emailHandoffReplyNeedsApproval,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  type EmailHandoffReplyApproval,
 } from "./types/instance.js";
 
 export {
@@ -775,6 +783,14 @@ export {
   issueTreeHoldReleasePolicySchema,
   previewIssueTreeControlSchema,
   releaseIssueTreeHoldSchema,
+  resolveEmailDelegationSchema,
+  handBackEmailDelegationSchema,
+  acknowledgeEmailDelegationSchema,
+  takeOverEmailDelegationSchema,
+  type ResolveEmailDelegation,
+  type HandBackEmailDelegation,
+  type AcknowledgeEmailDelegation,
+  type TakeOverEmailDelegation,
   type CreateIssue,
   type CreateChildIssue,
   type CreateIssueLabel,
@@ -1035,6 +1051,48 @@ export type {
 export { API_PREFIX, API } from "./api.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
 export { deriveProjectUrlKey, normalizeProjectUrlKey, hasNonAsciiContent } from "./project-url-key.js";
+export {
+  EMAIL_HANDOFF_ORIGIN_KIND,
+  buildEmailHandoffOriginId,
+  parseEmailHandoffOriginId,
+  isEmailHandoffOriginKind,
+  type EmailHandoffSourceRef,
+} from "./email-handoff-origin.js";
+export {
+  EMAIL_DELEGATION_STATES,
+  TERMINAL_EMAIL_DELEGATION_STATES,
+  checkEmailDelegationTransition,
+  delegationStateForIssueStatus,
+  isEmailDelegationState,
+  isTerminalEmailDelegationState,
+  type EmailDelegationState,
+  type EmailDelegationTransitionRequest,
+  type EmailDelegationTransitionResult,
+  type TerminalEmailDelegationState,
+} from "./email-delegation-state.js";
+export {
+  START_WORK_ORIGIN_KIND,
+  MAX_START_WORK_TASKS,
+  isStartWorkOriginKind,
+  startWorkInteractionIdempotencyKey,
+} from "./start-work.js";
+export {
+  directivePreviewSummaryLines,
+  type DirectivePreview,
+  type DirectivePreviewRecipient,
+  type DirectivePreviewSkip,
+} from "./portfolio-directive-preview.js";
+export {
+  startWorkPlanRequestSchema,
+  startWorkPlannerTaskSchema,
+  startWorkPlannerOutputSchema,
+  startWorkPlanResponseSchema,
+  stripDashes,
+  type StartWorkPlanRequest,
+  type StartWorkPlannerTask,
+  type StartWorkPlannerOutput,
+  type StartWorkPlanResponse,
+} from "./validators/index.js";
 export {
   AGENT_MENTION_SCHEME,
   PROJECT_MENTION_SCHEME,

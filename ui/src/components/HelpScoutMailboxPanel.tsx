@@ -36,6 +36,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkTriageBar } from "./BulkTriageBar";
 import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn, ellipsize } from "../lib/utils";
+import { useToastActions } from "@/context/ToastContext";
 
 const MAX_SENDER_CHARS = 50;
 const MAX_SUBJECT_CHARS = 80;
@@ -57,6 +58,7 @@ export function HelpScoutMailboxPanel({
   onOpenConversation,
 }: HelpScoutMailboxPanelProps) {
   const queryClient = useQueryClient();
+  const { pushToast } = useToastActions();
   const { pluginId, primaryCompanyId, accountKey, mailboxId, name, email } = mailbox;
 
   const api = useMemo(
@@ -115,10 +117,15 @@ export function HelpScoutMailboxPanel({
     helpScoutOverrideStore.clear(overrideScope, id);
   }
 
+  // P2 audit, 2026-09-03: none of these five reported a failure at all —
+  // the operator saw a click that appeared to do nothing. HelpScoutEmailView's
+  // equivalent buttons already toast on error; this panel hadn't.
   const keepActiveMutation = useMutation({
     mutationFn: (conv: HSConversationSummary) =>
       api.addLabel(accountKey, conv.id, [KEEP_ALWAYS_LABEL]),
     onSuccess: () => invalidateLists(),
+    onError: (err) =>
+      pushToast({ title: "Keep active failed", body: (err as Error).message, tone: "error" }),
   });
 
   const autoNoiseMutation = useMutation({
@@ -128,9 +135,10 @@ export function HelpScoutMailboxPanel({
       await api.changeStatus(accountKey, conv.id, "closed");
     },
     onSuccess: () => invalidateLists(),
-    onError: (_err, conv) => {
+    onError: (err, conv) => {
       clearStatus(conv.id);
       invalidateLists();
+      pushToast({ title: "Auto-noise failed", body: (err as Error).message, tone: "error" });
     },
   });
 
@@ -144,9 +152,10 @@ export function HelpScoutMailboxPanel({
       await api.changeStatus(accountKey, conv.id, "pending");
     },
     onSuccess: () => invalidateLists(),
-    onError: (_err, conv) => {
+    onError: (err, conv) => {
       clearStatus(conv.id);
       invalidateLists();
+      pushToast({ title: "Mark pending failed", body: (err as Error).message, tone: "error" });
     },
   });
 
@@ -156,9 +165,10 @@ export function HelpScoutMailboxPanel({
       await api.changeStatus(accountKey, conv.id, "closed");
     },
     onSuccess: () => invalidateLists(),
-    onError: (_err, conv) => {
+    onError: (err, conv) => {
       clearStatus(conv.id);
       invalidateLists();
+      pushToast({ title: "Close failed", body: (err as Error).message, tone: "error" });
     },
   });
 
@@ -168,9 +178,10 @@ export function HelpScoutMailboxPanel({
       await api.changeStatus(accountKey, conv.id, "spam");
     },
     onSuccess: () => invalidateLists(),
-    onError: (_err, conv) => {
+    onError: (err, conv) => {
       clearStatus(conv.id);
       invalidateLists();
+      pushToast({ title: "Mark spam failed", body: (err as Error).message, tone: "error" });
     },
   });
 

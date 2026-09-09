@@ -6,7 +6,7 @@ import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { authApi } from "../api/auth";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { agentRouteRef } from "../lib/utils";
@@ -111,7 +111,11 @@ export function AssistantWizard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (agentsApi.hire, same pattern already fixed in
+  // NewAgent.tsx — missed here since this is a separate wizard, not that
+  // page).
+  const selectedCompanyId = useActiveCompanyId();
   const { agentId: editingAgentId } = useParams<{ agentId?: string }>();
   const isEditMode = !!editingAgentId;
 

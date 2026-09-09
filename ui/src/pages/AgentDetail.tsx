@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { AGENT_TABS, agentTabLabel } from "@/lib/agent-tabs";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -930,7 +931,9 @@ export function AgentDetail() {
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
       } else {
-        crumbs.push({ label: "Dashboard" });
+        // Read from the shared list rather than typed again here, so the
+        // breadcrumb and the tab can never say different words.
+        crumbs.push({ label: agentTabLabel("dashboard") ?? "Current work" });
       }
     }
     setBreadcrumbs(crumbs);
@@ -1148,13 +1151,9 @@ export function AgentDetail() {
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
+            label="Agent section"
             items={[
-              { value: "dashboard", label: "Dashboard" },
-              { value: "instructions", label: "Instructions" },
-              { value: "skills", label: "Skills" },
-              { value: "configuration", label: "Configuration" },
-              { value: "runs", label: "Runs" },
-              { value: "budget", label: "Budget" },
+              ...AGENT_TABS,
               ...pluginTabItems.map((item) => ({ value: item.value, label: item.label })),
             ]}
             value={isPluginTab ? (urlTab ?? activeView) : activeView}
@@ -1841,7 +1840,6 @@ function PromptsTab({
   onSavingChange: (saving: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const { selectedCompanyId } = useCompany();
   const { isMobile } = useSidebar();
   const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
@@ -1971,8 +1969,13 @@ function PromptsTab({
 
   const uploadMarkdownImage = useMutation({
     mutationFn: async ({ file, namespace }: { file: File; namespace: string }) => {
-      if (!selectedCompanyId) throw new Error("Select a company to upload images");
-      return assetsApi.uploadImage(selectedCompanyId, file, namespace);
+      // Use the prop, not a fresh useCompany() read (P4 sweep, 2026-09-03):
+      // the parent already resolves this from the fetched agent's own
+      // companyId, which is safe against the stale-context-selection race
+      // this session found and fixed everywhere else — re-reading
+      // useCompany() here directly would reintroduce it for this one upload.
+      if (!companyId) throw new Error("Select a company to upload images");
+      return assetsApi.uploadImage(companyId, file, namespace);
     },
   });
 

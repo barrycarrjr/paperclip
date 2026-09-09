@@ -30,6 +30,17 @@ export {
   type IssueFilters,
 } from "./issues.js";
 export { issueThreadInteractionService } from "./issue-thread-interactions.js";
+export {
+  issueEmailDelegationService,
+  type IssueEmailDelegationService,
+  type IssueEmailDelegationRow,
+} from "./issue-email-delegations.js";
+export {
+  emailHandoffResolutionService,
+  replyToolForPlugin,
+  type EmailHandoffResolutionService,
+  type ResolveReplyOutcome,
+} from "./email-handoff-resolution.js";
 export { issueTreeControlService } from "./issue-tree-control.js";
 export { issueApprovalService } from "./issue-approvals.js";
 export { issueReferenceService } from "./issue-references.js";

@@ -30,11 +30,14 @@ import {
   rejectIssueThreadInteractionSchema,
   requestConfirmationPayloadSchema,
   requestConfirmationResultSchema,
+  START_WORK_ORIGIN_KIND,
+  startWorkInteractionIdempotencyKey,
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { issueService } from "./issues.js";
+import { pickAssigneeForCompany } from "./starter-catalog.js";
 
 type InteractionActor = {
   agentId?: string | null;
@@ -138,6 +141,89 @@ async function touchIssue(db: IssueTouchDb, issueId: string) {
     .where(eq(issues.id, issueId));
 }
 
+type StartWorkContainerRow = {
+  id: string;
+  originKind: string | null;
+  originId: string | null;
+  status: string;
+  description: string | null;
+  assigneeAgentId: string | null;
+};
+
+/**
+ * Read the host issue inside the accept/reject transaction and say whether it
+ * is a "Start work" container (a request a board user typed, waiting on its
+ * plan). Only such containers can get the hand-over below, and only through
+ * isStartWorkPlanCard; a suggest_tasks card on an ordinary issue must leave
+ * its host untouched, as it always has.
+ */
+async function getStartWorkContainer(
+  tx: Pick<Db, "select">,
+  issueId: string,
+): Promise<StartWorkContainerRow | null> {
+  const row = await tx
+    .select({
+      id: issues.id,
+      originKind: issues.originKind,
+      originId: issues.originId,
+      status: issues.status,
+      description: issues.description,
+      assigneeAgentId: issues.assigneeAgentId,
+    })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .then((rows: StartWorkContainerRow[]) => rows[0] ?? null);
+  return row?.originKind === START_WORK_ORIGIN_KIND ? row : null;
+}
+
+/**
+ * True only for the one card that IS the request's plan, on a container that
+ * has not been decided yet. Being on a start_work container is not enough: once
+ * the plan is accepted the container is handed to a lead who keeps working on
+ * it, and the lead's own later suggest_tasks cards land on the same issue.
+ * Those later cards are ordinary cards, so accepting one must not hand the
+ * request over a second time (which would reset the status, replace the
+ * assignee and drop the running agent's execution lock) and rejecting one must
+ * not cancel the whole request out from under its live children.
+ *
+ * The three checks are deliberately belt and braces: the key identifies the
+ * plan card itself, and backlog with no assignee proves the container has not
+ * already been started or handed to anybody.
+ */
+function isStartWorkPlanCard(
+  container: StartWorkContainerRow,
+  interactionIdempotencyKey: string | null,
+): boolean {
+  if (!container.originId || !interactionIdempotencyKey) return false;
+  if (interactionIdempotencyKey !== startWorkInteractionIdempotencyKey(container.originId)) {
+    return false;
+  }
+  return container.status === "backlog" && container.assigneeAgentId === null;
+}
+
+/**
+ * The record the woken lead reads: the operator's exact words already in the
+ * description, followed by what the reviewer actually approved. Written into
+ * the description rather than a comment so it commits with the claim and the
+ * children (addComment is not transaction-aware and carries its own wake).
+ */
+function appendAcceptedPlanSection(args: {
+  description: string | null;
+  createdIdentifiers: string[];
+  skippedTitles: string[];
+}): string {
+  const lines = [
+    args.description ?? "",
+    "",
+    "## Accepted plan",
+    ...args.createdIdentifiers,
+  ];
+  if (args.skippedTitles.length > 0) {
+    lines.push(`Left out by the reviewer: ${args.skippedTitles.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
 function isTerminalIssueStatus(status: string) {
   return status === "done" || status === "cancelled";
 }
@@ -156,7 +242,13 @@ function shouldReturnAcceptedConfirmationToCreatorAgent(args: {
   return true;
 }
 
-function buildTaskCreationOrder(tasks: ReadonlyArray<SuggestTasksInteraction["payload"]["tasks"][number]>) {
+/**
+ * Orders suggested tasks so every parent is created before its children,
+ * refusing a cycle or a parentClientKey that names nothing. Exported so the
+ * Start work planner can refuse a bad tree at plan time with the same rules
+ * accept applies, instead of keeping a second copy of them.
+ */
+export function buildTaskCreationOrder(tasks: ReadonlyArray<SuggestTasksInteraction["payload"]["tasks"][number]>) {
   const taskByClientKey = new Map(tasks.map((task) => [task.clientKey, task] as const));
   const ordered: Array<SuggestTasksInteraction["payload"]["tasks"][number]> = [];
   const state = new Map<string, "visiting" | "done">();
@@ -847,6 +939,7 @@ export function issueThreadInteractionService(db: Db) {
       const parentById = new Map(parentRows.map((row) => [row.id, row] as const));
       const createdByClientKey = new Map<string, SuggestTasksResultCreatedTask>();
       const createdWakeTargets: IssueWakeTarget[] = [];
+      let continuationIssue: IssueWakeTarget | null = null;
 
       await db.transaction(async (tx) => {
         const resolvedAt = new Date();
@@ -924,7 +1017,44 @@ export function issueThreadInteractionService(db: Db) {
           .where(eq(issueThreadInteractions.id, interactionId))
           .returning();
 
-        await touchIssue(tx, issue.id);
+        // Start work hand-over. Deliberately after the once-only claim and
+        // after every child exists: a 409 or a failed child leaves the
+        // container in backlog and unassigned, so no agent can ever be woken
+        // on an umbrella whose plan was not accepted. Same transaction, so it
+        // rolls back with the children.
+        const container = await getStartWorkContainer(tx as unknown as Db, issue.id);
+        if (container && isStartWorkPlanCard(container, current.idempotencyKey)) {
+          // Recomputed now rather than stored at plan time: a lead paused
+          // between drafting and accepting must never be handed the request.
+          const owner = await pickAssigneeForCompany(tx as unknown as Db, issue.companyId);
+          const skippedKeys = new Set(skippedClientKeys);
+          const handedOver = await issueService(db).update(issue.id, {
+            status: "todo",
+            assigneeAgentId: owner?.id ?? null,
+            assigneeUserId: null,
+            description: appendAcceptedPlanSection({
+              description: container.description,
+              createdIdentifiers: [...createdByClientKey.values()].map(
+                (task) => task.identifier ?? task.title ?? task.issueId,
+              ),
+              skippedTitles: interaction.payload.tasks
+                .filter((task) => skippedKeys.has(task.clientKey))
+                .map((task) => task.title),
+            }),
+            actorUserId: actor.userId ?? null,
+            actorAgentId: actor.agentId ?? null,
+          }, tx);
+          if (handedOver) {
+            continuationIssue = {
+              id: handedOver.id,
+              assigneeAgentId: handedOver.assigneeAgentId ?? null,
+              assigneeUserId: handedOver.assigneeUserId ?? null,
+              status: handedOver.status,
+            };
+          }
+        } else {
+          await touchIssue(tx, issue.id);
+        }
         current.status = updated.status;
         current.result = updated.result;
         current.resolvedByAgentId = updated.resolvedByAgentId;
@@ -936,6 +1066,7 @@ export function issueThreadInteractionService(db: Db) {
       return {
         interaction: hydrateInteraction(current),
         createdIssues: createdWakeTargets,
+        continuationIssue,
       };
     },
 
@@ -979,31 +1110,47 @@ export function issueThreadInteractionService(db: Db) {
         throw conflict("Interaction has already been resolved");
       }
 
-      const [updated] = await db
-        .update(issueThreadInteractions)
-        .set({
-          status: "rejected",
-          result: {
-            version: 1,
-            rejectionReason: input.reason?.trim() || null,
-          },
-          resolvedByAgentId: actor.agentId ?? null,
-          resolvedByUserId: actor.userId ?? null,
-          resolvedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(issueThreadInteractions.id, interactionId),
-          eq(issueThreadInteractions.status, "pending"),
-        ))
-        .returning();
+      // One transaction so a rejected plan and its cancelled container commit
+      // together: a start_work container must never outlive its plan as a
+      // live backlog issue somebody could pick up.
+      return db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(issueThreadInteractions)
+          .set({
+            status: "rejected",
+            result: {
+              version: 1,
+              rejectionReason: input.reason?.trim() || null,
+            },
+            resolvedByAgentId: actor.agentId ?? null,
+            resolvedByUserId: actor.userId ?? null,
+            resolvedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(issueThreadInteractions.id, interactionId),
+            eq(issueThreadInteractions.status, "pending"),
+          ))
+          .returning();
 
-      if (!updated) {
-        throw conflict("Interaction has already been resolved");
-      }
+        if (!updated) {
+          throw conflict("Interaction has already been resolved");
+        }
 
-      await touchIssue(db, issue.id);
-      return hydrateInteraction(updated);
+        const container = await getStartWorkContainer(tx as unknown as Db, issue.id);
+        if (container && isStartWorkPlanCard(container, current.idempotencyKey)) {
+          // No wake here: the policy is accept-only and the container has no
+          // assignee, so there is nobody to tell.
+          await issueService(db).update(issue.id, {
+            status: "cancelled",
+            actorUserId: actor.userId ?? null,
+            actorAgentId: actor.agentId ?? null,
+          }, tx);
+        } else {
+          await touchIssue(tx, issue.id);
+        }
+        return hydrateInteraction(updated);
+      });
     },
 
     expireRequestConfirmationsSupersededByComment: async (

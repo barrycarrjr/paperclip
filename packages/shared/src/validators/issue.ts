@@ -10,7 +10,26 @@ import {
   ISSUE_THREAD_INTERACTION_KINDS,
   ISSUE_THREAD_INTERACTION_STATUSES,
 } from "../constants.js";
+import { EMAIL_HANDOFF_ORIGIN_KIND } from "../email-handoff-origin.js";
 import { multilineTextSchema } from "./text.js";
+
+/**
+ * The only issue origin a CLIENT is allowed to declare (P5a).
+ *
+ * Deliberately a literal, not `z.enum(ISSUE_ORIGIN_KINDS)` or a free string:
+ * origin kinds drive real partial unique indexes and recovery classification
+ * (`issues_open_routine_execution_uq`, `issues_active_liveness_recovery_uq`,
+ * server's `recovery/origins.ts`). A client that could claim
+ * `routine_execution` or `harness_liveness_escalation` could collide with
+ * those indexes or confuse the recovery sweeps. Every other origin kind stays
+ * server-set-only, exactly as it is today.
+ */
+export const clientDeclarableIssueOriginSchema = z.object({
+  kind: z.literal(EMAIL_HANDOFF_ORIGIN_KIND),
+  id: z.string().trim().min(1).max(500),
+});
+
+export type ClientDeclarableIssueOrigin = z.infer<typeof clientDeclarableIssueOriginSchema>;
 
 export const ISSUE_EXECUTION_WORKSPACE_PREFERENCES = [
   "inherit",
@@ -146,6 +165,8 @@ export const createIssueSchema = z.object({
   labelIds: z.array(z.string().uuid()).optional(),
   startDate: z.coerce.date().optional().nullable(),
   dueDate: z.coerce.date().optional().nullable(),
+  /** See `clientDeclarableIssueOriginSchema` for why this is so narrow. */
+  origin: clientDeclarableIssueOriginSchema.optional(),
 });
 
 export type CreateIssue = z.infer<typeof createIssueSchema>;
@@ -477,3 +498,55 @@ export const restoreIssueDocumentRevisionSchema = z.object({});
 export type IssueDocumentFormat = z.infer<typeof issueDocumentFormatSchema>;
 export type UpsertIssueDocument = z.infer<typeof upsertIssueDocumentSchema>;
 export type RestoreIssueDocumentRevision = z.infer<typeof restoreIssueDocumentRevisionSchema>;
+
+/**
+ * Finishing, or giving up on, an email handed to an agent
+ * (P5a — docs/plans/2026-09-03-p5a-email-delegation-spec.md).
+ */
+
+/**
+ * `replyBody` is what gets sent back to whoever sent the original email.
+ * Optional: plenty of handovers end with an internal answer and nothing to
+ * say outward, and an empty one resolves without sending anything.
+ *
+ * `expectedVersion` is the version last read. Sending it makes the request
+ * fail rather than overwrite a change someone else made in between; leaving
+ * it out is for callers that just read the record in the same breath.
+ */
+export const resolveEmailDelegationSchema = z.object({
+  replyBody: multilineTextSchema.pipe(z.string().max(100000)).nullable().optional(),
+  resolutionNote: z.string().trim().max(2000).nullable().optional(),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+/**
+ * A reason is required, not optional. The whole point of separating handback
+ * from resolution is that someone has to pick the work up again, and doing
+ * that without being told why leaves them guessing.
+ */
+export const handBackEmailDelegationSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+export const acknowledgeEmailDelegationSchema = z.object({
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+/**
+ * A person taking a handed-over email back from the agent.
+ *
+ * The mirror image of a hand back: same required reason, for the same
+ * reason (the record has to say why the agent stopped), but started by a
+ * person rather than by the agent. Nothing is sent to the sender, which is
+ * why there is no reply field here at all.
+ */
+export const takeOverEmailDelegationSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expectedVersion: z.number().int().min(0).nullable().optional(),
+});
+
+export type ResolveEmailDelegation = z.infer<typeof resolveEmailDelegationSchema>;
+export type HandBackEmailDelegation = z.infer<typeof handBackEmailDelegationSchema>;
+export type AcknowledgeEmailDelegation = z.infer<typeof acknowledgeEmailDelegationSchema>;
+export type TakeOverEmailDelegation = z.infer<typeof takeOverEmailDelegationSchema>;

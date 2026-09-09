@@ -8,7 +8,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "./CommandPalette";
 
 const companyState = vi.hoisted(() => ({
-  selectedCompanyId: "company-1",
+  selectedCompanyId: "company-1" as string | null,
+  selectedCompany: null as { isPortfolioRoot: boolean } | null,
+}));
+
+const pluginSlotsState = vi.hoisted(() => ({
+  slots: [] as Array<{
+    id: string;
+    displayName: string;
+    routePath?: string;
+    pluginKey: string;
+    pluginDisplayName: string;
+  }>,
 }));
 
 const dialogState = vi.hoisted(() => ({
@@ -37,6 +48,10 @@ vi.mock("../context/CompanyContext", () => ({
   useCompany: () => companyState,
 }));
 
+vi.mock("@/plugins/slots", () => ({
+  usePluginSlots: () => ({ slots: pluginSlotsState.slots, isLoading: false, errorMessage: null }),
+}));
+
 vi.mock("../context/DialogContext", () => ({
   useDialog: () => dialogState,
 }));
@@ -45,8 +60,11 @@ vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => sidebarState,
 }));
 
+// One shared spy rather than a fresh one per render, so a test can assert
+// where a result actually sends you.
+const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/router", () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigateMock,
 }));
 
 vi.mock("../api/issues", () => ({
@@ -65,20 +83,57 @@ vi.mock("./Identity", () => ({
   Identity: ({ name }: { name: string }) => <span>{name}</span>,
 }));
 
-vi.mock("@/components/ui/command", () => ({
-  CommandDialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
+vi.mock("@/components/ui/command", async () => {
+  const React = await import("react");
+  return {
+  // Stands in for the real box, and copies the one bit of Radix behaviour
+  // these tests care about: when it closes it asks the caller where focus
+  // should go. ui/command.test.tsx checks the real box does the same.
+  CommandDialog: ({
+    open,
+    children,
+    onOpenChange,
+    onCloseAutoFocus,
+  }: {
+    open: boolean;
+    children: ReactNode;
+    onOpenChange?: (open: boolean) => void;
+    onCloseAutoFocus?: (event: { preventDefault: () => void }) => void;
+  }) => {
+    const wasOpen = React.useRef(false);
+    React.useEffect(() => {
+      if (wasOpen.current && !open) onCloseAutoFocus?.({ preventDefault: () => {} });
+      wasOpen.current = open;
+    }, [open, onCloseAutoFocus]);
+    if (!open) return null;
+    return (
+      <div>
+        {/* Stands in for pressing Escape or clicking outside. */}
+        <button type="button" aria-label="Back out" onClick={() => onOpenChange?.(false)} />
+        {children}
+      </div>
+    );
+  },
   CommandEmpty: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  CommandGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  CommandGroup: ({ heading, children }: { heading?: ReactNode; children: ReactNode }) => (
+    <div>
+      <h3>{heading}</h3>
+      {children}
+    </div>
+  ),
   CommandInput: ({
     value,
     onValueChange,
+    placeholder,
   }: {
     value: string;
     onValueChange: (value: string) => void;
+    placeholder?: string;
   }) => (
     <div>
       <input
         aria-label="Command search"
+        placeholder={placeholder}
         value={value}
         onChange={(event) => onValueChange(event.currentTarget.value)}
       />
@@ -88,13 +143,20 @@ vi.mock("@/components/ui/command", () => ({
   CommandItem: ({
     children,
     onSelect,
+    value,
   }: {
     children: ReactNode;
     onSelect?: () => void;
-  }) => <button onClick={onSelect}>{children}</button>,
+    value?: string;
+  }) => (
+    <button data-value={value} onClick={onSelect}>
+      {children}
+    </button>
+  ),
   CommandList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   CommandSeparator: () => <hr />,
-}));
+  };
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -152,13 +214,46 @@ describe("CommandPalette", () => {
     mockIssuesApi.list.mockReset();
     mockAgentsApi.list.mockReset();
     mockProjectsApi.list.mockReset();
+    navigateMock.mockReset();
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
     mockProjectsApi.list.mockResolvedValue([]);
+    companyState.selectedCompanyId = "company-1";
+    companyState.selectedCompany = { isPortfolioRoot: false };
+    pluginSlotsState.slots = [];
   });
+
+  function open() {
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+  }
+
+  function itemLabels(): string[] {
+    return Array.from(container.querySelectorAll("button")).map((el) => el.textContent ?? "");
+  }
 
   afterEach(() => {
     container.remove();
+  });
+
+  it("says in the box that it finds more than tasks and agents", () => {
+    // The old wording named only issues, agents and projects, which is a
+    // fraction of what it actually searches.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+
+    const box = container.querySelector("input");
+    const text = box?.getAttribute("placeholder") ?? "";
+    expect(text).toContain("email");
+    expect(text).not.toContain("Search issues, agents, projects");
+
+    act(() => {
+      root.unmount();
+    });
   });
 
   it("includes routine execution issues in search queries", async () => {
@@ -186,5 +281,258 @@ describe("CommandPalette", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("lists Email, Clippy and the other pages the audit found missing (B06)", async () => {
+    // Regression for docs/plans/2026-09-02-ux-control-center-preservation.md
+    // B06: the palette's navigation catalog used to be a separate
+    // hand-copied list that never included Email, Clippy, Routines,
+    // Work queues, Assistants, Memories, Approvals or Receipts. Labels here
+    // must match what the rest of the app calls the same destination. Barry
+    // renamed five of them on 2026-09-07, in every surface at once, so
+    // "Automations" and "Intake queues" are now the right words here; before
+    // that decision they would have been a mismatch.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const labels = itemLabels().join(" | ");
+    for (const expected of ["Email", "Clippy", "Automations", "Intake queues", "Assistants", "Memories", "Approvals", "Receipts"]) {
+      expect(labels).toContain(expected);
+    }
+    // The search box is also where the destinations that left the main menu
+    // are still reachable, under their new names.
+    for (const expected of ["Overview", "Attention", "Tasks", "Org chart", "Projects", "Goals"]) {
+      expect(labels).toContain(expected);
+    }
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("only shows the Portfolio group for the portfolio-root company", async () => {
+    const { root: nonRootRoot } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+    expect(itemLabels().join(" | ")).not.toContain("Portfolio Email");
+    act(() => {
+      nonRootRoot.unmount();
+    });
+
+    const rootContainer = document.createElement("div");
+    document.body.appendChild(rootContainer);
+    companyState.selectedCompany = { isPortfolioRoot: true };
+    const { root: portfolioRoot } = renderWithQueryClient(<CommandPalette />, rootContainer);
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+    await flush();
+    // Regression: portfolio-approvals/portfolio-activity/portfolio-receipts
+    // were previously in company-routes.ts's route-root list but never
+    // surfaced here even for HQ.
+    const portfolioLabels = Array.from(rootContainer.querySelectorAll("button")).map((el) => el.textContent ?? "").join(" | ");
+    expect(portfolioLabels).toContain("Portfolio Email");
+    expect(portfolioLabels).toContain("Portfolio Approvals");
+    expect(portfolioLabels).toContain("Portfolio Activity");
+    expect(portfolioLabels).toContain("Portfolio Receipts");
+
+    act(() => {
+      portfolioRoot.unmount();
+    });
+    rootContainer.remove();
+  });
+
+  it("lists installed plugin pages by their real display name and navigates to their real route", async () => {
+    pluginSlotsState.slots = [
+      { id: "slot-1", displayName: "Notepad", routePath: "notepad", pluginKey: "notepad", pluginDisplayName: "Notepad" },
+    ];
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const notepadButton = Array.from(container.querySelectorAll("button")).find((el) =>
+      (el.textContent ?? "").includes("Notepad"),
+    );
+    expect(notepadButton).toBeTruthy();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("does not render a page slot with no routePath as a navigable item (code review, 2026-09-02)", async () => {
+    // A "page" slot type can legally omit routePath (e.g. a page meant to be
+    // embedded elsewhere, not top-level navigable). The Plugins group's
+    // visibility guard used to check the unfiltered slot count, so a
+    // routePath-less-only install would show an empty "Plugins" heading with
+    // nothing clickable under it — fixed by filtering before both the guard
+    // and the render. This asserts the item itself never renders.
+    pluginSlotsState.slots = [
+      { id: "slot-1", displayName: "Embedded Widget", routePath: undefined, pluginKey: "widget-plugin", pluginDisplayName: "Widget Plugin" },
+    ];
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const widgetButton = Array.from(container.querySelectorAll("button")).find((el) =>
+      (el.textContent ?? "").includes("Embedded Widget"),
+    );
+    expect(widgetButton).toBeUndefined();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+  it("finds the settings pages, which it used to know nothing about", async () => {
+    // Typing "plugins", "secrets" or "MCP" found nothing at all before this:
+    // the box listed every page in the app except the settings ones. There is
+    // still no Administration page and no new menu line.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const labels = itemLabels().join(" | ");
+    for (const expected of ["Company settings", "Secrets", "Invites", "Plugins", "MCP servers", "Experimental", "Adapters"]) {
+      expect(labels, expected).toContain(expected);
+    }
+
+    const headings = Array.from(container.querySelectorAll("h3")).map((el) => el.textContent ?? "");
+    expect(headings).toContain("Company settings");
+    expect(headings).toContain("Instance settings");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("says on each settings result who it affects, and can tell the two Access pages apart", async () => {
+    // Both scopes have a page called Access. The scope document rules out a
+    // system wide setting looking like it applies only to the company you are
+    // in, so the note is on the row itself, and the words a person types pick
+    // the right one.
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const values = buttons.map((el) => el.getAttribute("data-value") ?? "");
+    const companyAccess = values.find((value) => value.startsWith("company settings access"));
+    const instanceAccess = values.find((value) => value.startsWith("instance settings access"));
+    expect(companyAccess).toBeTruthy();
+    expect(instanceAccess).toBeTruthy();
+
+    const rowFor = (startsWith: string) =>
+      buttons.find((el) => (el.getAttribute("data-value") ?? "").startsWith(startsWith))?.textContent ?? "";
+    expect(rowFor("company settings access")).toContain("This company");
+    expect(rowFor("instance settings access")).toContain("Every company");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("sends a settings result to the real screen, company-scoped or not", async () => {
+    // One render per click: picking a result closes the box, so the second
+    // one has to start from a freshly opened list rather than a stale node.
+    for (const [searchValue, path] of [
+      ["instance settings plugins", "/instance/settings/plugins"],
+      ["company settings secrets", "/company/settings/secrets"],
+    ] as const) {
+      navigateMock.mockReset();
+      const { root } = renderWithQueryClient(<CommandPalette />, container);
+      open();
+      await flush();
+
+      const button = Array.from(container.querySelectorAll("button")).find((el) =>
+        (el.getAttribute("data-value") ?? "").startsWith(searchValue),
+      );
+      expect(button, searchValue).toBeTruthy();
+      act(() => {
+        button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(navigateMock, searchValue).toHaveBeenCalledWith(path);
+
+      act(() => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("says in the box that it finds settings too", () => {
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+
+    const box = container.querySelector("input");
+    expect(box?.getAttribute("placeholder") ?? "").toContain("settings");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("puts focus back on the button that opened it when you back out", async () => {
+    // The Search button in the top bar does not own this box: it fires a
+    // Ctrl+K key event and the box picks that up, so Radix has no trigger to
+    // hand focus back to. Backing out used to leave focus on the page body, so
+    // the next Tab press started again at the very top of the document.
+    const searchButton = document.createElement("button");
+    searchButton.setAttribute("aria-label", "Search");
+    document.body.appendChild(searchButton);
+    searchButton.focus();
+
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+    expect(container.querySelector("input")).not.toBeNull();
+    // Something inside the box has focus now, the way it would in the app.
+    (container.querySelector("input") as HTMLInputElement).focus();
+    expect(document.activeElement).not.toBe(searchButton);
+
+    const backOut = container.querySelector<HTMLButtonElement>('button[aria-label="Back out"]');
+    expect(backOut).not.toBeNull();
+    await act(async () => {
+      backOut!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(document.activeElement).toBe(searchButton);
+
+    act(() => {
+      root.unmount();
+    });
+    searchButton.remove();
+  });
+
+  it("does not drag focus back to the search button after you pick a result", async () => {
+    // Picking a result takes you somewhere new, and the page you land on moves
+    // focus into its own main content. Putting focus back on the Search button
+    // as well would only fight that.
+    const searchButton = document.createElement("button");
+    searchButton.setAttribute("aria-label", "Search");
+    document.body.appendChild(searchButton);
+    searchButton.focus();
+
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    open();
+    await flush();
+
+    const result = Array.from(container.querySelectorAll("button")).find(
+      (el) => (el.textContent ?? "").includes("Goals"),
+    );
+    expect(result).not.toBeUndefined();
+    (container.querySelector("input") as HTMLInputElement).focus();
+
+    await act(async () => {
+      result!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(navigateMock).toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(searchButton);
+
+    act(() => {
+      root.unmount();
+    });
+    searchButton.remove();
   });
 });

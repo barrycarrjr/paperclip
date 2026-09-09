@@ -9,7 +9,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { queryKeys } from "../lib/queryKeys";
 import {
   formatCents,
@@ -196,7 +196,9 @@ function UsageList({
 
 export function UserProfile() {
   const { userSlug = "" } = useParams<{ userSlug: string }>();
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const companyId = selectedCompanyId ?? NO_COMPANY;
 

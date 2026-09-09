@@ -1,0 +1,5 @@
+One place to run a server-side one-shot AI call
+
+Moves the one-shot model call that plugin ai.complete used (look up the provider for a model, refuse if it is unknown or has no credentials, make up a throwaway session for adapter-routed models such as Claude Code, drain the streamed reply into plain text, and delete the throwaway workspace afterwards even if the call failed) into a new shared function, completeOnce, in server/src/services/llm-one-shot.ts. Plugin ai.complete now calls it and only translates its two typed refusals back into the [EUNKNOWN_MODEL] and [EPROVIDER_NOT_CONFIGURED] strings plugin workers already match on; image handling, the vision model pick and the audit log did not move. The same file also exports parseJsonObject, which removes one ```json fence, parses, and throws a typed error when the text is not JSON or not an object, ready for the Start work planner. Seven tests cover the drain, adapter cleanup on both success and failure, the two refusals, and the JSON helper; the existing plugin orchestration tests stay green and the server typecheck is clean.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

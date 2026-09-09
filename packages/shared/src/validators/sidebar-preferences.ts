@@ -30,7 +30,17 @@ export const upsertSidebarSlugOrderPreferenceSchema = z.object({
   orderedIds: z.array(sidebarSlugIdSchema),
 });
 
+/**
+ * A pinned workspace is either a core catalog id ("email") or a plugin's own
+ * route path ("notepad"). Both are slugs, so the existing slug rule covers
+ * them; the cap stops the column becoming a dumping ground.
+ */
+export const upsertPinnedWorkspacesSchema = z.object({
+  orderedIds: z.array(sidebarSlugIdSchema).max(30),
+});
+
 export const pageKeyParamSchema = pageKeySchema;
 
 export type UpsertSidebarOrderPreference = z.infer<typeof upsertSidebarOrderPreferenceSchema>;
 export type UpsertSidebarSlugOrderPreference = z.infer<typeof upsertSidebarSlugOrderPreferenceSchema>;
+export type UpsertPinnedWorkspaces = z.infer<typeof upsertPinnedWorkspacesSchema>;

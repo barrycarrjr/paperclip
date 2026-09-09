@@ -4,6 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
+import { unauthorized } from "../errors.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
@@ -24,6 +25,41 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * `<tool>-<uuid>` shape rather than inventing a parallel format.
  */
 const TOOL_SESSION_SUB_PATTERN = /^clippy-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function decodeJwtPayloadUnverified(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(parts[1] ?? "", "base64url").toString("utf8"));
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the bearer token was *meant* to be one of our agent JWTs, even if
+ * it no longer verifies. Not every bearer token on the wire is an agent
+ * credential: the public routine trigger authenticates with its own opaque
+ * secret in the same header, and that route verifies it itself. Those must
+ * still reach their route, so only tokens carrying our claim shape are
+ * treated as failed agent credentials and rejected.
+ */
+function looksLikeAgentToken(token: string): boolean {
+  const payload = decodeJwtPayloadUnverified(token);
+  if (!payload) return false;
+  return typeof payload.company_id === "string"
+    && typeof payload.adapter_type === "string"
+    && typeof payload.run_id === "string";
+}
+
+function invalidAgentTokenMessage(token: string): string {
+  const payload = decodeJwtPayloadUnverified(token);
+  if (payload && typeof payload.exp === "number" && payload.exp <= Math.floor(Date.now() / 1000)) {
+    return "Expired agent token; obtain fresh credentials and retry";
+  }
+  return "Agent token did not verify; obtain fresh credentials and retry";
+}
 
 /**
  * Populate `actor.isPortfolioRootAgent` / `actor.isPortfolioRootUserAdmin`
@@ -83,7 +119,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     const runIdHeader = req.header("x-paperclip-run-id");
 
     const authHeader = req.header("authorization");
-    if (!authHeader?.toLowerCase().startsWith("bearer ")) {
+    // `Bearer` with nothing after it is malformed credentials, not absent
+    // ones. Node trims trailing header whitespace, so matching on "bearer "
+    // would send a bare `Bearer` down the no-credentials path and quietly
+    // authenticate it as the local board user.
+    const hasBearerCredentials = /^bearer(?:\s|$)/i.test(authHeader ?? "");
+    if (!hasBearerCredentials) {
       if (opts.deploymentMode === "authenticated" && opts.resolveSession) {
         let session: BetterAuthSessionResult | null = null;
         try {
@@ -138,9 +179,9 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
-    const token = authHeader.slice("bearer ".length).trim();
+    const token = authHeader!.slice("bearer".length).trim();
     if (!token) {
-      next();
+      next(unauthorized("Empty bearer token; provide valid credentials and retry"));
       return;
     }
 
@@ -177,6 +218,13 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (!key) {
       const claims = verifyLocalAgentJwt(token);
       if (!claims) {
+        // An agent-shaped token that fails verification must fail loudly. Left
+        // to fall through it would land on the trusted local-board actor and
+        // the agent's writes would be stored under the human's identity.
+        if (looksLikeAgentToken(token)) {
+          next(unauthorized(invalidAgentTokenMessage(token)));
+          return;
+        }
         next();
         return;
       }
@@ -187,7 +235,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       // scoped to that single company, attributing writes to the user.
       if (TOOL_SESSION_SUB_PATTERN.test(claims.sub)) {
         if (!UUID_PATTERN.test(claims.company_id)) {
-          next();
+          next(unauthorized("Tool-session token carries an unusable company; obtain fresh credentials and retry"));
           return;
         }
         const userId = typeof claims.user_id === "string" && claims.user_id.length > 0
@@ -210,7 +258,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       // (uuid-typed). A non-UUID sub from an unrecognized tool would crash
       // the query with `22P02 invalid input syntax for type uuid`.
       if (!UUID_PATTERN.test(claims.sub)) {
-        next();
+        next(unauthorized("Agent token carries an unusable subject; obtain fresh credentials and retry"));
         return;
       }
 
@@ -221,12 +269,17 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         .then((rows) => rows[0] ?? null);
 
       if (!agentRecord || agentRecord.companyId !== claims.company_id) {
-        next();
+        next(unauthorized("Agent record is missing or belongs to another company; obtain fresh credentials and retry"));
         return;
       }
 
-      if (agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
-        next();
+      if (agentRecord.status === "terminated") {
+        next(unauthorized("Agent is terminated and cannot authenticate"));
+        return;
+      }
+
+      if (agentRecord.status === "pending_approval") {
+        next(unauthorized("Agent is pending approval and cannot authenticate"));
         return;
       }
 
@@ -254,8 +307,18 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .where(eq(agents.id, key.agentId))
       .then((rows) => rows[0] ?? null);
 
-    if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
-      next();
+    if (!agentRecord || agentRecord.companyId !== key.companyId) {
+      next(unauthorized("Agent record is missing or belongs to another company; obtain fresh credentials and retry"));
+      return;
+    }
+
+    if (agentRecord.status === "terminated") {
+      next(unauthorized("Agent is terminated and cannot authenticate"));
+      return;
+    }
+
+    if (agentRecord.status === "pending_approval") {
+      next(unauthorized("Agent is pending approval and cannot authenticate"));
       return;
     }
 

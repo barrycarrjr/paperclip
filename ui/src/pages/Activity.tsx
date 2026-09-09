@@ -6,7 +6,7 @@ import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
@@ -25,7 +25,9 @@ import { History } from "lucide-react";
 const ACTIVITY_PAGE_LIMIT = 200;
 
 export function Activity() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState("all");
 

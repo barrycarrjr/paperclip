@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
@@ -17,24 +17,17 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import {
-  CircleDot,
-  Bot,
-  Hexagon,
-  Target,
-  Sunrise,
-  Inbox,
-  DollarSign,
-  History,
-  SquarePen,
-  Plus,
-  Globe2,
-  Megaphone,
-  Repeat,
-  CalendarClock,
-} from "lucide-react";
+import { CircleDot, Bot, Hexagon, SquarePen, Plus, PlugZap } from "lucide-react";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
+import { usePluginSlots } from "@/plugins/slots";
+import { CORE_WORKSPACE_CATALOG, isWorkspaceAvailable } from "@/lib/workspace-catalog";
+import {
+  SETTINGS_SCOPE_COPY,
+  settingsCatalogForScope,
+  settingsSearchValue,
+} from "@/lib/settings-catalog";
+import { instanceSettingsApi } from "@/api/instanceSettings";
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -45,11 +38,20 @@ export function CommandPalette() {
   const { openNewIssue, openNewAgent } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
+  // Whatever had focus when the box was asked for, so focus can go back there
+  // when it closes. This box has no Radix Trigger to hand focus back to: the
+  // Search button in the top bar opens it by firing a Ctrl+K key event rather
+  // than owning the dialog, so remembering the opener is the only way to know
+  // where focus came from.
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
+        const opener = document.activeElement;
+        openerRef.current =
+          opener instanceof HTMLElement && opener !== document.body ? opener : null;
         setOpen(true);
         if (isMobile) setSidebarOpen(false);
       }
@@ -80,6 +82,14 @@ export function CommandPalette() {
     enabled: !!selectedCompanyId && open,
   });
 
+  // Instance-wide and shared with the sidebar's own copy through the query
+  // cache, so opening the palette does not refetch it.
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+    enabled: open,
+  });
+
   const { data: allProjects = [] } = useQuery({
     queryKey: queryKeys.projects.list(selectedCompanyId!),
     queryFn: () => projectsApi.list(selectedCompanyId!),
@@ -90,8 +100,65 @@ export function CommandPalette() {
     [allProjects],
   );
 
-  function go(path: string) {
+  // Real installed plugin pages (Notepad, To-dos, Phone, ...), not a
+  // hand-copied list — see workspace-catalog.ts's file comment for why core
+  // and plugin destinations are combined from two different sources instead
+  // of one hand-maintained list covering both.
+  const { slots: pluginPageSlots } = usePluginSlots({
+    slotTypes: ["page"],
+    companyId: selectedCompanyId,
+    enabled: open,
+  });
+  // A "page" slot can omit routePath (e.g. a page meant to be embedded
+  // elsewhere, not top-level navigable — see packages/shared/src/types/plugin.ts).
+  // Memoized and filtered up front, code-reviewed 2026-09-02: the group's
+  // render guard below must check THIS count, not pluginPageSlots.length —
+  // checking the unfiltered count let a "Plugins" heading with zero items
+  // under it render whenever every installed page slot happened to lack a
+  // routePath.
+  const routablePluginSlots = useMemo(
+    () => pluginPageSlots.filter((slot) => slot.routePath),
+    [pluginPageSlots],
+  );
+  // Visibility of the Portfolio group is gated at the JSX call site below, so
+  // neither list depends on isPortfolioRoot. Both DO depend on availability:
+  // offering a destination the sidebar has already hidden sends someone to a
+  // page that cannot help them, which is the whole point of the requirement.
+  const availability = useMemo(
+    () => ({
+      isolatedWorkspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
+    }),
+    [experimentalSettings?.enableIsolatedWorkspaces],
+  );
+  const corePages = useMemo(
+    () =>
+      CORE_WORKSPACE_CATALOG.filter(
+        (entry) => !entry.portfolioRootOnly && isWorkspaceAvailable(entry, availability),
+      ),
+    [availability],
+  );
+  const portfolioPages = useMemo(
+    () =>
+      CORE_WORKSPACE_CATALOG.filter(
+        (entry) => entry.portfolioRootOnly && isWorkspaceAvailable(entry, availability),
+      ),
+    [availability],
+  );
+
+  /**
+   * Close the box because the person picked something, rather than because
+   * they backed out of it. Forgetting the opener matters here: choosing a
+   * result takes you somewhere new, and the page you land on moves focus into
+   * the main content by itself (see lib/main-content-focus). Putting focus
+   * back on the Search button as well would only fight that.
+   */
+  function closeAfterChoosing() {
+    openerRef.current = null;
     setOpen(false);
+  }
+
+  function go(path: string) {
+    closeAfterChoosing();
     navigate(path);
   }
 
@@ -106,12 +173,34 @@ export function CommandPalette() {
   );
 
   return (
-    <CommandDialog open={open} onOpenChange={(v) => {
+    <CommandDialog
+      open={open}
+      onOpenChange={(v) => {
         setOpen(v);
         if (v && isMobile) setSidebarOpen(false);
-      }}>
+      }}
+      // Put focus back on the button that opened the box. Without this, closing
+      // it dropped focus on the outer page wrapper, so the next Tab press
+      // started again at the very top of the document. If the opener has gone
+      // from the page, say because a result navigated somewhere else, this
+      // stands aside and lets Radix do whatever it would have done.
+      onCloseAutoFocus={(event) => {
+        const opener = openerRef.current;
+        openerRef.current = null;
+        if (!opener || !opener.isConnected) return;
+        event.preventDefault();
+        opener.focus();
+      }}
+    >
       <CommandInput
-        placeholder="Search issues, agents, projects..."
+        // The box used to say "Search issues, agents, projects", which
+        // undersold it: this already finds Email, Clippy, Calendar, the
+        // assistants, the org chart, memories, skills, approvals, receipts,
+        // costs, activity, intake queues, every add-on page and the all
+        // company pages. Naming a few of the ones people do not expect is
+        // more use than listing the three they already know about. Settings
+        // joined the list on 2026-09-08, when the box learned about them.
+        placeholder="Search tasks, agents, email, notes, add-ons, settings..."
         value={query}
         onValueChange={setQuery}
       />
@@ -121,7 +210,7 @@ export function CommandPalette() {
         <CommandGroup heading="Actions">
           <CommandItem
             onSelect={() => {
-              setOpen(false);
+              closeAfterChoosing();
               openNewIssue();
             }}
           >
@@ -131,7 +220,7 @@ export function CommandPalette() {
           </CommandItem>
           <CommandItem
             onSelect={() => {
-              setOpen(false);
+              closeAfterChoosing();
               openNewAgent();
             }}
           >
@@ -147,76 +236,47 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Pages">
-          <CommandItem onSelect={() => go("/brief")}>
-            <Sunrise className="mr-2 h-4 w-4" />
-            Brief
-          </CommandItem>
-          <CommandItem onSelect={() => go("/inbox")}>
-            <Inbox className="mr-2 h-4 w-4" />
-            Inbox
-          </CommandItem>
-          <CommandItem onSelect={() => go("/issues")}>
-            <CircleDot className="mr-2 h-4 w-4" />
-            Issues
-          </CommandItem>
-          <CommandItem onSelect={() => go("/projects")}>
-            <Hexagon className="mr-2 h-4 w-4" />
-            Projects
-          </CommandItem>
-          <CommandItem onSelect={() => go("/goals")}>
-            <Target className="mr-2 h-4 w-4" />
-            Goals
-          </CommandItem>
-          <CommandItem onSelect={() => go("/calendar")}>
-            <CalendarClock className="mr-2 h-4 w-4" />
-            Calendar
-          </CommandItem>
-          <CommandItem onSelect={() => go("/agents")}>
-            <Bot className="mr-2 h-4 w-4" />
-            Agents
-          </CommandItem>
-          <CommandItem onSelect={() => go("/costs")}>
-            <DollarSign className="mr-2 h-4 w-4" />
-            Costs
-          </CommandItem>
-          <CommandItem onSelect={() => go("/activity")}>
-            <History className="mr-2 h-4 w-4" />
-            Activity
-          </CommandItem>
+          {corePages.map((entry) => (
+            <CommandItem key={entry.id} onSelect={() => go(`/${entry.routeRoot}`)}>
+              <entry.icon className="mr-2 h-4 w-4" />
+              {entry.label}
+            </CommandItem>
+          ))}
         </CommandGroup>
 
-        {isPortfolioRoot && (
+        {routablePluginSlots.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Plugins">
+              {routablePluginSlots.map((slot) => (
+                <CommandItem
+                  key={`${slot.pluginKey}:${slot.id}`}
+                  value={`${slot.pluginDisplayName} ${slot.displayName}`}
+                  onSelect={() => go(`/${slot.routePath}`)}
+                >
+                  <PlugZap className="mr-2 h-4 w-4" />
+                  {slot.displayName}
+                  <span className="text-xs text-muted-foreground ml-2">{slot.pluginDisplayName}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
+
+        {isPortfolioRoot && portfolioPages.length > 0 && (
           <>
             <CommandSeparator />
             <CommandGroup heading="Portfolio">
-              <CommandItem value="portfolio brief" onSelect={() => go("/portfolio-brief")}>
-                <Sunrise className="mr-2 h-4 w-4" />
-                Portfolio Brief
-              </CommandItem>
-              <CommandItem value="portfolio issues" onSelect={() => go("/portfolio-issues")}>
-                <Globe2 className="mr-2 h-4 w-4" />
-                Portfolio Issues
-              </CommandItem>
-              <CommandItem value="portfolio directives" onSelect={() => go("/portfolio-directives")}>
-                <Megaphone className="mr-2 h-4 w-4" />
-                Portfolio Directives
-              </CommandItem>
-              <CommandItem value="portfolio agents" onSelect={() => go("/portfolio-agents")}>
-                <Bot className="mr-2 h-4 w-4" />
-                Portfolio Agents
-              </CommandItem>
-              <CommandItem value="portfolio routines" onSelect={() => go("/portfolio-routines")}>
-                <Repeat className="mr-2 h-4 w-4" />
-                Portfolio Routines
-              </CommandItem>
-              <CommandItem value="portfolio calendar" onSelect={() => go("/portfolio-calendar")}>
-                <CalendarClock className="mr-2 h-4 w-4" />
-                Portfolio Calendar
-              </CommandItem>
-              <CommandItem value="portfolio costs" onSelect={() => go("/portfolio-costs")}>
-                <DollarSign className="mr-2 h-4 w-4" />
-                Portfolio Costs
-              </CommandItem>
+              {portfolioPages.map((entry) => (
+                <CommandItem
+                  key={entry.id}
+                  value={entry.label.toLowerCase()}
+                  onSelect={() => go(`/${entry.routeRoot}`)}
+                >
+                  <entry.icon className="mr-2 h-4 w-4" />
+                  {entry.label}
+                </CommandItem>
+              ))}
             </CommandGroup>
           </>
         )}
@@ -278,6 +338,39 @@ export function CommandPalette() {
             </CommandGroup>
           </>
         )}
+
+        {/*
+          Settings, last on purpose. Before this the box found every page in
+          the app except the settings ones, so typing "plugins", "secrets" or
+          "MCP" found nothing at all. Listed last so that opening the box
+          without typing still shows the daily things first.
+
+          Two groups, never one, and each row says who it affects: the scope
+          document rules out a system wide setting looking like it applies
+          only to the company you are in. Both scopes have a page called
+          Access, which is exactly why the note is on the row and not only in
+          the heading.
+        */}
+        {(["company", "instance"] as const).map((scope) => (
+          <Fragment key={scope}>
+            <CommandSeparator />
+            <CommandGroup heading={SETTINGS_SCOPE_COPY[scope].title}>
+              {settingsCatalogForScope(scope).map((entry) => (
+                <CommandItem
+                  key={entry.id}
+                  value={settingsSearchValue(entry)}
+                  onSelect={() => go(entry.path)}
+                >
+                  <entry.icon className="mr-2 h-4 w-4" />
+                  {entry.label}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {SETTINGS_SCOPE_COPY[scope].rowNote}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Fragment>
+        ))}
       </CommandList>
     </CommandDialog>
   );

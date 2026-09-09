@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionRow } from "@paperclipai/shared";
 import {
+  STALE_EMAIL_HANDOFF_AFTER_MS,
   groupUnaddressedRunFailures,
   isAttentionRowDismissed,
   isAttentionRowSetAside,
@@ -454,5 +455,45 @@ describe("isAttentionRowSetAside", () => {
       updatedAtMs: NOW - 60_000,
     });
     expect(isAttentionRowSetAside(longRunning, NOW)).toBe(false);
+  });
+});
+
+
+describe("stale email handoffs in the attention queue", () => {
+  it("uses an hour, so ordinary agent wake delay is not an interruption", () => {
+    // Agents wake on their own schedule; a few minutes is normal operation.
+    expect(STALE_EMAIL_HANDOFF_AFTER_MS).toBe(60 * 60 * 1000);
+  });
+
+  it("sorts as a waiting row, behind anything that has actually stopped", () => {
+    const sorted = sortAttentionRows([
+      row({
+        key: "email-handoff:1",
+        kind: "email_handoff_stale",
+        blocking: "waiting",
+        blockedSinceMs: 1,
+      }),
+      row({ key: "stopped", blocking: "stopped", blockedSinceMs: 9_000 }),
+    ]);
+    expect(sorted[0].key).toBe("stopped");
+  });
+
+  it("can be dismissed and snoozed like any other row", () => {
+    const handoff = row({
+      key: "email-handoff:1",
+      kind: "email_handoff_stale",
+      updatedAtMs: 1_000,
+    });
+    expect(
+      isAttentionRowDismissed(handoff, new Map([["email-handoff:1", 9_999]])),
+    ).toBe(true);
+    // Dismissed before the row last changed means it came back, which is the
+    // point: a handoff still sitting there tomorrow is news again.
+    expect(isAttentionRowDismissed(handoff, new Map([["email-handoff:1", 500]]))).toBe(false);
+
+    const now = Date.now();
+    expect(
+      isAttentionRowSnoozed(handoff, new Map([["email-handoff:1", now + 60_000]]), now),
+    ).toBe(true);
   });
 });

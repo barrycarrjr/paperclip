@@ -199,6 +199,31 @@ export function describeCadence(event: Pick<
   return "—";
 }
 
+/**
+ * When a notification actually fires, versus when the event itself occurs.
+ *
+ * A10/F13 require these shown as distinct — `leadTimeMinutes` moves the
+ * notification earlier than the occurrence, and with no lead time set they
+ * are the same instant, which is worth saying explicitly rather than
+ * silently rendering one value and leaving the reader to assume the two
+ * always match.
+ *
+ * Returns null when there's nothing to notify at (notifications off, or no
+ * next occurrence yet) — the caller decides how to render that.
+ */
+export function resolveNotificationTime(event: {
+  notify: boolean;
+  nextRunAt: string | Date | null;
+  leadTimeMinutes: number;
+}): { notifyAt: Date; leadsEvent: boolean } | null {
+  if (!event.notify || !event.nextRunAt) return null;
+  const occurrence = new Date(event.nextRunAt);
+  if (Number.isNaN(occurrence.getTime())) return null;
+  const leadTimeMinutes = event.leadTimeMinutes || 0;
+  const notifyAt = new Date(occurrence.getTime() - leadTimeMinutes * 60_000);
+  return { notifyAt, leadsEvent: leadTimeMinutes > 0 };
+}
+
 /** Format an ISO/Date value for a native `<input type="datetime-local">`. */
 export function toDateTimeLocalValue(value: string | Date | null | undefined): string {
   if (!value) return "";

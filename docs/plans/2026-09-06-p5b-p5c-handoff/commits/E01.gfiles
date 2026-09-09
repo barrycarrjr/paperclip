@@ -1,0 +1,15 @@
+plugins/gbp-reviews/src/worker.ts
+plugins/gbp-reviews/src/hostScope.ts
+plugins/gbp-reviews/src/hostScope.test.ts
+plugins/gbp-reviews/src/draftReply.ts
+plugins/gbp-reviews/src/draftReply.test.ts
+plugins/gbp-reviews/src/replySource.ts
+plugins/gbp-reviews/src/replySource.test.ts
+plugins/gbp-reviews/migrations/002_reply_posts.sql
+plugins/gbp-reviews/src/replyStore.ts
+plugins/gbp-reviews/src/replyGuard.ts
+plugins/gbp-reviews/src/replyGuard.test.ts
+plugins/gbp-reviews/src/gbpAuth.ts
+plugins/gbp-reviews/src/reviewQueries.ts
+plugins/gbp-reviews/src/reviewQueries.test.ts
+plugins/gbp-reviews/src/worker.handlers.test.ts

@@ -5,7 +5,7 @@ import type { Agent, Company } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
 import { agentsApi } from "../api/agents";
 import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { usePortfolioCompanyOptions } from "../hooks/usePortfolioCompanyOptions";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { ActivityRow } from "../components/ActivityRow";
@@ -16,7 +16,9 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
 
 export function PortfolioActivity() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
+  // same shape as Everything.tsx/PortfolioEmail.tsx.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => { setBreadcrumbs([{ label: "Portfolio Activity" }]); }, [setBreadcrumbs]);

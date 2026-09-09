@@ -291,7 +291,16 @@ export interface RunJobParams {
 export interface GetDataParams {
   /** Plugin-defined data key (e.g. `"sync-health"`). */
   key: string;
-  /** Context and query parameters from the UI. */
+  /**
+   * Context and query parameters from the UI.
+   *
+   * `params.hostScope` is reserved by the host: the bridge routes overwrite it
+   * with `{ companyId, userId }` after validating the request, where
+   * `companyId` is the company the host checked (null for an instance-admin
+   * global call) and `userId` is the authenticated board user. A plugin may
+   * read it to scope its work and must never send it; anything a UI puts
+   * under that key is discarded before the worker sees it.
+   */
   params: Record<string, unknown>;
   /** Optional launcher/container metadata from the host render environment. */
   renderEnvironment?: PluginLauncherRenderContextSnapshot | null;
@@ -305,7 +314,15 @@ export interface GetDataParams {
 export interface PerformActionParams {
   /** Plugin-defined action key (e.g. `"resync"`). */
   key: string;
-  /** Action parameters from the UI. */
+  /**
+   * Action parameters from the UI.
+   *
+   * `params.hostScope` is reserved by the host and carries the same
+   * `{ companyId, userId }` the host stamps on `getData` calls (see
+   * {@link GetDataParams.params}). Plugins read it and never send it; a worker
+   * that must act on one company should trust this over any other key in
+   * `params`, because the browser supplied those.
+   */
   params: Record<string, unknown>;
   /** Optional launcher/container metadata from the host render environment. */
   renderEnvironment?: PluginLauncherRenderContextSnapshot | null;

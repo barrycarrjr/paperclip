@@ -25,7 +25,9 @@
  *     and worker routing are all unchanged.
  */
 
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { heartbeatRuns, issueApprovals } from "@paperclipai/db";
 import {
   DEFAULT_SELF_NOTIFY_SETTINGS,
   OUTBOUND_SELF_RECIPIENT_RULES,
@@ -36,6 +38,7 @@ import {
 } from "@paperclipai/shared";
 import type { ToolRunContext, ToolResult } from "@paperclipai/plugin-sdk";
 import { approvalService } from "./approvals.js";
+import { issueApprovalService } from "./issue-approvals.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
@@ -71,6 +74,23 @@ export interface DraftGateInterceptResult {
   result?: ToolResult;
 }
 
+export interface DraftGateInterceptOptions {
+  /**
+   * Draft this call even if the instance-wide hold is off, and even if every
+   * recipient looks like the operator.
+   *
+   * For a caller whose own policy is stricter than the instance default. The
+   * self-notification bypass is overridden too, because a caller that has
+   * said "always ask me about these" has already answered the question that
+   * bypass exists to answer.
+   *
+   * The tool must still be one the gate knows how to draft: forcing does not
+   * make an arbitrary tool draftable, since nothing would know how to replay
+   * it after approval.
+   */
+  force?: boolean;
+}
+
 export interface DraftGate {
   /**
    * Check whether a given tool call should be drafted instead of executed.
@@ -84,6 +104,7 @@ export interface DraftGate {
     namespacedName: string,
     parameters: unknown,
     runContext: ToolRunContext,
+    options?: DraftGateInterceptOptions,
   ): Promise<DraftGateInterceptResult>;
 
   /**
@@ -101,6 +122,80 @@ export interface DraftGate {
  * and `activity_log.agent_id`. Detect it here and route the attribution to
  * the user-id columns instead.
  */
+/**
+ * The issue a run was working on, read back from the run itself.
+ *
+ * `ToolRunContext` carries the agent, the run and the company, but not the
+ * issue — plugin tools have never needed it. The draft gate does: an outbound
+ * message drafted while working on an issue belongs to that issue, and
+ * without the link nothing about the draft or the eventual send appears on
+ * the issue at all. That is how an operator ends up approving a Slack DM and
+ * then finding no trace of it anywhere near the work it came from.
+ *
+ * Read from the run's own context snapshot rather than threaded through the
+ * call, so no plugin, adapter or SDK type has to change to get it right.
+ * Returns null for chat turns and for runs with no issue, which is correct:
+ * there is nothing to link to.
+ *
+ * The second lookup is what stops a loop rather than merely recording one. A
+ * run woken by `approval_approved` carries the issue of the approval it is
+ * about — but only when that approval was itself linked. An unlinked approval
+ * therefore wakes the agent with no issue at all, the agent finds no work to
+ * return to, drafts another message to say so, and that draft is unlinked for
+ * the same reason. Four identical Slack DMs in three minutes came out of
+ * exactly that. Following the wake's `approvalId` back to its issue lets the
+ * link survive the hop, so the chain re-attaches instead of restarting empty.
+ */
+async function issueIdForRun(db: Db, runId: string | null): Promise<string | null> {
+  if (!runId) return null;
+  try {
+    const row = await db
+      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    const snapshot = (row?.contextSnapshot ?? null) as Record<string, unknown> | null;
+    const candidate = snapshot?.issueId ?? snapshot?.taskId;
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+
+    const wakingApprovalId = snapshot?.approvalId;
+    if (typeof wakingApprovalId !== "string" || !wakingApprovalId.trim()) return null;
+    const linked = await db
+      .select({ issueId: issueApprovals.issueId })
+      .from(issueApprovals)
+      .where(eq(issueApprovals.approvalId, wakingApprovalId.trim()))
+      .then((rows) => rows[0] ?? null);
+    return linked?.issueId ?? null;
+  } catch (err) {
+    log.warn({ err, runId }, "could not read the run's issue for draft linking");
+    return null;
+  }
+}
+
+/**
+ * A stable identity for "this exact outbound call", used to recognise a repeat.
+ *
+ * Object key order is not meaningful in a tool call but is not guaranteed
+ * stable either, so keys are sorted before stringifying. Anything that is not
+ * a plain object falls back to its JSON form, which is enough: two calls are
+ * only ever treated as the same draft when their parameters serialise
+ * identically.
+ */
+function draftIdentity(namespacedName: string, parameters: unknown): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => [key, normalize(entry)]),
+      );
+    }
+    return value;
+  };
+  return `${namespacedName}::${JSON.stringify(normalize(parameters ?? null))}`;
+}
+
 const CLIPPY_AGENT_PREFIX = "clippy:";
 
 interface ResolvedRunActor {
@@ -265,19 +360,33 @@ function buildSummary(toolName: string, params: unknown): string {
     return typeof v === "string" && v.trim() ? v.trim() : null;
   };
 
+  // The public-posting tools (social posts, Instagram, YouTube, KDP, Google
+  // review replies) name their target and content differently from the
+  // messaging tools this was written for. Without their field names here,
+  // every one of them summarised to the bare tool name, and the operator was
+  // asked to approve a public post without being shown a word of it.
   const recipient =
     candidate("to") ??
     candidate("recipient") ??
     candidate("channel") ??
     candidate("user") ??
     candidate("phoneNumber") ??
-    candidate("conversationId");
+    candidate("conversationId") ??
+    candidate("page") ??
+    candidate("locationKey") ??
+    candidate("account");
   const subject = candidate("subject") ?? candidate("title");
   const body =
     candidate("body") ??
     candidate("text") ??
     candidate("message") ??
-    candidate("html");
+    candidate("html") ??
+    candidate("caption") ??
+    candidate("replyText") ??
+    candidate("comment") ??
+    candidate("description") ??
+    candidate("link") ??
+    candidate("filePath");
 
   const parts: string[] = [];
   if (recipient) parts.push(`to ${recipient}`);
@@ -328,18 +437,23 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       namespacedName: string,
       parameters: unknown,
       runContext: ToolRunContext,
+      options?: DraftGateInterceptOptions,
     ): Promise<DraftGateInterceptResult> {
       if (!GATED_TOOLS.has(namespacedName)) {
         return { intercepted: false };
       }
+      // A caller can hold a call the instance would have let through, but not
+      // the other way around: `bypassDraftGate` on the dispatcher is what
+      // lets something past, and it never reaches here.
+      const force = options?.force === true;
       const { enabled, selfNotify } = await readGateSettings();
-      if (!enabled) {
+      if (!enabled && !force) {
         return { intercepted: false };
       }
       // Self-notifications (every recipient is the operator) are the agent
       // talking TO its user, not acting outward on their behalf — approving
       // your own incoming message defeats the purpose of the notification.
-      if (isSelfAddressed(namespacedName, parameters, selfNotify)) {
+      if (!force && isSelfAddressed(namespacedName, parameters, selfNotify)) {
         log.info(
           {
             tool: namespacedName,
@@ -364,6 +478,59 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
 
       const summary = buildSummary(namespacedName, parameters);
       const actor = resolveRunActor(runContext);
+
+      // An identical call that is already waiting is the same request, not a
+      // new one.
+      //
+      // Approving a draft wakes the agent that asked for it. An agent that
+      // wakes with no new work sometimes decides the useful thing to do is
+      // send another status message — which is drafted, approved, wakes it
+      // again, and so on. That produced four identical Slack DMs in three
+      // minutes, each needing its own tap. Handing back the pending draft
+      // instead of queueing a second one makes the loop terminate: the agent
+      // is told the message is already waiting, and the operator has one
+      // decision to make rather than a growing pile of the same one.
+      const identity = draftIdentity(namespacedName, parameters);
+      try {
+        const pending = await approvals.list(runContext.companyId, "pending");
+        const duplicate = pending.find((row) => {
+          const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
+          if (row.type !== "outbound_tool_draft") return false;
+          if (rowPayload.toolName !== namespacedName) return false;
+          return draftIdentity(namespacedName, rowPayload.parameters) === identity;
+        });
+        if (duplicate) {
+          log.info(
+            { approvalId: duplicate.id, tool: namespacedName, companyId: runContext.companyId },
+            "identical outbound draft already awaiting approval; not queueing another",
+          );
+          return {
+            intercepted: true,
+            result: {
+              content: [
+                DRAFT_RESULT_HEADER,
+                `Tool: ${namespacedName}`,
+                `Approval ID: ${duplicate.id}`,
+                "",
+                "This exact message is ALREADY waiting for approval from an earlier attempt. " +
+                  "Nothing has been sent and nothing new has been queued. Do not draft it again " +
+                  "and do not rephrase it to get around this — say it is waiting and stop.",
+              ].join("\n"),
+              data: {
+                drafted: true,
+                duplicateOf: duplicate.id,
+                approvalId: duplicate.id,
+                status: "pending",
+                tool: namespacedName,
+                summary,
+              },
+            },
+          };
+        }
+      } catch (err) {
+        // Better to risk a second draft than to drop the call entirely.
+        log.warn({ err, tool: namespacedName }, "could not check for a duplicate pending draft");
+      }
       const payload = {
         toolName: namespacedName,
         parameters: parameters ?? null,
@@ -394,6 +561,27 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         decidedByUserId: null,
         decidedAt: null,
       });
+
+      // Tie the draft to the issue it came out of, so the issue shows the
+      // message was drafted and (after approval) sent. This is also what puts
+      // an issue id on the post-approval wake, so the agent is woken about the
+      // work rather than about a bare approval id.
+      const draftIssueId = await issueIdForRun(db, runContext.runId ?? null);
+      if (draftIssueId) {
+        try {
+          await issueApprovalService(db).link(draftIssueId, approval.id, {
+            agentId: actor.agentUuid,
+            userId: actor.userId,
+          });
+        } catch (err) {
+          // A draft that is not linked is still a valid draft. Say so and
+          // carry on rather than failing the agent's tool call over it.
+          log.warn(
+            { err, approvalId: approval.id, issueId: draftIssueId },
+            "could not link the draft to its issue (non-fatal)",
+          );
+        }
+      }
 
       // Drop a receipt-style activity entry so the draft surfaces in the
       // Receipt feed and Morning Brief as a "drafted" outcome immediately,
@@ -436,11 +624,26 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         ? "The user must approve this draft before it executes. Do not retry the tool — wait for the approval.resolved wake."
         : "The user must approve this draft before it executes. Do not retry the tool. Tell the user it is queued and end your turn — you will not be woken when they approve.";
 
+      // Spelled out because the previous wording did not say it, and an agent
+      // read "queued for approval" as close enough to done: it commented
+      // "Reached out to Brandon Carr via Slack DM" on the issue at a moment
+      // when nothing had been sent and the operator had not yet been asked.
+      // The operator then read that sentence as a record of something that
+      // happened. Nothing about a draft is worth more than not being lied to
+      // about it.
+      const nothingSentYet =
+        "NOTHING HAS BEEN SENT. No message, email or call has gone out and none will " +
+        "until the draft is approved. Do not write, comment or report anywhere that " +
+        "you contacted, messaged, emailed or called anyone — say it is waiting for " +
+        "approval, and name the person it is waiting on if you know it.";
+
       const content = [
         DRAFT_RESULT_HEADER,
         `Tool: ${namespacedName}`,
         `Approval ID: ${approval.id}`,
         summary ? `Summary: ${summary}` : null,
+        "",
+        nothingSentYet,
         "",
         guidance,
       ]

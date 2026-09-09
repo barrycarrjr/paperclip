@@ -24,6 +24,7 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -45,6 +46,7 @@ import {
 } from "../components/ActivityCharts";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -82,12 +84,17 @@ function greeting(now: Date): { word: string; icon: typeof Sun } {
 }
 
 export function MorningBrief() {
-  const { selectedCompanyId, companies } = useCompany();
+  const { companies } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03):
+  // Brief is the app's default landing route and doesn't remount on a
+  // company switch, so this is reachable in ordinary use — see Calendar.tsx's
+  // identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Brief" }]);
+    setBreadcrumbs([{ label: "Overview" }]);
   }, [setBreadcrumbs]);
 
   const { data: session } = useQuery({
@@ -95,13 +102,13 @@ export function MorningBrief() {
     queryFn: () => authApi.getSession(),
   });
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: queryKeys.dashboard(selectedCompanyId!),
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
-  const { data: activity } = useQuery({
+  const { data: activity, isLoading: activityLoading } = useQuery({
     queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: OUTCOMES_LIMIT }],
     queryFn: () => activityApi.list(selectedCompanyId!, { limit: OUTCOMES_LIMIT }),
     enabled: !!selectedCompanyId,
@@ -113,7 +120,7 @@ export function MorningBrief() {
   // Rows that have gone quiet are held back until asked for, so months-old
   // sediment does not sit next to a live outage.
   const [showSetAside, setShowSetAside] = useState(false);
-  const { data: attention } = useQuery({
+  const { data: attention, isLoading: attentionLoading } = useQuery({
     queryKey: [...queryKeys.attention(selectedCompanyId!), showSetAside],
     queryFn: () => attentionApi.list(selectedCompanyId!, showSetAside),
     enabled: !!selectedCompanyId,
@@ -125,13 +132,13 @@ export function MorningBrief() {
   const attentionRows = attention?.rows ?? [];
   const { snooze: snoozeAttentionRow, dismiss: dismissAttentionRow } = useAttentionRowActions();
 
-  const { data: issues } = useQuery({
+  const { data: issues, isLoading: issuesLoading } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
     queryFn: () => issuesApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
-  const { data: agents } = useQuery({
+  const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
@@ -376,8 +383,27 @@ export function MorningBrief() {
     );
   }
 
-  if (summaryLoading) {
+  // P3 audit, 2026-09-03: this used to gate only on `summaryLoading`, so the
+  // hero ("All systems green.") and the Awaiting/Overnight/Today sections
+  // below could all render past the skeleton while activity/attention/
+  // issues/agents were still in flight — each defaults to `[]`/0 while
+  // loading, which reads identically to "genuinely nothing here" rather than
+  // "still loading". `Inbox.tsx` already gets this right by aggregating
+  // every relevant query's isLoading; this does the same.
+  if (summaryLoading || activityLoading || attentionLoading || issuesLoading || agentsLoading) {
     return <PageSkeleton variant="dashboard" />;
+  }
+
+  if (summaryError) {
+    // Previously fell through silently: `errors`/`allClear` below default to
+    // 0/true when `summary` is undefined, so a failed fetch rendered as "All
+    // systems green." — actively misrepresenting a fetch failure as healthy.
+    return (
+      <EmptyState
+        icon={AlertCircle}
+        message="Couldn't load the morning brief. Check your connection and try reloading."
+      />
+    );
   }
 
   const now = new Date();
@@ -474,7 +500,7 @@ export function MorningBrief() {
       {/* Hero */}
       <section
         aria-label="Morning brief"
-        className="group relative overflow-hidden border border-border bg-card pl-6 pr-5 py-6"
+        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card py-6 pl-6 pr-5 shadow-sm"
       >
         <span aria-hidden className={cn("absolute left-0 top-0 h-full w-[3px]", heroBarClass)} />
         <div className="flex items-start gap-4">
@@ -504,7 +530,7 @@ export function MorningBrief() {
       {/* Metric cards (absorbed from Dashboard) */}
       {summary && (
         <section aria-label="Key metrics">
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-px bg-border">
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <MetricCard
               icon={Bot}
               value={totalAgents}
@@ -589,16 +615,16 @@ export function MorningBrief() {
         </div>
 
         {attentionRows.length === 0 && reviewQueue.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <CheckCircle2 className="mx-auto h-5 w-5 text-emerald-500/70" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Nothing waiting on you. Inbox zero.
+              Nothing waiting on you.
             </p>
           </div>
         ) : (
           <div className="space-y-4">
             {attentionRows.length > 0 && (
-              <div className="border border-border bg-card divide-y divide-border">
+              <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
                 {attentionToShow.map((row) => (
                   <AttentionRow
                     key={row.key}
@@ -644,7 +670,7 @@ export function MorningBrief() {
                     Hover for preview, click for full email · Auto-triage = move + rule · Keep · read/unread = leave in INBOX + rule · Keep · mute = auto-mark future as read · Dismiss = no rule
                   </span>
                 </div>
-                <div className="border border-border bg-card divide-y divide-border">
+                <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
                   {(reviewQueueExpanded
                     ? reviewQueue
                     : reviewQueue.slice(0, REVIEW_QUEUE_SHOWN)
@@ -722,14 +748,14 @@ export function MorningBrief() {
         </div>
 
         {outcomesToShow.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <Sparkles className="mx-auto h-5 w-5 text-muted-foreground/40" />
             <p className="mt-3 text-sm text-muted-foreground">
               Nothing produced in the last {OVERNIGHT_HOURS} hours yet. Quiet morning.
             </p>
           </div>
         ) : (
-          <div className="border border-border bg-card divide-y divide-border">
+          <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
             {outcomesToShow.map((event) => (
               <OutcomeRow
                 key={event.id}
@@ -767,14 +793,14 @@ export function MorningBrief() {
         </div>
 
         {myIssues.length === 0 ? (
-          <div className="border border-border bg-card p-8 text-center">
+          <div className="rounded-xl border border-border/70 bg-card p-8 text-center shadow-sm">
             <ListChecks className="mx-auto h-5 w-5 text-muted-foreground/40" />
             <p className="mt-3 text-sm text-muted-foreground">
               No issues need your attention today.
             </p>
           </div>
         ) : (
-          <div className="border border-border bg-card divide-y divide-border">
+          <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
             <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/20">
               Open issues you own
             </div>
@@ -806,7 +832,7 @@ export function MorningBrief() {
         slotTypes={["dashboardWidget"]}
         context={{ companyId: selectedCompanyId }}
         className="grid gap-4 md:grid-cols-2"
-        itemClassName="border border-border bg-card p-4"
+        itemClassName="rounded-xl border border-border/70 bg-card p-4 shadow-sm"
       />
 
       {/* Trends — charts pushed to the bottom (absorbed from Dashboard) */}
@@ -818,7 +844,7 @@ export function MorningBrief() {
             </h2>
             <span className="text-[10px] text-muted-foreground/70">Last 14 days</span>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <ChartCard title="Run Activity">
               <RunActivityChart activity={summary.runActivity} />
             </ChartCard>
@@ -894,7 +920,12 @@ function ReviewQueueRow({
       onMouseLeave={() => onHoverChange(false)}
     >
       <span aria-hidden className="absolute left-0 top-0 h-full w-[3px] bg-sky-500/55 group-hover:bg-sky-500/80 transition-colors" />
-      <div className="flex items-start gap-3">
+      {/* Same card as the one on the Portfolio Brief, and the same fix: the
+          five actions come to more than the card is wide on anything narrower
+          than a laptop, and the card clips what does not fit, so the last two
+          could not be reached by finger. Below `lg` they take a line of their
+          own and wrap on it. */}
+      <div className={WRAPPING_ROW_CLASS}>
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted/40 shrink-0">
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
@@ -966,7 +997,7 @@ function ReviewQueueRow({
             </TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className={OWN_LINE_ACTIONS_CLASS}>
           <button
             type="button"
             onClick={onGraduate}

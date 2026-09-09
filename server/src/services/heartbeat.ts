@@ -76,6 +76,7 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { issueEmailDelegationService } from "./issue-email-delegations.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import {
   ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS,
@@ -2053,6 +2054,32 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
+  const emailDelegationsSvc = issueEmailDelegationService(db);
+
+  /**
+   * An email handed to an agent is "picked up" the moment the agent checks
+   * the issue out — not whenever the agent remembers to say so.
+   *
+   * The decision itself lives in the delegation service, next to the data it
+   * reads. What belongs here is the swallow: a tracking row that failed to
+   * move must not take a live run down with it, the same reasoning under
+   * which the row is written in the first place.
+   */
+  async function acknowledgeEmailHandoffOnCheckout(
+    companyId: string,
+    issueId: string,
+    agentId: string,
+  ): Promise<void> {
+    try {
+      await emailDelegationsSvc.acknowledgeOnCheckout({ companyId, issueId, agentId });
+    } catch (err) {
+      logger.warn(
+        { err, companyId, issueId, agentId },
+        "could not mark the email handover as picked up; the run continues",
+      );
+    }
+  }
+
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
@@ -4896,6 +4923,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       try {
         await issuesSvc.checkout(issueId, agent.id, ["todo", "backlog", "blocked"], run.id);
         context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
+        await acknowledgeEmailHandoffOnCheckout(agent.companyId, issueId, agent.id);
       } catch (error) {
         if (!isCheckoutConflictError(error)) throw error;
         context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = false;

@@ -5,6 +5,29 @@ import os from "node:os";
 import path from "node:path";
 
 const repoRoot = process.cwd();
+
+/**
+ * Spawning pnpm as a child process on Windows takes two accommodations, and
+ * missing either one makes `pnpm test:run` — the command that runs the whole
+ * suite — impossible to run on a Windows machine at all.
+ *
+ * First, pnpm there is `pnpm.cmd`, a batch script. `spawnSync("pnpm", ...)`
+ * looks for an executable of that exact name, finds nothing, and fails with a
+ * bare `spawnSync pnpm ENOENT` that reads like pnpm is not installed when it
+ * is on PATH and working perfectly.
+ *
+ * Second, naming the `.cmd` is not enough on its own: since the fix for
+ * CVE-2024-27980, Node refuses to spawn a `.cmd` or `.bat` without a shell and
+ * fails with `EINVAL`. So Windows needs `shell: true` as well.
+ *
+ * Passing arguments through a shell is normally worth avoiding, and it is safe
+ * here only because every argument this script passes is a project name or a
+ * repo-relative test path — no spaces, no globs, nothing cmd.exe would expand.
+ * Anything less predictable should go back to spawning pnpm's JS entry point
+ * with `process.execPath` rather than widening this.
+ */
+const isWindows = process.platform === "win32";
+const pnpmCommand = isWindows ? "pnpm.cmd" : "pnpm";
 const serverRoot = path.join(repoRoot, "server");
 const serverTestsDir = path.join(repoRoot, "server", "src", "__tests__");
 const nonServerProjects = [
@@ -80,18 +103,35 @@ function runVitest(args, label) {
   console.log(`\n[test:run] ${label}`);
   invocationIndex += 1;
   const testRoot = mkdtempSync(path.join(os.tmpdir(), `paperclip-vitest-${process.pid}-${invocationIndex}-`));
+  const tempDir = path.join(testRoot, "tmp");
   const env = {
     ...process.env,
     PAPERCLIP_HOME: path.join(testRoot, "home"),
     PAPERCLIP_INSTANCE_ID: `vitest-${process.pid}-${invocationIndex}`,
-    TMPDIR: path.join(testRoot, "tmp"),
+    TMPDIR: tempDir,
+    // TMPDIR alone is POSIX-only: Node's `os.tmpdir()` reads TEMP and TMP on
+    // Windows and ignores TMPDIR entirely, so the per-invocation isolation
+    // this block exists for silently did nothing there and everything landed
+    // in the machine's shared %TEMP% instead.
+    //
+    // That is not merely untidy. Tests that start an embedded PostgreSQL
+    // cluster create their data directory with `mkdtemp` under `os.tmpdir()`,
+    // and on a developer machine whose %TEMP% has accumulated hundreds of
+    // thousands of entries (another tool leaking them is enough) every create
+    // and enumerate in that directory slows down. Cluster startup drifts from
+    // a couple of seconds to nine or ten, and under the load of a full run it
+    // crosses the 20-second `beforeAll` budget - failing two dozen server
+    // suites that have nothing wrong with them.
+    TEMP: tempDir,
+    TMP: tempDir,
   };
   mkdirSync(env.PAPERCLIP_HOME, { recursive: true });
-  mkdirSync(env.TMPDIR, { recursive: true });
-  const result = spawnSync("pnpm", ["exec", "vitest", "run", ...args], {
+  mkdirSync(tempDir, { recursive: true });
+  const result = spawnSync(pnpmCommand, ["exec", "vitest", "run", ...args], {
     cwd: repoRoot,
     env,
     stdio: "inherit",
+    shell: isWindows,
   });
   if (result.error) {
     console.error(`[test:run] Failed to start Vitest: ${result.error.message}`);

@@ -43,14 +43,12 @@ import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
 import { logActivity } from "./activity-log.js";
 import {
-  getProviderForModel,
   pickBestVisionModel,
   isVisionCapableModel,
-  decodeAdapterModel,
-  removeClippyWorkspace,
   type CanonicalContentBlock,
   type ResolvedAttachments,
 } from "./chat-providers.js";
+import { completeOnce, OneShotError } from "./llm-one-shot.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import type { SystemSnapshotService } from "../routes/system-snapshot.js";
@@ -539,14 +537,6 @@ async function runPluginAiComplete(
     modelToUse = picked;
   }
 
-  const provider = getProviderForModel(modelToUse);
-  if (!provider) {
-    throw new Error(`[EUNKNOWN_MODEL] no provider handles model "${modelToUse}"`);
-  }
-  if (!provider.isConfigured()) {
-    throw new Error(`[EPROVIDER_NOT_CONFIGURED] provider for "${modelToUse}" is missing credentials`);
-  }
-
   // Build canonical content blocks. Each image gets a synthetic attachmentId
   // that maps to its decoded bytes in the resolvedAttachments map — the
   // provider layer (chat-providers.ts) reads from there when emitting
@@ -589,67 +579,30 @@ async function runPluginAiComplete(
     "plugin ai.complete starting",
   );
 
-  // Adapter-routed providers (claude_local etc.) require an adapterContext —
-  // session identity, callbacks for persisting per-turn state, etc. — that
-  // comes from the chat orchestrator in the Clippy flow. For a plugin one-shot
-  // we synthesize a minimal context: a per-call sessionId so the provider can
-  // materialize a private workspace (and we clean it up afterwards), a no-op
-  // saveSessionParams (we never resume), and pluginId as the boardUserId so
-  // adapter-side audit trails name the actual caller. Native providers
-  // (Anthropic, OpenAI, Gemini SDKs) ignore this entirely.
-  const ephemeralSessionId = `plugin-ai-${pluginId}-${randomUUID()}`;
-  const isAdapterRoute = decodeAdapterModel(modelToUse) !== null;
-  const adapterContext = isAdapterRoute
-    ? {
-        sessionId: ephemeralSessionId,
-        companyId: null,
-        boardUserId: `plugin:${pluginId}`,
-        prevSessionParams: null,
-        saveSessionParams: async () => {
-          /* one-shot — nothing to persist */
-        },
-      }
-    : undefined;
-
-  let final: { content: CanonicalContentBlock[] } | null = null;
+  // The provider lookup, the adapter workspace (session id `plugin-ai-<id>-<uuid>`,
+  // cleaned up afterwards) and the stream drain live in completeOnce, shared
+  // with the other server one-shots. Only the plugin error vocabulary is
+  // mapped back here so worker-side callers keep matching the same strings.
+  let text: string;
   try {
-    // Drain the provider stream into a final result. We discard text_delta
-    // events (no caller-side streaming on this surface) and use the returned
-    // ProviderTurnResult.content to assemble plain text.
-    const generator = provider.streamTurn({
+    const result = await completeOnce({
       model: modelToUse,
       system,
-      messages: [{ role: "user", content }],
+      content,
       resolvedAttachments,
-      adapterContext,
+      callerLabel: `plugin-ai-${pluginId}`,
+      boardUserId: `plugin:${pluginId}`,
     });
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const step = await generator.next();
-      if (step.done) {
-        final = step.value as { content: CanonicalContentBlock[] };
-        break;
+    text = result.text;
+  } catch (err) {
+    if (err instanceof OneShotError) {
+      if (err.code === "unknown_model") {
+        throw new Error(`[EUNKNOWN_MODEL] no provider handles model "${modelToUse}"`);
       }
-      // streaming events ignored for one-shot
+      throw new Error(`[EPROVIDER_NOT_CONFIGURED] provider for "${modelToUse}" is missing credentials`);
     }
-  } finally {
-    // Adapter routes materialized a per-call workspace; drop it now so we
-    // don't litter ~/.paperclip/clippy-workspaces with plugin-ai-* dirs.
-    if (isAdapterRoute) {
-      removeClippyWorkspace(ephemeralSessionId).catch((err) => {
-        logger.warn(
-          { pluginId, sessionId: ephemeralSessionId, err: (err as Error).message },
-          "plugin ai.complete: failed to clean up ephemeral workspace",
-        );
-      });
-    }
+    throw err;
   }
-
-  const text = (final?.content ?? [])
-    .filter((b): b is Extract<CanonicalContentBlock, { type: "text" }> => b.type === "text")
-    .map((b) => b.text)
-    .join("")
-    .trim();
 
   // Audit log — record fact-of-call without persisting the prompt or bytes.
   // The activity table is the right home; image bytes never go there.

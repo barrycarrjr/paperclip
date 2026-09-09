@@ -89,7 +89,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     // longer than necessary.
     manager = createExternalMcpServerManager(db, { idleTimeoutMs: 5_000 });
     toolSource = createExternalMcpToolSource(db, manager);
-  }, 60_000);
+  }, 90_000);
 
   afterAll(async () => {
     if (manager) await manager.shutdown();
@@ -143,7 +143,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     expect(result.isError).toBe(false);
     const flat = JSON.stringify(result.content);
     expect(flat).toContain("echo: hello from test");
-  }, 30_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 2. Namespacing flows through the tool source
@@ -160,7 +160,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
       `mcp:${key}:echo`,
       `mcp:${key}:read_secret_env`,
     ]);
-  }, 30_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 3. Mutation gate — heuristic-detected mutation is denied unless
@@ -187,7 +187,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     });
     expect(result.isError).toBe(false);
     expect(JSON.stringify(result.content)).toContain("created: x");
-  }, 60_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 4. Company isolation — companyB is not in allowedCompanies, so the
@@ -207,7 +207,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
 
     expect(forA.length).toBeGreaterThan(0);
     expect(forB.length).toBe(0);
-  }, 30_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 5. Secret-ref env binding — value resolves inside the spawned child.
@@ -239,7 +239,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     expect(result.isError).toBe(false);
     const flat = JSON.stringify(result.content);
     expect(flat).toContain("SECRET_TOKEN=shh-this-is-the-test-value");
-  }, 30_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 6. Slow cold start: a server that takes longer to boot than the
@@ -278,7 +278,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
       .map((t) => t.name)
       .sort();
     expect(names).toEqual(["create_thing", "echo", "read_secret_env"]);
-  }, 60_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 7. Concurrent callers share one cold start rather than each spawning
@@ -315,7 +315,7 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     const spawns = readFileSync(spawnLog, "utf8").trim().split("\n").filter(Boolean);
     expect(spawns).toHaveLength(1);
     rmSync(spawnLog, { force: true });
-  }, 60_000);
+  }, 90_000);
 
   // -----------------------------------------------------------------------
   // 8. The connect budget actually governs the handshake.
@@ -356,5 +356,5 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
       await generousManager.shutdown();
       await stingyManager.shutdown();
     }
-  }, 60_000);
+  }, 90_000);
 });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { describeTimeZone, listTimeZones } from "@/lib/timezones";
 
 type SchedulePreset = "every_minute" | "every_hour" | "every_day" | "multiple_daily" | "weekdays" | "weekly" | "monthly" | "custom";
 
@@ -122,33 +123,41 @@ function buildCron(preset: SchedulePreset, hour: string, minute: string, dayOfWe
   }
 }
 
-function describeSchedule(cron: string): string {
+/**
+ * The schedule in plain words, for example "Every day at 10:00 AM".
+ *
+ * Pass `timeZone` and the zone is named too, so nobody has to guess whose
+ * clock the time is on. "Every minute" never names a zone because every zone
+ * agrees on it.
+ */
+function describeSchedule(cron: string, timeZone?: string | null): string {
   const { preset, hour, minute, dayOfWeek, dayOfMonth } = parseCronToPreset(cron);
   const hourLabel = HOURS.find((h) => h.value === hour)?.label ?? `${hour}`;
   const timeStr = `${hourLabel.replace(/ (AM|PM)$/, "")}:${minute.padStart(2, "0")} ${hourLabel.match(/(AM|PM)$/)?.[0] ?? ""}`;
+  const withZone = (text: string) => (timeZone ? `${text}, ${timeZone}` : text);
 
   switch (preset) {
     case "every_minute":
       return "Every minute";
     case "every_hour":
-      return `Every hour at :${minute.padStart(2, "0")}`;
+      return withZone(`Every hour at :${minute.padStart(2, "0")}`);
     case "every_day":
-      return `Every day at ${timeStr}`;
+      return withZone(`Every day at ${timeStr}`);
     case "multiple_daily": {
       const hours = hour.split(",").map((h) => h.trim());
       const labels = hours.map((h) => HOURS.find((x) => x.value === h)?.label ?? h);
-      return `${hours.length}x daily (${labels.join(", ")})`;
+      return withZone(`${hours.length}x daily (${labels.join(", ")})`);
     }
     case "weekdays":
-      return `Weekdays at ${timeStr}`;
+      return withZone(`Weekdays at ${timeStr}`);
     case "weekly": {
       const day = DAYS_OF_WEEK.find((d) => d.value === dayOfWeek)?.label ?? dayOfWeek;
-      return `Every ${day} at ${timeStr}`;
+      return withZone(`Every ${day} at ${timeStr}`);
     }
     case "monthly":
-      return `Monthly on the ${dayOfMonth}${ordinalSuffix(Number(dayOfMonth))} at ${timeStr}`;
+      return withZone(`Monthly on the ${dayOfMonth}${ordinalSuffix(Number(dayOfMonth))} at ${timeStr}`);
     case "custom":
-      return cron || "No schedule set";
+      return cron ? withZone(cron) : "No schedule set";
   }
 }
 
@@ -163,11 +172,21 @@ export { describeSchedule };
 export function ScheduleEditor({
   value,
   onChange,
+  timeZone,
+  onTimeZoneChange,
 }: {
   value: string;
   onChange: (cron: string) => void;
+  /**
+   * The time zone the times above are read on. Leave it out and the editor
+   * shows no zone at all, which is how it behaved before zones were shown.
+   */
+  timeZone?: string;
+  /** Supply this to let a person pick a different zone. */
+  onTimeZoneChange?: (timeZone: string) => void;
 }) {
   const parsed = useMemo(() => parseCronToPreset(value), [value]);
+  const timeZoneOptions = useMemo(() => listTimeZones(timeZone), [timeZone]);
   const [preset, setPreset] = useState<SchedulePreset>(parsed.preset);
   const [hour, setHour] = useState(parsed.hour);
   const [minute, setMinute] = useState(parsed.minute);
@@ -417,6 +436,30 @@ export function ScheduleEditor({
           )}
         </div>
       )}
+
+      {timeZone && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">Time zone</span>
+          {onTimeZoneChange ? (
+            <Select value={timeZone} onValueChange={onTimeZoneChange}>
+              <SelectTrigger className="w-[260px]" aria-label="Time zone">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {timeZoneOptions.map((zone) => (
+                  <SelectItem key={zone} value={zone}>
+                    {describeTimeZone(zone)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span className="text-sm">{describeTimeZone(timeZone)}</span>
+          )}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">{describeSchedule(value, timeZone)}</p>
     </div>
   );
 }

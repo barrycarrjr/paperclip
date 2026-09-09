@@ -1,11 +1,14 @@
+import type { ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
+import { PortfolioScopeRoute } from "./components/PortfolioScopeRoute";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
+import { Team, TeamLayout } from "./pages/Team";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Projects } from "./pages/Projects";
 import { ProjectDetail } from "./pages/ProjectDetail";
@@ -20,6 +23,7 @@ import { UserProfile } from "./pages/UserProfile";
 import { ExecutionWorkspaceDetail } from "./pages/ExecutionWorkspaceDetail";
 import { Goals } from "./pages/Goals";
 import { GoalDetail } from "./pages/GoalDetail";
+import { workTabRoutes } from "./pages/Work";
 import { Memories } from "./pages/Memories";
 import { WorkQueues } from "./pages/WorkQueues";
 import { Approvals } from "./pages/Approvals";
@@ -38,6 +42,7 @@ import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
+import { Everything } from "./pages/Everything";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -80,8 +85,25 @@ import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 import { chooseHomeRoute } from "./lib/home-route";
+import { WORK_DEFAULT_TAB } from "./lib/work-tabs";
 
-function boardRoutes() {
+/**
+ * Which page each Work tab opens.
+ *
+ * Kept as a plain map so the tab list (lib/work-tabs.ts) stays the single
+ * place the tabs, their order and their labels are decided, while the pages
+ * themselves are still named here alongside every other route.
+ */
+const WORK_TAB_PAGES: Record<string, ReactNode> = {
+  issues: <Issues />,
+  projects: <Projects />,
+  goals: <Goals />,
+  routines: <Routines />,
+  "work-queues": <WorkQueues />,
+};
+
+/** Exported so a test can prove each address still resolves to its page. */
+export function boardRoutes() {
   return (
     <>
       <Route index element={<Navigate to="brief" replace />} />
@@ -99,21 +121,41 @@ function boardRoutes() {
       <Route path="settings" element={<LegacySettingsRedirect />} />
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
       <Route path="plugins/:pluginId" element={<PluginPage />} />
-      <Route path="org" element={<OrgChart />} />
-      <Route path="clippy" element={<Clippy />} />
+      {/* Team: one page that opens on what the team is doing right now,
+          instead of three separate menu lines (the mockup report's
+          difference 8).
+
+          The pages themselves are untouched and none of them moved: the tab
+          strip is a shell drawn above whichever of them the address names, so
+          /agents/all, /org and /assistants still open exactly what they always
+          opened, and /agents/<one agent> still opens that agent's own page
+          with all its tabs. Keeping the addresses is what makes a tab
+          linkable, reload-safe and reachable with the back button without
+          storing which tab you were on anywhere.
+
+          /team is the only new address, and unlike Work's /work it is a real
+          page rather than a redirect: the current-work view is its content. */}
+      <Route element={<TeamLayout />}>
+        <Route path="team" element={<Team />} />
+        <Route path="org" element={<OrgChart />} />
+        <Route path="agents/all" element={<Agents />} />
+        <Route path="agents/active" element={<Agents />} />
+        <Route path="agents/paused" element={<Agents />} />
+        <Route path="agents/error" element={<Agents />} />
+        <Route path="assistants" element={<AssistantsList />} />
+      </Route>
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
-      <Route path="agents/all" element={<Agents />} />
-      <Route path="agents/active" element={<Agents />} />
-      <Route path="agents/paused" element={<Agents />} />
-      <Route path="agents/error" element={<Agents />} />
       <Route path="agents/new" element={<NewAgent />} />
       <Route path="agents/:agentId" element={<AgentDetail />} />
       <Route path="agents/:agentId/:tab" element={<AgentDetail />} />
       <Route path="agents/:agentId/runs/:runId" element={<AgentDetail />} />
-      <Route path="assistants" element={<AssistantsList />} />
       <Route path="assistants/new" element={<AssistantWizard />} />
       <Route path="assistants/:agentId/edit" element={<AssistantWizard />} />
-      <Route path="projects" element={<Projects />} />
+      <Route path="clippy" element={<Clippy />} />
+      {/* The five list pages that make up the Work page's tabs are registered
+          together further down, nested inside <WorkLayout />. Their deeper
+          pages (one project, one goal, one task, one automation) stay out
+          here: they are destinations of their own, not tabs. */}
       <Route path="projects/:projectId" element={<ProjectDetail />} />
       <Route path="projects/:projectId/overview" element={<ProjectDetail />} />
       <Route path="projects/:projectId/issues" element={<ProjectDetail />} />
@@ -123,36 +165,54 @@ function boardRoutes() {
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
-      <Route path="portfolio-issues" element={<PortfolioIssues />} />
-      <Route path="portfolio-directives" element={<PortfolioDirectives />} />
-      <Route path="portfolio-agents" element={<PortfolioAgents />} />
-      <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
-      <Route path="portfolio-activity" element={<PortfolioActivity />} />
-      <Route path="portfolio-routines" element={<PortfolioRoutines />} />
-      <Route path="portfolio-calendar" element={<PortfolioCalendar />} />
-      <Route path="portfolio-costs" element={<PortfolioCosts />} />
+      {/* The all company pages. They are mounted under HQ's own address
+          prefix, so any company's prefix matches them; the shell around them
+          says so plainly when the company in the address is not HQ, instead
+          of drawing an empty page. See PortfolioScopeRoute.tsx. */}
+      <Route element={<PortfolioScopeRoute />}>
+        <Route path="portfolio-issues" element={<PortfolioIssues />} />
+        <Route path="portfolio-directives" element={<PortfolioDirectives />} />
+        <Route path="portfolio-agents" element={<PortfolioAgents />} />
+        <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
+        <Route path="portfolio-activity" element={<PortfolioActivity />} />
+        <Route path="portfolio-routines" element={<PortfolioRoutines />} />
+        <Route path="portfolio-calendar" element={<PortfolioCalendar />} />
+        <Route path="portfolio-costs" element={<PortfolioCosts />} />
+        <Route path="portfolio-brief" element={<PortfolioBrief />} />
+        <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
+        <Route path="portfolio-email" element={<PortfolioEmail />} />
+      </Route>
+      {/* Outside the shell on purpose: it is a redirect, not a page, and it
+          has to work from anywhere so an old saved link still lands. */}
       <Route path="portfolio-dashboard" element={<Navigate to="/portfolio-brief" replace />} />
-      <Route path="portfolio-brief" element={<PortfolioBrief />} />
-      <Route path="portfolio-receipts" element={<PortfolioReceipts />} />
-      <Route path="portfolio-email" element={<PortfolioEmail />} />
-      <Route path="issues" element={<Issues />} />
+      {/* The Work page. One page with tabs, instead of five separate menu
+          lines (the mockup report's difference 3).
+
+          The pages themselves are untouched and none of them moved: the tab
+          strip is a shell drawn above whichever of them the address names, so
+          /issues, /projects, /goals, /routines and /work-queues still open
+          exactly what they always opened. Keeping the addresses is what makes
+          a tab linkable, reload-safe and reachable with the back button
+          without storing which tab you were on anywhere.
+
+          /work is a front door with no content of its own; it sends you to the
+          first tab. */}
+      <Route path="work" element={<Navigate to={WORK_DEFAULT_TAB.to} replace />} />
+      {workTabRoutes((tabId) => WORK_TAB_PAGES[tabId] ?? null)}
       <Route path="issues/all" element={<Navigate to="/issues" replace />} />
       <Route path="issues/active" element={<Navigate to="/issues" replace />} />
       <Route path="issues/backlog" element={<Navigate to="/issues" replace />} />
       <Route path="issues/done" element={<Navigate to="/issues" replace />} />
       <Route path="issues/recent" element={<Navigate to="/issues" replace />} />
       <Route path="issues/:issueId" element={<IssueDetail />} />
-      <Route path="routines" element={<Routines />} />
       <Route path="routines/:routineId" element={<RoutineDetail />} />
       <Route path="calendar" element={<Calendar />} />
       <Route path="execution-workspaces/:workspaceId" element={<ExecutionWorkspaceDetail />} />
       <Route path="execution-workspaces/:workspaceId/configuration" element={<ExecutionWorkspaceDetail />} />
       <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<ExecutionWorkspaceDetail />} />
       <Route path="execution-workspaces/:workspaceId/issues" element={<ExecutionWorkspaceDetail />} />
-      <Route path="goals" element={<Goals />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
       <Route path="memories" element={<Memories />} />
-      <Route path="work-queues" element={<WorkQueues />} />
       <Route path="approvals" element={<Navigate to="/approvals/pending" replace />} />
       <Route path="approvals/pending" element={<Approvals />} />
       <Route path="approvals/all" element={<Approvals />} />
@@ -171,6 +231,7 @@ function boardRoutes() {
       <Route path="inbox/new" element={<Navigate to="/inbox/mine" replace />} />
       <Route path="u/:userSlug" element={<UserProfile />} />
       <Route path="design-guide" element={<DesignGuide />} />
+      <Route path="everything" element={<Everything />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />
@@ -354,6 +415,7 @@ export function App() {
           <Route path="receipts" element={<UnprefixedBoardRedirect />} />
           <Route path="clippy" element={<UnprefixedBoardRedirect />} />
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
+          <Route path="work" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/:issueId" element={<UnprefixedBoardRedirect />} />
           <Route path="routines" element={<UnprefixedBoardRedirect />} />
@@ -363,6 +425,9 @@ export function App() {
           <Route path="skills/*" element={<UnprefixedBoardRedirect />} />
           <Route path="settings" element={<LegacySettingsRedirect />} />
           <Route path="settings/*" element={<LegacySettingsRedirect />} />
+          {/* The Team page. Its other tabs (/agents/all, /org,
+              /assistants) are listed with the agent routes below. */}
+          <Route path="team" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/new" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />

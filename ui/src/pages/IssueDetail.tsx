@@ -67,6 +67,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
+import { EmailHandoffPanel } from "../components/EmailHandoffPanel";
 import { PageSection } from "../components/PageSection";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
@@ -1096,7 +1097,7 @@ export function IssueDetail() {
     }
   }, [hasLiveRuns, locallyQueuedCommentRunIds.size]);
   const sourceBreadcrumb = useMemo(
-    () => readIssueDetailBreadcrumb(issueId, location.state, location.search) ?? { label: "Issues", href: "/issues" },
+    () => readIssueDetailBreadcrumb(issueId, location.state, location.search) ?? { label: "Tasks", href: "/issues" },
     [issueId, location.state, location.search],
   );
 
@@ -1117,15 +1118,20 @@ export function IssueDetail() {
     placeholderData: keepPreviousDataForSameQueryTail<LiveRunForIssue[]>(resolvedCompanyId ?? "pending"),
   });
 
+  // These four all populate pickers/permissions FOR this issue (assignee,
+  // project, tree-control access), so they need the ISSUE's own company —
+  // `resolvedCompanyId`, not the ambient page-level `selectedCompanyId`,
+  // which can briefly disagree during a company switch or if this issue was
+  // reached from a different company's context (P4 sweep, 2026-09-03).
   const { data: agents } = useQuery({
-    queryKey: queryKeys.agents.list(selectedCompanyId!),
-    queryFn: () => agentsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
+    queryKey: queryKeys.agents.list(resolvedCompanyId!),
+    queryFn: () => agentsApi.list(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
   });
   const { data: companyMembers } = useQuery({
-    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
-    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
+    queryKey: queryKeys.access.companyUserDirectory(resolvedCompanyId!),
+    queryFn: () => accessApi.listUserDirectory(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
   });
 
   const { data: session } = useQuery({
@@ -1134,9 +1140,9 @@ export function IssueDetail() {
   });
 
   const { data: projects } = useQuery({
-    queryKey: queryKeys.projects.list(selectedCompanyId!),
-    queryFn: () => projectsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
+    queryKey: queryKeys.projects.list(resolvedCompanyId!),
+    queryFn: () => projectsApi.list(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
   });
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
   const [signOffError, setSignOffError] = useState<string | null>(null);
@@ -1147,8 +1153,8 @@ export function IssueDetail() {
     retry: false,
   });
   const canManageTreeControl = Boolean(
-    selectedCompanyId
-    && boardAccess?.companyIds?.includes(selectedCompanyId),
+    resolvedCompanyId
+    && boardAccess?.companyIds?.includes(resolvedCompanyId),
   );
   const { data: instanceGeneralSettings } = useQuery({
     queryKey: queryKeys.instance.generalSettings,
@@ -1159,7 +1165,7 @@ export function IssueDetail() {
   const keyboardShortcutsEnabled = instanceGeneralSettings?.keyboardShortcuts === true;
   const { orderedProjects } = useProjectOrder({
     projects: projects ?? [],
-    companyId: selectedCompanyId,
+    companyId: resolvedCompanyId,
     userId: currentUserId,
   });
   const { slots: issuePluginDetailSlots } = usePluginSlots({
@@ -2040,8 +2046,11 @@ export function IssueDetail() {
 
   const uploadAttachment = useMutation({
     mutationFn: async (file: File) => {
-      if (!selectedCompanyId) throw new Error("No company selected");
-      return issuesApi.uploadAttachment(selectedCompanyId, issueId!, file);
+      // The issue's own company, not the ambient page-level selection (P4
+      // sweep, 2026-09-03) — same reasoning as agents/companyMembers/
+      // projects above.
+      if (!resolvedCompanyId) throw new Error("No company selected");
+      return issuesApi.uploadAttachment(resolvedCompanyId, issueId!, file);
     },
     onSuccess: () => {
       setAttachmentError(null);
@@ -3072,6 +3081,9 @@ export function IssueDetail() {
           </Button>
         </div>
       )}
+
+      {/* Renders itself away on any issue that did not come from an email. */}
+      <EmailHandoffPanel companyId={issue.companyId} issueId={issue.id} />
 
       <IssueDocumentsSection
         issue={issue}

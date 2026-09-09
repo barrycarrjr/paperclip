@@ -25,6 +25,12 @@ import {
   updateIssueSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
+  isEmailHandoffOriginKind,
+  parseEmailHandoffOriginId,
+  acknowledgeEmailDelegationSchema,
+  handBackEmailDelegationSchema,
+  resolveEmailDelegationSchema,
+  takeOverEmailDelegationSchema,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
@@ -82,6 +88,11 @@ import {
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
+import type {
+  IssueEmailDelegationRow,
+  IssueEmailDelegationService,
+} from "../services/issue-email-delegations.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -388,6 +399,12 @@ export function issueRoutes(
   storage: StorageService,
   opts: {
     pluginWorkerManager?: PluginWorkerManager;
+    /**
+     * Late-bound, matching how the approval routes get it: the dispatcher is
+     * built after routes are mounted, so it can only be read at request time.
+     * Resolving an email handoff needs it to send the reply.
+     */
+    getToolDispatcher?: () => PluginToolDispatcher | null;
   } = {},
 ) {
   const router = Router();
@@ -404,6 +421,67 @@ export function issueRoutes(
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
+  // Resolved defensively, matching what issueTreeControlFactory below already
+   // does: many route tests replace ../services/index.js with a partial mock,
+   // and constructing an unmocked service eagerly would make this whole router
+   // fail to build for tests that have nothing to do with email handoffs.
+   // Returns null when the service is unavailable; every caller treats that as
+   // "no handoff tracking", which is the same non-fatal path a write failure
+   // already takes.
+  const emailDelegationsSvc = Object.prototype.hasOwnProperty.call(
+    serviceIndex,
+    "issueEmailDelegationService",
+  )
+    ? serviceIndex.issueEmailDelegationService(db)
+    : null;
+
+  /**
+   * Start tracking the handover when an issue is created from an email.
+   *
+   * Server-side rather than in the client, because there are two independent
+   * handoff code paths in the UI and this way neither can forget. Everything
+   * the delegation row needs is already inside the origin key, so the client
+   * does not have to send the same facts twice and cannot send a set that
+   * disagrees with itself.
+   *
+   * Deliberately non-fatal (spec §4.1): the issue carries the actual work and
+   * creating it is reliable today, so a failure to write the tracking row must
+   * not turn a working handoff into an error. The gap is findable afterwards
+   * through `listIssuesMissingDelegation`, which is the point of allowing it.
+   */
+  async function recordEmailDelegationIfHandoff(args: {
+    companyId: string;
+    issue: { id: string; assigneeAgentId?: string | null };
+    origin?: { kind: string; id: string } | null;
+    actor: { actorType: string; actorId: string };
+  }): Promise<void> {
+    const { companyId, issue, origin, actor } = args;
+    if (!origin || !isEmailHandoffOriginKind(origin.kind)) return;
+
+    const source = parseEmailHandoffOriginId(origin.id);
+    if (!source) return;
+    if (!emailDelegationsSvc) return;
+
+    try {
+      await emailDelegationsSvc.create({
+        issueId: issue.id,
+        companyId,
+        pluginId: source.pluginId,
+        sourceKey: origin.id,
+        mailbox: source.mailbox,
+        folder: source.kind === "uid" ? source.folder : null,
+        messageId: source.kind === "msgid" ? source.messageId : null,
+        delegatedByUserId: actor.actorType === "user" ? actor.actorId : null,
+        delegatedToAgentId: issue.assigneeAgentId ?? null,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, issueId: issue.id, companyId },
+        "could not record the email delegation; the issue stands and the gap is findable",
+      );
+    }
+  }
+
   const routinesSvc = routineService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -1109,13 +1187,30 @@ export function issueRoutes(
   // Broadcast a directive straight from the HQ Directives page (the one-tap
   // path — same fan-out the `broadcast_directive` Clippy tool uses, but
   // callable without a chat turn). Board-only, HQ-only.
-  const broadcastDirectiveSchema = z.object({
+  const previewDirectiveSchema = z.object({
     intent: z.string().trim().min(1).max(4000),
     title: z.string().trim().max(200).optional(),
-    companyIds: z.array(z.string()).max(500).optional(),
+    // Omit entirely to target every accessible company; an explicit but
+    // empty array is rejected rather than silently treated the same as
+    // omitted (P4 audit, 2026-09-03 — see portfolio-directive.ts).
+    companyIds: z.array(z.string()).min(1).max(500).optional(),
     includePortfolioRoot: z.boolean().optional(),
   });
-  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+  // The send carries the id of the preview the operator read. The service
+  // refuses anything else, so this page cannot start work in every company
+  // from a press whose effect was never shown.
+  const broadcastDirectiveSchema = previewDirectiveSchema.extend({
+    previewId: z.string().trim().min(1).max(200),
+  });
+
+  /**
+   * The shared gate for both directive endpoints. Answers false, having
+   * already sent the refusal, when the caller may not be here.
+   */
+  async function allowDirectiveRequest(
+    req: Request,
+    res: Response,
+  ): Promise<boolean> {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId, "read");
     assertBoard(req);
@@ -1124,7 +1219,7 @@ export function issueRoutes(
     const hqCompany = await companySvc.getById(companyId);
     if (!hqCompany?.isPortfolioRoot) {
       res.status(403).json({ error: "This endpoint is only available on the portfolio root company" });
-      return;
+      return false;
     }
     const isPortfolioRootAccess =
       req.actor.source === "local_implicit" ||
@@ -1132,8 +1227,42 @@ export function issueRoutes(
       req.actor.isPortfolioRootUserAdmin === true;
     if (!isPortfolioRootAccess) {
       res.status(403).json({ error: "Portfolio root access required" });
+      return false;
+    }
+    return true;
+  }
+
+  function directiveActor(req: Request) {
+    return {
+      userId: req.actor.userId ?? "board",
+      isInstanceAdmin: req.actor.isInstanceAdmin === true,
+      companyIds: req.actor.companyIds ?? [],
+    };
+  }
+
+  // Ask what a broadcast would do. Writes nothing: no issue, no wake-up, no
+  // setting touched, so asking and then walking away leaves no trace.
+  router.post("/companies/:companyId/portfolio-directives/preview", async (req, res) => {
+    if (!(await allowDirectiveRequest(req, res))) return;
+
+    const parsed = previewDirectiveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
       return;
     }
+
+    const preview = await portfolioDirectiveService(db).preview({
+      actor: directiveActor(req),
+      intent: parsed.data.intent,
+      title: parsed.data.title,
+      companyIds: parsed.data.companyIds,
+      includePortfolioRoot: parsed.data.includePortfolioRoot,
+    });
+    res.json(preview);
+  });
+
+  router.post("/companies/:companyId/portfolio-directives", async (req, res) => {
+    if (!(await allowDirectiveRequest(req, res))) return;
 
     const parsed = broadcastDirectiveSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1142,15 +1271,12 @@ export function issueRoutes(
     }
 
     const result = await portfolioDirectiveService(db).broadcast({
-      actor: {
-        userId: req.actor.userId ?? "board",
-        isInstanceAdmin: req.actor.isInstanceAdmin === true,
-        companyIds: req.actor.companyIds ?? [],
-      },
+      actor: directiveActor(req),
       intent: parsed.data.intent,
       title: parsed.data.title,
       companyIds: parsed.data.companyIds,
       includePortfolioRoot: parsed.data.includePortfolioRoot,
+      previewId: parsed.data.previewId,
     });
     res.status(201).json(result);
   });
@@ -1970,12 +2096,20 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    // `origin` is the client-declarable subset (email handoff only — see
+    // clientDeclarableIssueOriginSchema). Map it onto the real columns and
+    // drop the wrapper: issueService.create spreads whatever is left straight
+    // into the insert, so an unmapped `origin` key would reach Drizzle as an
+    // unknown column.
+    const { origin, ...createBody } = req.body;
     const issue = await svc.create(companyId, {
-      ...req.body,
+      ...createBody,
+      ...(origin ? { originKind: origin.kind, originId: origin.id } : {}),
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
     });
+    await recordEmailDelegationIfHandoff({ companyId, issue, origin, actor });
     await issueReferencesSvc.syncIssue(issue.id);
     const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const referenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
@@ -3284,7 +3418,12 @@ export function issueRoutes(
             status: continuationIssue.status,
             assigneeAgentId: continuationIssue.assigneeAgentId ?? null,
             assigneeUserId: continuationIssue.assigneeUserId ?? null,
-            source: "request_confirmation_accept",
+            // Only two kinds hand the host issue over on accept: a request
+            // confirmation returning it to its agent, and a Start work plan
+            // handing the container to the company's lead.
+            source: interaction.kind === "request_confirmation"
+              ? "request_confirmation_accept"
+              : "start_work_accept",
             interactionId: interaction.id,
             _previous: {
               status: issue.status,
@@ -3783,6 +3922,370 @@ export function issueRoutes(
     const attachments = await svc.listAttachments(issueId);
     res.json(attachments.map(withContentPath));
   });
+
+  // ---------------------------------------------------------------------
+  // Email handoffs (P5a)
+  //
+  // One set of routes for both callers: a person clicking in the interface
+  // and an agent using its own token reach the same handlers, so the rules
+  // about who may act, and what a state may become, are written once.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Resolve the caller's access to a delegation on this issue.
+   *
+   * Every check the issue itself gets, plus one more: the delegation must
+   * actually belong to the issue in the URL. Without that, a delegation id
+   * from another issue in the same company would be accepted, and the
+   * company check alone would not notice.
+   */
+  async function loadDelegationForIssue(
+    req: Request,
+    res: Response,
+  ): Promise<{
+    companyId: string;
+    issue: NonNullable<Awaited<ReturnType<typeof svc.getById>>>;
+    delegation: IssueEmailDelegationRow;
+    svc: IssueEmailDelegationService;
+  } | null> {
+    const companyId = req.params.companyId as string;
+    const issueId = req.params.issueId as string;
+    const delegationId = req.params.delegationId as string;
+    assertCompanyAccess(req, companyId);
+    if (!emailDelegationsSvc) {
+      res.status(503).json({ error: "Email handoff tracking is unavailable." });
+      return null;
+    }
+
+    const issue = await svc.getById(issueId);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return null;
+    }
+    if (issue.companyId !== companyId) {
+      res.status(422).json({ error: "Issue does not belong to company" });
+      return null;
+    }
+    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return null;
+
+    const delegation = await emailDelegationsSvc.findById(companyId, delegationId);
+    if (!delegation || delegation.issueId !== issueId) {
+      res.status(404).json({ error: "Handoff not found on this issue" });
+      return null;
+    }
+    // Handed back so callers get a service the compiler knows is present,
+    // rather than re-checking a nullable one this function already proved.
+    return { companyId, issue, delegation, svc: emailDelegationsSvc };
+  }
+
+  /**
+   * Everything an agent is holding in this company right now.
+   *
+   * The mail list has no way of knowing which of its messages are already
+   * with an agent — it reads a mailbox, not this app's records — so it asks
+   * for the whole open set once and matches messages against it locally.
+   * Read access only: seeing that a message is with an agent tells you
+   * nothing you could not already see on the work item.
+   */
+  router.get("/companies/:companyId/email-delegations", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    if (!emailDelegationsSvc) {
+      // An empty list, not an error. A missing tracking service means nothing
+      // is being held as far as anyone can tell, and the mail list should
+      // still work.
+      res.json([]);
+      return;
+    }
+    res.json(await emailDelegationsSvc.listOpenForCompany({ companyId }));
+  });
+
+  router.get("/companies/:companyId/issues/:issueId/email-delegations", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const issueId = req.params.issueId as string;
+    assertCompanyAccess(req, companyId, "read");
+
+    const issue = await svc.getById(issueId);
+    if (!issue || issue.companyId !== companyId) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    res.json(emailDelegationsSvc ? await emailDelegationsSvc.listForIssue(companyId, issueId) : []);
+  });
+
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/acknowledge",
+    validate(acknowledgeEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await loaded.svc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation.id,
+        to: "acknowledged",
+        expectedVersion: req.body.expectedVersion,
+      });
+      await logDelegationActivity(req, actor, loaded.companyId, updated.id, "acknowledged", null);
+      res.json(updated);
+    },
+  );
+
+  /**
+   * Finish the handover, and reply to whoever sent the email.
+   *
+   * Whether that reply waits for approval is the operator's setting, not this
+   * route's choice — see emailHandoffReplyNeedsApproval. The response carries
+   * what actually happened to the reply so the caller can say so, rather than
+   * assuming it went.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/resolve",
+    validate(resolveEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+
+      const dispatcher = opts.getToolDispatcher?.() ?? null;
+      if (!dispatcher) {
+        // Refuse rather than resolve-without-replying: the caller wrote a
+        // reply expecting it to be sent, and silently dropping it would
+        // leave a customer waiting on a message that is never coming.
+        if (req.body.replyBody?.trim()) {
+          res.status(503).json({
+            error: "Plugin tools are not ready yet, so the reply cannot be sent. Try again shortly.",
+          });
+          return;
+        }
+      }
+
+      const actor = getActorInfo(req);
+      const resolution = serviceIndex.emailHandoffResolutionService({
+        db,
+        dispatcher: dispatcher!,
+      });
+      const { delegation, reply } = await resolution.resolve({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation.id,
+        replyBody: req.body.replyBody,
+        resolutionNote: req.body.resolutionNote,
+        expectedVersion: req.body.expectedVersion,
+        actor: { agentId: actor.agentId, runId: actor.runId, userId: actor.actorType === "user" ? actor.actorId : null },
+      });
+
+      await logDelegationActivity(req, actor, loaded.companyId, delegation.id, "resolved", reply.replyState);
+      res.json({ delegation, reply });
+    },
+  );
+
+  /**
+   * Give the work back instead of finishing it. Sends nothing.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/hand-back",
+    validate(handBackEmailDelegationSchema),
+    async (req, res) => {
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await loaded.svc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation.id,
+        to: "handed_back",
+        handedBackReason: req.body.reason,
+        expectedVersion: req.body.expectedVersion,
+      });
+      await logDelegationActivity(req, actor, loaded.companyId, updated.id, "handed_back", null);
+      res.json(updated);
+    },
+  );
+
+  /**
+   * A person takes the email back from the agent.
+   *
+   * The mirror image of hand back, and deliberately a separate route: hand
+   * back is the agent saying it cannot continue, this is a person deciding
+   * they want it themselves. Only a signed-in person may do it, so an agent
+   * cannot "take over" on someone's behalf.
+   *
+   * Three things happen, in this order and for these reasons:
+   *
+   * 1. The handover is closed first, because that is the fact the person
+   *    asked for. Doing it last would mean a failure in the tidying-up
+   *    afterwards left the email still showing as held.
+   * 2. The agent's run on that work item is stopped. If that fails, the
+   *    take-over still stands and the failure is REPORTED in the response
+   *    rather than swallowed, because a person who thinks an agent has
+   *    stopped when it has not is worse off than one who is told.
+   * 3. The work item keeps everything it has, but the agent is taken off it
+   *    (and a work item that was being worked on goes back to "to do", since
+   *    nobody is working on it now). Without that, the next thing to wake the
+   *    agent would put it straight back on the job the person just took.
+   *
+   * Nothing is sent to anyone. Replying is what "finish" does.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/email-delegations/:delegationId/take-over",
+    validate(takeOverEmailDelegationSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const loaded = await loadDelegationForIssue(req, res);
+      if (!loaded) return;
+      const actor = getActorInfo(req);
+
+      const updated = await loaded.svc.transition({
+        companyId: loaded.companyId,
+        delegationId: loaded.delegation.id,
+        to: "handed_back",
+        handedBackReason: req.body.reason,
+        expectedVersion: req.body.expectedVersion,
+      });
+
+      const run = await stopRunForTakeOver(loaded.issue, loaded.delegation.id);
+      const workItem = await releaseWorkItemForTakeOver(loaded.issue, actor, req.body.reason);
+
+      await logDelegationActivity(
+        req,
+        actor,
+        loaded.companyId,
+        updated.id,
+        "handed_back",
+        null,
+        { takenOverBy: actor.actorId, runState: run.state, workItemState: workItem.state },
+      );
+      res.json({ delegation: updated, run, workItem });
+    },
+  );
+
+  type TakeOverRunOutcome =
+    | { state: "none" }
+    | { state: "stopped"; runId: string }
+    | { state: "failed"; error: string; runId: string | null };
+
+  async function stopRunForTakeOver(
+    issue: { id: string; assigneeAgentId: string | null; executionRunId?: string | null },
+    delegationId: string,
+  ): Promise<TakeOverRunOutcome> {
+    let runId: string | null = null;
+    try {
+      const active = await resolveActiveIssueRun(issue);
+      if (!active) return { state: "none" };
+      runId = active.id;
+      const cancelled = await heartbeat.cancelRun(active.id);
+      if (cancelled?.status === "cancelled") return { state: "stopped", runId: cancelled.id };
+      // It was running a moment ago and is not cancelled now. Say so plainly
+      // rather than reporting a stop that did not happen.
+      return {
+        state: "failed",
+        error: `The agent's run could not be stopped (it is ${cancelled?.status ?? "in an unknown state"}).`,
+        runId,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, delegationId, issueId: issue.id },
+        "could not stop the agent's run during an email take-over",
+      );
+      return { state: "failed", error: message, runId };
+    }
+  }
+
+  type TakeOverWorkItemOutcome = {
+    state: "updated" | "unchanged" | "failed";
+    unassignedAgent: boolean;
+    statusChangedTo: string | null;
+    error: string | null;
+  };
+
+  async function releaseWorkItemForTakeOver(
+    issue: { id: string; companyId: string; assigneeAgentId: string | null; status: string },
+    actor: ReturnType<typeof getActorInfo>,
+    reason: string,
+  ): Promise<TakeOverWorkItemOutcome> {
+    const unassignAgent = Boolean(issue.assigneeAgentId);
+    const nextStatus = issue.status === "in_progress" ? "todo" : null;
+    if (!unassignAgent && !nextStatus) {
+      await noteTakeOverOnWorkItem(issue.id, actor, reason);
+      return { state: "unchanged", unassignedAgent: false, statusChangedTo: null, error: null };
+    }
+
+    try {
+      await svc.update(issue.id, {
+        ...(unassignAgent ? { assigneeAgentId: null } : {}),
+        ...(nextStatus ? { status: nextStatus } : {}),
+        actorUserId: actor.actorType === "user" ? actor.actorId : null,
+      });
+      await noteTakeOverOnWorkItem(issue.id, actor, reason);
+      return {
+        state: "updated",
+        unassignedAgent: unassignAgent,
+        statusChangedTo: nextStatus,
+        error: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err, issueId: issue.id }, "could not release the work item during a take-over");
+      return { state: "failed", unassignedAgent: false, statusChangedTo: null, error: message };
+    }
+  }
+
+  /**
+   * Leave a plain note on the work item saying who took the email back.
+   *
+   * The handover row records that it ended and why, but not that a person
+   * ended it rather than the agent — telling those apart in the record needs
+   * a column the table does not have. This comment is where a person can
+   * read it, and it fails quietly because a missing note must not undo a
+   * take-over that already happened.
+   */
+  async function noteTakeOverOnWorkItem(
+    issueId: string,
+    actor: ReturnType<typeof getActorInfo>,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await svc.addComment(
+        issueId,
+        `Took this email back from the agent.\n\nReason: ${reason}`,
+        {
+          ...(actor.actorType === "user" ? { userId: actor.actorId } : {}),
+          ...(actor.agentId ? { agentId: actor.agentId } : {}),
+        },
+      );
+    } catch (err) {
+      logger.warn({ err, issueId }, "could not add the take-over note to the work item");
+    }
+  }
+
+  async function logDelegationActivity(
+    _req: Request,
+    actor: ReturnType<typeof getActorInfo>,
+    companyId: string,
+    delegationId: string,
+    state: string,
+    replyState: string | null,
+    extraDetails: Record<string, unknown> = {},
+  ): Promise<void> {
+    try {
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "email_delegation.updated",
+        entityType: "issue",
+        entityId: delegationId,
+        details: { state, ...(replyState ? { replyState } : {}), ...extraDetails },
+      });
+    } catch (err) {
+      // A missing audit line must not undo a state change that already
+      // happened, or a reply that has already gone out.
+      logger.warn({ err, delegationId }, "could not log the delegation change (non-fatal)");
+    }
+  }
 
   router.post("/companies/:companyId/issues/:issueId/attachments", async (req, res) => {
     const companyId = req.params.companyId as string;

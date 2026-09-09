@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { useDialogCompanyId } from "../hooks/useDialogCompany";
 import { accessApi } from "../api/access";
 import { projectsApi } from "../api/projects";
 import { agentsApi } from "../api/agents";
@@ -49,7 +50,14 @@ const projectStatuses = [
 
 export function NewProjectDialog() {
   const { newProjectOpen, closeNewProject } = useDialog();
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { companies, selectedCompanyId } = useCompany();
+  // The company this project is being written in, held still while the dialog
+  // is open so changing company does not file it somewhere else. See
+  // hooks/useDialogCompany.ts.
+  const companyId = useDialogCompanyId(newProjectOpen);
+  const dialogCompany = companies.find((c) => c.id === companyId) ?? null;
+  const movedCompanyWhileOpen =
+    newProjectOpen && !!companyId && !!selectedCompanyId && companyId !== selectedCompanyId;
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -66,21 +74,21 @@ export function NewProjectDialog() {
   const descriptionEditorRef = useRef<MarkdownEditorRef>(null);
 
   const { data: goals } = useQuery({
-    queryKey: queryKeys.goals.list(selectedCompanyId!),
-    queryFn: () => goalsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId && newProjectOpen,
+    queryKey: queryKeys.goals.list(companyId!),
+    queryFn: () => goalsApi.list(companyId!),
+    enabled: !!companyId && newProjectOpen,
   });
 
   const { data: agents } = useQuery({
-    queryKey: queryKeys.agents.list(selectedCompanyId!),
-    queryFn: () => agentsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId && newProjectOpen,
+    queryKey: queryKeys.agents.list(companyId!),
+    queryFn: () => agentsApi.list(companyId!),
+    enabled: !!companyId && newProjectOpen,
   });
 
   const { data: companyMembers } = useQuery({
-    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
-    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
-    enabled: !!selectedCompanyId && newProjectOpen,
+    queryKey: queryKeys.access.companyUserDirectory(companyId!),
+    queryFn: () => accessApi.listUserDirectory(companyId!),
+    enabled: !!companyId && newProjectOpen,
   });
 
   const mentionOptions = useMemo<MentionOption[]>(() => {
@@ -92,13 +100,13 @@ export function NewProjectDialog() {
 
   const createProject = useMutation({
     mutationFn: (data: Record<string, unknown>) =>
-      projectsApi.create(selectedCompanyId!, data),
+      projectsApi.create(companyId!, data),
   });
 
   const uploadDescriptionImage = useMutation({
     mutationFn: async (file: File) => {
-      if (!selectedCompanyId) throw new Error("No company selected");
-      return assetsApi.uploadImage(selectedCompanyId, file, "projects/drafts");
+      if (!companyId) throw new Error("No company selected");
+      return assetsApi.uploadImage(companyId, file, "projects/drafts");
     },
   });
 
@@ -145,7 +153,7 @@ export function NewProjectDialog() {
   };
 
   async function handleSubmit() {
-    if (!selectedCompanyId || !name.trim()) return;
+    if (!companyId || !name.trim()) return;
     const localPath = workspaceLocalPath.trim();
     const repoUrl = workspaceRepoUrl.trim();
 
@@ -181,7 +189,7 @@ export function NewProjectDialog() {
         await projectsApi.createWorkspace(created.id, workspacePayload);
       }
 
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(selectedCompanyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(created.id) });
       reset();
       closeNewProject();
@@ -203,6 +211,10 @@ export function NewProjectDialog() {
   return (
     <Dialog
       open={newProjectOpen}
+      // Not modal: this dialog is built to stay open and keep the company you
+      // started it in (see hooks/useDialogCompany.ts) while you switch
+      // company on the rail behind it, so the rail has to stay clickable.
+      modal={false}
       onOpenChange={(open) => {
         if (!open) {
           reset();
@@ -214,13 +226,19 @@ export function NewProjectDialog() {
         showCloseButton={false}
         className={cn("p-0 gap-0", expanded ? "sm:max-w-2xl" : "sm:max-w-lg")}
         onKeyDown={handleKeyDown}
+        // Radix still treats a click on the rail as an "outside" interaction
+        // and closes the dialog for it by default, `modal={false}` only stops
+        // it from being blocked. Without this the fix above lets the click
+        // reach the rail and then the dialog closes anyway, losing whatever
+        // was typed. Escape and the × button are untouched.
+        onPointerDownOutside={(event) => event.preventDefault()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            {selectedCompany && (
+            {dialogCompany && (
               <span className="bg-muted px-1.5 py-0.5 rounded text-xs font-medium">
-                {selectedCompany.name.slice(0, 3).toUpperCase()}
+                {dialogCompany.name.slice(0, 3).toUpperCase()}
               </span>
             )}
             <span className="text-muted-foreground/60">&rsaquo;</span>
@@ -245,6 +263,14 @@ export function NewProjectDialog() {
             </Button>
           </div>
         </div>
+
+        {/* You changed company with this form open. It keeps the company you
+            started it in rather than quietly moving to the new one. */}
+        {movedCompanyWhileOpen && dialogCompany && (
+          <div className="px-4 pt-3 text-xs text-muted-foreground">
+            This project will be saved in {dialogCompany.name}, where you started it.
+          </div>
+        )}
 
         {/* Name */}
         <div className="px-4 pt-4 pb-2 shrink-0">

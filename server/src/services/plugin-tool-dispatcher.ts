@@ -110,6 +110,18 @@ export interface ExecuteToolOptions {
    * looping on every approve click.
    */
   bypassDraftGate?: boolean;
+  /**
+   * When true, the tool is drafted for approval even if the instance-wide
+   * outbound hold is off (and even if every recipient looks like the
+   * operator). The mirror image of `bypassDraftGate`, for a caller whose own
+   * policy is stricter than the instance default — today that is a reply
+   * closing an email handoff, where the operator can ask for these
+   * specifically to always wait. See `emailHandoffReplyNeedsApproval`.
+   *
+   * Ignored when `bypassDraftGate` is also set: an already-approved draft
+   * being replayed must never be re-queued, or approving it would loop.
+   */
+  forceDraftGate?: boolean;
 }
 
 /**
@@ -511,7 +523,9 @@ export function createPluginToolDispatcher(
       // the approve route's hook into `executeDraftedApproval()`, which sets
       // `bypassDraftGate` so the gate does not re-intercept the re-dispatch.
       if (draftGate && !options?.bypassDraftGate) {
-        const gateResult = await draftGate.intercept(namespacedName, parameters, runContext);
+        const gateResult = await draftGate.intercept(namespacedName, parameters, runContext, {
+          force: options?.forceDraftGate === true,
+        });
         if (gateResult.intercepted && gateResult.result) {
           // Resolve the pluginId so the synthesized result still attributes
           // correctly in audit logs. Read from the registry rather than

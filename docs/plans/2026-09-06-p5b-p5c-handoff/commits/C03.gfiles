@@ -1,0 +1,4 @@
+ui/src/components/IssueThreadInteractionCard.tsx
+ui/src/components/IssueThreadInteractionCard.test.tsx
+server/src/services/starter-catalog.ts
+server/src/__tests__/starter-catalog.test.ts

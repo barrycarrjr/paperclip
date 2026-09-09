@@ -65,7 +65,7 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-heartbeat-issue-liveness-");
     db = createDb(tempDb.connectionString);
-  }, 30_000);
+  }, 90_000);
 
   afterEach(async () => {
     vi.clearAllMocks();

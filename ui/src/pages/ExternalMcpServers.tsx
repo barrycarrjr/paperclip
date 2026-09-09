@@ -41,7 +41,7 @@ import { externalMcpServersApi } from "@/api/external-mcp-servers";
 import { companiesApi } from "@/api/companies";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useToastActions } from "@/context/ToastContext";
-import { useCompany } from "@/context/CompanyContext";
+import { useActiveCompanyId } from "@/hooks/useRouteCompany";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -165,7 +165,9 @@ export function ExternalMcpServers() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, so a company switch cannot leave this page querying the
+  // company you just left for a render. See useRouteCompany.ts.
+  const selectedCompanyId = useActiveCompanyId();
 
   useEffect(() => {
     setBreadcrumbs([

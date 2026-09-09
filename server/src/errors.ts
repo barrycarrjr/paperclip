@@ -32,3 +32,13 @@ export function conflict(message: string, details?: unknown) {
 export function unprocessable(message: string, details?: unknown) {
   return new HttpError(422, message, details);
 }
+
+/**
+ * The instance cannot do this right now for want of something the operator
+ * has to set up (an AI model, most often). Kept distinct from 422 so a
+ * client can tell "set something up" apart from "your input could not be
+ * used".
+ */
+export function serviceUnavailable(message: string, details?: unknown) {
+  return new HttpError(503, message, details);
+}

@@ -1,0 +1,10 @@
+server/src/app.ts
+server/src/errors.ts
+server/src/services/issue-thread-interactions.ts
+server/src/services/start-work.ts
+server/src/routes/start-work.ts
+server/src/__tests__/start-work-service.test.ts
+server/src/__tests__/start-work-routes.test.ts
+server/src/routes/issues.ts
+server/src/__tests__/issue-thread-interactions-service.test.ts
+server/src/__tests__/issue-thread-interaction-routes.test.ts

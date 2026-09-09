@@ -179,6 +179,29 @@ describe("summarizeBulkRun", () => {
     expect(result.message).toBe("Closed 1 conversation.");
   });
 
+  it("can be told what the items are called and who slowed it down", () => {
+    const words = { noun: "message", plural: "messages", slowedBy: "the mail server" };
+    expect(
+      summarizeBulkRun(
+        { succeeded: [1, 2], failed: [], skipped: [], stoppedForRateLimit: false },
+        "Moved",
+        words,
+      ).message,
+    ).toBe("Moved 2 messages.");
+    expect(
+      summarizeBulkRun(
+        {
+          succeeded: [1],
+          failed: [{ item: 2, error: new Error("429") }],
+          skipped: [],
+          stoppedForRateLimit: true,
+        },
+        "Moved",
+        words,
+      ).message,
+    ).toContain("the mail server asked us to slow down");
+  });
+
   it("tells you how many landed before a rate limit stopped it", () => {
     const result = summarizeBulkRun(
       {

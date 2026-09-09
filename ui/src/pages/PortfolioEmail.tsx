@@ -28,8 +28,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { useNavigate } from "@/lib/router";
+import { Link, useNavigate } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
+import { useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { pluginsApi } from "../api/plugins";
 import {
@@ -127,7 +128,7 @@ interface PortfolioSearchRow {
 }
 
 export function PortfolioEmail() {
-  const { selectedCompanyId, selectedCompany, companies, setSelectedCompanyId } = useCompany();
+  const { selectedCompanyId, companies, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -136,7 +137,13 @@ export function PortfolioEmail() {
     setBreadcrumbs([{ label: "Portfolio Email" }]);
   }, [setBreadcrumbs]);
 
-  const isPortfolioRoot = selectedCompany?.isPortfolioRoot ?? false;
+  // URL-derived, not useCompany()'s selection state: that selection is
+  // synced from the route by an effect in Layout that runs one render late,
+  // so deriving the HQ-only gate below from it could render this page's full
+  // portfolio-wide content for one frame right after navigating away from
+  // HQ. See useRouteCompany.ts and Everything.tsx, which had the identical
+  // bug (2026-09-03).
+  const isPortfolioRoot = useIsActiveCompanyPortfolioRoot();
 
   const { data: plugins, isLoading: pluginsLoading } = useQuery({
     queryKey: queryKeys.plugins.all,
@@ -413,10 +420,18 @@ export function PortfolioEmail() {
   // page used to pass the pop-out no `onToast` at all, so every action here was
   // silent: a delete that the mailbox refused, or a forward the server would
   // not send, looked exactly like a click that never registered.
-  const [actionToast, setActionToast] = useState<string | null>(null);
-  function showActionToast(text: string) {
-    setActionToast(text);
-    setTimeout(() => setActionToast(null), 4000);
+  //
+  // `issueId`/`failed` (P2 audit, 2026-09-03): this used to drop both — a
+  // hand-off's resulting issue had no link, and a failure rendered identically
+  // to a success (plain text, no distinct styling), reproducing the same
+  // invisible-failure problem `useEmailMessageActions.ts`'s own `onToast`
+  // exists to avoid.
+  const [actionToast, setActionToast] = useState<
+    { text: string; issueId?: string; failed?: boolean } | null
+  >(null);
+  function showActionToast(text: string, issueId?: string, failed?: boolean) {
+    setActionToast({ text, issueId, failed });
+    setTimeout(() => setActionToast(null), failed ? 6000 : 4000);
   }
 
   const [showAll, setShowAll] = useState(() => {
@@ -717,16 +732,31 @@ export function PortfolioEmail() {
             void queryClient.invalidateQueries({ queryKey: ["portfolio-email"] });
             void queryClient.invalidateQueries({ queryKey: ["email"] });
           },
-          onToast: (text) => showActionToast(text),
+          onToast: (text, issueId, failed) => showActionToast(text, issueId, failed),
         }}
       />
 
       {actionToast && (
         <div
-          role="status"
-          className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded bg-foreground px-4 py-2 text-sm text-background shadow-lg"
+          role={actionToast.failed ? "alert" : "status"}
+          className={cn(
+            "fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            actionToast.failed
+              ? "bg-destructive text-destructive-foreground"
+              : "bg-foreground text-background",
+          )}
         >
-          {actionToast}
+          <span>
+            {actionToast.text}
+            {actionToast.issueId && (
+              <>
+                {" — "}
+                <Link to={`/issues/${actionToast.issueId}`} className="underline underline-offset-2">
+                  View issue
+                </Link>
+              </>
+            )}
+          </span>
         </div>
       )}
     </div>
@@ -884,8 +914,12 @@ function MailboxPanel({
       invalidateRules();
       invalidateMessageLists();
     },
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
+      // P2 audit, 2026-09-03: this used to fail silently while the sibling
+      // mutations below (keepAlways/autoTriage) already toasted on error —
+      // an inconsistency that read as "mark read sometimes just doesn't work".
+      pushToast({ title: "Mark read failed", body: (err as Error).message, tone: "error" });
     },
   });
 
@@ -895,9 +929,10 @@ function MailboxPanel({
       await emailApi.markUnread(key, msg.uid, pollFolder);
     },
     onSuccess: () => invalidateMessageLists(),
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      pushToast({ title: "Mark unread failed", body: (err as Error).message, tone: "error" });
     },
   });
 
@@ -935,9 +970,10 @@ function MailboxPanel({
       await emailApi.deleteMessage(key, msg.uid, pollFolder);
     },
     onSuccess: () => invalidateMessageLists(),
-    onError: (_err, msg) => {
+    onError: (err, msg) => {
       clearOverride(msg.uid);
       invalidateMessageLists();
+      pushToast({ title: "Delete failed", body: (err as Error).message, tone: "error" });
     },
   });
 

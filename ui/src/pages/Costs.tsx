@@ -25,7 +25,7 @@ import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
 import { queryKeys } from "../lib/queryKeys";
 import { billingTypeDisplayName, cn, formatCents, formatTokens, providerDisplayName } from "../lib/utils";
@@ -147,7 +147,10 @@ function FinanceSummaryCard({
 }
 
 export function Costs() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03):
+  // this page WRITES (budget policy, incident resolution) — see
+  // Calendar.tsx's/NewAgent.tsx's identical fix.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
@@ -954,7 +957,7 @@ export function Costs() {
           ) : (
             <>
               <Tabs value={effectiveProvider} onValueChange={setActiveProvider}>
-                <PageTabBar items={providerTabItems} value={effectiveProvider} />
+                <PageTabBar label="Provider" items={providerTabItems} value={effectiveProvider} />
 
                 <TabsContent value="all" className="mt-4">
                   {providers.length === 0 ? (
@@ -1009,7 +1012,7 @@ export function Costs() {
           ) : (
             <>
               <Tabs value={effectiveBiller} onValueChange={setActiveBiller}>
-                <PageTabBar items={billerTabItems} value={effectiveBiller} />
+                <PageTabBar label="Who is billed" items={billerTabItems} value={effectiveBiller} />
 
                 <TabsContent value="all" className="mt-4">
                   {billers.length === 0 ? (

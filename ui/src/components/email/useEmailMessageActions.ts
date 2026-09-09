@@ -6,6 +6,7 @@ import {
   type MailHeader,
   type ParsedEmailMessage,
 } from "../../api/emailTools";
+import { buildEmailHandoffOriginId, EMAIL_HANDOFF_ORIGIN_KIND } from "@paperclipai/shared";
 import { visibleEmailAttachments } from "../../lib/attachments";
 import { actionFailureText } from "./actionFailure";
 import { issuesApi } from "../../api/issues";
@@ -30,8 +31,17 @@ export interface EmailMessageActionHooks {
   onRevert?: (uid: number) => void;
   /** Called after a successful mutation so the caller can refetch its lists. */
   onSettled?: () => void;
-  /** Short confirmation for the operator. `issueId` is set by a hand-off. */
-  onToast?: (text: string, issueId?: string) => void;
+  /**
+   * Short confirmation for the operator. `issueId` is set by a hand-off —
+   * despite the name, it's the issue's human-readable identifier when one
+   * exists (e.g. "IND-42"), falling back to the raw id otherwise, ready to
+   * drop into an `/issues/<issueId>` link. `failed` is true when this is
+   * reporting a failure through the same channel a success would have used
+   * (see `reportFailure` below) — callers that render this as a plain
+   * neutral toast regardless of `failed` reproduce the exact silent-failure
+   * problem this hook exists to avoid.
+   */
+  onToast?: (text: string, issueId?: string, failed?: boolean) => void;
   /**
    * A sender the operator has now acted on deliberately. The Email page
    * promotes these to keep-always so future mail is not auto-triaged; other
@@ -50,7 +60,7 @@ export interface EmailMessageActionHooks {
  * recipient and the note still in it, exactly as it looked before the click.
  */
 function reportFailure(hooks: EmailMessageActionHooks, action: string, err: unknown): void {
-  hooks.onToast?.(actionFailureText(action, err));
+  hooks.onToast?.(actionFailureText(action, err), undefined, true);
 }
 
 /**
@@ -260,14 +270,28 @@ export function useEmailMessageActions(
         `**From:** ${msg.from}\n` +
         `**Subject:** ${msg.subject}\n` +
         `**Date:** ${msg.date}`;
+      // Durable link back to the source message (P5a). Without this the only
+      // trace of which email an issue came from is the body text pasted into
+      // the description above.
+      const originId = buildEmailHandoffOriginId({
+        pluginId: target.pluginId,
+        mailbox: target.mailbox,
+        messageId: msg.messageId,
+        folder: target.folder,
+        uid: msg.uid,
+      });
       const issue = await issuesApi.create(target.companyId, {
         title: `Email from ${msg.from}: ${msg.subject}`.slice(0, 200),
         description,
         assigneeAgentId: agentId,
+        ...(originId ? { origin: { kind: EMAIL_HANDOFF_ORIGIN_KIND, id: originId } } : {}),
       });
       // Creating the issue only assigns it. Without a wake the agent will not
       // look at it until its next scheduled tick, or never if it is not on a
       // routine, which reads to the operator as the hand-off silently failing.
+      // The issue itself still exists and is assigned either way, so this is
+      // reported as a partial success (via wakeFailed below), not an error.
+      let wakeFailed = false;
       try {
         await agentsApi.wakeup(
           agentId,
@@ -281,7 +305,7 @@ export function useEmailMessageActions(
           target.companyId,
         );
       } catch (err) {
-        // The issue exists and is assigned, so the hand-off stands.
+        wakeFailed = true;
         console.error("Failed to wake agent after handoff", err);
       }
       try {
@@ -290,12 +314,20 @@ export function useEmailMessageActions(
         // ignore
       }
       if (header) await hooks.onSenderEngaged?.(header);
-      return { issueId: issue.id, uid: msg.uid };
+      // Prefer the human-readable identifier (e.g. "IND-42") over the raw
+      // UUID for the link the operator sees — it's what every other issue
+      // link in the app uses (see PortfolioBrief.tsx).
+      return { issueId: issue.identifier ?? issue.id, uid: msg.uid, wakeFailed };
     },
-    onSuccess: ({ issueId, uid }) => {
+    onSuccess: ({ issueId, uid, wakeFailed }) => {
       hooks.onOptimistic?.(uid, "read");
       hooks.onSettled?.();
-      hooks.onToast?.("Handed off, issue created", issueId);
+      hooks.onToast?.(
+        wakeFailed
+          ? "Handed off, issue created — the agent couldn't be woken and may not start until its next scheduled check"
+          : "Handed off, issue created",
+        issueId,
+      );
     },
     onError: (err) => reportFailure(hooks, "Hand-off", err),
   });

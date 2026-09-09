@@ -5,6 +5,7 @@ import type { BudgetIncident, BudgetOverview, Company } from "@paperclipai/share
 import { costsApi } from "../api/costs";
 import { budgetsApi } from "../api/budgets";
 import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -31,7 +32,10 @@ function utilizationColor(pct: number) {
 type SortKey = "spend" | "budget" | "utilization" | "name";
 
 export function PortfolioCosts() {
-  const { selectedCompanyId, setSelectedCompanyId } = useCompany();
+  const { setSelectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();

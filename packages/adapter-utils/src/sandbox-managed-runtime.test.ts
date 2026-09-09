@@ -49,7 +49,15 @@ describe("sandbox managed runtime", () => {
     await expect(readFile(path.join(targetDir, "stale.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("syncs workspace and assets through a provider-neutral sandbox client", async () => {
+  // Stands a local temp directory in for the sandbox, and runs the commands the
+  // runtime would send there through a real POSIX shell. That combination has
+  // no Windows equivalent: the commands are built for the remote, where paths
+  // are always POSIX, so on Windows the fake remote hands `sh -lc` a path like
+  // `C:\Users\...` and GNU tar reads the drive colon as a host to connect to
+  // ("tar: Cannot connect to C: resolve failed"). Nothing about the runtime is
+  // wrong there - the harness cannot be both a POSIX shell and a Windows path.
+  // Same reasoning as `itSkipWindowsUnixTooling` in workspace-runtime.test.ts.
+  it.skipIf(process.platform === "win32")("syncs workspace and assets through a provider-neutral sandbox client", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-sandbox-managed-"));
     cleanupDirs.push(rootDir);
     const localWorkspaceDir = path.join(rootDir, "local-workspace");

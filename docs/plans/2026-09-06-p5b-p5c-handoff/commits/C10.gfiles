@@ -1,0 +1,3 @@
+ui/src/components/StarterCatalogDialog.tsx
+ui/src/components/StarterCatalogDialog.test.tsx
+ui/src/api/startWork.ts

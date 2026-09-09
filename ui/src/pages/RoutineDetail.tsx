@@ -20,12 +20,13 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { LiveRunWidget } from "../components/LiveRunWidget";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
-import { buildRoutineTriggerPatch } from "../lib/routine-trigger-patch";
+import { buildRoutineTriggerDraft, buildRoutineTriggerPatch } from "../lib/routine-trigger-patch";
 import { timeAgo } from "../lib/timeAgo";
+import { formatInstantInTimeZone, getBrowserTimeZone } from "../lib/timezones";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -114,14 +115,6 @@ function formatActivityDetailValue(value: unknown): string {
   }
 }
 
-function getLocalTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return "UTC";
-  }
-}
-
 function buildRoutineMutationPayload(input: {
   title: string;
   description: string;
@@ -151,20 +144,10 @@ function TriggerEditor({
   onRotate: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const [draft, setDraft] = useState({
-    label: trigger.label ?? "",
-    cronExpression: trigger.cronExpression ?? "",
-    signingMode: trigger.signingMode ?? "bearer",
-    replayWindowSec: String(trigger.replayWindowSec ?? 300),
-  });
+  const [draft, setDraft] = useState(() => buildRoutineTriggerDraft(trigger, getBrowserTimeZone()));
 
   useEffect(() => {
-    setDraft({
-      label: trigger.label ?? "",
-      cronExpression: trigger.cronExpression ?? "",
-      signingMode: trigger.signingMode ?? "bearer",
-      replayWindowSec: String(trigger.replayWindowSec ?? 300),
-    });
+    setDraft(buildRoutineTriggerDraft(trigger, getBrowserTimeZone()));
   }, [trigger]);
 
   return (
@@ -176,7 +159,7 @@ function TriggerEditor({
         </div>
         <span className="text-xs text-muted-foreground">
           {trigger.kind === "schedule" && trigger.nextRunAt
-            ? `Next: ${new Date(trigger.nextRunAt).toLocaleString()}`
+            ? `Next: ${formatInstantInTimeZone(trigger.nextRunAt, draft.timezone)} ${draft.timezone}`
             : trigger.kind === "webhook"
               ? "Webhook"
               : "API"}
@@ -197,7 +180,15 @@ function TriggerEditor({
             <ScheduleEditor
               value={draft.cronExpression}
               onChange={(cronExpression) => setDraft((current) => ({ ...current, cronExpression }))}
+              timeZone={draft.timezone}
+              onTimeZoneChange={(timezone) => setDraft((current) => ({ ...current, timezone }))}
             />
+            {trigger.timezone == null && (
+              <p className="text-xs text-muted-foreground">
+                This automation was saved before time zones were shown, so it has none of its own.
+                Saving will set it to {draft.timezone}.
+              </p>
+            )}
           </div>
         )}
         {trigger.kind === "webhook" && (
@@ -243,7 +234,7 @@ function TriggerEditor({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => onSave(trigger.id, buildRoutineTriggerPatch(trigger, draft, getLocalTimezone()))}
+            onClick={() => onSave(trigger.id, buildRoutineTriggerPatch(trigger, draft, getBrowserTimeZone()))}
           >
             <Save className="mr-1.5 h-3.5 w-3.5" />
             Save trigger
@@ -264,7 +255,9 @@ function TriggerEditor({
 
 export function RoutineDetail() {
   const { routineId } = useParams<{ routineId: string }>();
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -281,6 +274,9 @@ export function RoutineDetail() {
   const [newTrigger, setNewTrigger] = useState({
     kind: "schedule",
     cronExpression: "0 10 * * *",
+    // This browser's own zone, same as before, except now it is on screen and
+    // can be changed before the automation is added.
+    timezone: getBrowserTimeZone(),
     signingMode: "bearer",
     replayWindowSec: "300",
   });
@@ -383,7 +379,7 @@ export function RoutineDetail() {
 
   useEffect(() => {
     if (!routine) return;
-    setBreadcrumbs([{ label: "Routines", href: "/routines" }, { label: routine.title }]);
+    setBreadcrumbs([{ label: "Automations", href: "/routines" }, { label: routine.title }]);
     if (!routineDefaults) return;
 
     const changedRoutine = hydratedRoutineIdRef.current !== routine.id;
@@ -512,7 +508,7 @@ export function RoutineDetail() {
         kind: newTrigger.kind,
         label: autoLabel,
         ...(newTrigger.kind === "schedule"
-          ? { cronExpression: newTrigger.cronExpression.trim(), timezone: getLocalTimezone() }
+          ? { cronExpression: newTrigger.cronExpression.trim(), timezone: newTrigger.timezone }
           : {}),
         ...(newTrigger.kind === "webhook"
           ? {
@@ -1004,6 +1000,8 @@ export function RoutineDetail() {
                   <ScheduleEditor
                     value={newTrigger.cronExpression}
                     onChange={(cronExpression) => setNewTrigger((current) => ({ ...current, cronExpression }))}
+                    timeZone={newTrigger.timezone}
+                    onTimeZoneChange={(timezone) => setNewTrigger((current) => ({ ...current, timezone }))}
                   />
                 </div>
               )}

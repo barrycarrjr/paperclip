@@ -13,12 +13,13 @@ import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
-import { useCompany } from "../context/CompanyContext";
+import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
+import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { AttentionRow } from "../components/AttentionRow";
 import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import { attentionApi } from "../api/attention";
@@ -300,7 +301,7 @@ export function FailedRunInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
-                aria-label="Dismiss from inbox"
+                aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -466,7 +467,7 @@ function ApprovalInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
-                aria-label="Dismiss from inbox"
+                aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -602,7 +603,7 @@ function JoinRequestInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
-                aria-label="Dismiss from inbox"
+                aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -671,7 +672,9 @@ function JoinRequestInboxRow({
 }
 
 export function Inbox() {
-  const { selectedCompanyId } = useCompany();
+  // URL-derived, not useCompany()'s selection state (P3 audit, 2026-09-03) —
+  // see Calendar.tsx's identical fix for the general pattern.
+  const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
@@ -687,6 +690,17 @@ export function Inbox() {
   const experimentalSettingsLoaded = experimentalSettings !== undefined;
   const [searchQuery, setSearchQuery] = useState("");
   const normalizedSearchQuery = searchQuery.trim();
+  // This page doesn't remount on a company switch, so a typed search term
+  // otherwise survives it — combined with the search-supplement query's
+  // placeholderData below, that could show a previous company's matching
+  // rows under the newly-selected company while its own results load.
+  const prevSearchCompanyIdRef = useRef(selectedCompanyId);
+  useEffect(() => {
+    if (prevSearchCompanyIdRef.current !== selectedCompanyId) {
+      prevSearchCompanyIdRef.current = selectedCompanyId;
+      setSearchQuery("");
+    }
+  }, [selectedCompanyId]);
   const [filterPreferences, setFilterPreferences] = useState<InboxFilterPreferences>(
     () => loadInboxFilterPreferences(selectedCompanyId),
   );
@@ -705,7 +719,7 @@ export function Inbox() {
   const issueLinkState = useMemo(
     () =>
       createIssueDetailLocationState(
-        "Inbox",
+        "Attention",
         `${location.pathname}${location.search}${location.hash}`,
         "inbox",
       ),
@@ -754,7 +768,7 @@ export function Inbox() {
   });
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Inbox" }]);
+    setBreadcrumbs([{ label: "Attention" }]);
   }, [setBreadcrumbs]);
 
   useEffect(() => {
@@ -1232,6 +1246,7 @@ export function Inbox() {
     queryKey: [
       ...queryKeys.issues.search(selectedCompanyId!, normalizedSearchQuery, undefined, 25),
       "inbox-supplement",
+      selectedCompanyId ?? "__no-company__",
     ],
     queryFn: () =>
       issuesApi.list(selectedCompanyId!, {
@@ -1240,7 +1255,10 @@ export function Inbox() {
         includeRoutineExecutions: true,
       }),
     enabled: shouldUseIssueSearchSupplement,
-    placeholderData: (previousData) => previousData,
+    // Company-gated — see the matching comment in IssuesList.tsx. Without
+    // this, Company A's search-supplement rows paint under Company B's
+    // inbox for as long as the new company's fetch is in flight.
+    placeholderData: keepPreviousDataForSameQueryTail(selectedCompanyId ?? "__no-company__"),
   });
   const issueSearchSupplementResults = useMemo(
     () =>
@@ -1608,7 +1626,7 @@ export function Inbox() {
       setUnarchivingIssueIds((prev) => new Set(prev).add(id));
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to undo inbox archive");
+      setActionError(err instanceof Error ? err.message : "Failed to put this back on your Attention list");
     },
     onSuccess: (_data, id) => {
       setUndoableArchiveIssueIds((prev) => {
@@ -1986,7 +2004,7 @@ export function Inbox() {
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Search inbox…"
+            placeholder="Search Attention…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -2013,6 +2031,7 @@ export function Inbox() {
         <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
           <PageTabBar
+            label="Attention filter"
             items={[
               {
                 value: "mine",
@@ -2033,7 +2052,7 @@ export function Inbox() {
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
-              placeholder="Search inbox…"
+              placeholder="Search Attention…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -2121,7 +2140,7 @@ export function Inbox() {
             visibleColumnSet={visibleIssueColumnSet}
             onToggleColumn={toggleIssueColumn}
             onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
-            title="Choose which inbox columns stay visible"
+            title="Choose which columns stay visible"
             iconOnly
           />
           {canMarkAllRead && (
@@ -2213,14 +2232,14 @@ export function Inbox() {
           icon={searchQuery.trim() ? Search : InboxIcon}
           message={
             searchQuery.trim()
-              ? "No inbox items match your search."
+              ? "Nothing here matches your search."
               : tab === "mine"
-              ? "Inbox zero."
+              ? "Nothing waiting on you."
               : tab === "unread"
-              ? "No new inbox items."
+              ? "Nothing new."
               : tab === "recent"
-                ? "No recent inbox items."
-                : "No inbox items match these filters."
+                ? "Nothing looked at recently."
+                : "Nothing here matches these filters."
           }
         />
       )}

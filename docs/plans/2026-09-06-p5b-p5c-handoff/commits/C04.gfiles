@@ -1,0 +1,4 @@
+server/src/services/chat-providers.ts
+server/src/routes/agents.ts
+server/src/__tests__/chat-providers.test.ts
+server/src/__tests__/agent-instructions-routes.test.ts

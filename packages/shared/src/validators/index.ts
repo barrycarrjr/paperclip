@@ -46,9 +46,11 @@ export {
   sidebarOrderPreferenceSchema,
   upsertSidebarOrderPreferenceSchema,
   upsertSidebarSlugOrderPreferenceSchema,
+  upsertPinnedWorkspacesSchema,
   pageKeyParamSchema,
   type UpsertSidebarOrderPreference,
   type UpsertSidebarSlugOrderPreference,
+  type UpsertPinnedWorkspaces,
 } from "./sidebar-preferences.js";
 export {
   companySkillSourceTypeSchema,
@@ -187,6 +189,14 @@ export {
   issueDocumentKeySchema,
   upsertIssueDocumentSchema,
   restoreIssueDocumentRevisionSchema,
+  resolveEmailDelegationSchema,
+  handBackEmailDelegationSchema,
+  acknowledgeEmailDelegationSchema,
+  takeOverEmailDelegationSchema,
+  type ResolveEmailDelegation,
+  type HandBackEmailDelegation,
+  type AcknowledgeEmailDelegation,
+  type TakeOverEmailDelegation,
   type CreateIssue,
   type CreateChildIssue,
   type CreateIssueLabel,
@@ -204,6 +214,19 @@ export {
   type UpsertIssueDocument,
   type RestoreIssueDocumentRevision,
 } from "./issue.js";
+
+export {
+  startWorkPlanRequestSchema,
+  startWorkPlannerTaskSchema,
+  startWorkPlannerOutputSchema,
+  startWorkPlanResponseSchema,
+  type StartWorkPlanRequest,
+  type StartWorkPlannerTask,
+  type StartWorkPlannerOutput,
+  type StartWorkPlanResponse,
+} from "./start-work.js";
+
+export { stripDashes } from "./text.js";
 
 export {
   createIssueTreeHoldSchema,

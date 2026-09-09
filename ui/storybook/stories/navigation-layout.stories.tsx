@@ -334,10 +334,10 @@ function NavigationLayoutStories() {
         <Section eyebrow="Page tabs" title="Active and overflow tab bars">
           <div className="space-y-5">
             <Tabs value="issues" className="overflow-x-auto">
-              <PageTabBar items={tabItems.slice(0, 4)} value="issues" align="start" />
+              <PageTabBar label="Page section" items={tabItems.slice(0, 4)} value="issues" align="start" />
             </Tabs>
             <Tabs value="activity" className="overflow-x-auto">
-              <PageTabBar items={tabItems} value="activity" align="start" />
+              <PageTabBar label="Page section" items={tabItems} value="activity" align="start" />
             </Tabs>
           </div>
         </Section>

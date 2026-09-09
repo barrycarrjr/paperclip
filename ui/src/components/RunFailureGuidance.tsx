@@ -61,7 +61,7 @@ export function RunFailureGuidance({
         </div>
       )}
       <p className="text-[11px] text-muted-foreground/90">
-        Or leave it: "Seen it, not retrying" on your Brief takes it off your list without stopping
+        Or leave it: "Seen it, not retrying" on your Overview takes it off your list without stopping
         or changing anything.
       </p>
     </div>

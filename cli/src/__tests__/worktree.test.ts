@@ -597,7 +597,14 @@ describe("worktree helpers", () => {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }
     },
-    30000,
+    // Stands up two embedded PostgreSQL clusters, clones one into the other
+    // and seeds users through it. That is a couple of seconds on a fast idle
+    // machine and twenty on a Windows one; under the load of a full-repo run
+    // it reached 30.4s against a 30s budget and failed on time alone. Same
+    // reasoning as the 90s hook budget in server/vitest.config.ts: a generous
+    // ceiling costs nothing when setup is quick, and is the difference between
+    // a real failure and a false one when it is not.
+    120_000,
   );
 
   it("avoids ports already claimed by sibling worktree instance configs", async () => {
@@ -773,7 +780,14 @@ describe("worktree helpers", () => {
         }),
       ).toMatchObject({
         cwd: worktreeRoot,
-        homeDir: "/tmp/paperclip-worktrees",
+        // Resolved rather than compared literally, matching what this file
+        // already does for PAPERCLIP_HOME further up: the resolver puts the
+        // env file's value through `path.resolve`, which on Windows turns
+        // "/tmp/..." into a drive-qualified path. That is the right answer
+        // there, so a literal POSIX expectation asserts the platform instead
+        // of the behaviour under test, which is that the value comes from the
+        // adjacent .env at all.
+        homeDir: path.resolve("/tmp/paperclip-worktrees"),
         instanceId: "pap-1132-chat",
       });
     } finally {
@@ -879,7 +893,10 @@ describe("worktree helpers", () => {
       }
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 30_000);
+  // Reseeds a worktree instance from a live embedded PostgreSQL source: 12.6s
+  // on an idle machine, and enough slower under a full-repo run to threaten a
+  // 30s ceiling. Raised for the same reason as the seeding test above.
+}, 120_000);
 
   it("restores the current worktree config and instance data if reseed fails", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-worktree-reseed-rollback-"));
@@ -969,7 +986,10 @@ describe("worktree helpers", () => {
         targetRepoRoot: "/Users/example/paperclip-pr-432",
         workspaceCwd: "/Users/example/paperclip",
       }),
-    ).toBe("/Users/example/paperclip-pr-432");
+      // Resolved for the same reason as the reseed expectation above: the
+      // rebind returns a path in the running platform's shape, so comparing
+      // against a literal POSIX string tests the platform, not the rebinding.
+    ).toBe(path.resolve("/Users/example/paperclip-pr-432"));
 
     expect(
       rebindWorkspaceCwd({
@@ -977,7 +997,7 @@ describe("worktree helpers", () => {
         targetRepoRoot: "/Users/example/paperclip-pr-432",
         workspaceCwd: "/Users/example/paperclip/packages/db",
       }),
-    ).toBe("/Users/example/paperclip-pr-432/packages/db");
+    ).toBe(path.resolve("/Users/example/paperclip-pr-432/packages/db"));
   });
 
   it("does not rebind paths outside the source repo root", () => {
@@ -1030,7 +1050,14 @@ describe("worktree helpers", () => {
         copied: true,
       });
       expect(fs.readFileSync(targetHookPath, "utf8")).toBe("#!/usr/bin/env bash\nexit 0\n");
-      expect(fs.statSync(targetHookPath).mode & 0o111).not.toBe(0);
+      // Windows has no execute permission bit - `chmod` there only toggles the
+      // read-only attribute - so these bits are always 0 and the check can only
+      // ever fail. Everything else this test asserts (both files copied, to the
+      // right resolved paths) is just as true on Windows, so guard the one
+      // assertion rather than skip the whole test.
+      if (process.platform !== "win32") {
+        expect(fs.statSync(targetHookPath).mode & 0o111).not.toBe(0);
+      }
       expect(fs.readFileSync(targetTokensPath, "utf8")).toBe("secret-token\n");
     } finally {
       execFileSync("git", ["worktree", "remove", "--force", worktreePath], { cwd: repoRoot, stdio: "ignore" });

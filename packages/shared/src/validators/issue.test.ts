@@ -75,4 +75,49 @@ describe("issue validators", () => {
     expect(response.summaryMarkdown).toBe("Summary\n\nNext action");
     expect(document.body).toBe("# Plan\n\nShip it");
   });
+
+  describe("client-declarable issue origin (P5a)", () => {
+    it("accepts an email handoff origin", () => {
+      const parsed = createIssueSchema.parse({
+        title: "Email from a@b.com: Invoice",
+        origin: { kind: "email_handoff", id: "email:v1:msgid:p1:personal:%3Cm1%3E" },
+      });
+
+      expect(parsed.origin).toEqual({
+        kind: "email_handoff",
+        id: "email:v1:msgid:p1:personal:%3Cm1%3E",
+      });
+    });
+
+    // The point of the literal: origin kinds drive real partial unique indexes
+    // and recovery classification, so a client must not be able to claim one.
+    it("rejects every reserved, server-set origin kind", () => {
+      for (const kind of [
+        "routine_execution",
+        "harness_liveness_escalation",
+        "stranded_issue_recovery",
+        "stale_active_run_evaluation",
+        "manual",
+        "plugin:anything",
+      ]) {
+        expect(
+          () => createIssueSchema.parse({ title: "x", origin: { kind, id: "whatever" } }),
+          kind,
+        ).toThrow();
+      }
+    });
+
+    it("rejects a malformed origin rather than storing a useless reference", () => {
+      expect(() =>
+        createIssueSchema.parse({ title: "x", origin: { kind: "email_handoff", id: "" } }),
+      ).toThrow();
+      expect(() =>
+        createIssueSchema.parse({ title: "x", origin: { kind: "email_handoff" } }),
+      ).toThrow();
+    });
+
+    it("stays optional, so ordinary issue creation is unaffected", () => {
+      expect(createIssueSchema.parse({ title: "x" }).origin).toBeUndefined();
+    });
+  });
 });
