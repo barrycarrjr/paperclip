@@ -23,7 +23,7 @@ vi.mock("@/context/ToastContext", () => ({
 
 /**
  * A long unbreakable URL in the notes is what widened the dialog past its own
- * max-width, so the fixture keeps a real one (the reminder Barry hit it on).
+ * max-width, so the fixture keeps a real one (the reminder the operator hit it on).
  */
 const LONG_URL =
   "https://example.atlassian.net/wiki/spaces/DEMO/blog/2022/09/26/1234567890/Pay+schedule+2022-2023+calendar";

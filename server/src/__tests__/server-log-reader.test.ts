@@ -203,7 +203,7 @@ describe("redaction", () => {
   it("replaces a whole subtree when the container itself is named like a credential", () => {
     // `credentials` is secret-looking, so nothing under it is inspected or
     // returned. Coarser than redacting the leaves, and deliberately so.
-    const out = redactSecrets({ credentials: [{ user: "barry", oauthToken: "abc" }] }) as any;
+    const out = redactSecrets({ credentials: [{ user: "owner", oauthToken: "abc" }] }) as any;
     expect(out.credentials).toBe("[redacted]");
   });
 

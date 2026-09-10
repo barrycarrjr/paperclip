@@ -63,7 +63,7 @@ import {
  * said "Inbox". The rule that came out of it was that such a rename is one
  * decision applied everywhere at once.
  *
- * Barry took that decision on 2026-09-07 and chose the mockup's names: Brief
+ * The operator took that decision on 2026-09-07 and chose the mockup's names: Brief
  * became Overview, Inbox became Attention, Issues became Tasks, Routines
  * became Automations, and Work queues became Intake queues. The labels below
  * changed with the sidebar, the mobile bar, the command palette, the

@@ -323,7 +323,7 @@ describe("Everything", () => {
     });
   });
 
-  it("uses the names Barry chose, not the ones they replaced", async () => {
+  it("uses the names the operator chose, not the ones they replaced", async () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(renderWithQueryClient());

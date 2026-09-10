@@ -3,7 +3,7 @@
  * in one.
  *
  * Written down once because company names go into sentences all over the
- * switch messages and the unavailable states, and "Carr Rock Holdings's own
+ * switch messages and the unavailable states, and "Northwind Holdings's own
  * Costs" is the kind of thing a person notices immediately and a test never
  * does.
  */

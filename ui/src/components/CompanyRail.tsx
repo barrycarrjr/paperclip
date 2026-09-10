@@ -494,7 +494,7 @@ function SortableCompanyItem({
  *
  * This shipped on the premise that HQ is a real company with its own team
  * and work, separate from "the bird's-eye view of everything else" (see
- * docs/plans/2026-09-02-ux-control-center-scope.md, decision D05). Barry
+ * docs/plans/2026-09-02-ux-control-center-scope.md, decision D05). The operator
  * corrected that premise the same day this landed: HQ was never meant to be
  * its own operating company, it IS the bird's-eye view. Checking the live
  * data backed this up — HQ's two real agents (Builder, Steward) and its 345

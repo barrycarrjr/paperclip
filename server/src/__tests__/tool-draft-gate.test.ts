@@ -313,15 +313,15 @@ describe("tool draft gate — self-notification bypass", () => {
 
   it("an email whose every recipient is the operator sends without approval", async () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue(
-      generalSettings({ emails: ["Barry@Example.com"] }),
+      generalSettings({ emails: ["Owner@Example.com"] }),
     );
     const gate = await loadDraftGate();
     const result = await gate.intercept(
       "email-tools:email_send",
       {
         mailbox: "personal",
-        to: 'Barry Carr <barry@example.com>',
-        cc: ["barry@example.com"],
+        to: 'Alex Owner <owner@example.com>',
+        cc: ["owner@example.com"],
         subject: "note to self",
         body: "x",
       },
@@ -333,14 +333,14 @@ describe("tool draft gate — self-notification bypass", () => {
 
   it("an email that copies anyone else stays held", async () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue(
-      generalSettings({ emails: ["barry@example.com"] }),
+      generalSettings({ emails: ["owner@example.com"] }),
     );
     const gate = await loadDraftGate();
     const result = await gate.intercept(
       "email-tools:email_send",
       {
         mailbox: "personal",
-        to: "barry@example.com, customer@other.com",
+        to: "owner@example.com, customer@other.com",
         subject: "s",
         body: "x",
       },
@@ -354,7 +354,7 @@ describe("tool draft gate — self-notification bypass", () => {
     const gate = await loadDraftGate();
     const result = await gate.intercept(
       "email-tools:email_send",
-      { mailbox: "personal", to: "barry@example.com", subject: "s", body: "x" },
+      { mailbox: "personal", to: "owner@example.com", subject: "s", body: "x" },
       ctx({}),
     );
 
@@ -363,7 +363,7 @@ describe("tool draft gate — self-notification bypass", () => {
 
   it("email replies are always held (recipient is implicit in the thread)", async () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue(
-      generalSettings({ emails: ["barry@example.com"] }),
+      generalSettings({ emails: ["owner@example.com"] }),
     );
     const gate = await loadDraftGate();
     const result = await gate.intercept(
@@ -377,12 +377,12 @@ describe("tool draft gate — self-notification bypass", () => {
 
   it("an unreadable recipient shape stays held", async () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue(
-      generalSettings({ emails: ["barry@example.com"] }),
+      generalSettings({ emails: ["owner@example.com"] }),
     );
     const gate = await loadDraftGate();
     const result = await gate.intercept(
       "email-tools:email_send",
-      { mailbox: "personal", to: [{ address: "barry@example.com" }], subject: "s", body: "x" },
+      { mailbox: "personal", to: [{ address: "owner@example.com" }], subject: "s", body: "x" },
       ctx({}),
     );
 
@@ -453,12 +453,12 @@ describe("tool draft gate — self-notification bypass", () => {
       // A caller that has said "always ask me about these" has already
       // answered the question the self-notification bypass exists to answer.
       mockInstanceSettingsService.getGeneral.mockResolvedValue(
-        generalSettings({ skipApproval: true, emails: ["barry@example.com"] }),
+        generalSettings({ skipApproval: true, emails: ["owner@example.com"] }),
       );
       const gate = await loadDraftGate();
       const result = await gate.intercept(
         "email-tools:email_send",
-        { to: "barry@example.com", subject: "s", body: "b" },
+        { to: "owner@example.com", subject: "s", body: "b" },
         ctx({}),
         { force: true },
       );

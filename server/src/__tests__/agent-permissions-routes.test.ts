@@ -1314,7 +1314,7 @@ describe.sequential("agent permission routes", () => {
 
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1403,7 +1403,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects requests with too-long path entries", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1420,7 +1420,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects requests with too many path entries", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1440,7 +1440,7 @@ describe.sequential("agent permission routes", () => {
 
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1459,7 +1459,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects forbiddenWritePaths in general PATCH /agents/:id body", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],

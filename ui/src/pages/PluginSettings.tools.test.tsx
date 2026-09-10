@@ -11,7 +11,7 @@ vi.mock("@/lib/router", () => ({
   Navigate: ({ to }: { to: string }) => <div data-testid="navigate" data-to={to} />,
 }));
 
-const selected: { id: string | null; name: string } = { id: "company-1", name: "Industry Bureau" };
+const selected: { id: string | null; name: string } = { id: "company-1", name: "Acme Printing" };
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompany: { id: selected.id, name: selected.name },
@@ -170,7 +170,7 @@ describe("PluginSettings: what an add-on can do", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     selected.id = COMPANY;
-    selected.name = "Industry Bureau";
+    selected.name = "Acme Printing";
     pluginRecord.value = makePlugin();
     savedConfig.value = { configJson: { allowedCompanies: [COMPANY] } };
   });
@@ -209,7 +209,7 @@ describe("PluginSettings: what an add-on can do", () => {
 
   it("says the add-on is set up for the company being viewed", async () => {
     await renderConfigurationTab();
-    expect(container.textContent).toContain("Set up for Industry Bureau, so agents there can use these.");
+    expect(container.textContent).toContain("Set up for Acme Printing, so agents there can use these.");
   });
 
   it("warns when the add-on serves other companies and not this one", async () => {
@@ -217,7 +217,7 @@ describe("PluginSettings: what an add-on can do", () => {
 
     await renderConfigurationTab();
 
-    expect(container.textContent).toContain("Not set up for Industry Bureau");
+    expect(container.textContent).toContain("Not set up for Acme Printing");
     expect(container.textContent).toContain("serves other companies only");
     // The list is still shown: an operator judging the add-on needs to see
     // what it would do once it is switched on here.
@@ -238,7 +238,7 @@ describe("PluginSettings: what an add-on can do", () => {
     await renderConfigurationTab();
 
     expect(container.textContent).not.toContain("Not set up for");
-    expect(container.textContent).toContain("Set up for Industry Bureau");
+    expect(container.textContent).toContain("Set up for Acme Printing");
   });
 
   it("says nothing about companies for an add-on with no company list at all", async () => {

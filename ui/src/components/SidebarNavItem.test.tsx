@@ -72,7 +72,7 @@ describe("SidebarNavItem peek mode", () => {
     // CURRENT company (here "IND") instead of switching to the peeked one
     // ("PER"). The resulting URL was a normal, valid, single-prefixed page,
     // so it didn't look broken — this bug coexisted with, and was not caught
-    // by, the B01 double-prefix fix or Barry's live confirmation of it.
+    // by, the B01 double-prefix fix or the operator's live confirmation of it.
     const root = createRoot(container);
     act(() => {
       root.render(

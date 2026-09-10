@@ -1,7 +1,7 @@
 /**
  * What happens when an email handoff is finished (P5a §3's option (c)).
  *
- * Barry's decision, 2026-09-03: resolving sends a reply to whoever sent the
+ * The operator's decision, 2026-09-03: resolving sends a reply to whoever sent the
  * original email, and whether that reply waits for approval is its own
  * setting rather than being lumped in with every other outbound message.
  *

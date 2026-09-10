@@ -33,7 +33,7 @@ echo Data:    %DATA_DIR%
 echo.
 
 REM Check the origin remote and warn if it isn't the expected fork. We don't
-REM hard-fail because Barry/Tony might temporarily test a different fork.
+REM hard-fail because a maintainer might temporarily test a different fork.
 for /f "delims=" %%R in ('git -C "%PAPERCLIP_SRC%" remote get-url origin 2^>nul') do set "ORIGIN_URL=%%R"
 echo Remote:  %ORIGIN_URL%
 echo %ORIGIN_URL% | findstr /i "barrycarrjr/paperclip" >nul

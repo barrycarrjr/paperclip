@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
  * The attention queue puts "PAP-12 finished and wants your review" in front of
  * the operator with a Review button, and until now that button led to an issue
  * page where the only thing about the gate was a line of text in the properties
- * panel saying "Review pending with Barry". There was nowhere to approve it.
+ * panel saying "Review pending with the operator". There was nowhere to approve it.
  * This is that missing control, on the issue itself, where the row points.
  */
 

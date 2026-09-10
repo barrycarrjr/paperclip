@@ -24,15 +24,15 @@ describe("describeSendingIdentity", () => {
 
   it("falls back to the mailbox name when no address is configured", () => {
     // Still a real configured identity the operator chose — never a guess.
-    const identity = describeSendingIdentity({ key: "ib-barry", name: "IB mailbox", from: null });
-    expect(identity.label).toBe("IB mailbox");
+    const identity = describeSendingIdentity({ key: "acme-owner", name: "Acme mailbox", from: null });
+    expect(identity.label).toBe("Acme mailbox");
     expect(identity.isAddress).toBe(false);
     expect(identity.unknown).toBe(false);
   });
 
   it("falls back to the key when the name is blank too", () => {
-    expect(describeSendingIdentity({ key: "ib-barry", name: "  ", from: undefined }).label).toBe(
-      "ib-barry",
+    expect(describeSendingIdentity({ key: "acme-owner", name: "  ", from: undefined }).label).toBe(
+      "acme-owner",
     );
   });
 

@@ -148,7 +148,7 @@ describe("assertCompanyAccess — HQ portfolio-root bypass", () => {
     it("allows HQ owner/admin user to read another company (read bypass)", () => {
       const req = makeReq({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         companyIds: [COMPANY_HQ],
         isPortfolioRootUserAdmin: true,
         source: "session",
@@ -162,7 +162,7 @@ describe("assertCompanyAccess — HQ portfolio-root bypass", () => {
       const req = makeReq(
         {
           type: "board",
-          userId: "barry",
+          userId: "owner",
           companyIds: [COMPANY_HQ],
           isPortfolioRootUserAdmin: true,
           source: "session",

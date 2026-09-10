@@ -83,11 +83,11 @@ describe("resolveCompanySwitchDestination", () => {
   it("reads properly when the company name already ends in s", () => {
     const result = resolveCompanySwitchDestination({
       currentPath: "/HQ/portfolio-costs",
-      toCompany: { name: "Carr Rock Holdings", isPortfolioRoot: false },
+      toCompany: { name: "Northwind Holdings", isPortfolioRoot: false },
       fromCompanyName: "HQ",
     });
     expect(result.body).toBe(
-      "Portfolio Costs adds every company together, so this is Carr Rock Holdings' own Costs.",
+      "Portfolio Costs adds every company together, so this is Northwind Holdings' own Costs.",
     );
   });
 

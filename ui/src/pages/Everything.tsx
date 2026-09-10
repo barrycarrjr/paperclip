@@ -16,7 +16,7 @@ import { SETTINGS_SCOPE_COPY, settingsCatalogForScope } from "@/lib/settings-cat
  * Complete discovery: every real destination this company can reach, in one
  * place — the "All workspaces" entry from
  * docs/plans/2026-09-02-ux-control-center-scope.md's primary navigation
- * table. Named "Everything" (Barry's call, 2026-09-03) rather than literally
+ * table. Named "Everything" (the operator's call, 2026-09-03) rather than literally
  * "All workspaces" or "Catalog" to avoid colliding with the existing,
  * unrelated "Workspaces" nav item (isolated execution environments for
  * parallel agent work).
@@ -29,7 +29,7 @@ import { SETTINGS_SCOPE_COPY, settingsCatalogForScope } from "@/lib/settings-cat
  * rather than a third hand-maintained list.
  *
  * Uses `useActiveCompanyId` (the URL's company), not `useCompany()`'s
- * `selectedCompanyId`/`selectedCompany` directly (2026-09-03, Barry asked
+ * `selectedCompanyId`/`selectedCompany` directly (2026-09-03, the operator asked
  * whether switching companies could ever leak another company's Portfolio
  * section here). The context selection is synced from the route by an effect
  * in Layout that runs AFTER the render it was triggered by, so the render

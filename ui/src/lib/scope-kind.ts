@@ -11,7 +11,7 @@
  * :companyPrefix (so the URL and the sidebar's company menu both read "HQ"
  * even while viewing all-company aggregate data), and the page header
  * (BreadcrumbBar.tsx) never showed company/scope identity at all, only the
- * page title. Confirmed live by Barry 2026-09-02: opening Portfolio Brief
+ * page title. Confirmed live by the operator 2026-09-02: opening Portfolio Brief
  * showed no way to tell, from the header, that the data was aggregate rather
  * than HQ's own.
  */
@@ -73,7 +73,7 @@ export function resolveScopeKind(params: {
  * name of the scope you are in. Separate from the page title next to it,
  * which only ever said what page you're on, never what scope (a
  * portfolio-wide page and HQ's own page look identical there, both mounted
- * under the same /HQ/... prefix). Confirmed live by Barry 2026-09-02 that
+ * under the same /HQ/... prefix). Confirmed live by the operator 2026-09-02 that
  * nothing in the header told them apart. Returns null when there's nothing to
  * show yet (e.g. no company has resolved), so callers can skip rendering the
  * button and its separator both.

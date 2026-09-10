@@ -88,7 +88,7 @@ export async function testEnvironment(
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
 
   // Test environment is also "Prepare environment". If anything is missing
-  // we install/pull it before reporting status — Barry's feedback was that
+  // we install/pull it before reporting status — the operator's feedback was that
   // good software should "just work" and not require users to know secret
   // setup commands. The prep helpers stream their progress through onLog,
   // which the Test Environment dialog tee's into a buffer that becomes the

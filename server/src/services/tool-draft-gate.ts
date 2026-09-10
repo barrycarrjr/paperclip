@@ -270,7 +270,7 @@ function normalizeSlackId(value: string): string {
 
 /**
  * Emails are compared lowercased, with RFC 5322 display-name forms reduced to
- * the address inside the angle brackets ("Barry <a@b.com>" -> "a@b.com").
+ * the address inside the angle brackets ("Alex Owner <a@b.com>" -> "a@b.com").
  */
 function normalizeEmail(value: string): string {
   const angled = /<([^<>]+)>/.exec(value);

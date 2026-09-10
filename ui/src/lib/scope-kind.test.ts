@@ -79,8 +79,8 @@ describe("resolveScopeLabelText", () => {
       .toBe("Acme Printing");
     expect(resolveScopeLabelText({ scopeKind: "hq", companyName: "HQ", portfolioCompanyCount: 3 }))
       .toBe("HQ");
-    expect(resolveScopeLabelText({ scopeKind: "personal", companyName: "Barry", portfolioCompanyCount: 3 }))
-      .toBe("Barry");
+    expect(resolveScopeLabelText({ scopeKind: "personal", companyName: "Alex", portfolioCompanyCount: 3 }))
+      .toBe("Alex");
   });
 
   it("counts the portfolio's companies and gets the plural right", () => {
@@ -137,9 +137,9 @@ describe("resolveScopeExplanation", () => {
   });
 
   it("says the personal scope is private and follows the person", () => {
-    expect(resolveScopeExplanation({ scopeKind: "personal", companyName: "Barry", portfolioCompanyCount: 4 }))
+    expect(resolveScopeExplanation({ scopeKind: "personal", companyName: "Alex", portfolioCompanyCount: 4 }))
       .toEqual({
-        title: "Barry",
+        title: "Alex",
         meaning: "Your own private space.",
         includes: "Your private to-dos and notes, which follow you from company to company.",
         guardrail: "Nothing here is shared with a company's agents unless you share it.",
@@ -314,7 +314,7 @@ describe("resolveScopeChoices", () => {
   };
   const PERSONAL: ScopeChoiceCompany = {
     id: "company-personal",
-    name: "Barry",
+    name: "Alex",
     issuePrefix: "PER",
     isPortfolioRoot: false,
     kind: "personal",
@@ -334,7 +334,7 @@ describe("resolveScopeChoices", () => {
 
   it("puts Portfolio first and HQ directly below it", () => {
     const result = choices();
-    expect(result.map((c) => c.title)).toEqual(["Portfolio", "HQ", "Acme Printing", "Barry"]);
+    expect(result.map((c) => c.title)).toEqual(["Portfolio", "HQ", "Acme Printing", "Alex"]);
     expect(result[0]!.kind).toBe("portfolio");
     expect(result[1]!.kind).toBe("hq");
   });
@@ -352,7 +352,7 @@ describe("resolveScopeChoices", () => {
 
   it("leaves Portfolio out when there is no HQ to hang it under", () => {
     const result = choices({ companies: [ACME, PERSONAL], portfolioCompanyCount: 2 });
-    expect(result.map((c) => c.title)).toEqual(["Acme Printing", "Barry"]);
+    expect(result.map((c) => c.title)).toEqual(["Acme Printing", "Alex"]);
   });
 
   it("marks the company you are in", () => {
@@ -376,7 +376,7 @@ describe("resolveScopeChoices", () => {
 
   it("describes the private company as private rather than as an ordinary workspace", () => {
     const result = choices();
-    expect(result.find((c) => c.title === "Barry")!.description).toContain("private to-dos and notes");
+    expect(result.find((c) => c.title === "Alex")!.description).toContain("private to-dos and notes");
   });
 
   it("leaves out archived companies", () => {

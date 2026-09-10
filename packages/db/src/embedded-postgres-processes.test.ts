@@ -23,10 +23,10 @@ import {
  * the whole reason this module normalises paths, so the tests keep it.
  */
 const BIN =
-  "C:\\Users\\barry\\paperclip\\node_modules\\.pnpm\\@embedded-postgres+windows-x64@18.1.0-beta.16" +
+  "C:\\Users\\dev\\paperclip\\node_modules\\.pnpm\\@embedded-postgres+windows-x64@18.1.0-beta.16" +
   "\\node_modules\\@embedded-postgres\\windows-x64\\native\\bin\\postgres.exe";
 const BIN_FORWARD = BIN.replace(/\\/g, "/");
-const DATA_DIR = "C:\\Users\\barry\\.paperclip\\instances\\default\\db";
+const DATA_DIR = "C:\\Users\\dev\\.paperclip\\instances\\default\\db";
 
 function postmaster(overrides: Partial<OsProcess> = {}): OsProcess {
   return {
@@ -128,7 +128,7 @@ describe("postgresFamilyForDataDir", () => {
     // Two paperclip instances on one machine must not stop each other.
     const other = postmaster({
       pid: 900,
-      commandLine: `${BIN} -D C:\\Users\\barry\\.paperclip\\instances\\verify\\db -p 54330`,
+      commandLine: `${BIN} -D C:\\Users\\dev\\.paperclip\\instances\\verify\\db -p 54330`,
     });
     expect(postgresFamilyForDataDir([other, worker(901, "io_worker", 900)], DATA_DIR)).toEqual([]);
   });
@@ -360,7 +360,7 @@ describe("sweepStaleEmbeddedPostgres", () => {
     const other = postmaster({
       pid: 900,
       parentPid: 8000,
-      commandLine: `${BIN} -D C:\\Users\\barry\\.paperclip\\instances\\verify\\db -p 54330`,
+      commandLine: `${BIN} -D C:\\Users\\dev\\.paperclip\\instances\\verify\\db -p 54330`,
     });
     const t = tools({
       list: async () => [other, worker(901, "io_worker", 900)],
