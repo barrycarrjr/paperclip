@@ -23,6 +23,8 @@ describe("isPortfolioRoutePath", () => {
     expect(isPortfolioRoutePath("/HQ/portfolio-brief")).toBe(true);
     expect(isPortfolioRoutePath("/HQ/portfolio-email")).toBe(true);
     expect(isPortfolioRoutePath("/portfolio-brief")).toBe(true);
+    expect(isPortfolioRoutePath("/HQ/portfolio-agents/org")).toBe(true);
+    expect(isPortfolioRoutePath("/portfolio-agents/assistants")).toBe(true);
   });
 
   it("does not treat an ordinary HQ page as portfolio scope", () => {
@@ -204,11 +206,12 @@ describe("portfolioPathForPage", () => {
     expect(portfolioPathForPage("/ACM/brief")).toBe("/portfolio-brief");
   });
 
-  it("treats every Team address as the same question, so all four lead to Portfolio Agents", () => {
+  it("preserves the active Team view when opening Portfolio Teams", () => {
     expect(portfolioPathForPage("/ACM/team")).toBe("/portfolio-agents");
-    expect(portfolioPathForPage("/ACM/agents/all")).toBe("/portfolio-agents");
-    expect(portfolioPathForPage("/ACM/org")).toBe("/portfolio-agents");
-    expect(portfolioPathForPage("/ACM/assistants")).toBe("/portfolio-agents");
+    expect(portfolioPathForPage("/ACM/team/timeline")).toBe("/portfolio-agents/timeline");
+    expect(portfolioPathForPage("/ACM/agents/all")).toBe("/portfolio-agents/agents");
+    expect(portfolioPathForPage("/ACM/org")).toBe("/portfolio-agents/org");
+    expect(portfolioPathForPage("/ACM/assistants")).toBe("/portfolio-agents/assistants");
   });
 
   it("keeps the page when a deeper address still names a page that has an all company version", () => {
@@ -225,6 +228,9 @@ describe("portfolioPathForPage", () => {
   it("stays put when you are already on a portfolio page", () => {
     expect(portfolioPathForPage("/HQ/portfolio-costs")).toBe("/portfolio-costs");
     expect(portfolioPathForPage("/HQ/portfolio-directives")).toBe("/portfolio-directives");
+    expect(portfolioPathForPage("/HQ/portfolio-agents/timeline")).toBe(
+      "/portfolio-agents/timeline",
+    );
   });
 });
 
@@ -235,8 +241,12 @@ describe("companyPathForPortfolioPage", () => {
     expect(companyPathForPortfolioPage("/HQ/portfolio-brief")).toBe("/brief");
   });
 
-  it("comes back from Portfolio Agents to the Team page", () => {
+  it("preserves the active Portfolio Teams view when returning to one company", () => {
     expect(companyPathForPortfolioPage("/HQ/portfolio-agents")).toBe("/team");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-agents/timeline")).toBe("/team/timeline");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-agents/agents")).toBe("/agents/all");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-agents/org")).toBe("/org");
+    expect(companyPathForPortfolioPage("/HQ/portfolio-agents/assistants")).toBe("/assistants");
   });
 
   it("falls back to the Overview from a portfolio page with no per company twin", () => {

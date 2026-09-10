@@ -97,3 +97,23 @@ argument for doing this pass rather than trusting the suite.
 Hiring, approvals, delegation, task ownership and the `agent` vocabulary in the API, routes, CLI
 and adapters. The new controls call the existing mechanisms. This work is observation and
 management, not a second governance path.
+
+## Portfolio follow-up
+
+The operator confirmed on 2026-09-10 that HQ's cross-company **Portfolio Agents** workspace should
+become **Portfolio Teams**. This is a product-model change, not only a heading change: each company
+is now the top-level team container, with its agents nested beneath it in member or reporting-line
+view. Each container shows team-level live, paused and error signals and links directly to that
+company's full Team workspace.
+
+The existing `portfolio-agents` route, API endpoint, saved pin id and browser storage keys remain
+stable. They are implementation identifiers that preserve saved links, filters, pins and dependent
+portfolio lookups; every operator-facing label and the page's visual hierarchy now say Teams.
+
+Portfolio Teams now mirrors the company Team workspace's five views: **Right now**, **Timeline**,
+**Agents**, **Org chart**, and **Assistants**. The default address remains `/portfolio-agents`, with
+the other views under stable subpaths. Right now and Timeline open one team initially and lazily
+mount another company's full operational view when expanded, avoiding an all-companies request
+storm. Agents, reporting lines, and assistants remain grouped by company. Switching between
+Portfolio and a company preserves the active Team tab, and embedded links are explicitly scoped to
+the company whose panel they appear in rather than inheriting HQ from the outer route.

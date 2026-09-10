@@ -11,6 +11,28 @@ import {
 } from "@/lib/company-routes";
 import { parseIssuePathIdFromPath } from "@/lib/issue-reference";
 
+/**
+ * An embedded cross-company view can temporarily make relative links point at
+ * the company whose data it is rendering. Portfolio Teams uses this when it
+ * expands a company's Right now or Timeline view while HQ remains selected.
+ */
+const CompanyRoutePrefixContext = React.createContext<string | null | undefined>(undefined);
+
+export function CompanyRoutePrefixProvider({
+  companyPrefix,
+  children,
+}: {
+  companyPrefix: string | null;
+  children: React.ReactNode;
+}) {
+  const value = companyPrefix ? normalizeCompanyPrefix(companyPrefix) : null;
+  return (
+    <CompanyRoutePrefixContext.Provider value={value}>
+      {children}
+    </CompanyRoutePrefixContext.Provider>
+  );
+}
+
 function resolveTo(to: To, companyPrefix: string | null): To {
   if (typeof to === "string") {
     return applyCompanyPrefix(to, companyPrefix);
@@ -27,9 +49,12 @@ function resolveTo(to: To, companyPrefix: string | null): To {
 }
 
 function useActiveCompanyPrefix(): string | null {
+  const scopedPrefix = React.useContext(CompanyRoutePrefixContext);
   const { selectedCompany } = useCompany();
   const params = RouterDom.useParams<{ companyPrefix?: string }>();
   const location = RouterDom.useLocation();
+
+  if (scopedPrefix !== undefined) return scopedPrefix;
 
   if (params.companyPrefix) {
     return normalizeCompanyPrefix(params.companyPrefix);

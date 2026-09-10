@@ -447,9 +447,9 @@ export function SidebarMenu({ company, peekMode = false, onPeekItemClick }: Side
  *         {
  *           id: "portfolio-agents",
  *           to: "/portfolio-agents",
- *           label: "Portfolio Agents",
- *           icon: Bot,
- *           info: "See every agent across all companies at a glance. Filter by status or role, and bulk-pause or resume agents portfolio-wide.",
+ *           label: "Portfolio Teams",
+ *           icon: Users,
+ *           info: "See each company's team at a glance, expand it to manage members, and open the full Team workspace for that company.",
  *         },
  *         {
  *           id: "portfolio-activity",

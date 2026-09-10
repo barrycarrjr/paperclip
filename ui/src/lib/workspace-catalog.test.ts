@@ -33,6 +33,13 @@ describe("CORE_WORKSPACE_CATALOG", () => {
       expect(entry.routeRoot.startsWith("portfolio-")).toBe(Boolean(entry.portfolioRootOnly));
     }
   });
+
+  it("presents the cross-company agent roster as Portfolio Teams", () => {
+    const teams = CORE_WORKSPACE_CATALOG.find((entry) => entry.id === "portfolio-agents");
+    expect(teams?.label).toBe("Portfolio Teams");
+    // The stable id and route preserve existing pins and saved links.
+    expect(teams?.routeRoot).toBe("portfolio-agents");
+  });
 });
 
 describe("visibleWorkspaceCatalog", () => {

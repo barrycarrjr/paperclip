@@ -402,7 +402,7 @@ describe("Sidebar", () => {
       "Portfolio Approvals",
       "Portfolio Issues",
       "Portfolio Directives",
-      "Portfolio Agents",
+      "Portfolio Teams",
       "Portfolio Activity",
       "Portfolio Receipts",
       "Portfolio Routines",

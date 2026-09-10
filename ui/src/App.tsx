@@ -71,7 +71,14 @@ import { NotFoundPage } from "./pages/NotFound";
 import { Clippy } from "./pages/Clippy";
 import { PortfolioIssues } from "./pages/PortfolioIssues";
 import { PortfolioDirectives } from "./pages/PortfolioDirectives";
-import { PortfolioAgents } from "./pages/PortfolioAgents";
+import {
+  PortfolioTeams,
+  PortfolioTeamsAgents,
+  PortfolioTeamsAssistants,
+  PortfolioTeamsOrg,
+  PortfolioTeamsRightNow,
+  PortfolioTeamsTimeline,
+} from "./pages/PortfolioAgents";
 import { PortfolioApprovals } from "./pages/PortfolioApprovals";
 import { PortfolioActivity } from "./pages/PortfolioActivity";
 import { PortfolioRoutines } from "./pages/PortfolioRoutines";
@@ -173,7 +180,13 @@ export function boardRoutes() {
       <Route element={<PortfolioScopeRoute />}>
         <Route path="portfolio-issues" element={<PortfolioIssues />} />
         <Route path="portfolio-directives" element={<PortfolioDirectives />} />
-        <Route path="portfolio-agents" element={<PortfolioAgents />} />
+        <Route path="portfolio-agents" element={<PortfolioTeams />}>
+          <Route index element={<PortfolioTeamsRightNow />} />
+          <Route path="timeline" element={<PortfolioTeamsTimeline />} />
+          <Route path="agents" element={<PortfolioTeamsAgents />} />
+          <Route path="org" element={<PortfolioTeamsOrg />} />
+          <Route path="assistants" element={<PortfolioTeamsAssistants />} />
+        </Route>
         <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
         <Route path="portfolio-activity" element={<PortfolioActivity />} />
         <Route path="portfolio-routines" element={<PortfolioRoutines />} />
