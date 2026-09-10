@@ -8,7 +8,7 @@ Created: 2026-09-02. [Project entry point](2026-09-02-ux-control-center.md).
 - User's fork: `barrycarrjr/paperclip`.
 - Local branch created for this work: `ux-control-center`.
 - Baseline commit: `558f0096faa8fbb1caee01dede0de231568f7ee5`.
-- Intended normal operating URL: `http://paperclip.local:3100`.
+- Intended normal operating URL: `http://localhost:3100`.
 - No server restart, instance change, migration, install, build or application edit was performed during plan preparation.
 - The running process's actual code/instance binding still needs verification in P0. A branch switch at the same commit is not proof that an already-running server changed its boot metadata or serves the intended checkout.
 
@@ -22,7 +22,7 @@ Confirmed live, read-only, before any change was made. See the handoff ledger fo
 
 `pnpm dev:list`'s managed-runner registry is **stale**: it reports two `paperclip-dev-watch` entries (port 3100 pid=18832, port 3199 pid=51136), and every one of those four PIDs (18832/10468/51136/53656) is dead. Do not trust `dev:list` alone to decide whether a runner is live; cross-check with `Get-NetTCPConnection -LocalPort 3100` and the owning PID's actual command line.
 
-**Instance / config.** Instance `default`, config at `~/.paperclip/instances/default/config.json` (updated 2026-08-07). `deploymentMode: authenticated`, `exposure: private`, `bind: lan`, `host: 0.0.0.0`, port 3100, `allowedHostnames` includes `paperclip.local`. `paperclip.local` resolves via real DNS to `192.168.27.50`, which matches this machine's LAN address that PID 3588 is bound to — the documented trial URL works as-is, no hosts-file trick needed. `bootstrapStatus: ready`, `bootstrapInviteActive: false` — this is Barry's already-onboarded real instance, not a fresh bootstrap.
+**Instance / config.** Instance `default`, config at `~/.paperclip/instances/default/config.json` (updated 2026-08-07). `deploymentMode: authenticated`, `exposure: private`, `bind: lan`, `host: 0.0.0.0`, port 3100, `allowedHostnames` includes the hostname this instance is reached by, which resolves to the machine's own LAN address, so the documented trial URL works as-is with no hosts-file trick needed. `bootstrapStatus: ready`, `bootstrapInviteActive: false` — this is the operator's already-onboarded real instance, not a fresh bootstrap.
 
 **Database.** Embedded PostgreSQL, data dir `~/.paperclip/instances/default/db`, port 54329, live postmaster PID 52164 plus its worker/backend children. Storage provider `local_disk` at `~/.paperclip/instances/default/data/storage`. Secrets provider `local_encrypted`.
 
@@ -32,11 +32,11 @@ Confirmed live, read-only, before any change was made. See the handoff ledger fo
 pnpm --filter @paperclipai/server exec tsx <path-to-a-throwaway-.mjs-that-imports-inspectMigrations-from-'file:///~/paperclip/packages/db/src/index.ts'-and-prints-the-JSON-result>
 ```
 
-**The actual restart risk, found by reading the code, not documentation:** both `pnpm dev` and `pnpm dev:once` run through `scripts/dev-runner.ts`, which sets `PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true"` and `PAPERCLIP_MIGRATION_PROMPT ??= "never"` — so either command **silently applies any pending migration** on that restart, no confirmation possible, by design. Separately, even outside dev-runner, the server's own `promptApplyMigrations()` (`server/src/index.ts`) defaults to **auto-apply when stdin/stdout is not a TTY** — and no tool-driven shell here presents a real TTY, so *any* agent-initiated restart against a database with pending migrations would apply them by default unless `PAPERCLIP_MIGRATION_PROMPT=never` is explicitly set first (which makes it refuse to start instead, the safe failure mode). **Rule going forward: before any restart, always rerun the read-only `inspectMigrations` check above first. If it is not `upToDate`, do not restart via `pnpm dev`/`dev:once`/`run` without first setting `PAPERCLIP_MIGRATION_PROMPT=never` and getting Barry's explicit approval for the specific pending migration list.**
+**The actual restart risk, found by reading the code, not documentation:** both `pnpm dev` and `pnpm dev:once` run through `scripts/dev-runner.ts`, which sets `PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true"` and `PAPERCLIP_MIGRATION_PROMPT ??= "never"` — so either command **silently applies any pending migration** on that restart, no confirmation possible, by design. Separately, even outside dev-runner, the server's own `promptApplyMigrations()` (`server/src/index.ts`) defaults to **auto-apply when stdin/stdout is not a TTY** — and no tool-driven shell here presents a real TTY, so *any* agent-initiated restart against a database with pending migrations would apply them by default unless `PAPERCLIP_MIGRATION_PROMPT=never` is explicitly set first (which makes it refuse to start instead, the safe failure mode). **Rule going forward: before any restart, always rerun the read-only `inspectMigrations` check above first. If it is not `upToDate`, do not restart via `pnpm dev`/`dev:once`/`run` without first setting `PAPERCLIP_MIGRATION_PROMPT=never` and getting the operator's explicit approval for the specific pending migration list.**
 
-**Live UI verification is credential-gated.** Opening `http://paperclip.local:3100` in the agent's browser tool shows the Sign In form (Email/Password) — no persisted session. `/api/companies` returns `401` anonymously, confirming the auth boundary is enforced (expected in `authenticated` mode). No credentials were entered or guessed, per policy. Consequence: this agent cannot visually click through Barry's live authenticated pages for verification; P0/P1 route and behavior verification instead relied on reading source directly (see the reconciliation results folded into `2026-09-02-ux-control-center-preservation.md`). Browser-based acceptance testing (A01-A26) needs either Barry's own signed-in session or an explicitly-approved test account — flag this when a phase reaches that gate.
+**Live UI verification is credential-gated.** Opening `http://localhost:3100` in the agent's browser tool shows the Sign In form (Email/Password) — no persisted session. `/api/companies` returns `401` anonymously, confirming the auth boundary is enforced (expected in `authenticated` mode). No credentials were entered or guessed, per policy. Consequence: this agent cannot visually click through the operator's live authenticated pages for verification; P0/P1 route and behavior verification instead relied on reading source directly (see the reconciliation results folded into `2026-09-02-ux-control-center-preservation.md`). Browser-based acceptance testing (A01-A26) needs either the operator's own signed-in session or an explicitly-approved test account — flag this when a phase reaches that gate.
 
-**Baseline automated tests.** `pnpm test` (the documented default) fails in this environment before any real test runs, on a Windows-specific bug: `scripts/run-vitest-stable.mjs` calls `spawnSync("pnpm", [...])` with no `shell:true`, and on this box Node's spawn resolution fails with `ENOENT` even though `pnpm.cmd` exists on PATH (reproduced in total isolation with a two-line Node script — this is not a Paperclip logic bug, it's Node's Windows executable resolution getting confused by the coexisting extension-less `pnpm` POSIX shim in the same npm global directory; likely to hit any Windows contributor with a similar global npm install, and it also crashes at least two test files that themselves shell out to a bare `"pnpm"` — `cli/src/__tests__/company-import-export-e2e.test.ts` confirmed). Worked around for baseline purposes with direct top-level `pnpm exec vitest run --project <name> [...]` calls per project instead (each invoked directly by the calling shell, not through Node's `spawnSync`, so it never hits the broken resolution path). Worth a short bug report to Barry independent of this project; not fixed here since it's test-infra, not UX-project scope.
+**Baseline automated tests.** `pnpm test` (the documented default) fails in this environment before any real test runs, on a Windows-specific bug: `scripts/run-vitest-stable.mjs` calls `spawnSync("pnpm", [...])` with no `shell:true`, and on this box Node's spawn resolution fails with `ENOENT` even though `pnpm.cmd` exists on PATH (reproduced in total isolation with a two-line Node script — this is not a Paperclip logic bug, it's Node's Windows executable resolution getting confused by the coexisting extension-less `pnpm` POSIX shim in the same npm global directory; likely to hit any Windows contributor with a similar global npm install, and it also crashes at least two test files that themselves shell out to a bare `"pnpm"` — `cli/src/__tests__/company-import-export-e2e.test.ts` confirmed). Worked around for baseline purposes with direct top-level `pnpm exec vitest run --project <name> [...]` calls per project instead (each invoked directly by the calling shell, not through Node's `spawnSync`, so it never hits the broken resolution path). Worth a short bug report to the operator independent of this project; not fixed here since it's test-infra, not UX-project scope.
 
 Full baseline, captured 2026-09-02, zero application code changed at the time of capture:
 
@@ -76,10 +76,10 @@ If another branch is checked out or there are overlapping changes, inspect and p
 
 ## Before starting or restarting the app
 
-1. Identify the exact listener/runner for port 3100 and whether it is dev-watch, dev-once, a built UI or a managed service. Do not assume a documented default describes Barry's running instance.
+1. Identify the exact listener/runner for port 3100 and whether it is dev-watch, dev-once, a built UI or a managed service. Do not assume a documented default describes the operator's running instance.
 2. Verify effective config/instance and database/storage locations without exposing secrets. Repo docs mention both old PGlite defaults and current embedded PostgreSQL behavior; inspect the actual runtime instead of resetting a guessed directory.
 3. Inspect pending migrations and startup behavior. `pnpm dev:once` is documented to auto-apply pending local migrations. A restart is therefore not automatically schema-neutral.
-4. Check whether a restart would interrupt active agent work. Use the repository's managed/restart-safe path and coordinate meaningful downtime with Barry. Do not broadly kill all Node/Paperclip processes or pause unrelated agents.
+4. Check whether a restart would interrupt active agent work. Use the repository's managed/restart-safe path and coordinate meaningful downtime with the operator. Do not broadly kill all Node/Paperclip processes or pause unrelated agents.
 5. Reuse the existing hostname, port, auth mode, allowed-hostname configuration and instance. Do not change public exposure or substitute a fresh empty database to make the UI appear healthy.
 6. If schema work is required, explain impact, backup and rollback plan and obtain approval before live migration. UI-only phases should avoid it.
 
@@ -96,7 +96,7 @@ pnpm dev
 Read-only health check, once the intended instance is confirmed:
 
 ```powershell
-Invoke-RestMethod 'http://paperclip.local:3100/api/health'
+Invoke-RestMethod 'http://localhost:3100/api/health'
 ```
 
 Also verify the actual browser URL, company data, shell revision and a known source change. Health alone does not prove the UI is serving the branch. Respect authentication; do not bypass it.
@@ -121,10 +121,10 @@ The exact UI fallback mechanism is a P0/P1 decision. Before changing the shell, 
 
 - Preserve working changes and branch history; no `reset --hard`, forced checkout, broad deletion, or automatic stash.
 - Returning code to `master` is not a database rollback. Never assume an older binary understands newly migrated data.
-- If a migration has occurred, follow its approved compatibility/backup/recovery plan. Do not restore over Barry's database just to fix a navigation regression.
+- If a migration has occurred, follow its approved compatibility/backup/recovery plan. Do not restore over the operator's database just to fix a navigation regression.
 - Do not run two servers against the same embedded data directory. An isolated test instance must not resume copied production agents/routines or reach real outbound providers.
 - For a failed UI slice, use the documented shell fallback first when available; record the failure and affected acceptance checks, then correct locally.
 
 ## External publication remains gated
 
-Nothing in this runbook authorizes push, PR, merge, extension release, deployment, or provider/account changes. Barry approves publication only after local use is satisfactory. Follow the required secret-gated commit/push workflow and PR template at that later point.
+Nothing in this runbook authorizes push, PR, merge, extension release, deployment, or provider/account changes. The operator approves publication only after local use is satisfactory. Follow the required secret-gated commit/push workflow and PR template at that later point.

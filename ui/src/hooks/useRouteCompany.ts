@@ -14,7 +14,7 @@ import { useCompany } from "../context/CompanyContext";
  * Usually that is invisible: the request succeeds and is replaced a moment
  * later. It is not invisible where the company is an authorisation boundary.
  * On the Email page it made every cross-company visit fail: a mailbox is scoped
- * to exactly one company, so asking for `ib-barry` while the context still said
+ * to exactly one company, so asking for `acme-owner` while the context still said
  * HQ was rejected outright. Measured on a live instance across two days, 58
  * such requests failed, every one of them carrying a company the mailbox did
  * not belong to and every one of them the first request after a navigation.

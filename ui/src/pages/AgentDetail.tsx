@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { AGENT_TABS, agentTabLabel } from "@/lib/agent-tabs";
+import { AgentCurrentWork } from "../components/AgentCurrentWork";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1236,6 +1237,7 @@ export function AgentDetail() {
           runtimeState={runtimeState}
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
+          companyId={resolvedCompanyId ?? null}
         />
       )}
 
@@ -1416,6 +1418,7 @@ function AgentOverview({
   runtimeState,
   agentId,
   agentRouteId,
+  companyId,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1423,11 +1426,25 @@ function AgentOverview({
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
+  companyId: string | null;
 }) {
   return (
     <div className="space-y-8">
-      {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} />
+      {/* What this team member is doing right now, what it has been doing,
+          what came out of it, what it can reach and how it has been getting
+          on. Built from the same reading the Team list uses, so the two
+          cannot end up saying different things about the same agent. */}
+      {companyId ? (
+        <AgentCurrentWork
+          agent={agent}
+          companyId={companyId}
+          runs={runs}
+          agentRouteId={agentRouteId}
+          runtimeLastError={runtimeState?.lastError ?? null}
+        />
+      ) : (
+        <LatestRunCard runs={runs} agentId={agentRouteId} />
+      )}
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

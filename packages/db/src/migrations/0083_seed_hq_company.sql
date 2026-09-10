@@ -1,5 +1,5 @@
 -- Seed the singleton HQ portfolio-root company on installs that don't have one.
--- 0078 added `companies.is_portfolio_root` but did not insert a row; on Barry's
+-- 0078 added `companies.is_portfolio_root` but did not insert a row; on the operator's
 -- machine the existing "Portfolio Operations" company was hand-flipped to HQ
 -- via one-off SQL. Fresh installs (e.g. Tony's) had no HQ row, so the sidebar
 -- never showed the portfolio-root entry. This idempotent seed fixes that.

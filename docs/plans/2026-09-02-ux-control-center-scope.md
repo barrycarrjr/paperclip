@@ -2,7 +2,7 @@
 
 Created: 2026-09-02. [Project entry point](2026-09-02-ux-control-center.md).
 
-## Requirements established by Barry
+## Requirements established by the operator
 
 - Multiple companies each have their own agent team. HQ is not one of those operating companies: it is the
   bird's-eye view/oversight seat used to manage the others, not a business running its own separate work
@@ -71,7 +71,7 @@ Keep the bottom-right launcher, resizable drawer, recent chats, full workspace, 
 
 ### 5. Useful attention and activity
 
-Lead with what changed, who owns the next action, why Barry is needed, and the next useful action. Keep receipts/outcomes separate from raw diagnostic activity.
+Lead with what changed, who owns the next action, why the operator is needed, and the next useful action. Keep receipts/outcomes separate from raw diagnostic activity.
 
 Working, Watching, Waiting on someone, Needs a decision, Paused, and Failed must be backed by actual evidence. A `blocked` task can be intentionally waiting; a `succeeded` run can report a different failure. Reuse the fork's execution/liveness semantics and represent uncertainty explicitly. Never label the business healthy merely because a run succeeded.
 
@@ -111,12 +111,12 @@ Proposed additions remain in the roadmap but are not automatically authorized mi
 | D05 | Portfolio and HQ team are visibly distinct | **Superseded 2026-09-08 by D13** — was proposed implementation direction addressing observed ambiguity |
 | D06 | Preserve workspace on company change | Proposed; verify shortcut, detail, draft, and unavailable-state rules in P1 |
 | D07 | Local working checkout, not a separate live clone | Agreed local workflow; process/database binding still needs verification |
-| D08 | No push/PR until Barry approves | User-controlled publication gate |
+| D08 | No push/PR until the operator approves | User-controlled publication gate |
 | D09 | Additive UI work before behavior/schema expansion | Risk-control approach; preserves existing service contracts |
-| D10 | Runtime rollback strategy chosen before shell replacement | Resolved 2026-09-02 (agent-proposed default, not yet Barry-reviewed — see rationale below) |
+| D10 | Runtime rollback strategy chosen before shell replacement | Resolved 2026-09-02 (agent-proposed default, not yet the operator-reviewed — see rationale below) |
 | D11 | Extension repository changes | Open only if needed; coordinate its own branch/deployment path before edits |
 | D12 | Server-side restart safety gate | Agreed working rule 2026-09-02 (agent-adopted from P0 findings, not a product decision) |
-| D13 | HQ is not a real operating company; it is the bird's-eye view/oversight seat, same job as Portfolio | Barry correction, 2026-09-08 (supersedes D05) |
+| D13 | HQ is not a real operating company; it is the bird's-eye view/oversight seat, same job as Portfolio | the operator correction, 2026-09-08 (supersedes D05) |
 
 D13 rationale: D05 had it backwards. Checked against the live data 2026-09-08: HQ's only real content is its
 two agents (Builder, Steward) and their 345 issues, and every one of those issues is oversight/housekeeping
@@ -125,11 +125,11 @@ HQ runs on its own. So HQ and Portfolio are the same job, not two things that ne
 separate Portfolio button (globe icon, added under D05) was reverted the same day: it duplicated the single
 HQ icon, which already opens that oversight work and already pins the Portfolio aggregate pages by default
 (hooks/useHqDefaultPins.ts). The disabled button is kept as a commented-out block in CompanyRail.tsx, not
-deleted, in case a later Barry decision wants a differently-named separate button back. No data moved: HQ's
+deleted, in case a later the operator decision wants a differently-named separate button back. No data moved: HQ's
 agents and issues stay exactly where they are: only the rail's second icon was removed.
 
-D10 rationale: the new shell (P1) will wrap the *same* pages, routes, company context, and data hooks the current `Layout`/`Sidebar`/`CompanyRail` use — it must not fork business logic or duplicate the data layer (that would violate the "single domain implementation" preference and create drift risk). The chosen mechanism is a navigation-chrome-only runtime toggle: keep the existing shell components importable and working, add the new shell as a sibling, and gate which one renders behind a simple flag (instance setting or equivalent already-established settings surface, defaulting to a stored preference so Barry can flip back instantly without a git revert or restart). Both shells read the same pages/hooks/contexts underneath. This is an implementation-detail default chosen to keep P1 reversible cheaply; it is not a product/UX decision and does not need sign-off to start, but Barry should be told the toggle exists and where, the first time he sees the new shell.
+D10 rationale: the new shell (P1) will wrap the *same* pages, routes, company context, and data hooks the current `Layout`/`Sidebar`/`CompanyRail` use — it must not fork business logic or duplicate the data layer (that would violate the "single domain implementation" preference and create drift risk). The chosen mechanism is a navigation-chrome-only runtime toggle: keep the existing shell components importable and working, add the new shell as a sibling, and gate which one renders behind a simple flag (instance setting or equivalent already-established settings surface, defaulting to a stored preference so the operator can flip back instantly without a git revert or restart). Both shells read the same pages/hooks/contexts underneath. This is an implementation-detail default chosen to keep P1 reversible cheaply; it is not a product/UX decision and does not need sign-off to start, but the operator should be told the toggle exists and where, the first time he sees the new shell.
 
-D12: before any server restart during this project (a UI-only edit under Vite dev middleware does not need one), rerun the read-only migration check recorded in the runbook's "P0 verification results" section. If it reports anything other than `upToDate`, do not restart via `pnpm dev`/`dev:once`/`run` without first setting `PAPERCLIP_MIGRATION_PROMPT=never` (so the server refuses to start instead of silently migrating) and getting Barry's explicit approval for the specific pending migration list. Applies for the whole project life, not just P0.
+D12: before any server restart during this project (a UI-only edit under Vite dev middleware does not need one), rerun the read-only migration check recorded in the runbook's "P0 verification results" section. If it reports anything other than `upToDate`, do not restart via `pnpm dev`/`dev:once`/`run` without first setting `PAPERCLIP_MIGRATION_PROMPT=never` (so the server refuses to start instead of silently migrating) and getting the operator's explicit approval for the specific pending migration list. Applies for the whole project life, not just P0.
 
-Record new decisions with date, rationale, affected features/tests, and whether Barry approved them. Do not silently upgrade a proposal to an agreed requirement.
+Record new decisions with date, rationale, affected features/tests, and whether the operator approved them. Do not silently upgrade a proposal to an agreed requirement.

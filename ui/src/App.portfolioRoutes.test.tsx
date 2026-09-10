@@ -6,6 +6,14 @@ import { PortfolioBrief } from "./pages/PortfolioBrief";
 import { PortfolioCosts } from "./pages/PortfolioCosts";
 import { PortfolioDirectives } from "./pages/PortfolioDirectives";
 import { PortfolioEmail } from "./pages/PortfolioEmail";
+import {
+  PortfolioTeams,
+  PortfolioTeamsAgents,
+  PortfolioTeamsAssistants,
+  PortfolioTeamsOrg,
+  PortfolioTeamsRightNow,
+  PortfolioTeamsTimeline,
+} from "./pages/PortfolioAgents";
 
 /**
  * Putting the all company pages behind a shell that can say "not available
@@ -30,12 +38,22 @@ function isInsidePortfolioShell(pathname: string): boolean {
   return matches.some((match) => (match.route as any).element?.type === PortfolioScopeRoute);
 }
 
+function isInsidePortfolioTeams(pathname: string): boolean {
+  const matches = matchRoutes(routes, pathname) ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return matches.some((match) => (match.route as any).element?.type === PortfolioTeams);
+}
+
 const PORTFOLIO_PATHS = [
   "/portfolio-brief",
   "/portfolio-email",
   "/portfolio-issues",
   "/portfolio-directives",
   "/portfolio-agents",
+  "/portfolio-agents/timeline",
+  "/portfolio-agents/agents",
+  "/portfolio-agents/org",
+  "/portfolio-agents/assistants",
   "/portfolio-approvals",
   "/portfolio-activity",
   "/portfolio-routines",
@@ -50,6 +68,17 @@ describe("Portfolio addresses", () => {
     expect(pageAt("/portfolio-costs")).toBe(PortfolioCosts);
     expect(pageAt("/portfolio-directives")).toBe(PortfolioDirectives);
     expect(pageAt("/portfolio-email")).toBe(PortfolioEmail);
+    expect(pageAt("/portfolio-agents")).toBe(PortfolioTeamsRightNow);
+    expect(pageAt("/portfolio-agents/timeline")).toBe(PortfolioTeamsTimeline);
+    expect(pageAt("/portfolio-agents/agents")).toBe(PortfolioTeamsAgents);
+    expect(pageAt("/portfolio-agents/org")).toBe(PortfolioTeamsOrg);
+    expect(pageAt("/portfolio-agents/assistants")).toBe(PortfolioTeamsAssistants);
+  });
+
+  it("keeps all five team views inside the Portfolio Teams tab shell", () => {
+    for (const path of PORTFOLIO_PATHS.filter((path) => path.startsWith("/portfolio-agents"))) {
+      expect(isInsidePortfolioTeams(path), path).toBe(true);
+    }
   });
 
   it("puts every all company page behind the scope shell", () => {

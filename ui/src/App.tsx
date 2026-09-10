@@ -8,7 +8,7 @@ import { PortfolioScopeRoute } from "./components/PortfolioScopeRoute";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
-import { Team, TeamLayout } from "./pages/Team";
+import { Team, TeamTimeline, TeamLayout } from "./pages/Team";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Projects } from "./pages/Projects";
 import { ProjectDetail } from "./pages/ProjectDetail";
@@ -71,7 +71,14 @@ import { NotFoundPage } from "./pages/NotFound";
 import { Clippy } from "./pages/Clippy";
 import { PortfolioIssues } from "./pages/PortfolioIssues";
 import { PortfolioDirectives } from "./pages/PortfolioDirectives";
-import { PortfolioAgents } from "./pages/PortfolioAgents";
+import {
+  PortfolioTeams,
+  PortfolioTeamsAgents,
+  PortfolioTeamsAssistants,
+  PortfolioTeamsOrg,
+  PortfolioTeamsRightNow,
+  PortfolioTeamsTimeline,
+} from "./pages/PortfolioAgents";
 import { PortfolioApprovals } from "./pages/PortfolioApprovals";
 import { PortfolioActivity } from "./pages/PortfolioActivity";
 import { PortfolioRoutines } from "./pages/PortfolioRoutines";
@@ -137,6 +144,7 @@ export function boardRoutes() {
           page rather than a redirect: the current-work view is its content. */}
       <Route element={<TeamLayout />}>
         <Route path="team" element={<Team />} />
+        <Route path="team/timeline" element={<TeamTimeline />} />
         <Route path="org" element={<OrgChart />} />
         <Route path="agents/all" element={<Agents />} />
         <Route path="agents/active" element={<Agents />} />
@@ -172,7 +180,13 @@ export function boardRoutes() {
       <Route element={<PortfolioScopeRoute />}>
         <Route path="portfolio-issues" element={<PortfolioIssues />} />
         <Route path="portfolio-directives" element={<PortfolioDirectives />} />
-        <Route path="portfolio-agents" element={<PortfolioAgents />} />
+        <Route path="portfolio-agents" element={<PortfolioTeams />}>
+          <Route index element={<PortfolioTeamsRightNow />} />
+          <Route path="timeline" element={<PortfolioTeamsTimeline />} />
+          <Route path="agents" element={<PortfolioTeamsAgents />} />
+          <Route path="org" element={<PortfolioTeamsOrg />} />
+          <Route path="assistants" element={<PortfolioTeamsAssistants />} />
+        </Route>
         <Route path="portfolio-approvals" element={<PortfolioApprovals />} />
         <Route path="portfolio-activity" element={<PortfolioActivity />} />
         <Route path="portfolio-routines" element={<PortfolioRoutines />} />
@@ -428,6 +442,7 @@ export function App() {
           {/* The Team page. Its other tabs (/agents/all, /org,
               /assistants) are listed with the agent routes below. */}
           <Route path="team" element={<UnprefixedBoardRedirect />} />
+          <Route path="team/timeline" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/new" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />

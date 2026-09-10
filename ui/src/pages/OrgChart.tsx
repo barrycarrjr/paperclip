@@ -98,6 +98,20 @@ interface ForestLayout {
 }
 
 /**
+ * The CEO's tree is drawn first when a company has more than one root.
+ *
+ * The tree arrives in whatever order the database returned, so a company
+ * with an unattached agent alongside the CEO could draw that agent's tree on
+ * the left. The org chart is the picture of how the company is structured,
+ * and the top of the company belongs at the start of it. Anything else keeps
+ * the order it came in.
+ */
+function ceoFirst(left: OrgNode, right: OrgNode): number {
+  const rank = (node: OrgNode) => (node.role === "ceo" ? 0 : 1);
+  return rank(left) - rank(right);
+}
+
+/**
  * Lay out the forest. Roots with reports become the primary tree(s) at the
  * top. Roots that are leaves (no manager, no reports) are clustered in a
  * separate row underneath so they read as a distinct group rather than as
@@ -109,7 +123,7 @@ function layoutForest(roots: OrgNode[]): ForestLayout {
     return { nodes: [], orphanRowY: null, orphanRowBounds: null };
   }
 
-  const primaryRoots = roots.filter((r) => r.reports.length > 0);
+  const primaryRoots = roots.filter((r) => r.reports.length > 0).sort(ceoFirst);
   const orphanRoots = roots.filter((r) => r.reports.length === 0);
 
   // If everything is orphan (small companies w/ no manager chain), keep the

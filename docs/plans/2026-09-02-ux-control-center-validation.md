@@ -16,7 +16,7 @@ Use isolated test fixtures or mock providers for sends, calls, public replies, u
 
 ## Acceptance checklist
 
-All checks below start **pending**. Record per-check results in the handoff ledger; mark a deferral only with its reason and Barry's agreement.
+All checks below start **pending**. Record per-check results in the handoff ledger; mark a deferral only with its reason and the operator's agreement.
 
 | ID | Scenario and expected result | Features |
 |---|---|---|
@@ -45,7 +45,7 @@ All checks below start **pending**. Record per-check results in the handoff ledg
 | A23 | Empty, loading, disabled, unconfigured, permission-limited and failed plugin/page states are distinct; preserve navigation and recovery; no error object rendered as success data | F28, F29, X01–X11 |
 | A24 | On desktop and narrow screens, no accidental clipping, overlapping actions or inaccessible third pane; Email and Clippy reachable; keyboard/focus/Escape/labels/touch usable | All changed UI |
 | A25 | Company authorization, private data isolation, atomic checkout, single-assignee ownership, approval gates, budgets, audit logging and privacy/telemetry invariants still pass | All integrations |
-| A26 | Barry completes a normal local operating session, identifies scope/agents/attention and starts work without internal jargon; records explicit satisfaction and remaining agreed deferrals | Entire project |
+| A26 | the operator completes a normal local operating session, identifies scope/agents/attention and starts work without internal jargon; records explicit satisfaction and remaining agreed deferrals | Entire project |
 
 ## Minimum regression matrix
 
@@ -75,7 +75,7 @@ Run UI typechecking after coherent UI slices:
 pnpm --filter @paperclipai/ui typecheck
 ```
 
-The ordinary repo test path is `pnpm test` (Vitest, not browser suites). The current full-test wrapper creates isolated test instance directories. Confirm isolation before any server/integration test; do not pass Barry's live instance overrides into tests.
+The ordinary repo test path is `pnpm test` (Vitest, not browser suites). The current full-test wrapper creates isolated test instance directories. Confirm isolation before any server/integration test; do not pass the operator's live instance overrides into tests.
 
 Before broad completion / publication readiness:
 
@@ -89,8 +89,8 @@ Browser verification is necessary for this navigation/interaction change. Inspec
 
 Do not weaken tests, hide genuine failures, or equate a green targeted subset with a green full suite. Baseline failures need separate evidence and an agreed disposition.
 
-## Barry's daily-use trial
+## The operator's daily-use trial
 
-Have Barry operate Email, support, Calendar and a company team; switch companies repeatedly; use Clippy; find a less-used plugin/work detail; and inspect attention/agent progress. Observe misnavigation, hidden functionality and scope uncertainty rather than measuring only click counts.
+Have the operator operate Email, support, Calendar and a company team; switch companies repeatedly; use Clippy; find a less-used plugin/work detail; and inspect attention/agent progress. Observe misnavigation, hidden functionality and scope uncertainty rather than measuring only click counts.
 
 For each feedback item record the current branch/commit, reproduction, expected behavior, affected feature/acceptance IDs, correction and confirmation. No push or PR is triggered automatically by completing this checklist.

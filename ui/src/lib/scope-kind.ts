@@ -11,12 +11,16 @@
  * :companyPrefix (so the URL and the sidebar's company menu both read "HQ"
  * even while viewing all-company aggregate data), and the page header
  * (BreadcrumbBar.tsx) never showed company/scope identity at all, only the
- * page title. Confirmed live by Barry 2026-09-02: opening Portfolio Brief
+ * page title. Confirmed live by the operator 2026-09-02: opening Portfolio Brief
  * showed no way to tell, from the header, that the data was aggregate rather
  * than HQ's own.
  */
 import type { CompanyKind } from "@paperclipai/shared";
 import { isBoardPathWithoutPrefix, toCompanyRelativePath } from "./company-routes";
+import {
+  portfolioTeamPathForCompanyPath,
+  portfolioTeamTabForPath,
+} from "./portfolio-team-tabs";
 
 export type ScopeKind = "portfolio" | "hq" | "company" | "personal" | "instance";
 
@@ -31,7 +35,14 @@ export type ScopeKind = "portfolio" | "hq" | "company" | "personal" | "instance"
  * both the prefixed and already-relative forms the same way.
  */
 function pageRootSegment(pathname: string): string | null {
-  const relative = toCompanyRelativePath(pathname);
+  const rawRoot = pathname.split(/[?#]/)[0]?.split("/").filter(Boolean)[0]?.toLowerCase();
+  // Portfolio Teams has nested paths whose second segment (org, assistants,
+  // agents) is also a top-level company route. A bare company-relative path
+  // must not be mistaken for /:companyPrefix/:page in that case.
+  const relative =
+    rawRoot?.startsWith("portfolio-") && isBoardPathWithoutPrefix(`/${rawRoot}`)
+      ? pathname
+      : toCompanyRelativePath(pathname);
   const root = relative.split("/").filter(Boolean)[0];
   return root ? root.toLowerCase() : null;
 }
@@ -73,7 +84,7 @@ export function resolveScopeKind(params: {
  * name of the scope you are in. Separate from the page title next to it,
  * which only ever said what page you're on, never what scope (a
  * portfolio-wide page and HQ's own page look identical there, both mounted
- * under the same /HQ/... prefix). Confirmed live by Barry 2026-09-02 that
+ * under the same /HQ/... prefix). Confirmed live by the operator 2026-09-02 that
  * nothing in the header told them apart. Returns null when there's nothing to
  * show yet (e.g. no company has resolved), so callers can skip rendering the
  * button and its separator both.
@@ -234,11 +245,10 @@ const COMPANY_PAGE_FOR_PORTFOLIO_PAGE: Readonly<Record<string, string>> = {
 /**
  * The portfolio page each company page has an all company version of.
  *
- * Not simply the map above turned around. Team is one page with four
- * addresses (/team, /agents/all, /org, /assistants) and all four are about who
- * is on the team, so all four lead to Portfolio Agents, while coming back from
- * Portfolio Agents lands on /team, the one of the four that opens on what
- * everyone is doing.
+ * Not simply the map above turned around. Team is one workspace with five
+ * addresses. Portfolio Teams mirrors those five views, and the helpers below
+ * preserve the active tab in both directions before consulting this fallback
+ * map.
  *
  * A page with no all company version is not listed and is not invented here.
  * Choosing Portfolio from one of those (a single task, a project, Memories)
@@ -274,6 +284,12 @@ export const DEFAULT_COMPANY_PATH = "/brief";
  * you are in it does not throw away the page you were reading.
  */
 export function portfolioPathForPage(pathname: string): string {
+  const portfolioTeamTab = portfolioTeamTabForPath(pathname);
+  if (portfolioTeamTab) return portfolioTeamTab.to;
+
+  const matchingPortfolioTeamPath = portfolioTeamPathForCompanyPath(pathname);
+  if (matchingPortfolioTeamPath) return matchingPortfolioTeamPath;
+
   const root = pageRootSegment(pathname);
   if (!root) return DEFAULT_PORTFOLIO_PATH;
   if (isPortfolioRoutePath(pathname)) return `/${root}`;
@@ -289,6 +305,9 @@ export function portfolioPathForPage(pathname: string): string {
  * company switch, which keeps its existing behaviour untouched.
  */
 export function companyPathForPortfolioPage(pathname: string): string | null {
+  const portfolioTeamTab = portfolioTeamTabForPath(pathname);
+  if (portfolioTeamTab) return portfolioTeamTab.companyTo;
+
   if (!isPortfolioRoutePath(pathname)) return null;
   const root = pageRootSegment(pathname);
   const paired = root ? COMPANY_PAGE_FOR_PORTFOLIO_PAGE[root] : undefined;

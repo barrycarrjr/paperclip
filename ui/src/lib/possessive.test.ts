@@ -7,7 +7,7 @@ describe("possessive", () => {
   });
 
   it("adds only an apostrophe to a name that already ends in s", () => {
-    expect(possessive("Carr Rock Holdings")).toBe("Carr Rock Holdings'");
+    expect(possessive("Northwind Holdings")).toBe("Northwind Holdings'");
     expect(possessive("PBS")).toBe("PBS'");
   });
 

@@ -4,6 +4,7 @@ import type { LiveRunForIssue } from "../api/heartbeats";
 import type { PendingCompanyInteraction } from "../api/issues";
 import {
   buildTeamCurrentWork,
+  countTeamAttention,
   countTeamWorkStates,
   TEAM_WORK_STATE_LABELS,
 } from "./team-current-work";
@@ -273,5 +274,129 @@ describe("buildTeamCurrentWork", () => {
     for (const state of Object.keys(TEAM_WORK_STATE_LABELS)) {
       expect(TEAM_WORK_STATE_LABELS[state as keyof typeof TEAM_WORK_STATE_LABELS]).toBeTruthy();
     }
+  });
+
+  it("says an agent with nothing running has handed work back for review", () => {
+    const rows = build({
+      agents: [agent({ id: "a1", name: "Mail triage" })],
+      issues: [
+        issue({
+          id: "i1",
+          identifier: "PAP-7",
+          title: "Draft the supplier reply",
+          status: "in_review",
+          assigneeAgentId: "a1",
+        }),
+      ],
+    });
+
+    expect(rows[0]!.state).toBe("needs_review");
+    expect(rows[0]!.line).toBe("Finished and handed the work back to you.");
+    expect(rows[0]!.detail).toBe("1 finished task is waiting on you.");
+    expect(rows[0]!.task?.identifier).toBe("PAP-7");
+    expect(rows[0]!.needsAttention).toBe(true);
+  });
+
+  it("still reports a live run first, but says review work is stacking up behind it", () => {
+    const rows = build({
+      agents: [agent({ id: "a1", name: "Mail triage" })],
+      liveRuns: [run({ id: "r1", agentId: "a1", status: "running" })],
+      issues: [
+        issue({ id: "i1", title: "Older draft", status: "in_review", assigneeAgentId: "a1" }),
+      ],
+    });
+
+    expect(rows[0]!.state).toBe("working");
+    expect(rows[0]!.reviewWaiting).toHaveLength(1);
+  });
+
+  it("puts work waiting on a review above work that is merely running", () => {
+    const rows = build({
+      agents: [
+        agent({ id: "a1", name: "Aardvark" }),
+        agent({ id: "a2", name: "Zebra" }),
+      ],
+      liveRuns: [run({ id: "r1", agentId: "a1", status: "running" })],
+      issues: [issue({ id: "i1", title: "Done draft", status: "in_review", assigneeAgentId: "a2" })],
+    });
+
+    expect(rows.map((row) => row.agent.name)).toEqual(["Zebra", "Aardvark"]);
+  });
+
+  it("reports how long a run has been going and when the agent last did something", () => {
+    const startedAt = new Date(NOW - 10 * 60_000).toISOString();
+    const lastAction = new Date(NOW - 90_000).toISOString();
+    const rows = build({
+      agents: [agent({ id: "a1", name: "Mail triage" })],
+      liveRuns: [
+        run({ id: "r1", agentId: "a1", status: "running", startedAt, lastUsefulActionAt: lastAction }),
+      ],
+    });
+
+    expect(rows[0]!.runStartedAt).toBe(startedAt);
+    expect(rows[0]!.lastActivityAt).toBe(lastAction);
+  });
+
+  it("falls back to the scheduler heartbeat when no run is live", () => {
+    const beat = new Date(NOW - 5 * 60_000);
+    const rows = build({ agents: [agent({ id: "a1", name: "Spare", lastHeartbeatAt: beat })] });
+
+    expect(rows[0]!.runStartedAt).toBeNull();
+    expect(rows[0]!.lastActivityAt).toBe(beat.toISOString());
+  });
+
+  it("says why an agent stopped, in its own words, cut to one line", () => {
+    const rows = build({
+      agents: [
+        agent({
+          id: "a1",
+          name: "Fallen over",
+          status: "error",
+          lastError: "Adapter exited with code 1\n    at someFrame\n    at another",
+        } as never),
+      ],
+    });
+
+    expect(rows[0]!.state).toBe("error");
+    expect(rows[0]!.detail).toBe("Adapter exited with code 1");
+    expect(rows[0]!.detailTone).toBe("err");
+  });
+
+  it("says plainly that nothing recorded a reason, rather than sending you nowhere", () => {
+    const rows = build({
+      agents: [agent({ id: "a1", name: "Fallen over", status: "error" })],
+    });
+
+    expect(rows[0]!.detail).toBe("No reason was recorded.");
+  });
+
+  it("cuts a very long error rather than letting it fill the card", () => {
+    const rows = build({
+      agents: [
+        agent({
+          id: "a1",
+          name: "Fallen over",
+          status: "error",
+          lastError: "x".repeat(500),
+        } as never),
+      ],
+    });
+
+    expect(rows[0]!.detail!.length).toBe(160);
+    expect(rows[0]!.detail!.endsWith("…")).toBe(true);
+  });
+
+  it("counts everyone who is waiting on a person rather than on an agent", () => {
+    const rows = build({
+      agents: [
+        agent({ id: "a1", name: "One" }),
+        agent({ id: "a2", name: "Two", status: "error" }),
+        agent({ id: "a3", name: "Three" }),
+      ],
+      liveRuns: [run({ id: "r1", agentId: "a1", status: "running" })],
+      pendingInteractions: [question({ id: "q1", createdByAgentId: "a3" })],
+    });
+
+    expect(countTeamAttention(rows)).toBe(2);
   });
 });

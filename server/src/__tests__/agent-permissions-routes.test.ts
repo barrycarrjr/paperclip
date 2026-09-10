@@ -185,25 +185,47 @@ function registerModuleMocks() {
   }));
 }
 
-function createDbStub(options: { requireBoardApprovalForNewAgents?: boolean } = {}) {
+/**
+ * Two shapes of query reach this stub, and they are told apart by whether
+ * the caller joins. `.from(...).where(...)` is the company lookup;
+ * `.from(...).leftJoin(...).where(...)` is the per-agent runtime state the
+ * list route reads so it can say WHY an agent stopped.
+ */
+function createDbStub(
+  options: {
+    requireBoardApprovalForNewAgents?: boolean;
+    runtimeRows?: Array<Record<string, unknown>>;
+  } = {},
+) {
+  const thenable = (rows: unknown[]) => ({
+    then: vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve(resolve(rows))),
+  });
+
   return {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          then: vi.fn((resolve) =>
-            Promise.resolve(resolve([{
-              id: companyId,
-              name: "Paperclip",
-              requireBoardApprovalForNewAgents: options.requireBoardApprovalForNewAgents ?? false,
-            }])),
-          ),
+        where: vi.fn().mockReturnValue(
+          thenable([{
+            id: companyId,
+            name: "Paperclip",
+            requireBoardApprovalForNewAgents: options.requireBoardApprovalForNewAgents ?? false,
+          }]),
+        ),
+        leftJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue(thenable(options.runtimeRows ?? [])),
         }),
       }),
     }),
   };
 }
 
-async function createApp(actor: Record<string, unknown>, dbOptions: { requireBoardApprovalForNewAgents?: boolean } = {}) {
+async function createApp(
+  actor: Record<string, unknown>,
+  dbOptions: {
+    requireBoardApprovalForNewAgents?: boolean;
+    runtimeRows?: Array<Record<string, unknown>>;
+  } = {},
+) {
   const [{ errorHandler }, { agentRoutes }] = await Promise.all([
     import("../middleware/index.js") as Promise<typeof import("../middleware/index.js")>,
     import("../routes/agents.js") as Promise<typeof import("../routes/agents.js")>,
@@ -403,6 +425,108 @@ describe.sequential("agent permission routes", () => {
         runtimeConfig: {},
       }),
     ]);
+  });
+
+  it("says why an agent stopped, so a list does not have to guess", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      {
+        runtimeRows: [
+          {
+            agentId,
+            lastError: "OAuth session expired and could not be refreshed",
+            lastRunStatus: "failed",
+            lastRunError: null,
+          },
+        ],
+      },
+    );
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${companyId}/agents`));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].lastError).toBe("OAuth session expired and could not be refreshed");
+    expect(res.body[0].lastRunStatus).toBe("failed");
+  });
+
+  it("falls back to the failed run's own message when the runtime row kept none", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      {
+        runtimeRows: [
+          { agentId, lastError: null, lastRunStatus: "failed", lastRunError: "Adapter exited 1" },
+        ],
+      },
+    );
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${companyId}/agents`));
+
+    expect(res.body[0].lastError).toBe("Adapter exited 1");
+  });
+
+  it("reports no reason rather than an undefined field when nothing was recorded", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      { runtimeRows: [] },
+    );
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${companyId}/agents`));
+
+    expect(res.body[0].lastError).toBeNull();
+    expect(res.body[0].lastRunStatus).toBeNull();
+  });
+
+  it("keeps the error message away from a viewer who cannot read configurations", async () => {
+    mockAccessService.canUser.mockResolvedValue(false);
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "member-user",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: [companyId],
+      },
+      {
+        runtimeRows: [
+          { agentId, lastError: "secret path /home/operator/.config", lastRunStatus: "failed", lastRunError: null },
+        ],
+      },
+    );
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${companyId}/agents`));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].lastError).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain("secret path");
   });
 
   it("blocks agent updates for authenticated company members without agent admin permission", async () => {
@@ -1190,7 +1314,7 @@ describe.sequential("agent permission routes", () => {
 
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1279,7 +1403,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects requests with too-long path entries", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1296,7 +1420,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects requests with too many path entries", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1316,7 +1440,7 @@ describe.sequential("agent permission routes", () => {
 
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],
@@ -1335,7 +1459,7 @@ describe.sequential("agent permission routes", () => {
     it("rejects forbiddenWritePaths in general PATCH /agents/:id body", async () => {
       const app = await createApp({
         type: "board",
-        userId: "barry",
+        userId: "owner",
         source: "session",
         isInstanceAdmin: true,
         companyIds: [companyId],

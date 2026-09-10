@@ -106,7 +106,7 @@ it is already specified in `docs/plans/2026-09-03-p5a-email-delegation-spec.md`.
 
 **Superseded 2026-09-08, see `2026-09-02-ux-control-center-scope.md` D13.** The mockup description
 below and the app change it drove both rested on the premise D05 stated: that HQ is its own team
-separate from the portfolio aggregate. Barry corrected that: HQ is not an operating company, it is
+separate from the portfolio aggregate. The operator corrected that: HQ is not an operating company, it is
 the bird's-eye view, so a second "PF" button duplicating the HQ icon was the wrong move, not a gap
 to close. The rail button this section describes was built, then reverted the same day (kept as a
 commented-out block in `CompanyRail.tsx`). Left below as the historical record of what the mockup
@@ -306,7 +306,7 @@ editor: an editable box with a length limit, saved drafts, a "Posts as" line sho
 public identity, an AI suggestion the person can accept or edit, and a confirmation step that posts
 to Google. See `paperclip-extensions/plugins/gbp-reviews/src/ui/ReviewEditor.tsx`. So there is
 nothing to build here, and the scope document's row should be corrected rather than acted on. This
-is worth Barry knowing, because that row currently reads as authorising design work on something
+is worth the operator knowing, because that row currently reads as authorising design work on something
 that exists.
 
 ### The mockup's new names, adopted one screen at a time

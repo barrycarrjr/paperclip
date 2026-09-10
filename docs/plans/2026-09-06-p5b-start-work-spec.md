@@ -4,10 +4,10 @@ Status (2026-09-06): **built in the working tree, tested, and checked end to
 end on a throwaway instance. NOT yet live.** The live instance on port 3100
 still runs the code from before this feature (its `/start-work/plan` route
 answers `404 API route not found`, checked 2026-09-06), and migration 0097 has
-not been applied to it. Both need a server restart that Barry must approve
+not been applied to it. Both need a server restart that the operator must approve
 (see "What goes live when, and what needs the restart" below).
 
-## The one thing to decide, stated plainly for Barry
+## The one thing to decide, stated plainly for the operator
 
 Drafting a plan writes two rows BEFORE anyone accepts anything: one **request
 issue** (the container) and one **plan card** (a `suggest_tasks` interaction)
@@ -32,7 +32,7 @@ Rejecting cancels the container. Accepting hands it to the company's lead.
 The screen never claims "nothing was created": the plan header says a request
 issue exists and links to it.
 
-If Barry does not want even the container written before accept, the only
+If the operator does not want even the container written before accept, the only
 alternative is a nullable `issue_id` migration on the interaction table, which
 touches the pinned accept path and is the less reversible choice. That is why
 this spec went the other way.
@@ -333,13 +333,13 @@ HTML), and resolves `packages/*` from source.
   already has "Draft a plan", but pressing it against the old server gets
   `404 API route not found`, which the dialog shows as its failure text.
 - `server/` changes (route, service, accept and reject hooks, Brief wording)
-  and migration 0097 need the server restarted. Barry approves that; nobody
+  and migration 0097 need the server restarted. The operator approves that; nobody
   else restarts it, because the instance is shared and holds live
   workspaces.
 
 ## Runtime check (numbered; observed 2026-09-06, real identifiers)
 
-Barry's rule is to check the running app, not just tests. This run happened
+The operator's rule is to check the running app, not just tests. This run happened
 before the review described at the end of this document, so a few of the
 sentences it saw on screen have since been reworded. The quotes below have
 been brought back in line with what the code renders now, and the reworded
@@ -443,7 +443,7 @@ runs race on that insert. The tasks stayed assigned and later runs succeeded.
 Any accept that wakes several tasks for a never-run agent can hit this; it
 is worth its own small fix (`onConflictDoNothing` plus a re-read).
 
-## Barry's click steps on the live instance (after the restart he approves)
+## The operator's click steps on the live instance (after the restart he approves)
 
 This is behavioural, not a redesign: the only visual difference is the new
 "Draft a plan" button next to the box and what appears after it.

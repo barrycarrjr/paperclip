@@ -131,7 +131,7 @@ describe.sequential("memory routes", () => {
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post("/api/companies/company-1/memories")
-        .send({ kind: "user", name: "user_role", content: "Barry runs LLCs" }),
+        .send({ kind: "user", name: "user_role", content: "The owner runs several companies" }),
     );
     expect(res.status).toBe(201);
     expect(mockMemoryService.create).toHaveBeenCalledWith(

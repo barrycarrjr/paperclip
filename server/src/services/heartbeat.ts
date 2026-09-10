@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -7592,8 +7592,30 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   return {
-    list: async (companyId: string, agentId?: string, limit?: number) => {
+    /**
+     * `since` keeps every run that was still going at or after that moment,
+     * which is not the same as every run created after it. A run that started
+     * three hours ago and finished twenty minutes ago belongs on a two-hour
+     * view, and a run that started this morning and is still going belongs on
+     * every view. Filtering on creation time alone would drop both, and drop
+     * them silently, which is worse than reading too much.
+     *
+     * Without it a caller that only wants a couple of hours has to pull a
+     * fixed number of newest rows and hope they reach far enough back.
+     */
+    list: async (companyId: string, agentId?: string, limit?: number, since?: Date) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
+      const scope = [eq(heartbeatRuns.companyId, companyId)];
+      if (agentId) scope.push(eq(heartbeatRuns.agentId, agentId));
+      if (since) {
+        scope.push(
+          or(
+            gte(heartbeatRuns.createdAt, since),
+            isNull(heartbeatRuns.finishedAt),
+            gte(heartbeatRuns.finishedAt, since),
+          )!,
+        );
+      }
       const query = db
         .select(
           safeForLegacyEncoding
@@ -7609,11 +7631,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               },
         )
         .from(heartbeatRuns)
-        .where(
-          agentId
-            ? and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId))
-            : eq(heartbeatRuns.companyId, companyId),
-        )
+        .where(scope.length === 1 ? scope[0]! : and(...scope))
         .orderBy(desc(heartbeatRuns.createdAt));
 
       const rows = limit ? await query.limit(limit) : await query;

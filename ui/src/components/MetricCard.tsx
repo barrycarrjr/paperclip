@@ -90,10 +90,19 @@ export function MetricCard({
   }
 
   if (onClick) {
+    // A real button, not a clickable div. A tile that does something has to
+    // be reachable with the keyboard and announce itself as a control, and
+    // the aria-pressed follows `emphasis` because the only tiles that click
+    // are the ones that turn a filter on and off.
     return (
-      <div className="h-full" onClick={onClick}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={emphasis}
+        className="block h-full w-full cursor-pointer text-left"
+      >
         {inner}
-      </div>
+      </button>
     );
   }
 

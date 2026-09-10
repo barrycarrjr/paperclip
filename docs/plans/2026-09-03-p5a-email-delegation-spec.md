@@ -2,7 +2,7 @@
 
 ## Phase 2 is implemented (2026-09-03, later the same day)
 
-Barry approved the migration and the restart, so the table is live and the
+The operator approved the migration and the restart, so the table is live and the
 lifecycle is built. What exists now, beyond phase 1:
 
 - **The table**, `issue_email_delegations`, migration
@@ -23,7 +23,7 @@ lifecycle is built. What exists now, beyond phase 1:
   stale resolve cannot overwrite a fresher handback) and §4.6 (companyId on
   every read and write, no unscoped lookup exists).
 - **Resolution**, `server/src/services/email-handoff-resolution.ts`, wired to
-  Barry's decision below. The delegation is marked resolved BEFORE the reply
+  The operator's decision below. The delegation is marked resolved BEFORE the reply
   is attempted, and the reply's outcome is recorded separately in
   `replyState`, so a failed send is visible rather than silently undoing the
   record that the work was finished.
@@ -32,7 +32,7 @@ lifecycle is built. What exists now, beyond phase 1:
 
 - **§2 source key**: Message-Id preferred, `(mailbox, folder, uid)` as the
   documented fallback. Settled in phase 1.
-- **§3 what resolution causes**: option (c), auto-send, plus a control Barry
+- **§3 what resolution causes**: option (c), auto-send, plus a control the operator
   asked for afterwards (see below).
 - **§4.1 one transaction or two steps**: **two steps, with a sweep.** Making
   issue creation fail because a tracking row could not be written would take
@@ -46,7 +46,7 @@ lifecycle is built. What exists now, beyond phase 1:
   `delegated` counts: once an agent has acknowledged, slowness is the issue's
   problem to report, not the handover's.
 
-### The approval control (Barry, 2026-09-03, correcting the note below)
+### The approval control (the operator, 2026-09-03, correcting the note below)
 
 The note below reads his decision as "no new approval gate". He then
 corrected it: **"I didn't just mean the auto reply I meant the approval of
@@ -91,7 +91,7 @@ expected to see first.
 
 ## Decisions and progress (updated 2026-09-03)
 
-**Barry's decision, 2026-09-03: "Auto-send a reply, no new outbound approval
+**The operator's decision, 2026-09-03: "Auto-send a reply, no new outbound approval
 gate needed."** Recorded as §3's option (c). Read as: resolving a delegation
 may send a reply through the *existing* email tool path, and no NEW approval
 mechanism gets built — because the existing one
@@ -208,7 +208,7 @@ is answerable without re-parsing text:
 | `messageId` | the provider's own message id | For IMAP, the message's own `Message-Id` header value (stable across moves) is a better key than a UID (which is folder- and mailbox-relative and changes on move — a real, cited risk item below). |
 | `conversationId` | Help Scout conversation id, or an email thread key | Handoffs are often about a whole thread, not one message. |
 
-**Decision needed from Barry:** should a delegation key on the provider's
+**Decision needed from the operator:** should a delegation key on the provider's
 `Message-Id` (survives moves, but some providers don't expose it uniformly)
 or on `(mailboxKey, folder, uid)` (matches what today's code already uses
 everywhere, but breaks the moment the message is moved to another folder —
@@ -217,7 +217,7 @@ after creating the issue, via `markRead`, though not a move; a *later* human
 filing the email away would break a uid-based reference). This spec
 recommends `Message-Id` where the plugin can supply it, falling back to
 `(mailboxKey, folder, uid)` captured at delegation time with a documented
-staleness caveat, but this is Barry's call, not a default to assume.
+staleness caveat, but this is the operator's call, not a default to assume.
 
 ## 3. Delegation lifecycle (the actual state machine)
 
@@ -257,7 +257,7 @@ delegated → acknowledged → in_progress → needs_review → resolved
   original sender? a note posted to the Help Scout conversation? nothing
   automatic at all, just a marker?) is explicitly **not decided here** — this
   is exactly the kind of behavior this project's standing rule says needs
-  Barry's explicit product confirmation, not an inferred default. Options,
+  The operator's explicit product confirmation, not an inferred default. Options,
   roughly in order of how much new capability they need: (a) resolution is
   purely internal bookkeeping, no outbound action; (b) resolution optionally
   triggers the *existing* reply/note tools the agent already has, same as if
@@ -377,7 +377,7 @@ layer.
 Per this project's standing rule ("Decline wrong functionality... separate a
 genuine bug/restore from net-new behavior and confirm product changes
 explicitly"), none of the following are assumed, and none should be built
-without Barry answering them first:
+without the operator answering them first:
 
 - Whether resolution ever sends anything automatically (§3's option c).
 - Whether `Message-Id` or `(mailbox, folder, uid)` is the source key (§2).
@@ -393,5 +393,5 @@ without Barry answering them first:
 This document is the "specify" and "design" bullets of P5a's checklist. The
 next P5a bullet — "decide what can reuse vs needs migration, present for
 approval" — is §5 above, already presented. Implementation does not start
-until Barry has read this and either approved it, corrected it, or told this
+until the operator has read this and either approved it, corrected it, or told this
 project to drop the idea.

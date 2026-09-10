@@ -147,7 +147,7 @@ Portfolio Brief the landing page for the whole portfolio.
 
 **Screen:** Email, at phone width.
 
-**What I did:** opened `/IND/email` at 375 by 667 and measured every column and every control in the
+**What I did:** opened `/COB/email` at 375 by 667 and measured every column and every control in the
 page header.
 
 **What happened:** the desktop two-column layout is still there, squeezed. The mailbox column is a
@@ -200,7 +200,7 @@ header button should be inside the column and should have a name.
 
 **Screen:** the Work page and the Team page.
 
-**What I did:** loaded `/IND/work`, which correctly redirects to `/IND/issues`. Clicked the
+**What I did:** loaded `/COB/work`, which correctly redirects to `/COB/issues`. Clicked the
 "Projects" tab, then "Goals", reading `history.state.idx` after each. Then pressed Back and watched
 where I landed.
 
@@ -271,7 +271,7 @@ page. Twelve pixels of every message, including part of the close button, is off
 
 **Screen:** the top bar, at phone width.
 
-**What I did:** measured every control in the top bar at 375 by 667 on `/IND/issues`. Then I
+**What I did:** measured every control in the top bar at 375 by 667 on `/COB/issues`. Then I
 temporarily replaced the company name in the page with a very long one, measured again, and put the
 original text back.
 
@@ -300,7 +300,7 @@ company initials, or putting the page name on its own line, would both do it.
 
 **Screen:** Work and Team, at phone width.
 
-**What I did:** opened `/IND/work` and `/IND/team` at 375 and inspected the control that replaces the
+**What I did:** opened `/COB/work` and `/COB/team` at 375 and inspected the control that replaces the
 tab strip.
 
 **What happened:** `PageTabBar` swaps the tab strip for a plain HTML `<select>`. On Work it holds
@@ -410,7 +410,7 @@ out under 3 to 1.
 **Screen:** the Phone Wallboard plugin page, at phone width. Older than this branch, and in the
 plugin rather than the shell.
 
-**What I did:** opened `/IND/phone-wallboard` at 375 by 667.
+**What I did:** opened `/COB/phone-wallboard` at 375 by 667.
 
 **What happened:** the page's panels have fixed widths that do not fit. The document's scroll width
 comes out at 392 against a 367 pixel page, so the whole app including the top bar can be dragged
@@ -453,7 +453,7 @@ rule that the shell clips horizontally so one bad plugin cannot do this.
 
 **The panel showing an agent holding a message, and the take back confirmation.** No company in this
 instance currently has an email held by an agent. The "With agents" tab says "No agent is holding
-any mail right now" in both Industry Bureau and M3 Media, and the other companies have no mail
+any mail right now" in both Company B and Company A, and the other companies have no mail
 handed over either. To create one I would have to hand an email to an agent, which is exactly the
 kind of outward action I was told not to take. If someone wants this checked, hand one test message
 to an agent in a company that does not matter, then re-run this audit on that panel and its

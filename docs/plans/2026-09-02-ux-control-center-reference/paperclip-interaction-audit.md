@@ -1,6 +1,6 @@
 # Paperclip: expanded-state interaction audit
 
-September 2, 2026 · Live customized fork at `http://paperclip.local:3100`
+September 2, 2026 · Live customized fork at `http://localhost:3100`
 
 This supplements [the page and feature inventory](./paperclip-ux-audit.md). It specifically checks the hidden interaction layers that the earlier mockups did not represent adequately. The existing mockup is a direction study, **not an implementation-ready specification**.
 
@@ -129,7 +129,7 @@ These are observations, not code changes or a complete backend diagnosis.
 
 ### Company navigation can lose the intended destination
 
-Observed flow: from Industry with the main sidebar hidden, hover Personal and choose Email. The destination became `/PER/PER/notepad`, showing Page not found, rather than Personal Email. Later a normal company switch also produced `/IND/IND/clippy`.
+Observed flow: from Company B with the main sidebar hidden, hover Personal and choose Email. The destination became `/PER/PER/notepad`, showing Page not found, rather than Personal Email. Later a normal company switch also produced `/COB/COB/clippy`.
 
 The routing helpers only strip a company prefix when the next segment belongs to a hard-coded core-route list. Plugin slugs such as `notepad` are absent; `clippy` is absent from the global-route list even though `clippy-popup` is present. Company-page memory then prefixes the remembered path. The hover shortcut also changes company and navigates, while the memory hook independently navigates on company change. This is a source-supported explanation of the observed failure, not an integration-tested patch.
 
@@ -151,7 +151,7 @@ Personal exposes the 3CX navigation, but Recordings returned `ECOMPANY_NOT_ROUTE
 
 ### Activity counts are not meaningful work counts
 
-The Industry issue list and CEO run history contained many repeated silent-run review entries. A succeeded run can be a report about another failed or intentionally waiting operation. The earlier audit's healthy-watcher example must not be generalized into a claim that the current company is healthy: both waiting and failure narratives appeared during this pass. Determine attention from actual workflow evidence, not `blocked`, `done`, or `succeeded` alone.
+The Company B issue list and CEO run history contained many repeated silent-run review entries. A succeeded run can be a report about another failed or intentionally waiting operation. The earlier audit's healthy-watcher example must not be generalized into a claim that the current company is healthy: both waiting and failure narratives appeared during this pass. Determine attention from actual workflow evidence, not `blocked`, `done`, or `succeeded` alone.
 
 ## Revised overall interaction model
 
@@ -165,7 +165,7 @@ Show the full company name in the workspace header. On outbound operations also 
 
 - **Overview** — meaningful company/portfolio summary.
 - **Attention** — decisions, approvals, failed work, overdue commitments, and handbacks that require the human.
-- **Email** — permanently prominent for Barry; eligible to be the preferred landing workspace.
+- **Email** — permanently prominent for the operator; eligible to be the preferred landing workspace.
 - **Calendar** — human schedule with optional automation layer.
 - **Team** — company agents, current objectives, live work, waiting states, and help needed.
 - **Work** — tasks, projects, goals, automations, intake queues, and portfolio broadcasts.

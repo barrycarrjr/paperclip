@@ -63,7 +63,7 @@ import {
  * said "Inbox". The rule that came out of it was that such a rename is one
  * decision applied everywhere at once.
  *
- * Barry took that decision on 2026-09-07 and chose the mockup's names: Brief
+ * The operator took that decision on 2026-09-07 and chose the mockup's names: Brief
  * became Overview, Inbox became Attention, Issues became Tasks, Routines
  * became Automations, and Work queues became Intake queues. The labels below
  * changed with the sidebar, the mobile bar, the command palette, the
@@ -191,7 +191,7 @@ export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
   { id: "portfolio-email", label: "Portfolio Email", routeRoot: "portfolio-email", icon: Mail, portfolioRootOnly: true },
   { id: "portfolio-issues", label: "Portfolio Issues", routeRoot: "portfolio-issues", icon: Globe2, portfolioRootOnly: true },
   { id: "portfolio-directives", label: "Portfolio Directives", routeRoot: "portfolio-directives", icon: Megaphone, portfolioRootOnly: true },
-  { id: "portfolio-agents", label: "Portfolio Agents", routeRoot: "portfolio-agents", icon: Bot, portfolioRootOnly: true },
+  { id: "portfolio-agents", label: "Portfolio Teams", routeRoot: "portfolio-agents", icon: Users, portfolioRootOnly: true },
   { id: "portfolio-approvals", label: "Portfolio Approvals", routeRoot: "portfolio-approvals", icon: ShieldCheck, portfolioRootOnly: true },
   { id: "portfolio-routines", label: "Portfolio Routines", routeRoot: "portfolio-routines", icon: Repeat, portfolioRootOnly: true },
   { id: "portfolio-calendar", label: "Portfolio Calendar", routeRoot: "portfolio-calendar", icon: CalendarClock, portfolioRootOnly: true },

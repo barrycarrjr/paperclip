@@ -29,7 +29,7 @@ function revision(overrides: Partial<RunDocumentRevision> = {}): RunDocumentRevi
     key: "continuation-summary",
     title: null,
     revisionNumber: 4,
-    changeSummary: "Two replies sent, refund case flagged for Barry.",
+    changeSummary: "Two replies sent, refund case flagged for the owner.",
     createdAt: new Date(Date.now() - 6 * 60_000).toISOString(),
     ...overrides,
   };
@@ -48,7 +48,7 @@ describe("RunDocumentsCard", () => {
     expect(html).toContain("Notes updated by this run");
     expect(html).toContain("Handoff notes");
     expect(html).toContain("/issues/PRINT-218#document-continuation-summary");
-    expect(html).toContain("Two replies sent, refund case flagged for Barry.");
+    expect(html).toContain("Two replies sent, refund case flagged for the owner.");
   });
 
   it("collapses several revisions of the same document into one row", () => {

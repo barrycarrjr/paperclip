@@ -1,6 +1,6 @@
 # Handoff: the mockup was built, on a branch, and nothing is pushed
 
-Written 2026-09-08 for whoever picks this up next, including Barry. Everything
+Written 2026-09-08 for whoever picks this up next, including the operator. Everything
 named here is committed on `ux-mockup-shell` and none of it is pushed.
 
 Read the run sheet first. The reasoning is below it.

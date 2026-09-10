@@ -288,7 +288,7 @@ describe("CommandPalette", () => {
     // B06: the palette's navigation catalog used to be a separate
     // hand-copied list that never included Email, Clippy, Routines,
     // Work queues, Assistants, Memories, Approvals or Receipts. Labels here
-    // must match what the rest of the app calls the same destination. Barry
+    // must match what the rest of the app calls the same destination. The operator
     // renamed five of them on 2026-09-07, in every surface at once, so
     // "Automations" and "Intake queues" are now the right words here; before
     // that decision they would have been a mismatch.

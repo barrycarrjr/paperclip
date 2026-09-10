@@ -70,7 +70,7 @@ cd ~/paperclip && git add -- $(cat docs/plans/2026-09-06-p5b-p5c-handoff/commits
 
 ### Deploying and releasing (order matters)
 
-16. Restart the host. Migration 0097 applies on restart. Show Barry the SQL
+16. Restart the host. Migration 0097 applies on restart. Show the operator the SQL
     first; it is one additive partial unique index and rolls back with a DROP.
 17. **Host first, plugin second.** The gbp-reviews handlers now require the
     host's `hostScope` stamp. A plugin released ahead of the host shows an
@@ -96,7 +96,7 @@ cd ~/paperclip-extensions/plugins/gbp-reviews && npm run build
 Two features, both designed through a reader pass and a judge panel before any
 code, both specified in `docs/plans/2026-09-06-p5b-start-work-spec.md`.
 
-**P5b, "What do you want done?"** Barry types a request in his own words in the
+**P5b, "What do you want done?"** the operator types a request in his own words in the
 sidebar panel, a server-side one-shot model call drafts a plan, and he sees a
 plain-words header (who leads it, that it starts on accept and runs once, how
 many tasks in which company, which model drafted it, whether the agents'
@@ -187,7 +187,7 @@ Both are trivial and both are inside existing commit groups:
   `pnpm --filter paperclipai exec tsx src/index.ts plugin reinstall gbp-reviews --local-path <dir>`
   and an empty `DATABASE_URL` so the embedded Postgres on 54329 wins over the
   repo `.env`.
-- P6 is Barry's own trial and cannot be run for him. The checklist is the
+- P6 is the operator's own trial and cannot be run for him. The checklist is the
   deliverable, not a task to complete.
 - The one thing in P5c that reaches the public internet is step 44 of that
   checklist. Everything else in the feature is a refusal or a confirm panel.

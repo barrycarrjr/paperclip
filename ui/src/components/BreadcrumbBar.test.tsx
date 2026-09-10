@@ -38,7 +38,7 @@ const ACME: TestCompany = {
 
 const PERSONAL: TestCompany = {
   id: "company-personal",
-  name: "Barry",
+  name: "Alex",
   issuePrefix: "PER",
   isPortfolioRoot: false,
   kind: "personal",
@@ -307,7 +307,7 @@ describe("BreadcrumbBar", () => {
 
   it("lists Portfolio first and HQ below it, so the two can be told apart and picked", () => {
     render();
-    expect(scopeChoiceTitles()).toEqual(["Portfolio", "HQ", "Acme Printing", "Barry"]);
+    expect(scopeChoiceTitles()).toEqual(["Portfolio", "HQ", "Acme Printing", "Alex"]);
     const text = openScopePanelText();
     expect(text).toContain("Its own team and work, not the all company total.");
   });
@@ -344,7 +344,7 @@ describe("BreadcrumbBar", () => {
 
   it("leaves an ordinary company switch exactly as it was, with no destination of its own", () => {
     render();
-    clickScopeChoice("Barry");
+    clickScopeChoice("Alex");
     expect(selectCompanySpy).toHaveBeenCalledWith(PERSONAL.id);
     expect(navigateSpy).not.toHaveBeenCalled();
   });

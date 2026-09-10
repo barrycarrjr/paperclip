@@ -295,7 +295,7 @@ describe("instance settings routes", () => {
         selfNotify: {
           skipApproval: true,
           slackUserIds: ["U0AAA111"],
-          emails: ["barry@example.com"],
+          emails: ["owner@example.com"],
           phoneNumbers: ["+15551234567"],
         },
       });
@@ -306,7 +306,7 @@ describe("instance settings routes", () => {
       selfNotify: {
         skipApproval: true,
         slackUserIds: ["U0AAA111"],
-        emails: ["barry@example.com"],
+        emails: ["owner@example.com"],
         phoneNumbers: ["+15551234567"],
       },
     });
