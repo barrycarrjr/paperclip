@@ -32,13 +32,25 @@ import { workspaceCatalogEntryForRouteRoot } from "./workspace-catalog";
  */
 export interface TeamTab {
   /**
-   * The tab id, which is also its route root. Keeping them the same value is
-   * what stops the tab and the address bar from ever disagreeing.
+   * The tab id, which is also its route root, except for the tabs that live
+   * under /team itself (see subPath). Keeping them the same value is what
+   * stops the tab and the address bar from ever disagreeing.
    */
   id: string;
   label: string;
   /** Company-relative path. The router adds the company prefix. */
   to: string;
+  /**
+   * For a tab whose page sits under /team rather than at its own route root:
+   * the second segment of the address. /team itself leaves this out, and
+   * /team/timeline sets it to "timeline".
+   *
+   * This exists because the three older tabs are separate pages that kept
+   * their own addresses, while anything genuinely new belongs under /team.
+   * Without it, every new Team view would have to claim a top-level route
+   * root of its own, which is a lot of address space for a tab.
+   */
+  subPath?: string;
 }
 
 /** The Team page's own route root, and the current-work tab. */
@@ -51,8 +63,27 @@ function catalogLabel(routeRoot: string, fallback: string): string {
   return workspaceCatalogEntryForRouteRoot(routeRoot)?.label ?? fallback;
 }
 
+/**
+ * The second segment of the Team activity timeline's address.
+ *
+ * It is "timeline" and not "activity" for a routing reason worth knowing
+ * before adding another tab here. The app decides whether the first segment
+ * of an address is a company code by asking whether the SECOND segment is a
+ * known top-level page (lib/company-routes.ts, toCompanyRelativePath), and
+ * "activity" is a top-level page already. So "/team/activity" would be read
+ * as company "team" showing the Activity page, and the tab would never
+ * light up. A sub-path here must not be the name of a top-level page.
+ */
+export const TEAM_TIMELINE_SUBPATH = "timeline";
+
 export const TEAM_TABS: TeamTab[] = [
   { id: TEAM_ROUTE_ROOT, label: "Right now", to: `/${TEAM_ROUTE_ROOT}` },
+  {
+    id: "team-timeline",
+    label: "Timeline",
+    to: `/${TEAM_ROUTE_ROOT}/${TEAM_TIMELINE_SUBPATH}`,
+    subPath: TEAM_TIMELINE_SUBPATH,
+  },
   // /agents/all rather than /agents: /agents is a redirect to it, and
   // pointing the tab at the redirect would put an extra history entry
   // between the tabs and break the back button.
@@ -64,11 +95,13 @@ export const TEAM_TABS: TeamTab[] = [
 /** Where the Team menu entry lands: the current-work view. */
 export const TEAM_DEFAULT_TAB: TeamTab = TEAM_TABS[0]!;
 
-function routeRootOf(pathname: string): string | null {
+function segmentsOf(pathname: string): string[] {
   const relative = toCompanyRelativePath(pathname);
   const withoutQuery = relative.split(/[?#]/)[0] ?? "";
-  const segment = withoutQuery.split("/").filter(Boolean)[0];
-  return segment ? segment.toLowerCase() : null;
+  return withoutQuery
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
 }
 
 /**
@@ -79,9 +112,24 @@ function routeRootOf(pathname: string): string | null {
  * this Team" gets the same answer everywhere.
  */
 export function teamTabForPath(pathname: string): TeamTab | null {
-  const root = routeRootOf(pathname);
+  const segments = segmentsOf(pathname);
+  const root = segments[0];
   if (!root) return null;
-  return TEAM_TABS.find((tab) => tab.id === root) ?? null;
+
+  // Under /team the second segment picks the tab, so /team/timeline is the
+  // timeline and a bare /team is the right-now view. An address under /team
+  // that nothing claims falls back to the right-now tab rather than dropping
+  // out of Team altogether.
+  if (root === TEAM_ROUTE_ROOT) {
+    const sub = segments[1] ?? null;
+    return (
+      TEAM_TABS.find((tab) => tab.subPath !== undefined && tab.subPath === sub) ??
+      TEAM_TABS.find((tab) => tab.id === TEAM_ROUTE_ROOT) ??
+      null
+    );
+  }
+
+  return TEAM_TABS.find((tab) => tab.subPath === undefined && tab.id === root) ?? null;
 }
 
 /** Whether an address is anywhere in Team. */

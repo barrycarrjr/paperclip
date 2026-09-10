@@ -113,12 +113,45 @@ export const statusBadgeDefault = "bg-muted text-muted-foreground";
  */
 export const teamWorkStateBadge: Record<string, string> = {
   needs_you: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+  // Violet matches the in_review issue status above, because it is the same
+  // fact seen from the agent's side rather than the task's.
+  needs_review: "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300",
   working: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300",
   retrying: "bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
   paused: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
   waiting: "bg-muted text-muted-foreground",
   quiet: "bg-muted text-muted-foreground",
+};
+
+/**
+ * The same eight states as a solid dot, for the card and table views where
+ * one glance down a column has to separate them. Same hues as the badge
+ * above so the two never disagree; the working dot pulses because it is the
+ * only state that is changing while you look at it.
+ */
+export const teamWorkStateDot: Record<string, string> = {
+  needs_you: "bg-amber-500",
+  needs_review: "bg-violet-500",
+  working: "bg-cyan-400 animate-pulse",
+  retrying: "bg-sky-400",
+  error: "bg-red-500",
+  paused: "bg-orange-400",
+  waiting: "bg-neutral-400",
+  quiet: "bg-neutral-500/60",
+};
+
+export const teamWorkStateDotDefault = "bg-neutral-400";
+
+/**
+ * A soft edge colour for the whole card, so the states that need a person
+ * are separable from across the room without reading a word. Only the three
+ * attention states get one; everything else keeps the ordinary border.
+ */
+export const teamWorkStateCardEdge: Record<string, string> = {
+  needs_you: "border-amber-400/60 dark:border-amber-500/40",
+  needs_review: "border-violet-400/60 dark:border-violet-500/40",
+  error: "border-red-400/70 dark:border-red-500/50",
 };
 
 // ---------------------------------------------------------------------------

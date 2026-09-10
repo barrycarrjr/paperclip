@@ -9,9 +9,10 @@ import {
 import { CORE_WORKSPACE_CATALOG } from "./workspace-catalog";
 
 describe("TEAM_TABS", () => {
-  it("opens on the current-work view, then the three existing pages", () => {
+  it("opens on the current-work view, then the timeline, then the three existing pages", () => {
     expect(TEAM_TABS.map((tab) => tab.label)).toEqual([
       "Right now",
+      "Timeline",
       "Agents",
       "Org chart",
       "Assistants",
@@ -20,9 +21,10 @@ describe("TEAM_TABS", () => {
     expect(TEAM_DEFAULT_TAB.id).toBe(TEAM_ROUTE_ROOT);
   });
 
-  it("points every tab except the new one at the address that page already had", () => {
+  it("points every older tab at the address that page already had", () => {
     expect(TEAM_TABS.map((tab) => tab.to)).toEqual([
       "/team",
+      "/team/timeline",
       "/agents/all",
       "/org",
       "/assistants",
@@ -53,6 +55,7 @@ describe("teamTabForPath", () => {
     expect(teamTabForPath("/org")?.id).toBe("org");
     expect(teamTabForPath("/assistants")?.id).toBe("assistants");
     expect(teamTabForPath("/team")?.id).toBe("team");
+    expect(teamTabForPath("/team/timeline")?.id).toBe("team-timeline");
   });
 
   it("works with a company prefix in front of the address", () => {
@@ -60,6 +63,7 @@ describe("teamTabForPath", () => {
     expect(teamTabForPath("/ACME/org")?.id).toBe("org");
     expect(teamTabForPath("/ACME/assistants")?.id).toBe("assistants");
     expect(teamTabForPath("/ACME/team")?.id).toBe("team");
+    expect(teamTabForPath("/ACME/team/timeline")?.id).toBe("team-timeline");
   });
 
   it("still recognises a deeper page under a tab, such as one agent", () => {
@@ -68,9 +72,14 @@ describe("teamTabForPath", () => {
     expect(teamTabForPath("/assistants/alex/edit")?.id).toBe("assistants");
   });
 
+  it("falls back to the right-now tab for an unknown page under /team", () => {
+    expect(teamTabForPath("/team/something-new")?.id).toBe("team");
+  });
+
   it("ignores a query string or hash", () => {
     expect(teamTabForPath("/org?zoom=2")?.id).toBe("org");
     expect(teamTabForPath("/assistants#top")?.id).toBe("assistants");
+    expect(teamTabForPath("/team/timeline?range=24h")?.id).toBe("team-timeline");
   });
 
   it("says no for addresses that are not Team", () => {

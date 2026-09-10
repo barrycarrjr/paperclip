@@ -56,12 +56,13 @@ describe("TeamLayout", () => {
     });
   }
 
-  it("names the company and offers the four tabs, current work first", () => {
+  it("names the company and offers the five tabs, current work first", () => {
     render();
 
     expect(container.textContent).toContain("Team in Acme Robotics");
     expect(tabButtons(container).map((tab) => tab.textContent)).toEqual([
       "Right now",
+      "Timeline",
       "Agents",
       "Org chart",
       "Assistants",

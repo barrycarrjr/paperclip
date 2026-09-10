@@ -8,7 +8,7 @@ import { PortfolioScopeRoute } from "./components/PortfolioScopeRoute";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
-import { Team, TeamLayout } from "./pages/Team";
+import { Team, TeamTimeline, TeamLayout } from "./pages/Team";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Projects } from "./pages/Projects";
 import { ProjectDetail } from "./pages/ProjectDetail";
@@ -137,6 +137,7 @@ export function boardRoutes() {
           page rather than a redirect: the current-work view is its content. */}
       <Route element={<TeamLayout />}>
         <Route path="team" element={<Team />} />
+        <Route path="team/timeline" element={<TeamTimeline />} />
         <Route path="org" element={<OrgChart />} />
         <Route path="agents/all" element={<Agents />} />
         <Route path="agents/active" element={<Agents />} />
@@ -428,6 +429,7 @@ export function App() {
           {/* The Team page. Its other tabs (/agents/all, /org,
               /assistants) are listed with the agent routes below. */}
           <Route path="team" element={<UnprefixedBoardRedirect />} />
+          <Route path="team/timeline" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/new" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />

@@ -5,6 +5,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { PageTabBar } from "../components/PageTabBar";
 import { TeamCurrentWork } from "../components/TeamCurrentWork";
+import { TeamActivityTimeline } from "../components/TeamActivityTimeline";
 import { EmptyState } from "../components/EmptyState";
 import { useCompany } from "../context/CompanyContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
@@ -111,9 +112,9 @@ export function Team() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <p className="text-sm text-muted-foreground">
-          What each agent is doing right now. The roster, the reporting lines, the
-          assistants and everything about a single agent stay one click away on the tabs
-          above.
+          What each agent is doing right now, and the controls to do something about it.
+          Click a number to narrow the list, or open anyone for the detail. The roster,
+          the reporting lines and the assistants stay one click away on the tabs above.
         </p>
         <Button size="sm" variant="outline" className="shrink-0" onClick={openNewAgent}>
           <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -125,6 +126,35 @@ export function Team() {
         <TeamCurrentWork companyId={companyId} />
       ) : (
         <EmptyState icon={Bot} message="Select a company to see what its team is doing." />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The timeline tab at /team/timeline: the same team, but along a clock
+ * rather than at a single moment. Answers the questions the right-now view
+ * cannot, such as whether somebody has actually been working this afternoon.
+ */
+export function TeamTimeline() {
+  const companyId = useActiveCompanyId();
+  const { setBreadcrumbs } = useBreadcrumbs();
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Team", href: "/team" }, { label: "Timeline" }]);
+  }, [setBreadcrumbs]);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        What the whole team has been doing over time. Each bar is a run; click one to
+        open it.
+      </p>
+
+      {companyId ? (
+        <TeamActivityTimeline companyId={companyId} />
+      ) : (
+        <EmptyState icon={Bot} message="Select a company to see what its team has been doing." />
       )}
     </div>
   );

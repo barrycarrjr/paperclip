@@ -2,7 +2,13 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import {
+  agentRuntimeState,
+  agents as agentsTable,
+  companies,
+  heartbeatRuns,
+  issues as issuesTable,
+} from "@paperclipai/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import {
   agentHasOwnClaudeToken,
@@ -1194,7 +1200,35 @@ export function agentRoutes(
     }));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(withSchedule);
+      // Why an agent stopped, not just that it did. One query for the whole
+      // company (there is an index on company_id, agent_id), and only for
+      // viewers allowed to read configurations, because an adapter's error
+      // text can carry paths and internals a restricted viewer must not see.
+      const runtimeRows = await db
+        .select({
+          agentId: agentRuntimeState.agentId,
+          lastError: agentRuntimeState.lastError,
+          lastRunStatus: agentRuntimeState.lastRunStatus,
+          // The runtime row's own last_error is often empty even when the
+          // run it points at recorded one, so the run is the fallback rather
+          // than the other way round only because it is the less specific of
+          // the two. Left join: an agent that has never run still returns.
+          lastRunError: heartbeatRuns.error,
+        })
+        .from(agentRuntimeState)
+        .leftJoin(heartbeatRuns, eq(heartbeatRuns.id, agentRuntimeState.lastRunId))
+        .where(eq(agentRuntimeState.companyId, companyId));
+      const runtimeByAgent = new Map(runtimeRows.map((row) => [row.agentId, row]));
+      res.json(
+        withSchedule.map((agent) => {
+          const runtime = runtimeByAgent.get(agent.id);
+          return {
+            ...agent,
+            lastError: runtime?.lastError ?? runtime?.lastRunError ?? null,
+            lastRunStatus: runtime?.lastRunStatus ?? null,
+          };
+        }),
+      );
       return;
     }
     res.json(withSchedule.map((agent) => redactForRestrictedAgentView(agent)));
@@ -3060,7 +3094,24 @@ export function agentRoutes(
     const agentId = req.query.agentId as string | undefined;
     const limitParam = req.query.limit as string | undefined;
     const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 200)) : undefined;
-    const runs = await heartbeat.list(companyId, agentId, limit);
+    // `since` is an ISO timestamp: keep every run that was still going at or
+    // after it, which includes one that started earlier and finished inside
+    // the window, and one that started earlier and has not finished at all.
+    // A caller drawing a two-hour window should say so rather than pulling a
+    // fixed number of newest rows and hoping they reach back far enough. A
+    // value that is not a date is rejected rather than quietly ignored, which
+    // would hand back the whole history under a query that asked for a slice.
+    const sinceParam = req.query.since as string | undefined;
+    let since: Date | undefined;
+    if (sinceParam !== undefined) {
+      const parsed = new Date(sinceParam);
+      if (Number.isNaN(parsed.getTime())) {
+        res.status(400).json({ error: "Invalid since: expected an ISO timestamp" });
+        return;
+      }
+      since = parsed;
+    }
+    const runs = await heartbeat.list(companyId, agentId, limit, since);
     res.json(runs);
   });
 

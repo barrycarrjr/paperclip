@@ -91,6 +91,16 @@ export interface Agent {
   heartbeatIntervalSec?: number;
   heartbeatEnabled?: boolean;
   schedulerActive?: boolean;
+  /**
+   * The last error this agent recorded, from its runtime state, so a list
+   * can say WHY an agent stopped instead of only that it did. Absent for
+   * viewers who cannot read configurations, because an adapter's error text
+   * can carry paths and internals they are not meant to see, and absent on
+   * routes that do not append it.
+   */
+  lastError?: string | null;
+  /** What became of this agent's most recent run, from its runtime state. */
+  lastRunStatus?: string | null;
 }
 
 export interface AgentDetail extends Agent {

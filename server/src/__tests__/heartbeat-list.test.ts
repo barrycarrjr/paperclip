@@ -101,6 +101,128 @@ describeEmbeddedPostgres("heartbeat list", () => {
     }
   });
 
+  it("keeps every run that overlapped the window, not only the ones created in it", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const now = Date.now();
+    const hoursAgo = (hours: number) => new Date(now - hours * 60 * 60_000);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "running",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const startedInside = randomUUID();
+    const startedBeforeFinishedInside = randomUUID();
+    const startedBeforeStillGoing = randomUUID();
+    const whollyBefore = randomUUID();
+
+    await db.insert(heartbeatRuns).values([
+      {
+        id: startedInside,
+        companyId,
+        agentId,
+        invocationSource: "timer",
+        status: "succeeded",
+        createdAt: hoursAgo(1),
+        startedAt: hoursAgo(1),
+        finishedAt: hoursAgo(0.5),
+      },
+      {
+        // Began before the window opened but ended inside it, so it is part
+        // of what happened during the window.
+        id: startedBeforeFinishedInside,
+        companyId,
+        agentId,
+        invocationSource: "timer",
+        status: "succeeded",
+        createdAt: hoursAgo(5),
+        startedAt: hoursAgo(5),
+        finishedAt: hoursAgo(1.5),
+      },
+      {
+        // Began long before and has not finished, so it is going right now.
+        id: startedBeforeStillGoing,
+        companyId,
+        agentId,
+        invocationSource: "timer",
+        status: "running",
+        createdAt: hoursAgo(9),
+        startedAt: hoursAgo(9),
+        finishedAt: null,
+      },
+      {
+        id: whollyBefore,
+        companyId,
+        agentId,
+        invocationSource: "timer",
+        status: "succeeded",
+        createdAt: hoursAgo(30),
+        startedAt: hoursAgo(30),
+        finishedAt: hoursAgo(29),
+      },
+    ]);
+
+    const since = new Date(now - 2 * 60 * 60_000);
+    const runs = await heartbeatService(db).list(companyId, undefined, 100, since);
+    const ids = runs.map((run) => run.id).sort();
+
+    expect(ids).toEqual(
+      [startedInside, startedBeforeFinishedInside, startedBeforeStillGoing].sort(),
+    );
+    expect(ids).not.toContain(whollyBefore);
+  });
+
+  it("returns every run when no window is given", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "running",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      invocationSource: "timer",
+      status: "succeeded",
+      createdAt: new Date(Date.now() - 60 * 24 * 60 * 60_000),
+      finishedAt: new Date(Date.now() - 60 * 24 * 60 * 60_000),
+    });
+
+    expect(await heartbeatService(db).list(companyId, undefined, 100)).toHaveLength(1);
+  });
+
   it("returns small result json payloads unchanged from getRun", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
