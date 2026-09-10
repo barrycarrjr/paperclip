@@ -3,9 +3,12 @@ import type { Agent, HeartbeatRun, Issue } from "@paperclipai/shared";
 import {
   buildTeamTimeline,
   formatBusyTime,
+  orderTimelineByOrganization,
   teamTimelineTicks,
   timelinePercent,
+  type TeamTimelineRow,
 } from "./team-timeline";
+import { buildTeamHierarchy } from "./team-hierarchy";
 
 const NOW = Date.parse("2026-09-09T15:00:00.000Z");
 const HOUR = 60 * 60_000;
@@ -332,5 +335,80 @@ describe("formatBusyTime", () => {
     expect(formatBusyTime(12 * MIN)).toBe("12m");
     expect(formatBusyTime(64 * MIN)).toBe("1h 04m");
     expect(formatBusyTime(120 * MIN)).toBe("2h");
+  });
+});
+
+describe("orderTimelineByOrganization", () => {
+  function company() {
+    return [
+      agent({ id: "ceo", name: "Ada", role: "ceo" }),
+      agent({ id: "cto", name: "Cass", role: "cto", reportsTo: "ceo" }),
+      agent({ id: "em", name: "Erin", role: "pm", reportsTo: "cto" }),
+      agent({ id: "dev", name: "Devi", role: "engineer", reportsTo: "em" }),
+      agent({ id: "cmo", name: "Mo", role: "cmo", reportsTo: "ceo" }),
+    ];
+  }
+
+  function rowsFor(agents: Agent[]): TeamTimelineRow[] {
+    return agents.map((one) => ({ agent: one, blocks: [], busyMs: 0, pausedFromMs: null }));
+  }
+
+  it("leads with the top of the company under its own heading", () => {
+    const agents = company();
+    const entries = orderTimelineByOrganization(rowsFor(agents), buildTeamHierarchy(agents));
+    expect(entries[0]).toMatchObject({ kind: "heading", title: "Executive leadership" });
+    expect(entries[1]).toMatchObject({ kind: "row", depth: 0 });
+    expect((entries[1] as { row: TeamTimelineRow }).row.agent.id).toBe("ceo");
+  });
+
+  it("indents each member by how deep they sit under their executive", () => {
+    const agents = company();
+    const entries = orderTimelineByOrganization(rowsFor(agents), buildTeamHierarchy(agents));
+    const depths = new Map(
+      entries
+        .filter((entry) => entry.kind === "row")
+        .map((entry) => {
+          const row = entry as { row: TeamTimelineRow; depth: number };
+          return [row.row.agent.id, row.depth];
+        }),
+    );
+    // Relative to the CTO's heading, not to the top of the company.
+    expect(depths.get("cto")).toBe(0);
+    expect(depths.get("em")).toBe(1);
+    expect(depths.get("dev")).toBe(2);
+  });
+
+  it("names each member's manager for the tooltip", () => {
+    const agents = company();
+    const entries = orderTimelineByOrganization(rowsFor(agents), buildTeamHierarchy(agents));
+    const dev = entries.find(
+      (entry) => entry.kind === "row" && entry.row.agent.id === "dev",
+    ) as { managerName: string | null };
+    expect(dev.managerName).toBe("Erin");
+  });
+
+  it("lists everybody exactly once", () => {
+    const agents = company();
+    const entries = orderTimelineByOrganization(rowsFor(agents), buildTeamHierarchy(agents));
+    const ids = entries.filter((entry) => entry.kind === "row").map((entry) => (entry as { row: TeamTimelineRow }).row.agent.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.sort()).toEqual(["ceo", "cmo", "cto", "dev", "em"]);
+  });
+
+  it("puts anyone outside the reporting line in their own group at the end", () => {
+    const agents = [...company(), agent({ id: "loose", name: "Loose" })];
+    const entries = orderTimelineByOrganization(rowsFor(agents), buildTeamHierarchy(agents));
+    const headings = entries.filter((entry) => entry.kind === "heading");
+    expect(headings[headings.length - 1]).toMatchObject({ title: "Not in the reporting line" });
+    expect(entries[entries.length - 1]).toMatchObject({ kind: "row" });
+    expect((entries[entries.length - 1] as { row: TeamTimelineRow }).row.agent.id).toBe("loose");
+  });
+
+  it("skips a heading for an organization with nobody to draw", () => {
+    const agents = company();
+    // Only the marketing side has a row this window.
+    const rows = rowsFor(agents.filter((one) => one.id === "cmo"));
+    const entries = orderTimelineByOrganization(rows, buildTeamHierarchy(agents));
+    expect(entries.filter((entry) => entry.kind === "heading").map((entry) => (entry as { title: string }).title)).toEqual(["Mo"]);
   });
 });

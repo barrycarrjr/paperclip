@@ -2,7 +2,9 @@ import { AlertCircle, Users, Activity, Pause, Moon } from "lucide-react";
 import { MetricCard } from "./MetricCard";
 import {
   countTeamWorkStates,
+  TEAM_STATE_GROUP_STATES,
   type TeamAgentWork,
+  type TeamStateGroup,
   type TeamWorkState,
 } from "../lib/team-current-work";
 
@@ -21,18 +23,17 @@ import {
  * something. Splitting them across three tiles would bury that.
  */
 
-/** The group of states one tile stands for. */
-export type TeamSummaryGroup = "attention" | "working" | "paused" | "idle" | "all";
+/**
+ * The group of states one tile stands for. The four real groups are defined
+ * once in lib/team-current-work.ts, because an executive's roll-up and the
+ * branch headings count by the same groups and must not be able to disagree
+ * with the tiles. "all" is the tiles' own extra: the tile that clears the
+ * filter rather than narrowing it.
+ */
+export type TeamSummaryGroup = TeamStateGroup | "all";
 
-export const TEAM_SUMMARY_GROUP_STATES: Record<
-  Exclude<TeamSummaryGroup, "all">,
-  readonly TeamWorkState[]
-> = {
-  attention: ["needs_you", "needs_review", "error"],
-  working: ["working", "retrying"],
-  paused: ["paused"],
-  idle: ["waiting", "quiet"],
-};
+export const TEAM_SUMMARY_GROUP_STATES: Record<TeamStateGroup, readonly TeamWorkState[]> =
+  TEAM_STATE_GROUP_STATES;
 
 export function teamSummaryGroupMatches(group: TeamSummaryGroup, state: TeamWorkState): boolean {
   if (group === "all") return true;

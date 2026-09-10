@@ -19,6 +19,7 @@ import {
 } from "../lib/status-colors";
 import { agentUrl, cn, relativeTime } from "../lib/utils";
 import { formatElapsed } from "../lib/clippy-tool-labels";
+import { BOARD_MANAGER_LABEL, type TeamOrgContext } from "../lib/team-hierarchy";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -35,19 +36,32 @@ const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
  * the ones waiting on a person first. That is more useful than alphabetical
  * status names, and it means the default table and the default card grid
  * agree with each other.
+ *
+ * Two of the columns, "Reports to" and "Branch", are worked out from the
+ * reporting lines rather than stored on an agent. Branch means the executive
+ * whose organization somebody sits in, found by walking up to whoever reports
+ * to the top of the company. It is derived on purpose: adding a department
+ * field would create a second organizational idea able to disagree with the
+ * reporting lines.
  */
 
-type SortKey = "member" | "status" | "activity";
+type SortKey = "member" | "status" | "activity" | "manager" | "branch";
 type SortDirection = "asc" | "desc";
 
 export function TeamMemberTable({
   rows,
   actions,
   nowMs,
+  orgById,
+  onShowOrg,
 }: {
   rows: TeamAgentWork[];
   actions: TeamMemberActions;
   nowMs: number;
+  /** Where each member sits, by agent id. Absent on a view with no hierarchy. */
+  orgById?: Map<string, TeamOrgContext>;
+  /** Narrow the page to one manager's organization. */
+  onShowOrg?: (agentId: string) => void;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [direction, setDirection] = useState<SortDirection>("asc");
@@ -61,6 +75,24 @@ export function TeamMemberTable({
       let result: number;
       if (sortKey === "member") {
         result = a.agent.name.localeCompare(b.agent.name);
+      } else if (sortKey === "manager" || sortKey === "branch") {
+        // Sorting by a column some rows have nothing in would scatter those
+        // rows through the list, so they are kept together at the end
+        // whichever way the arrow points.
+        const pick = (row: TeamAgentWork) => {
+          const context = orgById?.get(row.agent.id);
+          if (sortKey === "manager") {
+            if (context?.isTop) return BOARD_MANAGER_LABEL;
+            return context?.manager?.name ?? "";
+          }
+          return context?.branch?.name ?? "";
+        };
+        const left = pick(a);
+        const right = pick(b);
+        if (left === right) result = a.agent.name.localeCompare(b.agent.name);
+        else if (!left) result = 1;
+        else if (!right) result = -1;
+        else result = left.localeCompare(right);
       } else if (sortKey === "activity") {
         const at = a.lastActivityAt ? new Date(a.lastActivityAt).getTime() : 0;
         const bt = b.lastActivityAt ? new Date(b.lastActivityAt).getTime() : 0;
@@ -90,7 +122,7 @@ export function TeamMemberTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
-      <table className="w-full min-w-[52rem] text-sm">
+      <table className="w-full min-w-[64rem] text-sm">
         <thead>
           <tr className="border-b border-border bg-accent/20 text-left">
             <SortableHeader
@@ -110,6 +142,19 @@ export function TeamMemberTable({
             </th>
             <th className="px-3 py-2 text-xs font-medium text-muted-foreground">Current task</th>
             <SortableHeader
+              label="Reports to"
+              active={sortKey === "manager"}
+              direction={direction}
+              onClick={() => toggle("manager")}
+            />
+            <SortableHeader
+              label="Branch"
+              title="The executive whose organization this member sits in, worked out from the reporting lines."
+              active={sortKey === "branch"}
+              direction={direction}
+              onClick={() => toggle("branch")}
+            />
+            <SortableHeader
               label="Last activity"
               active={sortKey === "activity"}
               direction={direction}
@@ -123,7 +168,14 @@ export function TeamMemberTable({
         </thead>
         <tbody>
           {sorted.map((row) => (
-            <TeamMemberTableRow key={row.agent.id} row={row} actions={actions} nowMs={nowMs} />
+            <TeamMemberTableRow
+              key={row.agent.id}
+              row={row}
+              actions={actions}
+              nowMs={nowMs}
+              org={orgById?.get(row.agent.id)}
+              onShowOrg={onShowOrg}
+            />
           ))}
         </tbody>
       </table>
@@ -133,18 +185,20 @@ export function TeamMemberTable({
 
 function SortableHeader({
   label,
+  title,
   active,
   direction,
   onClick,
 }: {
   label: string;
+  title?: string;
   active: boolean;
   direction: SortDirection;
   onClick: () => void;
 }) {
   const Icon = !active ? ChevronsUpDown : direction === "asc" ? ArrowUp : ArrowDown;
   return (
-    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
+    <th className="px-3 py-2 text-xs font-medium text-muted-foreground" title={title}>
       <button
         type="button"
         onClick={onClick}
@@ -165,10 +219,14 @@ function TeamMemberTableRow({
   row,
   actions,
   nowMs,
+  org,
+  onShowOrg,
 }: {
   row: TeamAgentWork;
   actions: TeamMemberActions;
   nowMs: number;
+  org?: TeamOrgContext;
+  onShowOrg?: (agentId: string) => void;
 }) {
   const { agent } = row;
   const roleLabel = roleLabels[agent.role] ?? agent.role;
@@ -248,6 +306,14 @@ function TeamMemberTableRow({
         )}
       </td>
 
+      <td className="max-w-[10rem] px-3 py-2.5 text-xs text-muted-foreground">
+        <ManagerCell org={org} />
+      </td>
+
+      <td className="max-w-[10rem] px-3 py-2.5 text-xs text-muted-foreground">
+        <BranchCell org={org} onShowOrg={onShowOrg} />
+      </td>
+
       <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">
         {row.lastActivityAt ? relativeTime(row.lastActivityAt) : "-"}
       </td>
@@ -262,5 +328,57 @@ function TeamMemberTableRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+/** Who this member answers to, or the board for the top of the company. */
+function ManagerCell({ org }: { org?: TeamOrgContext }) {
+  if (!org) return <span>-</span>;
+  if (org.isTop) {
+    return (
+      <span title="The CEO answers to you, the board. The board is not an agent.">
+        {BOARD_MANAGER_LABEL}
+      </span>
+    );
+  }
+  if (!org.manager) {
+    return <span title="Nobody is set as this member's manager.">Not set</span>;
+  }
+  return (
+    <Link to={agentUrl(org.manager)} className="block truncate hover:text-foreground hover:underline">
+      {org.manager.name}
+    </Link>
+  );
+}
+
+/**
+ * The executive organization this member sits in, and a way to narrow the
+ * page to it. The top of the company has no branch because it is over all of
+ * them, and somebody outside the reporting lines has none to name.
+ */
+function BranchCell({
+  org,
+  onShowOrg,
+}: {
+  org?: TeamOrgContext;
+  onShowOrg?: (agentId: string) => void;
+}) {
+  if (!org) return <span>-</span>;
+  if (org.isTop) return <span title="The whole company reports up to here.">Whole company</span>;
+  if (org.outsideReportingLine || !org.branch) {
+    return <span title="This member is not in the company's reporting line.">Not in the line</span>;
+  }
+  const branch = org.branch;
+  const label = org.leadsBranch ? `${branch.name} (leads)` : branch.name;
+  if (!onShowOrg) return <span className="block truncate">{label}</span>;
+  return (
+    <button
+      type="button"
+      onClick={() => onShowOrg(branch.id)}
+      title="Show only this organization"
+      className="block max-w-full truncate text-left hover:text-foreground hover:underline"
+    >
+      {label}
+    </button>
   );
 }

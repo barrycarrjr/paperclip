@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { Bot, RefreshCw } from "lucide-react";
 import { agentsApi } from "../api/agents";
+import { buildTeamHierarchy } from "../lib/team-hierarchy";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
@@ -11,12 +12,15 @@ import {
   buildTeamTimeline,
   formatBusyTime,
   TEAM_TIMELINE_DEFAULT_RANGE,
+  orderTimelineByOrganization,
   TEAM_TIMELINE_RANGES,
   TEAM_TIMELINE_TONE_LABELS,
   teamTimelineRange,
   teamTimelineTicks,
   timelinePercent,
   type TeamTimelineBlock,
+  type TeamTimelineEntry,
+  type TeamTimelineOrdering,
   type TeamTimelineRangeId,
   type TeamTimelineRow,
   type TeamTimelineTone,
@@ -115,6 +119,11 @@ export function TeamActivityTimeline({ companyId }: { companyId: string }) {
     queryFn: () => issuesApi.list(companyId),
   });
 
+  // Which order the rows are in: how busy everybody has been, or the shape
+  // of the company. Busiest-first stays the default because the first
+  // question a timeline is opened for is "has anything happened".
+  const [ordering, setOrdering] = useState<TeamTimelineOrdering>("busy");
+
   const rows = useMemo(
     () =>
       buildTeamTimeline({
@@ -129,6 +138,17 @@ export function TeamActivityTimeline({ companyId }: { companyId: string }) {
 
   const ticks = useMemo(() => teamTimelineTicks(fromMs, toMs), [fromMs, toMs]);
   const anyActivity = rows.some((row) => row.blocks.length > 0);
+
+  // The same reporting lines the rest of Team reads, so the headings here
+  // and the sections on the right-now view can never disagree.
+  const hierarchy = useMemo(() => buildTeamHierarchy(agents ?? []), [agents]);
+  const entries = useMemo<TeamTimelineEntry[]>(
+    () =>
+      ordering === "org"
+        ? orderTimelineByOrganization(rows, hierarchy)
+        : rows.map((row) => ({ kind: "row", row, depth: 0, managerName: null })),
+    [ordering, rows, hierarchy],
+  );
 
   if (agentsLoading || runsLoading) return <PageSkeleton variant="list" />;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
@@ -155,6 +175,40 @@ export function TeamActivityTimeline({ companyId }: { companyId: string }) {
               className={cn(
                 "rounded-md border border-border px-2 py-1 text-xs transition-colors",
                 option.id === rangeId
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50",
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/*
+            Two orders, not two charts. The bars, the window and everything
+            the chart claims are identical either way; only what is next to
+            what changes.
+          */}
+          <span className="text-xs text-muted-foreground">Order:</span>
+          {(
+            [
+              { id: "busy" as const, label: "Busiest first" },
+              { id: "org" as const, label: "By organization" },
+            ]
+          ).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={option.id === ordering}
+              onClick={() => setOrdering(option.id)}
+              title={
+                option.id === "org"
+                  ? "Group the rows by executive organization, indented by who reports to whom"
+                  : "Put the members who have run the most at the top"
+              }
+              className={cn(
+                "rounded-md border border-border px-2 py-1 text-xs transition-colors",
+                option.id === ordering
                   ? "bg-accent text-foreground"
                   : "text-muted-foreground hover:bg-accent/50",
               )}
@@ -194,15 +248,26 @@ export function TeamActivityTimeline({ companyId }: { companyId: string }) {
             </div>
           </div>
 
-          {rows.map((row) => (
-            <TimelineRow
-              key={row.agent.id}
-              row={row}
-              fromMs={fromMs}
-              toMs={toMs}
-              ticks={ticks}
-            />
-          ))}
+          {entries.map((entry) =>
+            entry.kind === "heading" ? (
+              <p
+                key={`heading-${entry.id}`}
+                className="border-b border-border bg-accent/20 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+              >
+                {entry.title}
+              </p>
+            ) : (
+              <TimelineRow
+                key={entry.row.agent.id}
+                row={entry.row}
+                depth={entry.depth}
+                managerName={entry.managerName}
+                fromMs={fromMs}
+                toMs={toMs}
+                ticks={ticks}
+              />
+            ),
+          )}
         </div>
       </div>
 
@@ -233,11 +298,17 @@ export function TeamActivityTimeline({ companyId }: { companyId: string }) {
 
 function TimelineRow({
   row,
+  depth,
+  managerName,
   fromMs,
   toMs,
   ticks,
 }: {
   row: TeamTimelineRow;
+  /** How deep under the heading this member sits, for the indent. */
+  depth?: number;
+  /** Their manager, named in the tooltip when the rows are in company order. */
+  managerName?: string | null;
   fromMs: number;
   toMs: number;
   ticks: number[];
@@ -246,9 +317,15 @@ function TimelineRow({
 
   return (
     <div className="flex items-center border-b border-border px-3 py-2 last:border-b-0 hover:bg-accent/10">
-      <div className="w-52 shrink-0 pr-3">
+      <div
+        className="w-52 shrink-0 pr-3"
+        // Indented rather than nested, so every bar still starts at the same
+        // place across the chart and the times stay comparable down the page.
+        style={depth ? { paddingLeft: `${Math.min(depth, 4) * 12}px` } : undefined}
+      >
         <Link
           to={agentUrl(row.agent)}
+          title={managerName ? `Reports to ${managerName}` : undefined}
           className="block truncate text-sm font-medium hover:underline"
         >
           {row.agent.name}

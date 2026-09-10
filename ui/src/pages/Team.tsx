@@ -112,9 +112,10 @@ export function Team() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <p className="text-sm text-muted-foreground">
-          What each agent is doing right now, and the controls to do something about it.
-          Click a number to narrow the list, or open anyone for the detail. The roster,
-          the reporting lines and the assistants stay one click away on the tabs above.
+          Everyone in this company, what each one is doing right now, and who they report
+          to. Start with an executive to see how their part of the company is getting on,
+          or narrow to one organization and work down. The full org chart, the roster and
+          the assistants stay one click away on the tabs above.
         </p>
         <Button size="sm" variant="outline" className="shrink-0" onClick={openNewAgent}>
           <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -148,7 +149,8 @@ export function TeamTimeline() {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         What the whole team has been doing over time. Each bar is a run; click one to
-        open it.
+        open it. Order the rows by who has been busiest, or by the company's own
+        organization.
       </p>
 
       {companyId ? (

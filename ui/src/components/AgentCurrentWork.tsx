@@ -29,6 +29,8 @@ import {
 import { AGENT_HEALTH_WINDOW_DAYS, formatSuccessRate, summarizeAgentHealth } from "../lib/agent-health";
 import { formatElapsed } from "../lib/clippy-tool-labels";
 import { cn, relativeTime } from "../lib/utils";
+import { buildTeamHierarchy } from "../lib/team-hierarchy";
+import { AgentOrgPanel } from "./AgentOrgPanel";
 import { ActivityRow } from "./ActivityRow";
 import { RunWorkProductsCard } from "./RunWorkProductsCard";
 import { RunDocumentsCard } from "./RunDocumentsCard";
@@ -132,6 +134,31 @@ export function AgentCurrentWork({
     return rows[0] ?? null;
   }, [agent, runtimeLastError, lastFailedRunError, liveRuns, issues, pendingInteractions, nowMs]);
 
+  // The rest of the company, for the panel that says where this member sits
+  // and how their own organization is doing. Same query key as the Team
+  // page, so on a normal walk from Team to a member it is already cached.
+  const { data: companyAgents } = useQuery({
+    queryKey: queryKeys.agents.list(companyId),
+    queryFn: () => agentsApi.list(companyId),
+  });
+
+  const hierarchy = useMemo(() => buildTeamHierarchy(companyAgents ?? []), [companyAgents]);
+
+  // Deliberately not keyed on the ticking clock: these rows feed a list of
+  // states and names, none of which change second to second, and rebuilding
+  // every member's row on every tick would be real work for no difference on
+  // screen.
+  const companyRows = useMemo(
+    () =>
+      buildTeamCurrentWork({
+        agents: companyAgents ?? [],
+        liveRuns: liveRuns ?? [],
+        issues: issues ?? [],
+        pendingInteractions: pendingInteractions ?? [],
+      }),
+    [companyAgents, liveRuns, issues, pendingInteractions],
+  );
+
   const health = useMemo(() => summarizeAgentHealth(runs, { now: nowMs }), [runs, nowMs]);
 
   const sortedRuns = useMemo(
@@ -168,6 +195,7 @@ export function AgentCurrentWork({
         </div>
 
         <div className="space-y-6">
+          <AgentOrgPanel agent={agent} hierarchy={hierarchy} rows={companyRows} />
           <HealthPanel health={health} />
           <ToolsPanel agent={agent} companyId={companyId} />
         </div>

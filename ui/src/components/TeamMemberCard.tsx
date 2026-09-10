@@ -19,6 +19,8 @@ import {
 } from "../lib/status-colors";
 import { agentUrl, cn, relativeTime } from "../lib/utils";
 import { formatElapsed } from "../lib/clippy-tool-labels";
+import type { TeamOrgContext } from "../lib/team-hierarchy";
+import { OrgRollupStrip, ReportsToLine } from "./TeamOrgContextLine";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -32,16 +34,30 @@ const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
  * last did something real, and whether the run has gone quiet, and all three
  * of those are on the card instead. A quiet run is the thing a percentage
  * would have hidden.
+ *
+ * The card also says where this member sits: who they report to, and, when
+ * they manage anybody, how their own organization is getting on. Without that
+ * line a grid showing the whole company reads as though everybody reports to
+ * the CEO, which is exactly what the reporting lines say they do not.
  */
 export function TeamMemberCard({
   row,
   actions,
   nowMs,
+  org,
+  onShowOrg,
 }: {
   row: TeamAgentWork;
   actions: TeamMemberActions;
   /** A clock the whole page shares, so every card ticks together. */
   nowMs: number;
+  /**
+   * Where this member sits in the company. Optional so the card still draws
+   * on a view with no company-wide list to work the hierarchy out from.
+   */
+  org?: TeamOrgContext;
+  /** Narrow the page to this member's organization, for a manager's card. */
+  onShowOrg?: () => void;
 }) {
   const { agent } = row;
   const roleLabel = roleLabels[agent.role] ?? agent.role;
@@ -94,6 +110,7 @@ export function TeamMemberCard({
             {roleLabel}
             {agent.title ? ` - ${agent.title}` : ""}
           </p>
+          {org && <ReportsToLine context={org} className="mt-0.5" />}
         </div>
       </div>
 
@@ -112,6 +129,10 @@ export function TeamMemberCard({
           </p>
         )}
       </div>
+
+      {org?.rollup && (
+        <OrgRollupStrip rollup={org.rollup} onOpen={onShowOrg} />
+      )}
 
       {taskHref && row.task && (
         <Link

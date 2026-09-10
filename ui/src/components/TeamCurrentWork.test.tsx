@@ -329,6 +329,117 @@ describe("TeamCurrentWork", () => {
     expect(container.textContent).not.toContain("Operations");
   });
 
+  /**
+   * A company shaped like the one in the brief: a CEO, two executives, a
+   * manager under one of them, and people under the manager. These tests are
+   * about the thing a flat list gets wrong, which is implying that everybody
+   * answers to the CEO.
+   */
+  function companyWithHierarchy() {
+    return [
+      agent({ id: "ceo", name: "Ada", urlKey: "ada", role: "ceo" }),
+      agent({ id: "cto", name: "Cass", urlKey: "cass", role: "cto", reportsTo: "ceo" }),
+      agent({ id: "cmo", name: "Mo", urlKey: "mo", role: "cmo", reportsTo: "ceo" }),
+      agent({ id: "em", name: "Erin", urlKey: "erin", role: "pm", reportsTo: "cto" }),
+      agent({ id: "dev", name: "Devi", urlKey: "devi", role: "engineer", reportsTo: "em" }),
+      agent({ id: "seo", name: "Sasha", urlKey: "sasha", role: "researcher", reportsTo: "cmo" }),
+    ];
+  }
+
+  it("says who each person reports to rather than showing a flat company", async () => {
+    listAgents.mockResolvedValue(companyWithHierarchy());
+
+    await render();
+
+    // The developer answers to the engineering manager, not to the CEO, and
+    // the screen says so.
+    expect(container.textContent).toContain("Reports to Erin");
+    expect(container.textContent).toContain("Reports to Cass");
+    // The CEO answers to the human board, which is not an agent.
+    expect(container.textContent).toContain("Reports to the board (you)");
+  });
+
+  it("summarizes an executive's own organization next to their name", async () => {
+    listAgents.mockResolvedValue(companyWithHierarchy());
+
+    await render();
+
+    // The CTO has the manager and the developer beneath them.
+    expect(container.textContent).toContain("2 reports");
+  });
+
+  it("groups the company by executive organization when there is one", async () => {
+    listAgents.mockResolvedValue(companyWithHierarchy());
+
+    await render();
+
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "By organization",
+    );
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).toContain("Executive leadership");
+  });
+
+  it("offers a filter for one executive's whole organization", async () => {
+    listAgents.mockResolvedValue(companyWithHierarchy());
+
+    await render();
+
+    const bar = container.querySelector('[data-testid="team-org-filters"]');
+    expect(bar).not.toBeNull();
+
+    const ctoChip = Array.from(bar!.querySelectorAll("button")).find((button) =>
+      button.textContent?.startsWith("Cass"),
+    );
+    await act(async () => {
+      ctoChip?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await settle();
+
+    // Everybody under the CTO, at any depth, and nobody from marketing.
+    expect(container.textContent).toContain("Erin");
+    expect(container.textContent).toContain("Devi");
+    expect(container.textContent).not.toContain("Sasha");
+  });
+
+  it("does not offer reporting-line chrome for a company that has no reporting lines", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Mail triage", urlKey: "mail-triage" }),
+      agent({ id: "a2", name: "Operations", urlKey: "operations" }),
+    ]);
+
+    await render();
+
+    expect(container.querySelector('[data-testid="team-org-filters"]')).toBeNull();
+    expect(container.textContent).not.toContain("No manager set");
+  });
+
+  it("brings a problem deep in the company up to the front page", async () => {
+    listAgents.mockResolvedValue(
+      companyWithHierarchy().map((one) =>
+        one.id === "dev" ? { ...one, status: "error", lastError: "Tests failed" } : one,
+      ),
+    );
+
+    await render();
+
+    const panel = container.querySelector('[data-testid="team-needs-attention"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.textContent).toContain("Devi");
+    expect(panel!.textContent).toContain("Tests failed");
+    // Named by the organization it is in, so it is obvious whose problem it is.
+    expect(panel!.textContent).toContain("Cass");
+    expect(panel!.textContent).toContain("Reports to Erin");
+  });
+
+  it("says nothing about attention when the whole company is healthy", async () => {
+    listAgents.mockResolvedValue(companyWithHierarchy());
+
+    await render();
+
+    expect(container.querySelector('[data-testid="team-needs-attention"]')).toBeNull();
+  });
+
   it("offers the move that this person's state calls for", async () => {
     listAgents.mockResolvedValue([
       agent({ id: "a1", name: "Asker", urlKey: "asker" }),

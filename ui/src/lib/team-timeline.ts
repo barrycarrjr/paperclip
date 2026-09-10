@@ -1,4 +1,5 @@
 import type { Agent, HeartbeatRun, Issue } from "@paperclipai/shared";
+import type { TeamHierarchy } from "./team-hierarchy";
 
 /**
  * The Team activity timeline: what the whole team has been doing over a
@@ -276,3 +277,74 @@ export function formatBusyTime(ms: number): string {
   const rest = minutes % 60;
   return rest > 0 ? `${hours}h ${String(rest).padStart(2, "0")}m` : `${hours}h`;
 }
+
+/**
+ * The timeline in the shape of the company rather than in order of how busy
+ * everybody has been.
+ *
+ * Busiest-first answers "who has actually done anything today", which is the
+ * right default. It cannot answer "has the technology side been working this
+ * afternoon", because the technology side is scattered down the list. This
+ * ordering answers that one: a heading per executive organization, everybody
+ * beneath them in reading order, indented by how deep they sit.
+ *
+ * Grouping only. The bars, the window and everything the chart claims are
+ * untouched, and no run moves from one member to another.
+ */
+export type TeamTimelineOrdering = "busy" | "org";
+
+export type TeamTimelineEntry =
+  | { kind: "heading"; id: string; title: string }
+  | { kind: "row"; row: TeamTimelineRow; depth: number; managerName: string | null };
+
+export function orderTimelineByOrganization(
+  rows: TeamTimelineRow[],
+  hierarchy: TeamHierarchy,
+): TeamTimelineEntry[] {
+  const rowById = new Map(rows.map((row) => [row.agent.id, row]));
+  const entries: TeamTimelineEntry[] = [];
+  const placed = new Set<string>();
+
+  const pushRow = (id: string, depth: number) => {
+    const row = rowById.get(id);
+    if (!row || placed.has(id)) return;
+    placed.add(id);
+    const managerId = hierarchy.byId.get(id)?.managerId ?? null;
+    entries.push({
+      kind: "row",
+      row,
+      depth,
+      managerName: managerId ? hierarchy.byId.get(managerId)?.agent.name ?? null : null,
+    });
+  };
+
+  // Everybody beneath somebody, in reading order, keeping the indentation
+  // relative to the heading rather than to the top of the company.
+  const pushSubtree = (id: string, depth: number) => {
+    pushRow(id, depth);
+    for (const child of hierarchy.byId.get(id)?.directReportIds ?? []) {
+      pushSubtree(child, depth + 1);
+    }
+  };
+
+  if (hierarchy.topId && rowById.has(hierarchy.topId)) {
+    entries.push({ kind: "heading", id: "__top__", title: "Executive leadership" });
+    pushRow(hierarchy.topId, 0);
+  }
+
+  for (const branch of hierarchy.branches) {
+    const anyVisible = branch.memberIds.some((id) => rowById.has(id));
+    if (!anyVisible) continue;
+    entries.push({ kind: "heading", id: branch.id, title: branch.leader.name });
+    pushSubtree(branch.id, 0);
+  }
+
+  const leftover = rows.filter((row) => !placed.has(row.agent.id));
+  if (leftover.length > 0) {
+    entries.push({ kind: "heading", id: "__unattached__", title: "Not in the reporting line" });
+    for (const row of leftover) pushRow(row.agent.id, 0);
+  }
+
+  return entries;
+}
+

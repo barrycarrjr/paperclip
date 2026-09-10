@@ -102,6 +102,37 @@ export const TEAM_ATTENTION_STATES: readonly TeamWorkState[] = [
   "error",
 ];
 
+/**
+ * The four groups the eight states collapse into.
+ *
+ * They live here rather than beside the tiles that first used them because
+ * three other things now count by group as well: the summary tiles, an
+ * executive's roll-up of their own organization, and the branch headings on
+ * the grouped view. One definition means those three can never drift into
+ * disagreeing about whether, say, a retrying agent counts as working.
+ *
+ * "attention" deliberately spans three states. A question waiting for an
+ * answer, finished work waiting for a look and an agent stopped with an
+ * error are three different situations but the same instruction to the
+ * person reading: this will not move until you do something.
+ */
+export type TeamStateGroup = "attention" | "working" | "paused" | "idle";
+
+export const TEAM_STATE_GROUP_STATES: Record<TeamStateGroup, readonly TeamWorkState[]> = {
+  attention: ["needs_you", "needs_review", "error"],
+  working: ["working", "retrying"],
+  paused: ["paused"],
+  idle: ["waiting", "quiet"],
+};
+
+export function teamStateGroupOf(state: TeamWorkState): TeamStateGroup {
+  for (const group of Object.keys(TEAM_STATE_GROUP_STATES) as TeamStateGroup[]) {
+    if (TEAM_STATE_GROUP_STATES[group].includes(state)) return group;
+  }
+  // Unreachable while every state is in a group; a test pins that.
+  return "idle";
+}
+
 /** Order the rows: the ones that need a person first, quiet ones last. */
 const STATE_ORDER: Record<TeamWorkState, number> = {
   needs_you: 0,
