@@ -2,7 +2,7 @@
 
 Written 2026-09-09, branch `team-operations-console`.
 
-Barry brought four mockups showing a card grid, a table, a member detail page and a Gantt-style
+The operator brought four mockups showing a card grid, a table, a member detail page and a Gantt-style
 timeline, with a note that the mockups were written by an assistant that did not know how Paperclip
 works. He also said the real problem in his own words: some work he does by hand in Paperclip, like
 reading and answering email, and some he wants agents to do, and for the agent half he does not yet
@@ -50,7 +50,7 @@ edge and nothing more is claimed.
 
 An agent in an error state used to read "Stopped with an error." and nothing else, on both the
 list and its own page. That is the least useful card on the screen and it is exactly the question
-Barry says he cannot answer today.
+The operator says he cannot answer today.
 
 The app does record the reason; it was just not on the routes the screens read. Three places hold
 it and any of them can be empty: `agent_runtime_state.last_error`, the failed run's own
@@ -69,14 +69,14 @@ it and any of them can be empty: `agent_runtime_state.last_error`, the failed ru
   somewhere. The earlier wording told you to open the agent's page, which was silly on the agent's
   page.
 
-Verified against real data on 2026-09-09: an M3 Media agent that had been sitting in an error
+Verified against real data on 2026-09-09: a Company A agent that had been sitting in an error
 state now reads "Claude run failed ... Failed to authenticate: OAuth session expired and could not
-be refreshed" on both surfaces. **That is a live problem on Barry's instance, not a test case.**
+be refreshed" on both surfaces. **That is a live problem on the operator's instance, not a test case.**
 
 ### 2. Bounding the timeline's read to the window it draws
 
 The timeline first asked for "the newest 500 runs" and filtered them in the browser. Measured on
-M3 Media that was **1,283 KB per request, repeating every 30 seconds** while the tab was open, to
+Company A that was **1,283 KB per request, repeating every 30 seconds** while the tab was open, to
 draw a handful of bars. Worse, it was quietly wrong in the making: a company busy enough to do 500
 runs inside the window would have had the chart cut off with nothing saying so.
 
@@ -105,7 +105,7 @@ losing its state. See `lib/team-current-work.ts`.
 **Controls next to the work.** Every list row and the member's own page carry the same control
 strip: the one button on show is whatever that member's state says the next move is (Answer,
 Review, Stop, Resume or Wake), with the rest behind the menu. All of these already existed on the
-agent's own page; none of them is new behaviour. This is the "control" half of Barry's sentence, and
+agent's own page; none of them is new behaviour. This is the "control" half of the operator's sentence, and
 it was the half the mockups underweighted: they show play/pause/stop, but the moves that actually
 unblock work are answering a question and reviewing finished work.
 
@@ -117,7 +117,7 @@ limit does not move it. With nothing to count it says "not enough to go on" rath
 
 ## Naming
 
-Barry asked that "Agents" become "Team" everywhere. Most of that was already true: the section is
+The operator asked that "Agents" become "Team" everywhere. Most of that was already true: the section is
 Team, there is no parallel Agents area, and every new view here is Team-first. The word "agent" was
 kept for an individual worker, because it is the word used by the API, the routes (`/agents/...`),
 the CLI, the docs and every add-on. Renaming only the labels would leave the screen disagreeing with
@@ -157,10 +157,10 @@ Changed: `lib/team-current-work.ts` (new state, new fields, the error reason), `
 
 ## Checked in a browser against real data, 2026-09-09
 
-Signed in on the local instance at `http://paperclip.local:3100`, which serves the UI straight
+Signed in on the local instance at `http://localhost:3100`, which serves the UI straight
 from source, so no separate dev server is needed to see changes.
 
-- **HQ (2 agents)** and **M3 Media (9 agents)**, cards and table. Summary tiles, chips, search, the
+- **HQ (2 agents)** and **Company A (9 agents)**, cards and table. Summary tiles, chips, search, the
   view switch and the sort all behave. Rows arrive urgency-first: ready-for-review, then error,
   then paused, then waiting, then nothing-running.
 - **Controls** offer the right move per row without being told: Review on the agent holding

@@ -1,4 +1,4 @@
-# IND-1260: what actually happened (2026-09-09)
+# COB-1260: what actually happened (2026-09-09)
 
 Investigated against the live instance DB (port 54329) and the run logs in
 `~/.paperclip/instances/default/data/run-logs/`.
@@ -8,7 +8,7 @@ Investigated against the live instance DB (port 54329) and the run logs in
 Approval `8eb37c06-a13a-481e-9051-42ccf7fbb803`, activity log:
 
 - 16:11:17 `approval.created` (slack-tools:slack_send_dm, target Slack user U5EU3BQCE)
-- 16:11:48 `approval.approved` by Barry
+- 16:11:48 `approval.approved` by the operator
 - 16:11:48 `approval.executed` `{ ok: true, hadError: false }`
 
 So the send succeeded. There is no bug in the send path.
@@ -17,7 +17,7 @@ The reason nothing looks sent:
 
 - `linkedIssueIds` on both the approval and the wake was `[]`. The draft gate
   (`server/src/services/tool-draft-gate.ts`) never links the approval to the issue
-  it came from, so IND-1260's Activity tab has no record of the draft or the send.
+  it came from, so COB-1260's Activity tab has no record of the draft or the send.
 - The post-approval chat wake targets `payload.chatSessionId`, which for an agent
   run is the synthetic string `heartbeat:<runId>`, not a real chat session.
   `appendApprovedDraftResultToChatSession` therefore skips, and the agent is never
@@ -54,34 +54,34 @@ cannot change issue status and cannot acknowledge a handoff. Its only write tool
 ## 4. The documented REST fallback is broken: PAPERCLIP_API_URL has no port
 
 The agent is told to fall back to the REST API via `$PAPERCLIP_API_URL`. Its value in
-the run was `http://paperclip.local` — no port. Paperclip listens on 3100; port 80 on
-that host is a different web server that 301-redirects to `http://store.paperclip.local`,
+the run was `http://localhost` — no port. Paperclip listens on 3100; port 80 on
+that host is a different web server that 301-redirects to `http://store.localhost`,
 which does not resolve. Verified:
 
-    curl http://paperclip.local/api/health      -> 301 -> http://store.paperclip.local/api/health
-    curl http://paperclip.local:3100/api/health -> 200
+    curl http://localhost/api/health      -> 301 -> http://store.localhost/api/health
+    curl http://localhost:3100/api/health -> 200
 
-Chain: `.env` line 6 `BETTER_AUTH_URL=http://paperclip.local` becomes `authPublicBaseUrl`
+Chain: `.env` line 6 `BETTER_AUTH_URL=http://localhost` becomes `authPublicBaseUrl`
 (`server/src/config.ts:189`), and `choosePrimaryRuntimeApiUrl` (`server/src/runtime-api.ts:47-54`)
 returns `new URL(...).origin` for an explicit base URL, dropping the port. The
 allowed-hostnames branch below it would have appended `:3100` correctly. Note
-`buildRuntimeApiCandidateUrls` does produce the correct `http://paperclip.local:3100`
+`buildRuntimeApiCandidateUrls` does produce the correct `http://localhost:3100`
 candidate, but only the primary is exported as `PAPERCLIP_API_URL`.
 
 Two candidate fixes:
-- Narrow: set `BETTER_AUTH_URL=http://paperclip.local:3100` in `.env`.
+- Narrow: set `BETTER_AUTH_URL=http://localhost:3100` in `.env`.
 - Real: in `choosePrimaryRuntimeApiUrl`, if the explicit base URL has no explicit port
   and its hostname is in `allowedHostnames`, append the listen port.
 
 ## 5. Live consequence: a 30-second heartbeat loop burning money
 
 Because status is stuck at `in_progress`, the harness fires `issue_continuation_needed`
-every ~30 seconds. As of 16:21 there were 18 runs and 18 comments on IND-1260, the last
+every ~30 seconds. As of 16:21 there were 18 runs and 18 comments on COB-1260, the last
 twelve of them literally "No new context. No-op. Exiting." Run costs seen in the logs:
 $0.286 for the first, ~$0.05 each thereafter, roughly $6/hour and still running.
 
-Stopping it: set IND-1260 to `blocked` (or `done`) on the board. That is exactly what the
-agent's second, still-pending draft (`80d6dee4`) is asking Barry to do.
+Stopping it: set COB-1260 to `blocked` (or `done`) on the board. That is exactly what the
+agent's second, still-pending draft (`80d6dee4`) is asking the operator to do.
 
 ---
 
@@ -89,11 +89,11 @@ agent's second, still-pending draft (`80d6dee4`) is asking Barry to do.
 
 ## Immediate
 
-IND-1260 set to `blocked` in the database. The loop stopped: no runs after 16:24:39,
+COB-1260 set to `blocked` in the database. The loop stopped: no runs after 16:24:39,
 against one every ~30 seconds before it. Done by direct DB update because the board API
 token in `~/.paperclip/auth.json` **expired at 15:47 UTC that same day**, 34 minutes
 before this. Re-run `paperclipai auth login --instance-admin` before any CLI or REST work
-against the instance; it needs a browser click, so it is Barry's to do.
+against the instance; it needs a browser click, so it is the operator's to do.
 
 ## Code
 
@@ -103,7 +103,7 @@ process: `http:` scheme, no written port, we are not on 80, and the hostname is 
 serve. All four conditions must hold, so an `https:` proxy address, a written-down port,
 and a hostname we do not answer for are all left exactly as configured. Applied to both
 the primary URL and the candidate list. `.env` was NOT edited — `BETTER_AUTH_URL` is still
-`http://paperclip.local`, which is right for browser auth callbacks; only the runtime
+`http://localhost`, which is right for browser auth callbacks; only the runtime
 address needed correcting.
 
 **2. `server/src/services/chat-tools.ts` — `update_issue`.**
@@ -196,7 +196,7 @@ holding port 54329 with a stale `postmaster.pid`, twice; startup hung on
 child that could not serve. Cleared the orphans, removed the stale lock, and started
 Postgres directly to read its log: `database system was not properly shut down; automatic
 recovery in progress` followed by `redo is not required`. No data loss. Verified after:
-3,030 issues, 12 companies, 69 agents, 71 approvals, 10,147 comments, IND-1260 still
+3,030 issues, 12 companies, 69 agents, 71 approvals, 10,147 comments, COB-1260 still
 `blocked`. The instance was down about 25 minutes.
 
 **Correction to something believed earlier in this document's first half:** the startup
@@ -205,9 +205,9 @@ banner does NOT print `PAPERCLIP_API_URL`. It builds its own string from host an
 
 **And the running server does not exercise that fix.** `dev-watch.ts:16` spawns the server
 with its working directory set to `server/`, so `config.ts` never loads the repo-root
-`.env` and never sees `BETTER_AUTH_URL=http://paperclip.local`. `authPublicBaseUrl` is
+`.env` and never sees `BETTER_AUTH_URL=http://localhost`. `authPublicBaseUrl` is
 therefore null and `PAPERCLIP_API_URL` resolves to `http://127.0.0.1:3100`, which is
 reachable — the original symptom is gone on this process, but by launch path, not by the
-fix. The agent that hit the bug saw `http://paperclip.local`, so the previous server was
+fix. The agent that hit the bug saw `http://localhost`, so the previous server was
 started from the repo root by some other route. Anyone restoring that launch path gets the
 fix doing the actual work; the unit tests cover exactly that configuration.

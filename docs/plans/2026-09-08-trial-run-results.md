@@ -1,6 +1,6 @@
 # Trial run results (agent-run portion), 2026-09-08
 
-Ran against the live app at paperclip.local:3100, logged in as Barry, against the real
+Ran against the live app at localhost:3100, logged in as the operator, against the real
 8-company instance. Covers the highest-risk items from
 `2026-09-06-p6-trial-checklist.md`, not the full 71 steps (see "What I did not run" below).
 
@@ -9,15 +9,15 @@ Ran against the live app at paperclip.local:3100, logged in as Barry, against th
 **Part 1, steps 1/2/4 — company scoping while switching company on Email.** This is the
 check the checklist itself calls the most important one in the whole list.
 
-- Opened Email in Industry Bureau LLC: showed its own mailboxes
-  (`barry.c@printinginabox.com`, Help Scout `support@printinginabox.com`) and its own
+- Opened Email in Company B: showed its own mailboxes
+  (`owner@example-b.com`, Help Scout `support@example-b.com`) and its own
   folder tree.
-- Switched to Carr Rock Holdings by clicking its logo: stayed on the Email page
-  (`/CAR/email`), and correctly showed "Email is not available here. No mailbox in this
-  company has been set up yet." — not Industry Bureau's mailboxes, not a blank/broken
-  page. Confirmed by text search: no trace of `printinginabox` anywhere on the page.
-- Switched to M3 Media LLC: stayed on `/MME/email`, showed M3's own mailbox
-  (`barry.c@m3printing.com`). Again, no leftover Industry Bureau or Carr Rock content.
+- Switched to Company C by clicking its logo: stayed on the Email page
+  (`/COC/email`), and correctly showed "Email is not available here. No mailbox in this
+  company has been set up yet." — not Company B's mailboxes, not a blank/broken
+  page. Confirmed by text search: no trace of `example-b` anywhere on the page.
+- Switched to Company A: stayed on `/COA/email`, showed Company A's own mailbox
+  (`owner@example-a.com`). Again, no leftover Company B or Company C content.
 
 No cross-company data leak in any of the three switches. This is the property the whole
 checklist calls the one that matters most, and it holds.
@@ -25,8 +25,8 @@ checklist calls the one that matters most, and it holds.
 **Part 2, layout/naming — confirmed passively.** Every page loaded during the above
 checks already showed: two sidebar headings ("Your workspaces", "Control center"), the
 five renamed entries (Overview, Attention — reached via Work's tabs — Team, Work),
-Everything at the bottom, and the scope button correctly reading "Industry Bureau LLC" /
-"Carr Rock Holdings" / "M3 Media LLC" as the company changed. Consistent with what P1
+Everything at the bottom, and the scope button correctly reading "Company B" /
+"Company C" / "Company A" as the company changed. Consistent with what P1
 already confirmed when the HQ rail change shipped this session.
 
 ## More checks, second pass
@@ -37,21 +37,21 @@ Searching "secrets" returned a "Company settings" group with a "Secrets" row mar
 company". Both matched the checklist exactly.
 
 **Step 48 — GBP review dashboard, core leak check. Passed; one separate inconsistency
-found.** Opened the GBP Review Dashboard from M3 Media LLC, Industry Bureau LLC, and HQ.
+found.** Opened the GBP Review Dashboard from Company A, Company B, and HQ.
 The core thing this step guards against — a non-HQ company showing another company's
-locations — did not happen anywhere. M3 and Industry Bureau each correctly said "Locations
+locations — did not happen anywhere. Company A and Company B each correctly said "Locations
 belonging to the company you are viewing" (with no locations configured on either), and HQ
 correctly said "Every location across the portfolio, because you are viewing from HQ."
 
 Found something else, unrelated to the leak this step is checking for: HQ's portfolio view
-lists a location called "M3 Printing", but M3 Media LLC's own GBP dashboard says "No GBP
+lists a location called "Company A Print", but Company A's own GBP dashboard says "No GBP
 locations configured yet" — reproduced twice. Not a data leak (HQ is allowed to see it), but
-the two views disagree about whether M3 actually has a configured location. Possibly related
-to a real issue already on M3's board, `MME-428: GBP OAuth token expired - review monitoring
+the two views disagree about whether Company A actually has a configured location. Possibly related
+to a real issue already on Company A's board, `COA-428: GBP OAuth token expired - review monitoring
 blocked` — worth a look, not urgent.
 
 **Step 9 — goal dialog keeping its target company across a switch. Could not run as
-written; found something else instead.** Opened Work > Goals on M3 Media LLC, clicked Add
+written; found something else instead.** Opened Work > Goals on Company A, clicked Add
 Goal, typed a title. The checklist's next instruction is to switch company by clicking its
 logo on the rail while the dialog stays open. That click does nothing: the New Goal dialog
 has a full-screen backdrop (`fixed inset-0` overlay, confirmed by checking exactly what
@@ -78,7 +78,7 @@ reasons:
 2. Real side effects. Parts 4, 6, and 9 tick, move, and reply to real mail in the real
    inbox, hand real messages to real agents, and would spin up real agent work — not
    something to do unsupervised as a "test" on live business data. Part 10 step 71 is an
-   actual public post to Google and the checklist itself says only Barry can do that one.
+   actual public post to Google and the checklist itself says only the operator can do that one.
 
 ## If continuing this later
 

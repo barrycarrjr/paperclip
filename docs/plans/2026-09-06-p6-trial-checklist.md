@@ -1,11 +1,11 @@
 # P6 trial: what to click, in order
 
 Created: 2026-09-06. Brought back in line with the app on 2026-09-08. For:
-Barry. Purpose: the daily-use trial that only you can run. Each line is one
+The operator. Purpose: the daily-use trial that only you can run. Each line is one
 thing to do and what you should see. Tick it or say what you saw instead.
 Nothing below needs the internal object model.
 
-Log in at `http://paperclip.local:3100` (or `http://localhost:3100`) first.
+Log in at `http://localhost:3100` (or `http://localhost:3100`) first.
 
 ## If you have already done this once
 
@@ -397,7 +397,7 @@ Four things are enough:
 
 The steps here are drawn from the project's own acceptance list
 (`2026-09-02-ux-control-center-validation.md`, A01 to A26), from the work in
-`2026-09-02-ux-control-center-handoff.md` marked "not yet Barry-confirmed
+`2026-09-02-ux-control-center-handoff.md` marked "not yet the operator-confirmed
 live", and from the fifteen commits on the `ux-mockup-shell` branch that
 built the agreed mockup (`2026-09-07-mockup-vs-app.md`). They are not
 exhaustive: A05, A06, A08, A13, A14, A15 and A17 cover existing behaviour

@@ -3,7 +3,7 @@
 Written 2026-09-10, branch `team-operations-console`, on top of commit `9abb6c217`.
 
 The console built on 2026-09-09 answers "what is everyone doing" but it answers it as a flat list
-of agents. Barry's follow-up brief is about the half that was missing: **who works for whom**. A
+of agents. The operator's follow-up brief is about the half that was missing: **who works for whom**. A
 company of thirty agents shown as thirty equal cards cannot be read, and worse, a flat list quietly
 suggests that everybody reports to the CEO.
 
@@ -45,7 +45,7 @@ list and the member's own page can never disagree about who reports to whom.
 
 It turns the flat agent list into, for each member: their manager, their depth, their direct
 reports, everybody beneath them, and which executive branch they sit in. Four things it is careful
-about, each of which is a real case on Barry's own instance:
+about, each of which is a real case on the operator's own instance:
 
 1. **The top is found, not assumed.** One agent with no manager is the top. Several, and the one
    whose role is `ceo` is the top; the rest are shown as outside the reporting line rather than
@@ -75,7 +75,7 @@ about, each of which is a real case on Barry's own instance:
 
 ## Four things the live instance caught that tests had not
 
-Checked in a browser against M3 Media (9 agents, a real CEO, six executives, one agent nobody has
+Checked in a browser against Company A (9 agents, a real CEO, six executives, one agent nobody has
 placed) on 2026-09-10. Each of these was wrong on screen while every test was green, which is the
 argument for doing this pass rather than trusting the suite.
 
@@ -83,7 +83,7 @@ argument for doing this pass rather than trusting the suite.
    no branch, because every branch is beneath them, and the attention list was reading "no branch"
    as "not placed". An unwell CEO now heads the list under "Executive leadership".
 2. **An agent with no manager was described as leading an organization.** The table's Branch column
-   said "Mike (leads)" for an agent nobody has placed. Such a member is given a branch internally so
+   said "Sam (leads)" for an agent nobody has placed. Such a member is given a branch internally so
    the grouped view has somewhere to put them, which is not the same as leading anything; the table
    now says "Not in the line".
 3. **A section with no leader printed its own title twice**, once as the small heading and once as

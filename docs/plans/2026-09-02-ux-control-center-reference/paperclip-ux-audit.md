@@ -1,10 +1,10 @@
 # Paperclip: operator workspace / information architecture audit
 
-Reviewed September 2, 2026. Scope: the running customized fork at `paperclip.local:3100`, `~/paperclip/ui`, and the installed plugin implementations in `~/paperclip-extensions`.
+Reviewed September 2, 2026. Scope: the running customized fork at `localhost:3100`, `~/paperclip/ui`, and the installed plugin implementations in `~/paperclip-extensions`.
 
 ## Conclusion
 
-Paperclip is already more than an agent dashboard. It is a multi-company operator workspace: Barry personally reads and sends mail, manages support conversations and reminders, observes the phone system, and asks agents to act on the same work. The first mockup captured supervision but underweighted direct operation. Email belongs at the front, not under a miscellaneous Operations menu.
+Paperclip is already more than an agent dashboard. It is a multi-company operator workspace: The operator personally reads and sends mail, manages support conversations and reminders, observes the phone system, and asks agents to act on the same work. The first mockup captured supervision but underweighted direct operation. Email belongs at the front, not under a miscellaneous Operations menu.
 
 Preserve the first mockup's clear scope and calmer shell. Add first-class daily workspaces and a shared human/agent ownership model. Regroup existing capabilities; do not replace them with a generic dashboard or force every interaction through task creation.
 
@@ -24,7 +24,7 @@ Current company Email supports IMAP folders, search, unread/all, sender grouping
 
 At desktop width the company rail, primary sidebar, mailbox tree, message list, and reader compete for horizontal space. Many consequential actions are icon-only. Account identity is stronger in the mailbox list than at the moment of sending. Rule learning is easy to overlook: marking read/replying/handing off may implicitly add a keep-always rule for an unclassified sender. Rules are administered down inside plugin configuration.
 
-**Direction:** Email is a pinned top-level workspace and can be Barry's preferred home. Use a compact mailbox/folder picker plus list and reader; retain an expandable mailbox tree for heavy filing. Make the sending identity, company, provider, ownership, and next action explicit. Expose mail-handling rules inside Email; keep credentials/connections in Administration.
+**Direction:** Email is a pinned top-level workspace and can be the operator's preferred home. Use a compact mailbox/folder picker plus list and reader; retain an expandable mailbox tree for heavy filing. Make the sending identity, company, provider, ownership, and next action explicit. Expose mail-handling rules inside Email; keep credentials/connections in Administration.
 
 Source: `ui/src/pages/Email.tsx`, `PortfolioEmail.tsx`, `ui/src/components/HelpScoutEmailView.tsx`, `HelpScoutMailboxPanel.tsx`, `ui/src/components/email/EmailPopoutDialog.tsx`.
 
@@ -59,7 +59,7 @@ The inspected Help Scout watcher intentionally parks its work in `blocked` while
 
 **Direction:** distinguish Working, Watching, Waiting on someone, Needs your decision, Paused, and Failed. These must be based on real workflow semantics, not guessed from `blocked` or `succeeded`. Human attention should show why action is needed, impact, age, responsible company, owner, and the next decision. Watching healthy mail automation is not an alert. Receipts remain outcome history; raw events remain available in diagnostic history.
 
-Source: `MorningBrief.tsx`, `PortfolioBrief.tsx`, `Inbox.tsx`, `Issues.tsx`, `IssueDetail.tsx`, `DashboardLive.tsx`, `AgentDetail.tsx`, `Activity.tsx`, `Receipts.tsx`, portfolio counterparts. Live representative record: IND-1075 and its routine.
+Source: `MorningBrief.tsx`, `PortfolioBrief.tsx`, `Inbox.tsx`, `Issues.tsx`, `IssueDetail.tsx`, `DashboardLive.tsx`, `AgentDetail.tsx`, `Activity.tsx`, `Receipts.tsx`, portfolio counterparts. Live representative record: COB-1075 and its routine.
 
 ### 5. Plugin packaging currently determines navigation too much
 
@@ -125,18 +125,18 @@ The sidebar has a small stable control section plus individually pinned workspac
 | Shell and scope | HQ and eight active operating-company rail entries, company menus, navigation, breadcrumbs, company switching | Company route memory; HQ doubles as aggregate and company. Companies administration also includes archived/stub companies. |
 | Overview/attention | Company Brief, portfolio Brief, Inbox, portfolio/company approvals | Preserve actionable queue and clarify health semantics. No approval was submitted. |
 | Portfolio | Brief, Email, Calendar, Agents, Issues, Directives, Routines, Approvals, Activity, Receipts, Costs | Empty-company repetition, different inclusion of HQ, noisy history, stale paused schedule dates. |
-| Email | Industry IMAP list/reader, compose/handoff dialogs; Industry Help Scout mailbox/conversation controls; portfolio multi-mailbox view | No messages sent, filed, deleted, triaged, or handed off. Some already-read mail was opened. |
+| Email | Company B IMAP list/reader, compose/handoff dialogs; Company B Help Scout mailbox/conversation controls; portfolio multi-mailbox view | No messages sent, filed, deleted, triaged, or handed off. Some already-read mail was opened. |
 | Calendar | Company list/month, routine occurrence navigation; portfolio list/filters, new reminder dialog | No reminder saved. Paperclip/routine sources verified; external sync not assumed. |
 | Work | Issues; representative issue/chat/activity/related work; projects/detail tabs; goals/detail; routine/detail; work queues | Intentionally blocked mail watcher; repetitive automation issues. Empty queues are still real workflows. |
 | Agents/team | Org/agent lists, portfolio teams, agent Dashboard/Instructions/Skills/Configuration/Runs/Budget/Phone | Instructions/adapter controls kept separate from operator overview. Non-assistant Phone tab blank. |
-| Assistants | Industry empty list; first step of eight-step builder; Personal Alex; Alex's Phone actions | Actual configured Personal assistant verified. No test or outbound call placed; no assistant created. |
-| Knowledge/capture | Memories; Industry Notepad unavailable; Personal Notepad working; private To-dos | Availability is company-specific; To-dos global personal. |
+| Assistants | Company B empty list; first step of eight-step builder; Personal Alex; Alex's Phone actions | Actual configured Personal assistant verified. No test or outbound call placed; no assistant created. |
+| Knowledge/capture | Memories; Company B Notepad unavailable; Personal Notepad working; private To-dos | Availability is company-specific; To-dos global personal. |
 | History/usage | Receipts, Activity, Costs tabs, Dashboard Live, portfolio counterparts | Raw lifecycle/lease noise can crowd meaningful outcomes; no backend root-cause claim for differing receipt counts. |
 | 3CX Live | Active calls, parked calls, queues, agents/presence, wallboard | All five visited. Distinguish human extensions from AI agents. |
 | 3CX History | Call history, recordings, daily report | Daily report remained loading during audit; cannot claim it rendered successfully. |
 | 3CX Directory | DIDs, extensions, trunks | Shared PBX directory can include other-company objects. |
 | AI Calls | Campaigns, inbound routes, DNC list, audit | Empty/configuration states inspected. Some editing flows described as not implemented. |
-| GBP Reviews | Industry, M3 Media, C3 Media page mounts; same M3 Printing summary | Summary-only current UI; portfolio scope despite company URL. No public reply posted. |
+| GBP Reviews | Company B, Company A, Company D page mounts; same Company A Print summary | Summary-only current UI; portfolio scope despite company URL. No public reply posted. |
 | Backups | Overview, Schedules, Destinations, History | No Run backup or Restore operation clicked. |
 | Company admin | Companies, Settings, Access, Invites, Secrets, Skills, Import, Export | Sensitive pages inspected for structure, not credential values. Export did not render a substantive state during the audit wait. |
 | Instance admin | Profile, General, Access, Heartbeats, Templates, Adapters, Agent defaults, External MCP, Experimental, Logs, Roadmap | Roadmap did not render substantive content during audit wait. Template editing and settings were not saved. |

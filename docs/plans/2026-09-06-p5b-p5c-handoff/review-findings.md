@@ -48,7 +48,7 @@ Fix: Keep the stamp but replace the refusal with a second access check: in stamp
 
 Claim: The page hides the Post button whenever the review has a reply_posts row in status posting or unknown (findPendingAttempt, reviewQueries.ts:227) and shows the sentence 'A post was attempted at <time> and did not finish. Check the review on Google before trying again.' Nothing the page can do ever clears such a row: the only code that settles a stale posting row (replyGuard.ts:233-243 and :255) or an unknown row (replyGuard.ts:257-262, same key only) runs inside postReplyGuarded, which the page reaches only through the button it has just hidden; findInFlight returns posting rows only (replyStore.ts:169), so an unknown row is never reconciled by any other caller; the daily sync never touches reply_posts. 'Before trying again' promises a retry that cannot happen.
 
-Scenario: Barry posts, the connection drops after the PUT, the row is marked unknown. He reopens the review: review-detail returns pendingAttempt {status:'unknown'}, canShowPostButton is false, the sentence tells him to check Google before trying again. He checks, comes back, and there is no button, today or next month. Same outcome when the worker dies between beginPost and finishPost (a posting row that never ages out on the page).
+Scenario: The operator posts, the connection drops after the PUT, the row is marked unknown. He reopens the review: review-detail returns pendingAttempt {status:'unknown'}, canShowPostButton is false, the sentence tells him to check Google before trying again. He checks, comes back, and there is no button, today or next month. Same outcome when the worker dies between beginPost and finishPost (a posting row that never ages out on the page).
 
 Fix: In review-detail (worker.ts:697) settle rows the way the guard does before computing pendingAttempt: for a posting row older than STALE_IN_FLIGHT_MS and for any unknown row, run reconcileAgainstLive (export it from replyGuard.ts and let the store return unknown rows too) using the live review already read at worker.ts:685; hide the button only for a posting row younger than two minutes. If reconciliation cannot run (Google unreachable), keep the sentence but add a 'Check Google now' action that calls it.
 
@@ -174,7 +174,7 @@ Fix: Add a test with mockLogActivity.mockRejectedValueOnce(new Error('db down'))
 
 Claim: The mapper replaces the guard's own sentence 'Try again; the retry checks Google first and will not post twice' (replyGuard.ts:326) with 'Open the review again; it checks Google first and will not post twice.' Only a retry from the still-open confirm panel carries the same idempotency key (editorState.ts:212-216 keeps it, :244-245 keeps the panel in the failed stage with Yes, post it enabled) and reaches the reconcile at replyGuard.ts:257-262. Reopening the review remounts the editor with a fresh key (index.tsx:229, key={reviewName}) and lands on the pendingAttempt dead end in ux-honesty-01.
 
-Scenario: The connection drops after the PUT. The panel shows the sentence. Barry does what it says: Close, reopen the review. No Post button, and the reply may or may not be on Google.
+Scenario: The connection drops after the PUT. The panel shows the sentence. The operator does what it says: Close, reopen the review. No Post button, and the reply may or may not be on Google.
 
 Fix: Change the sentence to: 'The connection dropped while posting, so it is not known whether the reply reached Google. Press Yes, post it again: it checks Google first and will not post twice.' The panel already stays open with the same key.
 
@@ -201,7 +201,7 @@ Fix: Read isLoading and isError from that useQuery. While loading render the but
 
 Claim: The receipt line 'Handed to <name>, who has been woken' asserts an outcome the server never reports. The accept route queues the wake fire-and-forget (server/src/routes/issues.ts, queueResolvedInteractionContinuationWakeup: void heartbeat.wakeup(...).catch(warn)), and enqueueWakeup throws and writes a skipped request when the agent is budget-blocked (server/src/services/heartbeat.ts:6713-6721), paused or pending approval (:6724-6730), or has wake-on-demand off (:6738-6741). The dialog reads only container.assigneeAgentId (:215-217). The same screen may have shown '<name> is paused by budget. Its task will be created but will not start until the budget is raised.' (:513) moments earlier.
 
-Scenario: The lead is over budget. The header warns. Barry accepts. The receipt says 'Handed to Ops Lead, who has been woken.' Nothing runs, and the receipt gave him no reason to look.
+Scenario: The lead is over budget. The header warns. The operator accepts. The receipt says 'Handed to Ops Lead, who has been woken.' Nothing runs, and the receipt gave him no reason to look.
 
 Fix: Say what the server can vouch for: 'Handed to <name>.' plus, when plan.warnings names that agent, '<name> is paused by budget, so it will not start until the budget is raised.'; otherwise 'It will pick this up on its next run.' Or read the wake outcome back (the wake request row) before writing the line.
 
@@ -221,7 +221,7 @@ Claim: The removed cascade in routes/agents.ts consulted the env override only i
 
 Scenario: Instance has ANTHROPIC_API_KEY and PAPERCLIP_CHAT_DEFAULT_MODEL=adapter:claude_local:claude-opus-4-7 (a Claude Pro user's Clippy default). Before: ai-rewrite ran on the native Anthropic SDK in hundreds of milliseconds. After: it spawns the claude_local CLI per rewrite, taking seconds, and the start-work planner inherits the same choice.
 
-Fix: Either keep the old order for one-shots (native providers first, env override only in the discovered-model pass) or leave the code as is and correct the spec's 'identical behaviour' claim so the change is a deliberate decision Barry has seen.
+Fix: Either keep the old order for one-shots (native providers first, env override only in the discovered-model pass) or leave the code as is and correct the spec's 'identical behaviour' claim so the change is a deliberate decision the operator has seen.
 
 ## data-integrity-idempotency-key-not-bound-to-review [low] paperclip-extensions:plugins/gbp-reviews/src/replyGuard.ts:219
 **A reused idempotency key returns another review's receipt and restarts another review's audit row**
@@ -390,7 +390,7 @@ Fix: Map only 'Viewer access is read-only' to the role sentence, and map the two
 
 Claim: lastSyncedAtForLocation is MAX(updated_at) over the reviews rows. upsertReview sets updated_at = now() on a human post (replyStore.ts:242), so after a post the header at ReviewList.tsx:85 reads 'Last synced <time of the post>' although no sync ran; and a location with no reviews reads 'Last synced never' right after Sync now reported '0 new reviews pulled in.' (ReviewList.tsx:65).
 
-Scenario: Barry posts a reply at 10:14; the list header says 'Last synced 10:14'; the real sync was 06:00. A new location with no reviews on Google: Sync now says 0 new, header still says never.
+Scenario: The operator posts a reply at 10:14; the list header says 'Last synced 10:14'; the real sync was 06:00. A new location with no reviews on Google: Sync now says 0 new, header still says never.
 
 Fix: Record the sync itself (a per-location ctx.state key written at the end of syncLocationReviews, or a sync_runs row) and read that for lastSyncedAt; or relabel the current value 'Last updated'.
 
@@ -417,7 +417,7 @@ Fix: Return posting: { accountFound: boolean, accountAllowed: boolean } from the
 
 Claim: On a same-key retry the worker returns alreadyPosted: true (replyGuard.ts:157 and :224) and the panel shows 'Already posted' with 'This attempt had already reached Google, so nothing was sent twice.' (editorState.ts:334-335, ReviewEditor.tsx:343), but the host toast still says title 'Reply posted', body 'Posted as <location>.'
 
-Scenario: Connection drops, Barry presses Yes, post it again, the guard reconciles: a toast announces a fresh post while the panel beside it says nothing was sent.
+Scenario: Connection drops, the operator presses Yes, post it again, the guard reconciles: a toast announces a fresh post while the panel beside it says nothing was sent.
 
 Fix: toast({ title: receipt.alreadyPosted ? 'Already posted' : 'Reply posted', body: receipt.alreadyPosted ? 'Google already had this reply; nothing was sent twice.' : `Posted as ${receipt.location.displayName}.`, tone: 'success' }).
 
@@ -444,7 +444,7 @@ Fix: '- `ReviewDashboardPage`: full page at route `gbp-reviews`. Location cards 
 
 Claim: For a plan a person asked for, the row's consequence is 'Nothing is created until you accept it. Waiting costs nothing.' The row is attached to, and deep-links to, the request container issue that start-work.ts:494-502 created in backlog, and its detail line shows that issue's title. The spec's own container decision says no screen may claim nothing was created after drafting.
 
-Scenario: Barry drafts, closes the dialog, opens the Brief: 'Plan waiting for your decision', 'Request: hire a bookkeeper', 'Nothing is created until you accept it.' He then finds that request issue in the Issues list.
+Scenario: The operator drafts, closes the dialog, opens the Brief: 'Plan waiting for your decision', 'Request: hire a bookkeeper', 'Nothing is created until you accept it.' He then finds that request issue in the Issues list.
 
 Fix: 'No tasks are created until you accept it. Waiting costs nothing.'
 
@@ -453,7 +453,7 @@ Fix: 'No tasks are created until you accept it. Waiting costs nothing.'
 
 Claim: rejectPlan awaits issuesApi.rejectInteraction, which cancels the request container (issue-thread-interactions.ts reject hook), then calls clearPlan() and returns to the empty box with no notice or receipt, while accept, activation and a 409 each produce a visible result.
 
-Scenario: Barry clicks Reject. The panel silently resets. Later he finds a cancelled 'Request: ...' issue and does not know what happened to it.
+Scenario: The operator clicks Reject. The panel silently resets. Later he finds a cancelled 'Request: ...' issue and does not know what happened to it.
 
 Fix: Before clearPlan(): setReceipt({ title: 'Plan rejected', steps: [{ step: 'cancelled', ok: true, detail: 'Request ', link: { to: `/issues/${plan.issue.identifier}`, label: plan.issue.identifier }, after: ' was cancelled. Nothing was started.' }] }).
 
