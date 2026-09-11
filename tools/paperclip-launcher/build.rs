@@ -22,7 +22,12 @@ fn main() {
     }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let src_ico = manifest_dir.join("..").join("..").join("ui").join("public").join("favicon.ico");
+    let src_ico = manifest_dir
+        .join("..")
+        .join("..")
+        .join("ui")
+        .join("public")
+        .join("favicon.ico");
     println!("cargo:rerun-if-changed={}", src_ico.display());
     println!("cargo:rerun-if-changed=build.rs");
 

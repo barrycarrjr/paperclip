@@ -6,7 +6,7 @@
 //   - Spawns the server hidden if 3100 isn't already bound. Stdout/stderr go
 //     to %USERPROFILE%\.paperclip\logs\paperclip-YYYYMMDD.log.
 //   - Stays alive in the tray; menu mirrors the browser's system-actions
-//     panel (Open, Update, Rebuild, Restart, Logs, Docs, Shutdown, Quit).
+//     panel (Open, Update, Rebuild, Restart, Repair UI, Logs, Docs, Shutdown).
 //
 // Built from tools\paperclip-launcher\; binary lands at
 // scripts\launchers\windows\paperclip.exe via build.bat.
@@ -148,6 +148,7 @@ struct DesktopNotification {
 enum UserEvent {
     Notify(DesktopNotification),
     RestartFinished(Result<(), String>),
+    RepairUiFinished(Result<(), String>),
 }
 
 /// Shape of GET /api/internal/desktop-notifications/pending.
@@ -234,8 +235,7 @@ fn main() {
 }
 
 fn resolve_paths() -> Result<Paths, String> {
-    let exe_path = env::current_exe()
-        .map_err(|e| format!("Could not resolve own path: {}", e))?;
+    let exe_path = env::current_exe().map_err(|e| format!("Could not resolve own path: {}", e))?;
     let launcher_dir = exe_path
         .parent()
         .ok_or("Exe has no parent directory")?
@@ -259,8 +259,8 @@ fn resolve_paths() -> Result<Paths, String> {
         ));
     }
 
-    let user_profile_os = env::var_os("USERPROFILE")
-        .ok_or("USERPROFILE environment variable is not set")?;
+    let user_profile_os =
+        env::var_os("USERPROFILE").ok_or("USERPROFILE environment variable is not set")?;
     let user_profile = PathBuf::from(user_profile_os);
     let logs_dir = user_profile.join(".paperclip").join("logs");
     let _ = fs::create_dir_all(&logs_dir);
@@ -289,6 +289,26 @@ fn spawn_server(paths: &Paths) -> Result<(), String> {
         .try_clone()
         .map_err(|e| format!("Could not clone log handle: {}", e))?;
     let _ = writeln!(header, "\r\n=== paperclip starting {} ===", format_now());
+
+    // Vite occasionally leaves a metadata file or optimized dependency that
+    // points at a chunk which no longer exists (most often after an update on
+    // NTFS). The server still reports healthy in that state, but the browser
+    // has no executable UI and appears as a blank page. Validate the generated
+    // cache before every server spawn and discard it only when it is provably
+    // incomplete; Vite will regenerate it on the first page request.
+    let cache_existed = ui_vite_cache_dir(paths).exists();
+    let cache_repair = repair_incomplete_ui_cache(paths)?;
+    if let Some(reason) = &cache_repair {
+        let _ = writeln!(
+            header,
+            "[launcher] cleared incomplete Vite UI cache: {}",
+            reason
+        );
+    }
+    let cache_generation = ensure_vite_cache_generation(
+        &ui_node_modules_dir(paths),
+        !cache_existed || cache_repair.is_some(),
+    )?;
     drop(header);
 
     let repo_root_str = paths
@@ -309,6 +329,11 @@ fn spawn_server(paths: &Paths) -> Result<(), String> {
             "src/index.ts",
             "run",
         ])
+        // Vite includes this value in its optimizer config hash (see
+        // ui/vite.config.ts). It changes only when the generated cache is
+        // cleared, so browsers receive a new ?v= URL instead of reusing an
+        // immutable dependency response from the previous cache generation.
+        .env("PAPERCLIP_UI_CACHE_GENERATION", cache_generation)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_for_stderr))
@@ -337,6 +362,7 @@ fn run_tray(paths: Paths, config: Config) {
     let item_update = MenuItem::new("Update Paperclip…", true, None);
     let item_rebuild = MenuItem::new("Rebuild from local…", true, None);
     let item_restart = MenuItem::new("Restart Paperclip", true, None);
+    let item_repair_ui = MenuItem::new("Repair blank screen", true, None);
     let sep2 = PredefinedMenuItem::separator();
     let item_logs = MenuItem::new("Open logs folder", true, None);
     let item_docs = MenuItem::new("Documentation", true, None);
@@ -348,6 +374,7 @@ fn run_tray(paths: Paths, config: Config) {
     let _ = menu.append(&item_update);
     let _ = menu.append(&item_rebuild);
     let _ = menu.append(&item_restart);
+    let _ = menu.append(&item_repair_ui);
     let _ = menu.append(&sep2);
     let _ = menu.append(&item_logs);
     let _ = menu.append(&item_docs);
@@ -358,6 +385,7 @@ fn run_tray(paths: Paths, config: Config) {
     let id_update = item_update.id().clone();
     let id_rebuild = item_rebuild.id().clone();
     let id_restart = item_restart.id().clone();
+    let id_repair_ui = item_repair_ui.id().clone();
     let id_logs = item_logs.id().clone();
     let id_docs = item_docs.id().clone();
     let id_shutdown = item_shutdown.id().clone();
@@ -392,7 +420,10 @@ fn run_tray(paths: Paths, config: Config) {
     let notification_proxy = proxy.clone();
     std::thread::spawn(move || {
         let loopback_base = format!("http://127.0.0.1:{}/", internal_port);
-        let pending_url = join_url(&loopback_base, "api/internal/desktop-notifications/pending?limit=20");
+        let pending_url = join_url(
+            &loopback_base,
+            "api/internal/desktop-notifications/pending?limit=20",
+        );
         let ack_url = join_url(&loopback_base, "api/internal/desktop-notifications/ack");
         let mut shown: std::collections::HashSet<String> = std::collections::HashSet::new();
         loop {
@@ -451,6 +482,20 @@ fn run_tray(paths: Paths, config: Config) {
                     );
                     warn_box(message);
                 }
+                UserEvent::RepairUiFinished(Ok(())) => {
+                    show_status_toast(
+                        "Paperclip UI repaired",
+                        "The generated UI cache was rebuilt and Paperclip is ready.",
+                    );
+                    open_url(&cache_busted_url(&config.url));
+                }
+                UserEvent::RepairUiFinished(Err(message)) => {
+                    show_status_toast(
+                        "Paperclip UI repair failed",
+                        "Paperclip could not rebuild the UI cache. See the error for details.",
+                    );
+                    warn_box(message);
+                }
             }
         }
 
@@ -487,6 +532,27 @@ fn run_tray(paths: Paths, config: Config) {
                         "Paperclip is still restarting. You'll be notified when it is ready.",
                     );
                 }
+            } else if id == &id_repair_ui {
+                if !restart_in_progress.swap(true, Ordering::SeqCst) {
+                    show_status_toast(
+                        "Repairing Paperclip UI",
+                        "Clearing generated UI files and restarting Paperclip…",
+                    );
+                    let paths_clone = clone_paths(&paths);
+                    let cfg_clone = config.clone();
+                    let flag = restart_in_progress.clone();
+                    let repair_proxy = proxy.clone();
+                    thread::spawn(move || {
+                        let result = do_ui_repair(&paths_clone, &cfg_clone);
+                        flag.store(false, Ordering::SeqCst);
+                        let _ = repair_proxy.send_event(UserEvent::RepairUiFinished(result));
+                    });
+                } else {
+                    show_status_toast(
+                        "Maintenance already in progress",
+                        "Paperclip is still restarting. You'll be notified when it is ready.",
+                    );
+                }
             } else if id == &id_shutdown {
                 spawn_hidden_stop(&paths.launcher_dir, config.port);
                 *control_flow = ControlFlow::Exit;
@@ -496,6 +562,14 @@ fn run_tray(paths: Paths, config: Config) {
 }
 
 fn do_restart(paths: &Paths, config: &Config) -> Result<(), String> {
+    do_server_restart(paths, config, false)
+}
+
+fn do_ui_repair(paths: &Paths, config: &Config) -> Result<(), String> {
+    do_server_restart(paths, config, true)
+}
+
+fn do_server_restart(paths: &Paths, config: &Config, clear_ui_cache: bool) -> Result<(), String> {
     // Stop the server: invoke stop-paperclip.ps1 directly so we don't fight
     // the .bat's interactive `pause`.
     let stop_script = paths.launcher_dir.join("stop-paperclip.ps1");
@@ -554,6 +628,15 @@ fn do_restart(paths: &Paths, config: &Config) -> Result<(), String> {
         ));
     }
 
+    if clear_ui_cache {
+        clear_ui_vite_cache(paths).map_err(|error| {
+            format!(
+                "The server stopped, but the generated UI cache could not be cleared:\n{}\n\nYou can safely retry Repair blank screen from the tray.",
+                error
+            )
+        })?;
+    }
+
     spawn_server(paths).map_err(|msg| format!("Restart failed at spawn step:\n{}", msg))?;
 
     if wait_for_port(config.port, STARTUP_TIMEOUT_SECS) {
@@ -564,6 +647,235 @@ fn do_restart(paths: &Paths, config: &Config) -> Result<(), String> {
             STARTUP_TIMEOUT_SECS,
             paths.logs_dir.display()
         ))
+    }
+}
+
+fn ui_node_modules_dir(paths: &Paths) -> PathBuf {
+    paths.repo_root.join("ui").join("node_modules")
+}
+
+fn ui_vite_cache_dir(paths: &Paths) -> PathBuf {
+    ui_node_modules_dir(paths).join(".vite")
+}
+
+/// Return the first concrete sign that Vite's generated dependency cache is
+/// incomplete. A missing cache is healthy: Vite creates it lazily.
+fn vite_cache_problem(cache_dir: &Path) -> Result<Option<String>, String> {
+    if !cache_dir.exists() {
+        return Ok(None);
+    }
+
+    let deps_dir = cache_dir.join("deps");
+    if !deps_dir.is_dir() {
+        return Ok(Some(format!("{} is missing", deps_dir.display())));
+    }
+
+    let metadata_path = deps_dir.join("_metadata.json");
+    let metadata_raw = match fs::read(&metadata_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(format!("{} is missing", metadata_path.display())));
+        }
+        Err(error) => {
+            return Err(format!(
+                "Could not read Vite metadata at {}: {}",
+                metadata_path.display(),
+                error
+            ));
+        }
+    };
+    let metadata: serde_json::Value = match serde_json::from_slice(&metadata_raw) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return Ok(Some(format!(
+                "{} is malformed: {}",
+                metadata_path.display(),
+                error
+            )));
+        }
+    };
+
+    // Every optimized entry and shared chunk declared in the metadata must
+    // have a corresponding file in deps/. This catches interrupted writes.
+    for section in ["optimized", "chunks"] {
+        if let Some(entries) = metadata.get(section).and_then(|value| value.as_object()) {
+            for entry in entries.values() {
+                if let Some(file) = entry.get("file").and_then(|value| value.as_str()) {
+                    let expected = deps_dir.join(file);
+                    if !expected.is_file() {
+                        return Ok(Some(format!(
+                            "metadata references missing file {}",
+                            expected.display()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Vite's metadata does not always enumerate every transitive chunk. Scan
+    // optimized JS for the exact relative chunk imports that produce the
+    // blank-screen 404 and make sure each target exists.
+    let entries = fs::read_dir(&deps_dir).map_err(|error| {
+        format!(
+            "Could not inspect Vite dependency cache at {}: {}",
+            deps_dir.display(),
+            error
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not inspect an entry in {}: {}",
+                deps_dir.display(),
+                error
+            )
+        })?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("js") {
+            continue;
+        }
+        let source_bytes = fs::read(&path).map_err(|error| {
+            format!(
+                "Could not read cached dependency {}: {}",
+                path.display(),
+                error
+            )
+        })?;
+        let source = String::from_utf8_lossy(&source_bytes);
+        if let Some(missing) = missing_relative_vite_chunk(&source, &deps_dir) {
+            return Ok(Some(format!(
+                "{} references missing chunk {}",
+                path.display(),
+                missing.display()
+            )));
+        }
+    }
+
+    Ok(None)
+}
+
+fn missing_relative_vite_chunk(source: &str, deps_dir: &Path) -> Option<PathBuf> {
+    for marker in ["\"./chunk-", "'./chunk-"] {
+        let quote = marker.chars().next()?;
+        let mut remaining = source;
+        while let Some(start) = remaining.find(marker) {
+            // Skip the opening quote, leaving a candidate that starts with ./.
+            let candidate_and_rest = &remaining[start + quote.len_utf8()..];
+            let Some(end) = candidate_and_rest.find(quote) else {
+                break;
+            };
+            let candidate = &candidate_and_rest[..end];
+            let file = candidate
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(candidate)
+                .trim_start_matches("./");
+            if file.ends_with(".js") {
+                let expected = deps_dir.join(file);
+                if !expected.is_file() {
+                    return Some(expected);
+                }
+            }
+            remaining = &candidate_and_rest[end + quote.len_utf8()..];
+        }
+    }
+    None
+}
+
+fn repair_incomplete_ui_cache(paths: &Paths) -> Result<Option<String>, String> {
+    let cache_dir = ui_vite_cache_dir(paths);
+    let Some(problem) = vite_cache_problem(&cache_dir)? else {
+        return Ok(None);
+    };
+    clear_ui_vite_cache(paths).map_err(|error| {
+        format!(
+            "Detected an incomplete Vite UI cache ({}), but could not clear it: {}",
+            problem, error
+        )
+    })?;
+    Ok(Some(problem))
+}
+
+/// Remove only Vite's generated UI caches. Application source, dependencies,
+/// configuration, and Paperclip data all live outside these two directories.
+fn clear_ui_vite_cache(paths: &Paths) -> Result<bool, String> {
+    clear_vite_cache_dirs(&ui_node_modules_dir(paths))
+}
+
+fn clear_vite_cache_dirs(node_modules_dir: &Path) -> Result<bool, String> {
+    let mut removed_any = false;
+    for name in [".vite", ".vite-temp"] {
+        let target = node_modules_dir.join(name);
+        let metadata = match fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Could not inspect {}: {}", target.display(), error));
+            }
+        };
+
+        let result = if metadata.is_dir() {
+            fs::remove_dir_all(&target)
+        } else if metadata.file_type().is_symlink() {
+            // A directory symlink/junction must be unlinked rather than walked.
+            fs::remove_dir(&target).or_else(|_| fs::remove_file(&target))
+        } else {
+            fs::remove_file(&target)
+        };
+        result.map_err(|error| format!("Could not remove {}: {}", target.display(), error))?;
+        removed_any = true;
+    }
+    Ok(removed_any)
+}
+
+fn ensure_vite_cache_generation(
+    node_modules_dir: &Path,
+    force_new: bool,
+) -> Result<String, String> {
+    fs::create_dir_all(node_modules_dir).map_err(|error| {
+        format!(
+            "Could not create UI node_modules directory {}: {}",
+            node_modules_dir.display(),
+            error
+        )
+    })?;
+    let marker = node_modules_dir.join(".paperclip-vite-generation");
+    let existing = fs::read_to_string(&marker)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if !force_new {
+        if let Some(value) = existing {
+            return Ok(value);
+        }
+    }
+
+    let base = format!("{}-{}", compact_now(), std::process::id());
+    let generation = if existing.as_deref() == Some(base.as_str()) {
+        format!("{}-next", base)
+    } else {
+        base
+    };
+    fs::write(&marker, &generation).map_err(|error| {
+        format!(
+            "Could not write Vite cache generation marker {}: {}",
+            marker.display(),
+            error
+        )
+    })?;
+    Ok(generation)
+}
+
+fn cache_busted_url(url: &str) -> String {
+    let (base, fragment) = url.split_once('#').unwrap_or((url, ""));
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let repaired = format!("{}{}paperclip-ui-repair={}", base, separator, compact_now());
+    if fragment.is_empty() {
+        repaired
+    } else {
+        format!("{}#{}", repaired, fragment)
     }
 }
 
@@ -846,9 +1158,53 @@ fn format_now() -> String {
     )
 }
 
+fn compact_now() -> String {
+    let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut st) };
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}{:03}",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::acquire_named_mutex;
+    use super::{
+        acquire_named_mutex, clear_vite_cache_dirs, ensure_vite_cache_generation,
+        vite_cache_problem,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let id = TEST_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "paperclip-launcher-{}-{}-{}",
+            tag,
+            std::process::id(),
+            id
+        ))
+    }
+
+    fn write_valid_cache(cache: &std::path::Path) {
+        let deps = cache.join("deps");
+        fs::create_dir_all(&deps).expect("create cache deps");
+        fs::write(
+            deps.join("_metadata.json"),
+            r#"{
+                "optimized": {"react": {"file": "react.js"}},
+                "chunks": {"chunk-READY": {"file": "chunk-READY.js"}}
+            }"#,
+        )
+        .expect("write metadata");
+        fs::write(deps.join("react.js"), "import \"./chunk-READY.js\";")
+            .expect("write optimized dep");
+        fs::write(deps.join("chunk-READY.js"), "export const ready = true;")
+            .expect("write shared chunk");
+    }
 
     // Test mutex names carry the test process id so a parallel `cargo test`
     // (or a developer's live tray, which uses the real name) can't collide.
@@ -873,5 +1229,67 @@ mod tests {
     fn distinct_names_do_not_interfere() {
         assert!(acquire_named_mutex(&unique_name("a")));
         assert!(acquire_named_mutex(&unique_name("b")));
+    }
+
+    #[test]
+    fn complete_vite_cache_passes_integrity_check() {
+        let root = temp_dir("valid-cache");
+        let cache = root.join(".vite");
+        write_valid_cache(&cache);
+
+        assert_eq!(vite_cache_problem(&cache).expect("inspect cache"), None);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_transitive_vite_chunk_is_reported() {
+        let root = temp_dir("missing-chunk");
+        let cache = root.join(".vite");
+        write_valid_cache(&cache);
+        fs::write(
+            cache.join("deps").join("react.js"),
+            "import './chunk-MISSING.js';",
+        )
+        .expect("rewrite optimized dep");
+
+        let problem = vite_cache_problem(&cache)
+            .expect("inspect cache")
+            .expect("cache should be incomplete");
+        assert!(problem.contains("chunk-MISSING.js"), "{problem}");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_clear_removes_only_generated_vite_directories() {
+        let root = temp_dir("clear-cache");
+        let cache = root.join(".vite");
+        let temp = root.join(".vite-temp");
+        let keep = root.join("keep-me");
+        fs::create_dir_all(&cache).expect("create cache");
+        fs::create_dir_all(&temp).expect("create temp cache");
+        fs::create_dir_all(&keep).expect("create keep dir");
+
+        assert!(clear_vite_cache_dirs(&root).expect("clear caches"));
+        assert!(!cache.exists());
+        assert!(!temp.exists());
+        assert!(keep.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn vite_generation_is_stable_until_cache_is_cleared() {
+        let root = temp_dir("cache-generation");
+
+        let first = ensure_vite_cache_generation(&root, false).expect("create generation");
+        let reused = ensure_vite_cache_generation(&root, false).expect("reuse generation");
+        let renewed = ensure_vite_cache_generation(&root, true).expect("renew generation");
+
+        assert_eq!(first, reused);
+        assert_ne!(first, renewed);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

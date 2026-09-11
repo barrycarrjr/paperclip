@@ -19,9 +19,15 @@ hidden-window launcher and system-tray for paperclip on Windows.
    Tray restarts show native starting/completed feedback and refuse to launch
    if the configured port never becomes free, rather than silently creating a
    second server on a fallback port.
-4. **Stays in the tray** with a menu that mirrors the browser's
-   account-menu lifecycle strip: Open / Update / Rebuild / Restart / Logs /
-   Docs / Shut down / Quit launcher.
+4. **Self-heals incomplete UI caches** before every server spawn. If Vite's
+   generated metadata or optimized JavaScript references a missing chunk, the
+   launcher clears only `ui/node_modules/.vite` and `.vite-temp`, then rotates
+   a local generation token so browsers cannot reuse immutable modules from
+   the previous cache. Vite regenerates the cache on the first request.
+5. **Stays in the tray** with a menu that mirrors the browser's
+   account-menu lifecycle strip: Open / Update / Rebuild / Restart / Repair
+   blank screen / Logs / Docs / Shut down. The repair action is a one-click
+   forced cache clear + restart for a browser that is already blank.
 
 ## Why a native exe?
 

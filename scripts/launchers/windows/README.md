@@ -17,10 +17,19 @@ wherever you cloned this — no path edits needed.
 
   After launch, a paperclip icon lives in your system tray. Right-click for
   the menu — same lifecycle actions as the browser's account-menu strip:
-  *Open Paperclip*, *Update*, *Rebuild from local*, *Restart*, *Open logs
-  folder*, *Documentation*, *Shut down Paperclip*, and *Quit launcher (keep
-  server running)*. Update/Rebuild open a visible console window so you can
-  watch the build run, same as the browser flow.
+  *Open Paperclip*, *Update*, *Rebuild from local*, *Restart*, *Repair blank
+  screen*, *Open logs folder*, *Documentation*, and *Shut down Paperclip*.
+  Update/Rebuild open a visible console window so you can watch the build run,
+  same as the browser flow.
+
+  The launcher validates Vite's generated dependency cache before every server
+  start. If the cache references a missing JavaScript chunk, it clears only
+  those generated files and rotates the browser cache generation so Vite can
+  rebuild without an already-open tab reusing old modules. If the browser is
+  ever blank while the server is already running, choose
+  **Repair blank screen** from the tray menu; it stops the server, clears the
+  generated UI cache, restarts, and opens a cache-busted Paperclip URL. It does
+  not touch Paperclip data, configuration, source files, or installed plugins.
 
   Single-instance: re-running `paperclip.exe` while the tray is up just
   opens the browser instead of stacking trays.

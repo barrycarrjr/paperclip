@@ -6,6 +6,21 @@ import { createUiDevWatchOptions } from "./src/lib/vite-watch";
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
+  // The Windows launcher rotates this token only when Vite's generated cache
+  // is cleared. Because optimizeDeps responses are intentionally cached by
+  // browsers for a year, a fresh cache with the old browser hash can otherwise
+  // leave an already-open tab requesting chunk names that no longer exist.
+  // Including the generation in the optimizer config produces a new ?v= URL
+  // without forcing re-optimization on ordinary restarts.
+  optimizeDeps: {
+    esbuildOptions: {
+      define: {
+        __PAPERCLIP_UI_CACHE_GENERATION__: JSON.stringify(
+          process.env.PAPERCLIP_UI_CACHE_GENERATION ?? "unmanaged",
+        ),
+      },
+    },
+  },
   build: {
     minify: "esbuild",
   },
