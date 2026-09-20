@@ -18,7 +18,10 @@ wherever you cloned this — no path edits needed.
   After launch, a paperclip icon lives in your system tray. Right-click for
   the menu — same lifecycle actions as the browser's account-menu strip:
   *Open Paperclip*, *Update*, *Rebuild from local*, *Restart*, *Repair blank
-  screen*, *Open logs folder*, *Documentation*, and *Shut down Paperclip*.
+  screen*, *Open logs folder*, *Documentation*, *Start with Windows*, and
+  *Shut down Paperclip*. The checked **Start with Windows** item registers the
+  launcher for the current Windows user; startup launches remain in the tray
+  without opening a browser tab. Uncheck it to remove the startup entry.
   Update/Rebuild open a visible console window so you can watch the build run,
   same as the browser flow.
 

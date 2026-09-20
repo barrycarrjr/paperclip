@@ -26,8 +26,11 @@ hidden-window launcher and system-tray for paperclip on Windows.
    the previous cache. Vite regenerates the cache on the first request.
 5. **Stays in the tray** with a menu that mirrors the browser's
    account-menu lifecycle strip: Open / Update / Rebuild / Restart / Repair
-   blank screen / Logs / Docs / Shut down. The repair action is a one-click
-   forced cache clear + restart for a browser that is already blank.
+   blank screen / Logs / Docs / Start with Windows / Shut down. **Start with
+   Windows** is a checked toggle backed by the current user's Windows startup
+   registration. Startup launches are quiet: Paperclip starts the server and
+   tray without opening a browser tab. The repair action is a one-click forced
+   cache clear + restart for a browser that is already blank.
 
 ## Why a native exe?
 

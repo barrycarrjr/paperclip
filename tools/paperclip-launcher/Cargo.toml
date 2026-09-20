@@ -1,6 +1,6 @@
 [package]
 name = "paperclip-launcher"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 publish = false
 description = "Hidden-window launcher + tray icon for paperclip on Windows"
@@ -36,6 +36,7 @@ windows-sys = { version = "0.59", features = [
     # function when the features for every type it references are enabled.
     "Win32_Security",
     "Win32_System_SystemInformation",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

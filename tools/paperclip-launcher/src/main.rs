@@ -6,7 +6,8 @@
 //   - Spawns the server hidden if 3100 isn't already bound. Stdout/stderr go
 //     to %USERPROFILE%\.paperclip\logs\paperclip-YYYYMMDD.log.
 //   - Stays alive in the tray; menu mirrors the browser's system-actions
-//     panel (Open, Update, Rebuild, Restart, Repair UI, Logs, Docs, Shutdown).
+//     panel (Open, Update, Rebuild, Restart, Repair UI, Logs, Docs, Start with
+//     Windows, Shutdown).
 //
 // Built from tools\paperclip-launcher\; binary lands at
 // scripts\launchers\windows\paperclip.exe via build.bat.
@@ -14,9 +15,11 @@
 #![windows_subsystem = "windows"]
 
 use std::env;
+use std::ffi::c_void;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::TcpStream;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,10 +30,16 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, SYSTEMTIME};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS,
+    SYSTEMTIME,
+};
+use windows_sys::Win32::System::Registry::{
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
+};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -48,6 +57,9 @@ const SINGLE_INSTANCE_MUTEX_NAME: &str = "paperclip-launcher-single-instance";
 const DEFAULT_URL: &str = "http://localhost:3100/";
 const DEFAULT_PORT: u16 = 3100;
 const DEFAULT_DOCS_URL: &str = "https://docs.paperclip.ing/";
+const STARTUP_REGISTRY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const STARTUP_REGISTRY_VALUE: &str = "Paperclip";
+const STARTUP_ARG: &str = "--startup";
 
 /// Runtime config. Loaded from %USERPROFILE%\.paperclip\launcher.json (if it
 /// exists) and overridden by env vars (PAPERCLIP_URL, PAPERCLIP_PORT,
@@ -183,6 +195,7 @@ const TRAY_ICON_PNG: &[u8] = include_bytes!("../../../ui/public/favicon-32x32.pn
 
 /// Resolved paths the launcher needs at runtime.
 struct Paths {
+    exe_path: PathBuf,
     repo_root: PathBuf,
     logs_dir: PathBuf,
     launcher_dir: PathBuf,
@@ -190,6 +203,13 @@ struct Paths {
 }
 
 fn main() {
+    // Windows invokes the launcher with --startup from the current user's Run
+    // key. In that mode Paperclip should become available in the tray without
+    // opening a browser tab during sign-in.
+    let quiet_startup = env::args_os()
+        .skip(1)
+        .any(|arg| arg == std::ffi::OsStr::new(STARTUP_ARG));
+
     // Fail-fast paths and config setup. Show the user a MessageBox if any of
     // these are wrong — easier than silently dying.
     let paths = match resolve_paths() {
@@ -202,11 +222,13 @@ fn main() {
 
     let config = Config::load(&paths.user_profile);
 
-    // Single-instance: if another launcher already holds the lock port,
-    // it's the tray owner. Just open the browser (which is what the user
-    // wants when they double-click again) and exit.
+    // Single-instance: if another launcher already holds the mutex, it's the
+    // tray owner. Normal double-clicks open the browser; Windows startup stays
+    // quiet in case the tray is already running.
     if !acquire_single_instance_lock() {
-        open_url(&config.url);
+        if !quiet_startup {
+            open_url(&config.url);
+        }
         return;
     }
 
@@ -223,10 +245,10 @@ fn main() {
                 paths.logs_dir.display()
             ));
             // Continue anyway — user can use the tray to retry, view logs, etc.
-        } else {
+        } else if !quiet_startup {
             open_url(&config.url);
         }
-    } else {
+    } else if !quiet_startup {
         // Server already running — just open the browser.
         open_url(&config.url);
     }
@@ -266,6 +288,7 @@ fn resolve_paths() -> Result<Paths, String> {
     let _ = fs::create_dir_all(&logs_dir);
 
     Ok(Paths {
+        exe_path,
         repo_root,
         logs_dir,
         launcher_dir,
@@ -367,6 +390,12 @@ fn run_tray(paths: Paths, config: Config) {
     let item_logs = MenuItem::new("Open logs folder", true, None);
     let item_docs = MenuItem::new("Documentation", true, None);
     let sep3 = PredefinedMenuItem::separator();
+    let item_startup = CheckMenuItem::new(
+        "Start with Windows",
+        true,
+        startup_is_enabled(&paths.exe_path).unwrap_or(false),
+        None,
+    );
     let item_shutdown = MenuItem::new("Shut down Paperclip", true, None);
 
     let _ = menu.append(&item_open);
@@ -379,6 +408,7 @@ fn run_tray(paths: Paths, config: Config) {
     let _ = menu.append(&item_logs);
     let _ = menu.append(&item_docs);
     let _ = menu.append(&sep3);
+    let _ = menu.append(&item_startup);
     let _ = menu.append(&item_shutdown);
 
     let id_open = item_open.id().clone();
@@ -388,6 +418,7 @@ fn run_tray(paths: Paths, config: Config) {
     let id_repair_ui = item_repair_ui.id().clone();
     let id_logs = item_logs.id().clone();
     let id_docs = item_docs.id().clone();
+    let id_startup = item_startup.id().clone();
     let id_shutdown = item_shutdown.id().clone();
 
     let icon = load_tray_icon();
@@ -552,6 +583,24 @@ fn run_tray(paths: Paths, config: Config) {
                         "Maintenance already in progress",
                         "Paperclip is still restarting. You'll be notified when it is ready.",
                     );
+                }
+            } else if id == &id_startup {
+                // The native check item toggles visually before emitting its
+                // event. Read the registry as the source of truth, then either
+                // persist the inverse state or restore the check on failure.
+                let was_enabled = startup_is_enabled(&paths.exe_path)
+                    .unwrap_or_else(|_| !item_startup.is_checked());
+                let enable = !was_enabled;
+                match set_startup_enabled(&paths.exe_path, enable) {
+                    Ok(()) => item_startup.set_checked(enable),
+                    Err(error) => {
+                        item_startup.set_checked(was_enabled);
+                        warn_box(&format!(
+                            "Could not {} Start with Windows.\n\n{}",
+                            if enable { "enable" } else { "disable" },
+                            error
+                        ));
+                    }
                 }
             } else if id == &id_shutdown {
                 spawn_hidden_stop(&paths.launcher_dir, config.port);
@@ -930,11 +979,103 @@ fn show_status_toast(title: &str, body: &str) {
 
 fn clone_paths(p: &Paths) -> Paths {
     Paths {
+        exe_path: p.exe_path.clone(),
         repo_root: p.repo_root.clone(),
         logs_dir: p.logs_dir.clone(),
         launcher_dir: p.launcher_dir.clone(),
         user_profile: p.user_profile.clone(),
     }
+}
+
+fn startup_command(exe_path: &Path) -> Vec<u16> {
+    let mut command = Vec::new();
+    command.push('"' as u16);
+    command.extend(exe_path.as_os_str().encode_wide());
+    command.extend(format!("\" {}", STARTUP_ARG).encode_utf16());
+    command
+}
+
+fn startup_is_enabled(exe_path: &Path) -> Result<bool, String> {
+    Ok(read_startup_command()?.as_deref() == Some(startup_command(exe_path).as_slice()))
+}
+
+fn read_startup_command() -> Result<Option<Vec<u16>>, String> {
+    let key = wide(STARTUP_REGISTRY_KEY);
+    let value = wide(STARTUP_REGISTRY_VALUE);
+    let mut byte_len = 0u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut byte_len,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(registry_error("read the startup setting", status));
+    }
+
+    let mut command = vec![0u16; (byte_len as usize).div_ceil(2)];
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            command.as_mut_ptr().cast::<c_void>(),
+            &mut byte_len,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(registry_error("read the startup setting", status));
+    }
+    while command.last() == Some(&0) {
+        command.pop();
+    }
+    Ok(Some(command))
+}
+
+fn set_startup_enabled(exe_path: &Path, enabled: bool) -> Result<(), String> {
+    let key = wide(STARTUP_REGISTRY_KEY);
+    let value = wide(STARTUP_REGISTRY_VALUE);
+    let status = if enabled {
+        let mut command = startup_command(exe_path);
+        command.push(0);
+        unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                REG_SZ,
+                command.as_ptr().cast::<c_void>(),
+                (command.len() * std::mem::size_of::<u16>()) as u32,
+            )
+        }
+    } else {
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) }
+    };
+
+    if status == ERROR_SUCCESS || (!enabled && status == ERROR_FILE_NOT_FOUND) {
+        Ok(())
+    } else {
+        Err(registry_error("update the startup setting", status))
+    }
+}
+
+fn registry_error(action: &str, status: u32) -> String {
+    format!(
+        "Windows could not {}: {} (error {})",
+        action,
+        std::io::Error::from_raw_os_error(status as i32),
+        status
+    )
 }
 
 fn load_tray_icon() -> Icon {
@@ -969,8 +1110,8 @@ fn load_tray_icon() -> Icon {
 }
 
 /// True when the Windows taskbar is using its dark theme. Reads
-/// HKCU\...\Personalize\SystemUsesLightTheme via reg.exe so we don't have to
-/// pull in a Win32 registry binding. If the read fails, default to dark —
+/// HKCU\...\Personalize\SystemUsesLightTheme via reg.exe. If the read fails,
+/// default to dark —
 /// that's the Windows 11 default and the harder case to render against.
 fn is_dark_taskbar_theme() -> bool {
     let output = Command::new("reg")
@@ -1170,8 +1311,8 @@ fn compact_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_named_mutex, clear_vite_cache_dirs, ensure_vite_cache_generation,
-        vite_cache_problem,
+        acquire_named_mutex, clear_vite_cache_dirs, ensure_vite_cache_generation, startup_command,
+        vite_cache_problem, STARTUP_ARG,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1229,6 +1370,20 @@ mod tests {
     fn distinct_names_do_not_interfere() {
         assert!(acquire_named_mutex(&unique_name("a")));
         assert!(acquire_named_mutex(&unique_name("b")));
+    }
+
+    #[test]
+    fn startup_command_quotes_the_exe_and_uses_quiet_mode() {
+        let command = startup_command(std::path::Path::new(
+            r"C:\Program Files\Paperclip\paperclip.exe",
+        ));
+        assert_eq!(
+            String::from_utf16(&command).expect("startup command is utf-16"),
+            format!(
+                r#""C:\Program Files\Paperclip\paperclip.exe" {}"#,
+                STARTUP_ARG
+            )
+        );
     }
 
     #[test]
