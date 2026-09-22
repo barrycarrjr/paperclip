@@ -55,6 +55,7 @@ const railState = vi.hoisted(() => ({
   hasMailbox: true,
   hasPhoneAccount: true,
   pluginPageRoutePaths: [] as string[],
+  pinnedWorkspaces: [] as string[],
 }));
 
 vi.mock("@/lib/router", () => ({
@@ -104,6 +105,7 @@ vi.mock("../hooks/usePhoneToolsPlugin", () => ({
 }));
 
 vi.mock("../plugins/slots", () => ({
+  PluginSlotOutlet: () => null,
   usePluginSlots: () => ({
     slots: railState.pluginPageRoutePaths.map((routePath) => ({
       routePath,
@@ -111,6 +113,31 @@ vi.mock("../plugins/slots", () => ({
     })),
     isLoading: false,
     errorMessage: null,
+  }),
+}));
+
+vi.mock("../api/agents", () => ({
+  agentsApi: { list: vi.fn().mockResolvedValue([]) },
+}));
+
+vi.mock("../api/instanceSettings", () => ({
+  instanceSettingsApi: { getExperimental: vi.fn().mockResolvedValue({}) },
+}));
+
+vi.mock("../hooks/useInboxBadge", () => ({
+  useInboxBadge: () => ({ inbox: 0, failedRuns: 0 }),
+}));
+
+vi.mock("../hooks/usePinnedWorkspaces", () => ({
+  usePinnedWorkspaces: () => ({
+    pinned: railState.pinnedWorkspaces,
+    pinnedSet: new Set(railState.pinnedWorkspaces),
+    canPin: true,
+    pinsLoaded: true,
+    ownerId: "user-1",
+    isPinned: (id: string) => railState.pinnedWorkspaces.includes(id),
+    toggle: vi.fn(),
+    replaceAll: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
@@ -155,6 +182,7 @@ describe("CompanyRail", () => {
     railState.hasMailbox = true;
     railState.hasPhoneAccount = true;
     railState.pluginPageRoutePaths = ["phone-active-calls", "notepad"];
+    railState.pinnedWorkspaces = [];
     localStorage.clear();
     navigateSpy.mockClear();
     selectCompanySpy.mockClear();
@@ -309,12 +337,54 @@ describe("CompanyRail", () => {
       railState.sidebarOpen = false;
     });
 
-    it("opens from the keyboard and shows the five the mockup asks for", async () => {
+    it("opens from the keyboard and shows the menu snapshot", async () => {
       await render();
       expect(panel(), "no panel before the right arrow key").toBeNull();
       await openWithKeyboard();
       expect(panel(), "expected the shortcut panel").not.toBeNull();
-      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work", "Phone"]);
+      expect(shortcutLabels()).toEqual([
+        "Email",
+        "Calendar",
+        "Overview",
+        "Attention",
+        "Team",
+        "Work",
+        "Everything",
+      ]);
+    });
+
+    it("shows pinned items including portfolio workspaces on HQ", async () => {
+      railState.companies = [HQ, ACME];
+      railState.selectedCompanyId = ACME.id;
+      railState.pinnedWorkspaces = [
+        "portfolio-brief",
+        "portfolio-email",
+        "portfolio-approvals",
+      ];
+      await render();
+      press(hqAvatar()!, "ArrowRight");
+      await flushReact();
+      expect(panel(), "expected the HQ menu snapshot").not.toBeNull();
+      expect(shortcutLabels()).toContain("Portfolio Brief");
+      expect(shortcutLabels()).toContain("Portfolio Email");
+      expect(shortcutLabels()).toContain("Portfolio Approvals");
+    });
+
+    it("shows pinned workspaces for standard companies", async () => {
+      railState.pinnedWorkspaces = ["issues", "goals"];
+      await render();
+      await openWithKeyboard();
+      expect(shortcutLabels()).toEqual([
+        "Email",
+        "Calendar",
+        "Tasks",
+        "Goals",
+        "Overview",
+        "Attention",
+        "Team",
+        "Work",
+        "Everything",
+      ]);
     });
 
     it("closes again on Escape", async () => {
@@ -337,21 +407,14 @@ describe("CompanyRail", () => {
       railState.hasMailbox = false;
       await render();
       await openWithKeyboard();
-      expect(shortcutLabels()).toEqual(["Calendar", "Team", "Work", "Phone"]);
-    });
-
-    it("leaves Phone out where the add-on covers no account for this company", async () => {
-      railState.hasPhoneAccount = false;
-      await render();
-      await openWithKeyboard();
-      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work"]);
-    });
-
-    it("leaves Phone out where the add-on is not installed at all", async () => {
-      railState.pluginPageRoutePaths = ["notepad"];
-      await render();
-      await openWithKeyboard();
-      expect(shortcutLabels()).toEqual(["Email", "Calendar", "Team", "Work"]);
+      expect(shortcutLabels()).toEqual([
+        "Calendar",
+        "Overview",
+        "Attention",
+        "Team",
+        "Work",
+        "Everything",
+      ]);
     });
 
     it("keeps the row back to the page you left off on", async () => {

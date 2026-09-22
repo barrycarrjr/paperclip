@@ -39,18 +39,7 @@ import {
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 import { isLiveRunStatus } from "../lib/liveIssueIds";
-// SidebarMenu is no longer drawn inside the rail's flyout (see
-// CompanyPeekContent below). Its peek mode is left in place so the whole menu
-// can be put back here in one edit if the short list turns out to be too
-// short.
-import { SidebarNavItem } from "./SidebarNavItem";
-import { SidebarSection } from "./SidebarSection";
-import { SidebarPeekProvider } from "../context/SidebarPeekContext";
-import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
-import { usePhoneToolsPlugin } from "../hooks/usePhoneToolsPlugin";
-import { useRememberedCompanyPage } from "../hooks/useRememberedCompanyPage";
-import { usePluginSlots } from "../plugins/slots";
-import { resolveCompanyShortcuts } from "../lib/company-shortcuts";
+import { SidebarMenu } from "./SidebarMenu";
 import {
   companyPathForPortfolioPage,
   resolveScopeChoiceDescription,
@@ -59,24 +48,12 @@ import {
 /**
  * Body of the panel that opens beside a company logo on the rail.
  *
- * It shows the company's full name, one line saying what that company is, the
- * page you last had open in it, and a short list of shortcut buttons. That is
- * the shape the mockup asks for (docs/plans/2026-09-07-mockup-vs-app.md,
- * difference 12); it used to be the company's whole menu, which was richer
- * than the mockup and slower to read.
- *
- * The one line note is the same sentence the company picker in the top bar
- * uses for the same company, so the two cannot end up describing a company
- * differently.
- *
- * "Where you left off" stays. Switching company now keeps you on the page you
- * are reading, so this row is the only explicit way back to the page a company
- * had open last time you were in it, and the scope document allows it on
- * exactly those terms.
- *
- * Every row is a SidebarNavItem inside a SidebarPeekProvider, which is what
- * makes a click here switch to this company with the "shortcut" source. That
- * source is what stops the remembered page overriding where you asked to go.
+ * Shows the company's full name, one line saying what that company is, and
+ * a snapshot of the menu (SidebarMenu in peekMode).
+ * This restores the full menu snapshot when hovering over rail icons in collapsed
+ * mode, including "Where you left off", "Your workspaces" (with pinned items like
+ * Portfolio Brief/Email on HQ and pinned workspaces on companies), "Control center",
+ * and "Everything".
  */
 function CompanyPeekContent({
   company,
@@ -87,29 +64,7 @@ function CompanyPeekContent({
   portfolioCompanyCount: number;
   onItemClick: () => void;
 }) {
-  const location = useLocation();
   const isPortfolioRoot = company.isPortfolioRoot === true;
-  const { hasMailboxForCompany } = useEmailToolsPlugin(company.id);
-  const { hasAccountForCompany } = usePhoneToolsPlugin(company.id);
-  const { slots: pluginPageSlots } = usePluginSlots({
-    slotTypes: ["page"],
-    companyId: company.id,
-  });
-  const shortcuts = useMemo(
-    () =>
-      resolveCompanyShortcuts({
-        isPortfolioRoot,
-        hasMailbox: hasMailboxForCompany,
-        phone: {
-          installedRoutePaths: pluginPageSlots
-            .map((slot) => slot.routePath)
-            .filter((routePath): routePath is string => !!routePath),
-          coversCompany: hasAccountForCompany,
-        },
-      }),
-    [isPortfolioRoot, hasMailboxForCompany, hasAccountForCompany, pluginPageSlots],
-  );
-  const rememberedPage = useRememberedCompanyPage(company, location.pathname);
   const note = resolveScopeChoiceDescription({
     scopeKind: isPortfolioRoot ? "hq" : company.kind === "personal" ? "personal" : "company",
     companyName: company.name,
@@ -117,7 +72,7 @@ function CompanyPeekContent({
   });
 
   return (
-    <SidebarPeekProvider peekCompanyId={company.id} onItemClick={onItemClick}>
+    <>
       <div className="border-b border-border px-3 py-2.5">
         <div className="flex items-center gap-2">
           {company.brandColor ? (
@@ -148,34 +103,17 @@ function CompanyPeekContent({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{note}</p>
       </div>
-      {rememberedPage && (
-        <div className="border-b border-border py-2">
-          <SidebarSection
-            label="Where you left off"
-            info="The last page you had open in this company. Clicking the company logo itself keeps you on the page you are reading instead."
-          >
-            <SidebarNavItem
-              to={rememberedPage.to}
-              label={rememberedPage.pageLabel ?? "The page you had open"}
-              icon={rememberedPage.icon}
-            />
-          </SidebarSection>
-        </div>
-      )}
       <nav
-        className="flex flex-col gap-0.5 py-2"
-        aria-label={`Shortcuts for ${company.name}`}
+        className="max-h-[70vh] overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-3"
+        aria-label={`Menu snapshot for ${company.name}`}
       >
-        {shortcuts.map((shortcut) => (
-          <SidebarNavItem
-            key={shortcut.id}
-            to={shortcut.to}
-            label={shortcut.label}
-            icon={shortcut.icon}
-          />
-        ))}
+        <SidebarMenu
+          company={company}
+          peekMode
+          onPeekItemClick={onItemClick}
+        />
       </nav>
-    </SidebarPeekProvider>
+    </>
   );
 }
 
