@@ -505,7 +505,7 @@ export function SidebarAccountMenu({
                     the version it is about, and only ever on a copy that really
                     is running the working tree.
                   */}
-                  {runningFromSource ? (
+                  {runningFromSource && !updateAvailable ? (
                     <p className="mt-1 text-xs text-muted-foreground">
                       This copy runs straight from the working tree, so there is nothing to build.
                     </p>

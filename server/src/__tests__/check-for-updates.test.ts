@@ -818,7 +818,45 @@ describe("checkForRemoteUpdate", () => {
         expect(result.available).toBe(false);
       });
 
-      // The case that must not be weakened. Same install marker, same commits,
+      it("offers an update when checkout is level with remote but installed commit is behind", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: LIVE_HEAD })) as never,
+          headImpl: async () => LIVE_HEAD,
+          relationImpl: async (_repoPath, local, remote) => {
+            if (local === LIVE_HEAD && remote === LIVE_HEAD) return "level";
+            if (local === SAMPLE_INSTALL.commit && remote === LIVE_HEAD) return "behind";
+            return "unknown";
+          },
+        });
+
+        expect(result.reason).toBe("remote_ahead");
+        expect(result.available).toBe(true);
+        expect(result.remoteRelation).toBe("behind");
+        expect(result.localCommit).toBe(LIVE_HEAD);
+        expect(result.remoteCommit).toBe(LIVE_HEAD);
+        expect(result.installedCommit).toBe(SAMPLE_INSTALL.commit);
+      });
+
+      it("does not offer an update when checkout has diverged even if install was behind", async () => {
+        mockInstall({});
+        const result = await checkForRemoteUpdate({
+          ...fromSource,
+          fetchImpl: vi.fn(async () => jsonResponse({ sha: LIVE_HEAD })) as never,
+          headImpl: async () => "diverged_commit",
+          relationImpl: async (_repoPath, local, _remote) => {
+            if (local === "diverged_commit") return "diverged";
+            return "behind";
+          },
+        });
+
+        expect(result.reason).toBeNull();
+        expect(result.available).toBe(false);
+        expect(result.remoteRelation).toBe("diverged");
+      });
+
+            // The case that must not be weakened. Same install marker, same commits,
       // same everything except that this instance runs a build: the rebuild is
       // still found, still offered, and still called build_behind.
       it("keeps the rebuild on an instance that runs a build", async () => {

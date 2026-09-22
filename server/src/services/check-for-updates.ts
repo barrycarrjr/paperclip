@@ -174,7 +174,7 @@ function readInstallInfo(): InstallInfo | null {
   try {
     const raw = readFileSync(join(homedir(), ".paperclip", "install.json"), "utf8");
     // Strip a UTF-8 BOM the install scripts can leave behind on Windows.
-    const cleaned = raw.replace(/^﻿/, "");
+    const cleaned = raw.replace(/^\ufeff/, "");
     const parsed = JSON.parse(cleaned) as {
       repoPath?: unknown;
       remote?: unknown;
@@ -210,6 +210,25 @@ async function readCheckoutHead(repoPath: string | null): Promise<string | null>
     return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
   } catch (err) {
     logger.warn({ err, repoPath }, "Update check: could not read local git HEAD");
+    return null;
+  }
+}
+
+/**
+ * Read the remote branch HEAD commit directly via `git ls-remote`.
+ * Used as a zero-rate-limit fallback when GitHub REST API fails or is rate-limited.
+ */
+async function readRemoteHeadViaGit(repoPath: string | null, branch: string): Promise<string | null> {
+  if (!repoPath || !existsSync(repoPath)) return null;
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", repoPath, "ls-remote", "origin", branch], {
+      timeout: GIT_HEAD_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    const match = stdout.trim().match(/^([0-9a-f]{40})\s+/i);
+    return match ? match[1] : null;
+  } catch (err) {
+    logger.warn({ err, repoPath, branch }, "Update check: git ls-remote failed");
     return null;
   }
 }
@@ -391,6 +410,7 @@ async function fetchRemoteCommit(
   parsed: ParsedRemote,
   branch: string,
   opts: FetchOptions = {},
+  repoPath?: string | null,
 ): Promise<{ remoteCommit: string | null; live: boolean; httpStatus: number | null }> {
   const now = opts.now ?? Date.now;
   const fetchImpl = opts.fetchImpl ?? ghFetch;
@@ -418,11 +438,25 @@ async function fetchRemoteCommit(
     });
   } catch (err) {
     logger.warn({ err, url }, "Update check: GitHub fetch failed");
+    if (repoPath) {
+      const gitRemoteSha = await readRemoteHeadViaGit(repoPath, branch);
+      if (gitRemoteSha) {
+        remoteCache.set(key, { remoteCommit: gitRemoteSha, fetchedAt: now() });
+        return { remoteCommit: gitRemoteSha, live: true, httpStatus: null };
+      }
+    }
     return failed();
   }
 
   if (!response.ok) {
     logger.warn({ status: response.status, url }, "Update check: GitHub returned non-2xx");
+    if (repoPath) {
+      const gitRemoteSha = await readRemoteHeadViaGit(repoPath, branch);
+      if (gitRemoteSha) {
+        remoteCache.set(key, { remoteCommit: gitRemoteSha, fetchedAt: now() });
+        return { remoteCommit: gitRemoteSha, live: true, httpStatus: response.status };
+      }
+    }
     return failed(response.status);
   }
 
@@ -586,7 +620,7 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
   if (!parsed || !isGitHubHostname(parsed.hostname)) return localOnly("unsupported_remote");
 
   const branch = info.branch ?? DEFAULT_BRANCH;
-  const { remoteCommit, live, httpStatus } = await fetchRemoteCommit(parsed, branch, opts);
+  const { remoteCommit, live, httpStatus } = await fetchRemoteCommit(parsed, branch, opts, info.repoPath);
 
   if (!remoteCommit) {
     // GitHub answering is not the same as GitHub being unreachable, so the
@@ -618,11 +652,30 @@ export async function checkForRemoteUpdate(opts: FetchOptions = {}): Promise<Upd
     }
   }
 
-  // Only a checkout that is genuinely behind has anything to pull. Ahead and
-  // level have nothing. Diverged deliberately offers nothing either: pulling it
-  // would not be a simple move forward, so a person has to decide. Unknown
-  // offers nothing because we do not know.
-  const remoteAhead = remoteRelation === "behind";
+  // Also compare the installed commit against the remote tip. When new commits
+  // are pushed to GitHub from this checkout, localCommit is level with remoteCommit,
+  // but the installed build is still on the older commit. In that case, remote is
+  // ahead of the install, and an update is available to apply the pushed commits.
+  let installRelation: RemoteRelation = "unknown";
+  if (installedCommit && installedCommit !== remoteCommit) {
+    installRelation = await compareLocally(info.repoPath, installedCommit, remoteCommit);
+    if (installRelation === "unknown") {
+      installRelation = await compareOnGitHub(parsed, remoteCommit, installedCommit, opts);
+    }
+  }
+
+  // Only a checkout or install that is genuinely behind has anything to pull.
+  // Ahead and level have nothing. Diverged deliberately offers nothing either:
+  // pulling it would not be a simple move forward, so a person has to decide.
+  // Unknown offers nothing because we do not know.
+  const remoteAhead =
+    remoteRelation === "behind" ||
+    (installRelation === "behind" && remoteRelation !== "diverged");
+
+  if (remoteAhead && remoteRelation === "level") {
+    remoteRelation = "behind";
+  }
+
   // A pull wins when both are true, because updating rebuilds as its last step.
   const reason: UpdateCheckReason | null = remoteAhead
     ? "remote_ahead"
