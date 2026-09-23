@@ -11,6 +11,7 @@ import { EmailPopoutDialog, type EmailPopoutRequest } from "./EmailPopoutDialog"
 const mockApi = vi.hoisted(() => ({
   fetchMessage: vi.fn(),
   listFolders: vi.fn(),
+  listMailboxes: vi.fn(),
   markRead: vi.fn(),
   markUnread: vi.fn(),
   deleteMessage: vi.fn(),
@@ -19,8 +20,13 @@ const mockApi = vi.hoisted(() => ({
   sendNew: vi.fn(),
   getAttachment: vi.fn(),
 }));
+const mockDraftsApi = vi.hoisted(() => ({ draftReply: vi.fn() }));
 
 vi.mock("../../api/emailTools", () => ({ makeEmailToolsApi: () => mockApi }));
+vi.mock("../../api/emailDrafts", () => ({ emailDraftsApi: mockDraftsApi }));
+vi.mock("../../api/chat", () => ({
+  chatApi: { listModels: vi.fn(async () => ({ models: [] })) },
+}));
 vi.mock("../../api/issues", () => ({ issuesApi: { create: vi.fn() } }));
 vi.mock("../../api/agents", () => ({ agentsApi: { list: vi.fn(async () => []), wakeup: vi.fn() } }));
 vi.mock("../../hooks/usePrintToolsPlugin", () => ({
@@ -57,21 +63,16 @@ function request(overrides: Partial<EmailPopoutRequest> = {}): EmailPopoutReques
 
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
+let queryClient: QueryClient | null = null;
 
-async function mountDialog(
+async function renderDialog(
   req: EmailPopoutRequest,
-  onClose = vi.fn(),
+  onClose: () => void,
   actionHooks?: React.ComponentProps<typeof EmailPopoutDialog>["actionHooks"],
 ) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  container = document.createElement("div");
-  document.body.appendChild(container);
-  root = createRoot(container);
   await act(async () => {
     root!.render(
-      <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={queryClient!}>
         {/* main.tsx wraps the whole app in one; the dialog inherits it. */}
         <TooltipProvider>
           <EmailPopoutDialog request={req} onClose={onClose} actionHooks={actionHooks} />
@@ -80,6 +81,20 @@ async function mountDialog(
     );
   });
   await settle();
+}
+
+async function mountDialog(
+  req: EmailPopoutRequest,
+  onClose = vi.fn(),
+  actionHooks?: React.ComponentProps<typeof EmailPopoutDialog>["actionHooks"],
+) {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await renderDialog(req, onClose, actionHooks);
   return { onClose };
 }
 
@@ -100,6 +115,8 @@ function readToggle(): HTMLButtonElement {
 
 beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset();
+  mockDraftsApi.draftReply.mockReset();
+  localStorage.removeItem("email-draftModel");
   mockApi.fetchMessage.mockResolvedValue({
     uid: 42,
     messageId: "<m1>",
@@ -117,6 +134,9 @@ beforeEach(() => {
     attachments: [],
   });
   mockApi.listFolders.mockResolvedValue({ folders: ["Archive"] });
+  mockApi.listMailboxes.mockResolvedValue({
+    mailboxes: [{ key: "personal", name: "Personal", pollFolder: "INBOX", from: "me@example.com" }],
+  });
   mockApi.markRead.mockResolvedValue({ ok: true });
   mockApi.markUnread.mockResolvedValue({ ok: true });
 });
@@ -128,6 +148,7 @@ afterEach(() => {
   container?.remove();
   container = null;
   root = null;
+  queryClient = null;
   document.body.innerHTML = "";
 });
 
@@ -305,5 +326,242 @@ describe("EmailPopoutDialog failure reporting", () => {
     await clickByText("Send reply");
 
     expect(document.querySelector('[role="alert"]')?.textContent).toBe("smtp refused");
+  });
+});
+
+const INSTRUCTIONS = 'input[aria-label="Instructions for the AI draft"]';
+
+function replyBox(): HTMLTextAreaElement {
+  const textarea = document.querySelector<HTMLTextAreaElement>("textarea");
+  if (!textarea) throw new Error("reply box not rendered");
+  return textarea;
+}
+
+/** Type into the reply box the way React's onChange expects. */
+async function typeReply(value: string) {
+  const textarea = replyBox();
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    setter.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+}
+
+function buttonText(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === text,
+  );
+}
+
+function secondMessage() {
+  return {
+    uid: 43,
+    messageId: "<m2>",
+    inReplyTo: null,
+    references: [],
+    from: "other@example.com",
+    fromAddress: "other@example.com",
+    to: ["me@example.com"],
+    cc: [],
+    subject: "Something else",
+    date: "2026-08-02T10:00:00.000Z",
+    text: "A different question.",
+    html: "",
+    markdown: "A different question.",
+    attachments: [],
+  };
+}
+
+describe("EmailPopoutDialog AI draft", () => {
+  // The bug: the Email page's reply box had the AI helper and the pop-out's
+  // did not, so replying from the portfolio list meant writing by hand.
+  it("offers the AI helper in the reply box", async () => {
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+
+    expect(document.querySelector(INSTRUCTIONS)).not.toBeNull();
+    expect(document.querySelector('[title="Model used for AI Draft"]')).not.toBeNull();
+    expect(buttonText("AI Draft")).toBeDefined();
+  });
+
+  it("writes the reply from the message and the operator's instructions", async () => {
+    mockDraftsApi.draftReply.mockResolvedValue({ draft: "Happy to send them over.", model: "m1" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeInto(INSTRUCTIONS, "offer to send the Q3 file");
+    await clickByText("AI Draft");
+
+    expect(mockDraftsApi.draftReply).toHaveBeenCalledWith({
+      from: "sender@example.com",
+      subject: "Quarterly numbers",
+      bodyText: "The numbers are attached.",
+      instructions: "offer to send the Q3 file",
+      currentDraft: undefined,
+      model: undefined,
+    });
+    expect(replyBox().value).toBe("Happy to send them over.");
+    // Kept, so the next click refines this draft instead of starting over.
+    expect(document.querySelector<HTMLInputElement>(INSTRUCTIONS)?.value).toBe(
+      "offer to send the Q3 file",
+    );
+  });
+
+  it("revises what is already in the reply box instead of starting over", async () => {
+    mockDraftsApi.draftReply.mockResolvedValue({ draft: "Thanks, sending it today.", model: "m1" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeReply("thanks will send");
+    await clickByText("AI Revise");
+
+    expect(mockDraftsApi.draftReply.mock.calls[0][0].currentDraft).toBe("thanks will send");
+    expect(replyBox().value).toBe("Thanks, sending it today.");
+  });
+
+  it("drafts when Enter is pressed in the instructions", async () => {
+    mockDraftsApi.draftReply.mockResolvedValue({ draft: "Sure.", model: "m1" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeInto(INSTRUCTIONS, "say yes");
+    const input = document.querySelector<HTMLInputElement>(INSTRUCTIONS)!;
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+
+    expect(mockDraftsApi.draftReply).toHaveBeenCalledTimes(1);
+    expect(replyBox().value).toBe("Sure.");
+  });
+
+  it("drafts with the model the operator picked on the Email page", async () => {
+    localStorage.setItem("email-draftModel", "claude-sonnet-5");
+    mockDraftsApi.draftReply.mockResolvedValue({ draft: "Sure.", model: "claude-sonnet-5" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await clickByText("AI Draft");
+
+    expect(mockDraftsApi.draftReply.mock.calls[0][0].model).toBe("claude-sonnet-5");
+  });
+
+  it("says why a draft failed and leaves the reply alone", async () => {
+    mockDraftsApi.draftReply.mockRejectedValue(new Error("No LLM provider is configured."));
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeReply("My own words");
+    await clickByText("AI Revise");
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "AI draft failed: No LLM provider is configured.",
+    );
+    expect(replyBox().value).toBe("My own words");
+  });
+
+  it("drops a draft that comes back after the operator has moved to another message", async () => {
+    let finishDraft: (value: { draft: string; model: string }) => void = () => {};
+    mockDraftsApi.draftReply.mockReturnValue(
+      new Promise((resolve) => {
+        finishDraft = resolve;
+      }),
+    );
+    const onClose = vi.fn();
+    await mountDialog(request(), onClose);
+
+    await clickToolbar("Reply");
+    await clickByText("AI Draft");
+
+    mockApi.fetchMessage.mockResolvedValue(secondMessage());
+    await renderDialog(
+      request({ uid: 43, header: header({ uid: 43, messageId: "<m2>", from: "other@example.com" }) }),
+      onClose,
+    );
+    await clickToolbar("Reply");
+    await act(async () => {
+      finishDraft({ draft: "Reply meant for the first sender", model: "m1" });
+    });
+    await settle();
+
+    expect(replyBox().value).toBe("");
+  });
+
+  it("clears the AI instructions when a different message opens", async () => {
+    const onClose = vi.fn();
+    await mountDialog(request(), onClose);
+
+    await clickToolbar("Reply");
+    await typeInto(INSTRUCTIONS, "decline politely");
+
+    mockApi.fetchMessage.mockResolvedValue(secondMessage());
+    await renderDialog(
+      request({ uid: 43, header: header({ uid: 43, messageId: "<m2>", from: "other@example.com" }) }),
+      onClose,
+    );
+    await clickToolbar("Reply");
+
+    expect(document.querySelector<HTMLInputElement>(INSTRUCTIONS)?.value).toBe("");
+  });
+});
+
+describe("EmailPopoutDialog reply extras", () => {
+  it("shows which address the reply leaves from", async () => {
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+
+    expect(document.querySelector('[data-testid="sending-identity"]')?.textContent).toBe(
+      "FromPersonal <me@example.com>",
+    );
+  });
+
+  it("shows which address a forward leaves from", async () => {
+    await mountDialog(request());
+
+    await clickToolbar("Forward");
+
+    expect(document.querySelector('[data-testid="sending-identity"]')?.textContent).toBe(
+      "FromPersonal <me@example.com>",
+    );
+  });
+
+  it("leaves the From line off while the mailbox list is still loading", async () => {
+    // "No mailbox selected" in red would be untrue: one is, it just has not loaded.
+    mockApi.listMailboxes.mockReturnValue(new Promise(() => {}));
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+
+    expect(document.querySelector('[data-testid="sending-identity"]')).toBeNull();
+  });
+
+  it("sends picked files with the reply", async () => {
+    mockApi.sendReply.mockResolvedValue({ ok: true, messageId: "<r1>" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeReply("Here it is");
+    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!picker) throw new Error("file picker not rendered");
+    const file = new File(["hello"], "q3.pdf", { type: "application/pdf" });
+    Object.defineProperty(picker, "files", { configurable: true, value: [file] });
+    await act(async () => {
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // FileReader finishes on a later tick.
+    await settle();
+    await settle();
+    await clickByText("Send reply");
+
+    expect(mockApi.sendReply).toHaveBeenCalledWith("personal", 42, "INBOX", "Here it is", {
+      replyAll: false,
+      attachments: [{ name: "q3.pdf", mime: "application/pdf", contentBase64: "aGVsbG8=" }],
+    });
   });
 });

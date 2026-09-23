@@ -121,7 +121,7 @@ import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
-import { chatApi } from "../api/chat";
+import { useDraftModel } from "../hooks/useDraftModel";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
@@ -597,14 +597,9 @@ export function Email() {
   // survives drafting so a second click refines rather than starting over.
   const [draftInstructions, setDraftInstructions] = useState("");
   // AI Draft model — empty string = let server auto-pick. Persisted so the
-  // operator doesn't have to re-pick on every reply.
-  const [draftModel, setDraftModel] = useState<string>(() => {
-    try { return localStorage.getItem("email-draftModel") ?? ""; } catch { return ""; }
-  });
-  const updateDraftModel = (m: string) => {
-    setDraftModel(m);
-    try { localStorage.setItem("email-draftModel", m); } catch {}
-  };
+  // operator doesn't have to re-pick on every reply, and shared with the email
+  // pop-out, which opens on top of this page.
+  const { draftModel, setDraftModel: updateDraftModel, draftModels } = useDraftModel();
   // Compose dialog state. Same isolation pattern as reply — field contents
   // live inside DraftInput / DraftTextarea; the parent only tracks the
   // has-content flags and the initial values to seed each field on mount.
@@ -626,15 +621,6 @@ export function Email() {
   // rewriting a forward would mangle the message being forwarded.
   const [composeInstructions, setComposeInstructions] = useState("");
   const composeAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
-
-  // ── Available LLM models (for AI Draft picker) ────────────────────────────
-
-  const draftModelsQuery = useQuery({
-    queryKey: ["email", "draftModels"],
-    queryFn: () => chatApi.listModels().then((r) => r.models),
-    staleTime: 5 * 60_000,
-  });
-  const draftModels = draftModelsQuery.data ?? [];
 
   // ── Mailbox list ──────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Bot,
   Forward,
@@ -10,6 +10,7 @@ import {
   Printer,
   Reply,
   Send,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -25,14 +26,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { makeEmailToolsApi, type MailHeader } from "../../api/emailTools";
+import { makeEmailToolsApi, type MailHeader, type ParsedEmailMessage } from "../../api/emailTools";
+import { emailDraftsApi } from "../../api/emailDrafts";
 import { AttachmentChipList } from "../attachments/AttachmentChipList";
-import { visibleEmailAttachments } from "../../lib/attachments";
+import { AttachmentComposer, useComposeAttachments } from "../attachments/AttachmentComposer";
+import { DraftInstructionsField } from "../DraftInstructionsField";
+import { DraftModelSelect } from "../DraftModelSelect";
+import {
+  EMAIL_ATTACHMENT_MAX_BYTES,
+  toEmailSendAttachments,
+  visibleEmailAttachments,
+} from "../../lib/attachments";
 import { agentsApi } from "../../api/agents";
+import { useDraftModel } from "../../hooks/useDraftModel";
 import { useEmailMessageActions, type EmailMessageActionHooks } from "./useEmailMessageActions";
 import { usePrintEmail } from "./usePrintEmail";
 import { resolveActionHeader } from "./emailActionHeader";
-import { inlineFailureText } from "./actionFailure";
+import { actionFailureText, inlineFailureText } from "./actionFailure";
+import { SendingIdentityLine } from "./SendingIdentityLine";
+import { describeSendingIdentity, findSelectedMailbox } from "./sendingIdentity";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -64,11 +76,14 @@ type Composer = { kind: "reply"; replyAll: boolean } | { kind: "forward" } | nul
  * the page that opened it wiring `onToast`. The portfolio list does not, so a
  * forward that the server rejected left the composer sitting there unchanged,
  * which is indistinguishable from the button not working.
+ *
+ * `action` names what failed, for a composer that can fail in more than one
+ * way: the reply box can fail to draft as well as to send.
  */
-function ComposerError({ error }: { error: unknown }) {
+function ComposerError({ error, action }: { error: unknown; action?: string }) {
   return (
     <p role="alert" className="text-xs font-medium text-destructive">
-      {inlineFailureText(error)}
+      {action ? actionFailureText(action, error) : inlineFailureText(error)}
     </p>
   );
 }
@@ -100,6 +115,11 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   // taken when the dialog opened and never updates, so the read/unread toggle
   // and a reply (which marks read) have to record the new state themselves.
   const [readStateChange, setReadStateChange] = useState<boolean | null>(null);
+  // Steering text for AI Draft. Kept apart from the reply itself so it
+  // survives drafting, and a second click refines rather than starting over.
+  const [draftInstructions, setDraftInstructions] = useState("");
+  const replyAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
+  const { draftModel, setDraftModel, draftModels } = useDraftModel();
 
   // A different message means a different draft; carrying the old text over
   // would risk sending it to the wrong person.
@@ -112,7 +132,21 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     setHandOffNote("");
     setPrintNote(null);
     setReadStateChange(null);
-  }, [request?.uid, request?.mailbox, request?.companyId]);
+    setDraftInstructions("");
+    replyAttachments.clear();
+  }, [request?.uid, request?.mailbox, request?.companyId, replyAttachments.clear]);
+
+  // The message the reply box is answering. An AI draft that comes back after
+  // the operator has moved to another message is for a message that is no
+  // longer open, and writing it into the new reply box would put one person's
+  // answer in front of another.
+  const openMessageKey = request
+    ? `${request.companyId}:${request.mailbox}:${request.folder}:${request.uid}`
+    : null;
+  const openMessageKeyRef = useRef(openMessageKey);
+  useEffect(() => {
+    openMessageKeyRef.current = openMessageKey;
+  }, [openMessageKey]);
 
   useEffect(() => {
     if (!printNote) return;
@@ -145,6 +179,19 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     staleTime: 60_000,
   });
 
+  // Where a reply or forward leaves from, shown at the point of sending like
+  // every other composer does. Same cache entry as the Email page's mailbox
+  // list. Nothing is shown until it arrives: the header already names the
+  // mailbox, and "No mailbox selected" would be untrue while it loads.
+  const { data: mailboxList } = useQuery({
+    queryKey: ["email", request?.pluginId, request?.companyId, "mailboxes"],
+    queryFn: () => api!.listMailboxes(),
+    enabled: Boolean(api && request),
+  });
+  const sendingIdentity = mailboxList
+    ? describeSendingIdentity(findSelectedMailbox(mailboxList.mailboxes ?? [], request?.mailbox))
+    : null;
+
   const { data: agents } = useQuery({
     queryKey: ["email-popout-agents", request?.companyId],
     queryFn: () => agentsApi.list(request!.companyId),
@@ -167,6 +214,40 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     onDone: (text) => setPrintNote(text),
   });
 
+  // Same contract as the Email page's composer: the instructions steer the
+  // model, and whatever is already in the reply box rides along as
+  // currentDraft so the model revises it in place instead of starting over.
+  const draftMutation = useMutation({
+    mutationFn: (input: {
+      msg: ParsedEmailMessage;
+      instructions: string;
+      currentDraft: string;
+      messageKey: string | null;
+    }) =>
+      emailDraftsApi.draftReply({
+        from: input.msg.from,
+        subject: input.msg.subject,
+        bodyText: input.msg.markdown || input.msg.text || "",
+        instructions: input.instructions.trim() || undefined,
+        currentDraft: input.currentDraft.trim() || undefined,
+        model: draftModel || undefined,
+      }),
+    onSuccess: (result, input) => {
+      if (input.messageKey !== openMessageKeyRef.current) return;
+      setBody(result.draft);
+    },
+  });
+
+  function runDraft(msg: ParsedEmailMessage) {
+    if (draftMutation.isPending) return;
+    draftMutation.mutate({
+      msg,
+      instructions: draftInstructions,
+      currentDraft: body,
+      messageKey: openMessageKey,
+    });
+  }
+
   // Actions that dispose of the message close the pop-out; there is nothing
   // left to look at, and leaving it open invites acting on it twice.
   function runAndClose(run: () => void) {
@@ -180,6 +261,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     actions.reply.reset();
     actions.forward.reset();
     actions.handOff.reset();
+    draftMutation.reset();
   }
 
   const isUnread = readStateChange ?? request?.header?.unseen ?? false;
@@ -311,6 +393,8 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 setHandOffOpen(false);
                 setComposer((c) => (c?.kind === "reply" ? null : { kind: "reply", replyAll: false }));
                 setBody("");
+                setDraftInstructions("");
+                replyAttachments.clear();
               }}
             />
             <ToolbarButton
@@ -412,6 +496,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 Reply all
               </label>
             </div>
+            {sendingIdentity && <SendingIdentityLine identity={sendingIdentity} />}
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -419,18 +504,59 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               placeholder="Write a reply..."
               autoFocus
             />
+            <AttachmentComposer state={replyAttachments} />
+            <DraftInstructionsField
+              value={draftInstructions}
+              onChange={setDraftInstructions}
+              onSubmit={() => runDraft(message)}
+              refining={body.trim().length > 0}
+              disabled={draftMutation.isPending}
+            />
+            {draftMutation.isError && (
+              <ComposerError error={draftMutation.error} action="AI draft" />
+            )}
             {actions.reply.isError && <ComposerError error={actions.reply.error} />}
-            <div className="flex justify-end">
+            <div className="flex items-center justify-end gap-2">
+              <DraftModelSelect value={draftModel} onChange={setDraftModel} models={draftModels} />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={draftMutation.isPending}
+                    onClick={() => runDraft(message)}
+                  >
+                    {draftMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    {body.trim() ? "AI Revise" : "AI Draft"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {body.trim()
+                    ? "Rewrite the reply above, applying your instructions"
+                    : "Write a reply with AI, following your instructions"}
+                </TooltipContent>
+              </Tooltip>
               <Button
                 size="sm"
-                disabled={!body.trim() || actions.reply.isPending}
+                disabled={!body.trim() || actions.reply.isPending || !replyAttachments.allReady}
                 onClick={() =>
                   actions.reply.mutate(
-                    { msg: headerForActions, body, replyAll: composer.replyAll },
+                    {
+                      msg: headerForActions,
+                      body,
+                      replyAll: composer.replyAll,
+                      attachments: toEmailSendAttachments(replyAttachments.attachments),
+                    },
                     {
                       onSuccess: () => {
                         setComposer(null);
                         setBody("");
+                        setDraftInstructions("");
+                        replyAttachments.clear();
                         // Replying marks the message read, so the toolbar has
                         // to stop offering to do it again.
                         setReadStateChange(false);
@@ -452,6 +578,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
         {message && composer?.kind === "forward" && (
           <div className="shrink-0 space-y-2 border-t border-border bg-background p-4">
             <span className="text-xs font-medium text-muted-foreground">Forward this email</span>
+            {sendingIdentity && <SendingIdentityLine identity={sendingIdentity} />}
             <Input
               value={forwardTo}
               onChange={(e) => setForwardTo(e.target.value)}

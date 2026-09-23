@@ -197,7 +197,7 @@ Use in property rows, comment headers, assignee displays, and anywhere a user/ag
 />
 ```
 
-Used by the Help Scout and IMAP reply composers on the Email page.
+Used by the Help Scout and IMAP reply composers on the Email page, and by the reply box in the email pop-out (`email/EmailPopoutDialog.tsx`), which the Portfolio Email list opens. Pair it with `DraftModelSelect` and take the model from `hooks/useDraftModel.ts`, so every composer drafts with the same pick.
 
 ### PageSkeleton
 

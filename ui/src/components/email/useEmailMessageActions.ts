@@ -164,13 +164,18 @@ export function useEmailMessageActions(
       msg,
       body,
       replyAll,
+      attachments,
     }: {
       msg: MailHeader;
       body: string;
       replyAll: boolean;
+      attachments?: EmailSendAttachment[];
     }) => {
       const { api, target } = mustHaveMailbox();
-      await api.sendReply(target.mailbox, msg.uid, target.folder, body, { replyAll });
+      await api.sendReply(target.mailbox, msg.uid, target.folder, body, {
+        replyAll,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      });
       // Replying is disposal: mark read so it leaves the unread view here and
       // in the operator's own mail client. A failure here must not fail the
       // send, which has already happened and cannot be taken back.

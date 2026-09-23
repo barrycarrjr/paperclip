@@ -237,6 +237,34 @@ describe("useEmailMessageActions", () => {
     expect(mockApi.markRead).toHaveBeenCalledWith("personal", 42, "INBOX");
   });
 
+  it("sends picked files along with a reply", async () => {
+    const actions = mountActions();
+    const attachments = [{ name: "q3.pdf", mime: "application/pdf", contentBase64: "aGVsbG8=" }];
+
+    await act(async () => {
+      actions.current!.reply.mutate({ msg: header(), body: "Here it is", replyAll: false, attachments });
+    });
+    await settle();
+
+    expect(mockApi.sendReply).toHaveBeenCalledWith("personal", 42, "INBOX", "Here it is", {
+      replyAll: false,
+      attachments,
+    });
+  });
+
+  it("sends no attachments field when no files were picked", async () => {
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.reply.mutate({ msg: header(), body: "Thanks", replyAll: false, attachments: [] });
+    });
+    await settle();
+
+    expect(mockApi.sendReply).toHaveBeenCalledWith("personal", 42, "INBOX", "Thanks", {
+      replyAll: false,
+    });
+  });
+
   it("still counts a reply as sent when the follow-up mark-read fails", async () => {
     mockApi.markRead.mockRejectedValue(new Error("imap down"));
     const actions = mountActions();
