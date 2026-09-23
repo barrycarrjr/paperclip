@@ -73,6 +73,13 @@ const OUTCOME_TABLE: Record<
   "agent.paused": { verb: "Paused agent", chip: "paused", tone: "amber", category: "agent" },
   "agent.resumed": { verb: "Resumed agent", chip: "resumed", tone: "sky", category: "agent" },
   "agent.terminated": { verb: "Terminated agent", chip: "terminated", tone: "red", category: "agent" },
+  // Written by the daily model check. Nobody's model is ever changed for
+  // them, so these ask a person to act: amber, like a pause.
+  "agent.model_unavailable": { verb: "Paused agent", chip: "model gone", tone: "amber", category: "agent" },
+  "agent.model_needs_update": { verb: "Model update needed for", chip: "model", tone: "amber", category: "agent" },
+
+  // Models: a provider started offering one the last check had not seen.
+  "model.available": { verb: "New model available:", chip: "new model", tone: "sky", category: "system" },
 
   // Projects + Goals.
   "project.created": { verb: "Created project", chip: "created", tone: "sky", category: "project" },
@@ -286,7 +293,10 @@ function approvalTargetFromDetails(event: ActivityEvent): string | null {
   return type ? type.replace(/_/g, " ") : null;
 }
 
-function entityTarget(event: ActivityEvent): string | null {
+function entityTarget(event: ActivityEvent, opts: SummarizeOptions): string | null {
+  if (event.action === "model.available") {
+    return detailString(event, "label", "model");
+  }
   if (event.entityType === "issue") {
     const ident = detailString(event, "identifier", "issueIdentifier");
     const title = detailString(event, "issueTitle", "title");
@@ -297,7 +307,9 @@ function entityTarget(event: ActivityEvent): string | null {
     return approvalTargetFromDetails(event);
   }
   if (event.entityType === "agent") {
-    return detailString(event, "agentName", "name");
+    // The daily model check records the agent by id only, so fall back to
+    // the loaded agents for its name.
+    return detailString(event, "agentName", "name") ?? opts.agentMap?.get(event.entityId)?.name ?? null;
   }
   if (event.entityType === "project") {
     return detailString(event, "projectName", "name", "title");
@@ -308,8 +320,8 @@ function entityTarget(event: ActivityEvent): string | null {
   return detailString(event, "title", "name", "summary");
 }
 
-export function summarizeOutcome(event: ActivityEvent, _opts: SummarizeOptions = {}): Outcome {
-  const target = entityTarget(event);
+export function summarizeOutcome(event: ActivityEvent, opts: SummarizeOptions = {}): Outcome {
+  const target = entityTarget(event, opts);
   const known = OUTCOME_TABLE[event.action];
   if (known) {
     return { ...known, target };

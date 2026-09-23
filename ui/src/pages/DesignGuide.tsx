@@ -126,6 +126,10 @@ import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { MailSearchBar } from "@/components/MailSearchBar";
 import { EmailStateIcons } from "@/components/email/EmailStateIcons";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "@/components/email/RowHoverToolbar";
+import { ModelLifecycleBadge } from "@/components/ModelLifecycleBadge";
+import { ModelPicker } from "@/components/ModelPicker";
+import { SavedModelNotice } from "@/components/SavedModelNotice";
+import type { ModelPickerEntry } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { InlineEditor } from "@/components/InlineEditor";
 import { DraftInstructionsField } from "@/components/DraftInstructionsField";
@@ -184,6 +188,24 @@ function Swatch({ name, cssVar }: { name: string; cssVar: string }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Sample models for the model picker section (made-up names)         */
+/* ------------------------------------------------------------------ */
+
+const DEMO_MODELS: ModelPickerEntry[] = [
+  { id: "example-large-3", label: "Example Large 3", status: "current", isDefault: true, isNew: true, releasedAt: "2026-09-20" },
+  { id: "example-fast-3", label: "Example Fast 3", status: "current" },
+  {
+    id: "example-large-2-5",
+    label: "Example Large 2.5",
+    status: "deprecated",
+    retiresAt: "2026-10-14T12:00:00.000Z",
+    replacementId: "example-large-3",
+  },
+  { id: "example-large-2", label: "Example Large 2", status: "legacy", replacementId: "example-large-3" },
+  { id: "example-fast-2", label: "Example Fast 2", status: "legacy", replacementId: "example-fast-3" },
+];
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -206,6 +228,7 @@ export function DesignGuide() {
   const [mailSearch, setMailSearch] = useState("");
   const [mailSearchSummary, setMailSearchSummary] = useState<string | null>(null);
   const demoAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
+  const [demoModel, setDemoModel] = useState("example-large-2");
 
   return (
     <div className="space-y-10 max-w-4xl">
@@ -246,6 +269,7 @@ export function DesignGuide() {
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
                 "AttachmentComposer", "EmailStateIcons", "RowHoverToolbar",
+                "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -1139,6 +1163,54 @@ export function DesignGuide() {
             <RowHoverToolbar forceVisible>
               <Button size="icon-sm" variant="ghost" aria-label="Move to folder"><MoveRight className="h-3.5 w-3.5" /></Button>
             </RowHoverToolbar>
+          </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  MODEL PICKERS                                                */}
+      {/* ============================================================ */}
+      <Section title="Model Pickers">
+        <p className="text-sm text-muted-foreground">
+          Every model choice uses the same picker: agent config, new agents, onboarding, instance
+          defaults, the issue override, Clippy and email drafts. Models keep the server's order
+          (current, then retiring, then older), older ones fold under "Older models", and a saved
+          model the provider no longer offers says so. The names below are made up.
+        </p>
+        <SubSection title="Tags (ModelLifecycleBadge)">
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <span className="flex items-center gap-2">
+              Example Large 3 <ModelLifecycleBadge model={DEMO_MODELS[0]} />
+            </span>
+            <span className="flex items-center gap-2">
+              Example Large 2.5 <ModelLifecycleBadge model={DEMO_MODELS[2]} />
+            </span>
+            <span className="flex items-center gap-2">
+              example-large-1 <ModelLifecycleBadge unavailable />
+            </span>
+            <span className="flex items-center gap-2 text-muted-foreground">
+              Example Fast 3 (plain current: no tag)
+            </span>
+          </div>
+        </SubSection>
+        <SubSection title="Picker with the line under it (ModelPicker + SavedModelNotice)">
+          <div className="max-w-sm space-y-1.5">
+            <ModelPicker
+              models={DEMO_MODELS}
+              value={demoModel}
+              onChange={setDemoModel}
+              emptyOption={{ label: "Default", hint: "adapter CLI fallback", triggerLabel: "Default (adapter CLI fallback)" }}
+              creatable
+              aria-label="Model"
+            />
+            <SavedModelNotice models={DEMO_MODELS} value={demoModel} onSwitch={setDemoModel} />
+          </div>
+        </SubSection>
+        <SubSection title="Notices">
+          <div className="space-y-2">
+            <SavedModelNotice models={DEMO_MODELS} value="example-fast-2" onSwitch={() => {}} />
+            <SavedModelNotice models={DEMO_MODELS} value="example-large-2-5" onSwitch={() => {}} />
+            <SavedModelNotice models={DEMO_MODELS} value="example-large-1" onSwitch={() => {}} />
           </div>
         </SubSection>
       </Section>

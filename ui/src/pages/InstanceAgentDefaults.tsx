@@ -9,6 +9,9 @@ import { getAdapterLabel } from "@/adapters/adapter-display-registry";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
+import { ModelPicker } from "@/components/ModelPicker";
+import { SavedModelNotice } from "@/components/SavedModelNotice";
+import { useAdapterModelRefresh } from "@/hooks/useAdapterModelRefresh";
 
 // opencode_local agents must specify a model — the "Default" affordance never
 // applies, so a configured default for it would be dead config. Hide it from
@@ -65,6 +68,7 @@ export function InstanceAgentDefaults() {
       enabled: Boolean(selectedCompanyId),
     })),
   });
+  const modelRefresh = useAdapterModelRefresh(selectedCompanyId);
 
   const isLoading = adaptersQuery.isLoading || defaultsQuery.isLoading;
 
@@ -132,11 +136,17 @@ export function InstanceAgentDefaults() {
             const models = (modelsQuery?.data as AdapterModel[] | undefined) ?? [];
             const currentValue = defaults[adapter.type] ?? "";
             const modelLoadError = modelsQuery?.error;
-            const isFetching = modelsQuery?.isFetching ?? false;
+            const refreshing = modelRefresh.isRefreshing(adapter.type);
+            const isFetching = (modelsQuery?.isFetching ?? false) || refreshing;
+            const refreshError = modelRefresh.errorFor(adapter.type);
             const adapterLabel = adapter.label || getAdapterLabel(adapter.type);
-            const knownModelIds = new Set(models.map((m) => m.id));
-            const showOrphanedNotice =
-              currentValue.length > 0 && knownModelIds.size > 0 && !knownModelIds.has(currentValue);
+            const saveDefault = (next: string) =>
+              updateMutation.mutate({
+                defaultModelByAdapterType: {
+                  ...defaults,
+                  [adapter.type]: next,
+                },
+              });
             return (
               <section
                 key={adapter.type}
@@ -158,65 +168,47 @@ export function InstanceAgentDefaults() {
                     {" "}You can still type a model ID below; Paperclip will pass it through to the adapter at run time.
                   </div>
                 )}
-                {showOrphanedNotice && (
-                  <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    The configured model <code className="font-mono">{currentValue}</code> is not in
-                    the discovered list. It will still be passed through; the adapter will reject it
-                    if invalid.
+                {refreshError && (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    {refreshError}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
-                  <select
-                    className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
-                    value={currentValue}
-                    disabled={
-                      updateMutation.isPending ||
-                      isFetching ||
-                      !selectedCompanyId
-                    }
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      updateMutation.mutate({
-                        defaultModelByAdapterType: {
-                          ...defaults,
-                          [adapter.type]: next,
-                        },
-                      });
-                    }}
-                  >
-                    <option value="">— No default (adapter CLI picks) —</option>
-                    {currentValue && !knownModelIds.has(currentValue) && (
-                      <option value={currentValue}>
-                        {currentValue} (not in discovered list)
-                      </option>
-                    )}
-                    {models
-                      .slice()
-                      .sort((a, b) => a.id.localeCompare(b.id))
-                      .map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label || model.id}
-                        </option>
-                      ))}
-                  </select>
+                  <div className="min-w-0 flex-1">
+                    <ModelPicker
+                      models={models}
+                      value={currentValue}
+                      onChange={saveDefault}
+                      loading={modelsQuery?.isLoading ?? false}
+                      emptyOption={{
+                        label: "No default",
+                        hint: "adapter CLI picks",
+                        triggerLabel: "No default (adapter CLI picks)",
+                      }}
+                      creatable
+                      disabled={updateMutation.isPending || !selectedCompanyId}
+                      aria-label={`Default model for ${adapterLabel}`}
+                    />
+                  </div>
                   {selectedCompanyId && (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       disabled={isFetching}
-                      onClick={() => {
-                        if (!selectedCompanyId) return;
-                        void queryClient.invalidateQueries({
-                          queryKey: queryKeys.agents.adapterModels(selectedCompanyId, adapter.type),
-                        });
-                      }}
+                      onClick={() => void modelRefresh.refresh(adapter.type)}
                     >
                       <RotateCw className={isFetching ? "size-3 animate-spin" : "size-3"} />
                       Refresh
                     </Button>
                   )}
                 </div>
+                <SavedModelNotice
+                  models={models}
+                  value={currentValue}
+                  onSwitch={saveDefault}
+                  disabled={updateMutation.isPending}
+                />
               </section>
             );
           })}

@@ -2,6 +2,18 @@ export { execute, runClaudeLogin, runClaudeSetupToken, extractClaudeSetupToken }
 export type { ClaudeSetupTokenResult } from "./execute.js";
 export { listClaudeSkills, syncClaudeSkills } from "./skills.js";
 export { listClaudeModels } from "./models.js";
+export {
+  readClaudeCliModels,
+  parseClaudeCliModelRows,
+  claudeCliRowsToModels,
+  deriveClaudeModelLabel,
+} from "./cli-models.js";
+export type {
+  ClaudeCliModelRow,
+  ClaudeCliModel,
+  ClaudeCliAccount,
+  ClaudeCliModelListing,
+} from "./cli-models.js";
 export { testEnvironment } from "./test.js";
 export {
   parseClaudeStreamJson,

@@ -1,5 +1,7 @@
 import type { AdapterModel } from "./types.js";
 import { models as geminiFallbackModels, DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { getModelCatalog, refreshModelCatalog } from "../services/model-catalog.js";
+import { buildModelList } from "../services/model-lifecycle.js";
 
 /**
  * The "auto" entry is the Gemini CLI's own model picker, not a concrete model
@@ -110,7 +112,24 @@ export async function fetchLiveGeminiModels(): Promise<AdapterModel[] | null> {
   return dedupeModels([...AUTO_MODELS, ...discovered]);
 }
 
+/**
+ * Mark each model current, older or retiring from the public catalog, keeping
+ * "auto" (the CLI's own picker) first as the default.
+ */
+async function withLifecycle(models: AdapterModel[], forceCatalog?: boolean): Promise<AdapterModel[]> {
+  const catalog = forceCatalog ? await refreshModelCatalog({ force: true }) : await getModelCatalog();
+  const auto: AdapterModel[] = models
+    .filter((m) => m.id === DEFAULT_GEMINI_LOCAL_MODEL)
+    .map((m) => ({ ...m, status: "current", isDefault: true }));
+  const rest = models.filter((m) => m.id !== DEFAULT_GEMINI_LOCAL_MODEL);
+  return [...auto, ...buildModelList({ live: rest, catalog, catalogProvider: "google" }).models];
+}
+
 async function loadGeminiModels(opts?: { forceRefresh?: boolean }): Promise<AdapterModel[]> {
+  return withLifecycle(await loadGeminiModelIds(opts), opts?.forceRefresh);
+}
+
+async function loadGeminiModelIds(opts?: { forceRefresh?: boolean }): Promise<AdapterModel[]> {
   const apiKey = resolveGeminiApiKey();
   const fallback = dedupeModels([...geminiFallbackModels]);
   if (!apiKey) return fallback;

@@ -14,6 +14,15 @@ import {
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
 import { resolveAdapterAccountEnv } from "./active-account.js";
 import type { AnthropicToolSpec } from "./chat-tools.js";
+import type { AdapterModel, AdapterModelStatus } from "../adapters/types.js";
+import {
+  bestKnownNativeModel,
+  knownImageSupport,
+  listNativeChatModels,
+  type NativeChatProvider,
+} from "./chat-model-lists.js";
+import { peekModelCatalog } from "./model-catalog.js";
+import { rankModelsForDefault } from "./model-lifecycle.js";
 
 /**
  * Adapter types whose underlying CLI has multimodal Read support — i.e. it
@@ -147,20 +156,22 @@ export interface ChatProvider {
   streamTurn(input: ProviderTurnInput): AsyncGenerator<ProviderStreamEvent, ProviderTurnResult, void>;
 }
 
-const ANTHROPIC_MODELS = [
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "claude-opus-4-5",
-  "claude-sonnet-5",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-];
+// The Anthropic, OpenAI and Gemini model lists come from each provider's own
+// models endpoint (see chat-model-lists.ts), so a new model appears and a
+// retired one disappears without a code change. The literal lists that used
+// to sit here went stale within weeks of each release.
 
-const OPENAI_MODELS = ["gpt-5", "gpt-4.1", "gpt-4o", "gpt-4o-mini", "o4-mini"];
+/** The key a direct provider is configured with, or "" when it is not. */
+function nativeApiKey(provider: NativeChatProvider): string {
+  if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+  if (provider === "openai") return process.env.OPENAI_API_KEY?.trim() ?? "";
+  return process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
+}
+
+async function nativeModelEntries(provider: NativeChatProvider): Promise<AdapterModel[]> {
+  const key = nativeApiKey(provider);
+  return key ? listNativeChatModels(provider, key) : [];
+}
 
 const MAX_TOKENS = 4096;
 
@@ -178,10 +189,10 @@ class AnthropicProvider implements ChatProvider {
   defaultModel() {
     return process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.startsWith("claude-")
       ? process.env.PAPERCLIP_CHAT_DEFAULT_MODEL
-      : "claude-opus-4-7";
+      : bestKnownNativeModel("anthropic");
   }
-  listModels() {
-    return ANTHROPIC_MODELS;
+  async listModels() {
+    return (await nativeModelEntries("anthropic")).map((m) => m.id);
   }
 
   async *streamTurn(input: ProviderTurnInput): AsyncGenerator<ProviderStreamEvent, ProviderTurnResult, void> {
@@ -328,10 +339,10 @@ class OpenAIProvider implements ChatProvider {
     if (process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.startsWith("gpt-")) {
       return process.env.PAPERCLIP_CHAT_DEFAULT_MODEL;
     }
-    return "gpt-4.1";
+    return bestKnownNativeModel("openai");
   }
-  listModels() {
-    return OPENAI_MODELS;
+  async listModels() {
+    return (await nativeModelEntries("openai")).map((m) => m.id);
   }
 
   async *streamTurn(input: ProviderTurnInput): AsyncGenerator<ProviderStreamEvent, ProviderTurnResult, void> {
@@ -757,11 +768,11 @@ class GeminiProvider implements ChatProvider {
   defaultModel(): string {
     return process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.startsWith("gemini-")
       ? process.env.PAPERCLIP_CHAT_DEFAULT_MODEL
-      : "gemini-2.0-flash";
+      : bestKnownNativeModel("gemini");
   }
 
-  listModels(): string[] {
-    return ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"];
+  async listModels(): Promise<string[]> {
+    return (await nativeModelEntries("gemini")).map((m) => m.id);
   }
 
   async *streamTurn(input: ProviderTurnInput): AsyncGenerator<ProviderStreamEvent, ProviderTurnResult, void> {
@@ -1420,11 +1431,49 @@ export function listConfiguredProviders(): ChatProvider[] {
   return PROVIDERS.filter((p) => p.isConfigured());
 }
 
-export async function listAvailableModels(): Promise<{ provider: string; model: string; source?: string }[]> {
-  const out: { provider: string; model: string; source?: string }[] = [];
+/** One model a chat session can use, with what the picker needs to label it. */
+export interface AvailableChatModel {
+  provider: string;
+  /** What the session stores: a plain id, or `adapter:<type>:<id>` for adapter-routed models. */
+  model: string;
+  /** Adapter type, for adapter-routed models. */
+  source?: string;
+  label?: string;
+  status?: AdapterModelStatus;
+  isDefault?: boolean;
+  isNew?: boolean;
+  releasedAt?: string;
+  retiresAt?: string;
+  replacementId?: string;
+  supportsImages?: boolean;
+}
+
+function lifecycleOf(model: AdapterModel): Omit<AvailableChatModel, "provider" | "model" | "source"> {
+  const out: Omit<AvailableChatModel, "provider" | "model" | "source"> = {};
+  if (model.label && model.label !== model.id) out.label = model.label;
+  if (model.status) out.status = model.status;
+  if (model.isDefault) out.isDefault = true;
+  if (model.isNew) out.isNew = true;
+  if (model.releasedAt) out.releasedAt = model.releasedAt;
+  if (model.retiresAt) out.retiresAt = model.retiresAt;
+  if (model.replacementId) out.replacementId = model.replacementId;
+  if (model.supportsImages !== undefined) out.supportsImages = model.supportsImages;
+  return out;
+}
+
+const NATIVE_CHAT_PROVIDERS: ReadonlySet<string> = new Set<NativeChatProvider>(["anthropic", "openai", "gemini"]);
+
+export async function listAvailableModels(): Promise<AvailableChatModel[]> {
+  const out: AvailableChatModel[] = [];
   for (const p of PROVIDERS) {
     if (!p.isConfigured()) continue;
     if (p.name === "adapter") continue; // enumerated separately below
+    if (NATIVE_CHAT_PROVIDERS.has(p.name)) {
+      for (const m of await nativeModelEntries(p.name as NativeChatProvider)) {
+        out.push({ provider: p.name, model: m.id, ...lifecycleOf(m) });
+      }
+      continue;
+    }
     const models = await p.listModels();
     for (const m of models) out.push({ provider: p.name, model: m });
   }
@@ -1432,7 +1481,7 @@ export async function listAvailableModels(): Promise<{ provider: string; model: 
   // Surface adapter-discovered models. For each adapter we add an
   // `adapter:<type>:<modelId>` entry that routes through AdapterExecuteProvider
   // (using the adapter's own auth/CLI). When the same model id also exists in
-  // a configured native provider (e.g. claude-opus-4-7 on both Anthropic SDK
+  // a configured native provider (e.g. claude-opus-5-5 on both Anthropic SDK
   // and claude_local adapter), both entries are shown so the user can pick
   // their auth path.
   try {
@@ -1440,7 +1489,7 @@ export async function listAvailableModels(): Promise<{ provider: string; model: 
     const adapters = listEnabledServerAdapters();
     const seen = new Set(out.map((m) => `${m.provider}:${m.model}`));
     for (const adapter of adapters) {
-      let adapterModels: { id: string; label: string }[] = [];
+      let adapterModels: AdapterModel[] = [];
       try {
         adapterModels = await listAdapterModels(adapter.type);
       } catch (err) {
@@ -1452,7 +1501,7 @@ export async function listAvailableModels(): Promise<{ provider: string; model: 
         const key = `adapter:${encoded}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ provider: "adapter", model: encoded, source: adapter.type });
+        out.push({ provider: "adapter", model: encoded, source: adapter.type, ...lifecycleOf(m) });
       }
     }
   } catch (err) {
@@ -1475,17 +1524,35 @@ export function resolveDefaultModel(): { provider: ChatProvider; model: string }
 }
 
 /**
- * Picks the best model from everything currently available — including
+ * The best model a direct provider offers right now, asking the provider
+ * first so a model released since the last check is the one chosen.
+ */
+export async function resolveNativeDefaultModel(provider: ChatProvider): Promise<string> {
+  if (NATIVE_CHAT_PROVIDERS.has(provider.name)) {
+    const explicit = process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.trim();
+    if (explicit && provider.supportsModel(explicit)) return explicit;
+    const ranked = rankModelsForDefault(await nativeModelEntries(provider.name as NativeChatProvider));
+    if (ranked[0]) return ranked[0].id;
+  }
+  return provider.defaultModel();
+}
+
+/** The model an entry names, decoded when it is adapter-routed. */
+function rankableEntry(entry: AvailableChatModel) {
+  const decoded = decodeAdapterModel(entry.model);
+  return { ...entry, id: decoded ? decoded.modelId : entry.model };
+}
+
+/**
+ * Picks the best model from everything currently available, including
  * adapter-routed entries. Used to seed `chat_sessions.model` so a fresh
- * Clippy session picks something the user will actually want by default
- * instead of the hardcoded `claude-opus-4-7` (which requires
- * ANTHROPIC_API_KEY).
+ * Clippy session starts on something the user will actually want.
  *
- * Scoring is **model-family-first**: a Claude model wins regardless of how
- * it's routed, because operators almost always prefer Claude when it's
- * available. Routing is a tiebreaker — among same-family models, prefer
- * the path that doesn't need a separate API key (adapter-routed
- * claude_local for Claude Pro users, etc.).
+ * Ranking is family first (a Claude model wins however it is routed, because
+ * operators almost always prefer Claude when it is available), then current
+ * over older, then the provider's own default, then the newest release, and
+ * only then routing. So a model released today is preferred today, and an
+ * older model never wins just because its route is preferred.
  */
 export async function pickBestDefaultModel(): Promise<string> {
   const explicit = process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.trim();
@@ -1494,7 +1561,7 @@ export async function pickBestDefaultModel(): Promise<string> {
     if (p?.isConfigured()) return explicit;
   }
   const models = await listAvailableModels();
-  return bestOfAvailableModels(models) ?? "claude-opus-4-7";
+  return bestOfAvailableModels(models) ?? bestKnownNativeModel("anthropic");
 }
 
 /**
@@ -1504,46 +1571,9 @@ export async function pickBestDefaultModel(): Promise<string> {
  * `listAvailableModels()` (adapter discovery plus the Ollama probe) is not
  * made to pay for it a second time just to rank the result.
  */
-function bestOfAvailableModels(
-  models: { provider: string; model: string; source?: string }[],
-): string | null {
+function bestOfAvailableModels(models: AvailableChatModel[]): string | null {
   if (models.length === 0) return null;
-
-  function score(m: { provider: string; model: string; source?: string }): number {
-    let s = 0;
-    const lower = m.model.toLowerCase();
-
-    // (1) Model family — the dominant signal. A Claude Opus available
-    // anywhere should beat a llama via Aider hands down.
-    if (lower.includes("claude") && lower.includes("opus")) s += 200;
-    else if (lower.includes("claude") && lower.includes("sonnet")) s += 180;
-    else if (lower.includes("claude")) s += 160; // any other claude (haiku, etc.)
-    else if (lower.includes("gpt-5")) s += 140;
-    else if (lower.includes("gpt-4")) s += 120;
-    else if (lower.includes("o4") || lower.includes("o3")) s += 110;
-    else if (lower.includes("gemini-2")) s += 90;
-    else if (lower.includes("gemini")) s += 80;
-    else if (lower.includes("qwen") && lower.includes("coder")) s += 60;
-    else if (lower.includes("llama")) s += 50;
-    else if (lower.includes("deepseek") || lower.includes("mistral") || lower.includes("qwen")) s += 45;
-    else s += 20;
-
-    // (2) Routing — tiebreaker among same-family models. CLI-authenticated
-    // adapter routing wins (no API key needed); then native SDKs.
-    const isAdapter = m.provider === "adapter";
-    if (isAdapter && m.source === "claude_local") s += 6;
-    else if (isAdapter && m.source === "codex_local") s += 5;
-    else if (isAdapter && m.source === "gemini_local") s += 4;
-    else if (m.provider === "anthropic") s += 3;
-    else if (isAdapter) s += 2;
-    else if (m.provider === "openai") s += 2;
-    else if (m.provider === "ollama") s += 1;
-    else if (m.provider === "gemini") s += 1;
-
-    return s;
-  }
-
-  return [...models].sort((a, b) => score(b) - score(a))[0].model;
+  return rankModelsForDefault(models.map(rankableEntry))[0].model;
 }
 
 /**
@@ -1563,8 +1593,7 @@ const ONE_SHOT_NATIVE_PREFERENCE = ["anthropic", "openai", "gemini"] as const;
  *
  * Unlike `pickBestDefaultModel`, this returns null when nothing is
  * configured and nothing was discovered, so the caller can say "no AI model
- * is set up" instead of trying the hardcoded `claude-opus-4-7` and failing
- * for want of an ANTHROPIC_API_KEY.
+ * is set up" instead of trying a model that cannot run.
  */
 export async function pickOneShotModel(): Promise<string | null> {
   // A configured native provider wins first, ahead of
@@ -1576,7 +1605,7 @@ export async function pickOneShotModel(): Promise<string | null> {
   const configured = listConfiguredProviders();
   for (const name of ONE_SHOT_NATIVE_PREFERENCE) {
     const native = configured.find((p) => p.name === name);
-    if (native) return native.defaultModel();
+    if (native) return resolveNativeDefaultModel(native);
   }
 
   // No native key: an explicit operator choice wins whenever its provider can
@@ -1588,10 +1617,23 @@ export async function pickOneShotModel(): Promise<string | null> {
 }
 
 /**
+ * Families known to accept images, for models no list or catalog describes:
+ * Claude 3 and later, GPT-4o, GPT-4.1 and GPT-5 onwards, Gemini 1.5 and
+ * later. o-series reasoning models stay excluded until validated.
+ */
+function visionByFamily(lower: string): boolean {
+  if (/^claude-(?!2|instant)/.test(lower)) return true;
+  if (/^gpt-(4o|4\.1|[5-9]|\d{2})/.test(lower)) return true;
+  if (/^gemini-(1\.5|[2-9]|\d{2})/.test(lower) || lower.startsWith("gemini-pro-vision")) return true;
+  return false;
+}
+
+/**
  * True when a model id refers to a vision-capable model known to accept
- * image content blocks. Conservative on purpose — better to fall back to a
- * text-only summary than to silently drop images on a model that ignores
- * them. The list is updated as new vision-capable families ship.
+ * image content blocks. The provider's own list or the public catalog decides
+ * when either knows the model; otherwise a family rule does. Conservative on
+ * purpose: better to fall back to a text-only summary than to silently drop
+ * images on a model that ignores them.
  *
  * **Adapter-routed models** are vision-capable only when the adapter type is
  * in `ADAPTER_TYPES_WITH_IMAGE_SUPPORT` (because the adapter then materializes
@@ -1605,22 +1647,11 @@ export function isVisionCapableModel(model: string): boolean {
     return isVisionCapableModel(decoded.modelId);
   }
 
-  const lower = model.toLowerCase();
-  // Anthropic Claude 4.x family is all multimodal.
-  if (lower.startsWith("claude-opus-4") || lower.startsWith("claude-sonnet-4") || lower.startsWith("claude-haiku-4")) {
-    return true;
-  }
-  // OpenAI: gpt-4o / gpt-4.1 / gpt-5 family accept image_url. o-series reasoning
-  // models are excluded here even though some now support vision — keep the
-  // list narrow until they're explicitly validated.
-  if (lower.startsWith("gpt-4o") || lower.startsWith("gpt-4.1") || lower.startsWith("gpt-5")) {
-    return true;
-  }
-  // Gemini 1.5+ is multimodal; older bisons are not.
-  if (lower.startsWith("gemini-1.5") || lower.startsWith("gemini-2") || lower.startsWith("gemini-pro-vision")) {
-    return true;
-  }
-  return false;
+  const lower = model.trim().toLowerCase();
+  if (/^o\d/.test(lower)) return false;
+  const known = knownImageSupport(lower, peekModelCatalog());
+  if (known !== null) return known;
+  return visionByFamily(lower);
 }
 
 /**
@@ -1629,29 +1660,14 @@ export function isVisionCapableModel(model: string): boolean {
  * rather than silently routing to a text-only model.
  *
  * Used by `ctx.ai.complete` (plugin SDK) when no explicit model is requested.
- * Prefers Claude Opus > Sonnet > Haiku > GPT-5 > GPT-4.x > Gemini-2 > others,
- * mirroring `pickBestDefaultModel` but filtered through `isVisionCapableModel`.
+ * Same ranking as `pickBestDefaultModel`, filtered through
+ * `isVisionCapableModel`, except that a native SDK path beats adapter routing
+ * among equals, since adapters expect session continuity and this is a
+ * one-shot call.
  */
 export async function pickBestVisionModel(): Promise<string | null> {
   const all = await listAvailableModels();
   const candidates = all.filter((m) => isVisionCapableModel(m.model));
   if (candidates.length === 0) return null;
-
-  function score(m: { provider: string; model: string }): number {
-    const lower = m.model.toLowerCase();
-    let s = 0;
-    if (lower.includes("opus")) s += 200;
-    else if (lower.includes("sonnet")) s += 180;
-    else if (lower.includes("claude")) s += 160;
-    else if (lower.includes("gpt-5")) s += 140;
-    else if (lower.includes("gpt-4")) s += 120;
-    else if (lower.includes("gemini-2")) s += 90;
-    else if (lower.includes("gemini")) s += 70;
-    // Tiebreak: prefer the native SDK path over adapter routing for one-shot
-    // ephemeral calls, since adapters expect session continuity.
-    if (m.provider !== "adapter") s += 5;
-    return s;
-  }
-
-  return [...candidates].sort((a, b) => score(b) - score(a))[0].model;
+  return rankModelsForDefault(candidates.map(rankableEntry), { prefer: "native" })[0].model;
 }

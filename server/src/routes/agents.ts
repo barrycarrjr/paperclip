@@ -82,6 +82,7 @@ import {
   probeAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
+import { currentCodexDefaultModel } from "../adapters/codex-models.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -684,14 +685,20 @@ export function agentRoutes(
     return { ...adapterConfig, devicePrivateKeyPem: generateEd25519PrivateKeyPem() };
   }
 
-  function applyCreateDefaultsByAdapterType(
+  async function applyCreateDefaultsByAdapterType(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const next = { ...adapterConfig };
     if (adapterType === "codex_local") {
       if (!asNonEmptyString(next.model)) {
-        next.model = DEFAULT_CODEX_LOCAL_MODEL;
+        // Codex's own current default for the account, so a new agent never
+        // starts on a model Codex has since retired; the built-in constant is
+        // only for when Codex cannot be asked. Saving an agent never waits more
+        // than a few seconds on Codex (the answer is cached after that).
+        const askedCodex = currentCodexDefaultModel().catch(() => null);
+        const gaveUp = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000).unref());
+        next.model = (await Promise.race([askedCodex, gaveUp])) ?? DEFAULT_CODEX_LOCAL_MODEL;
       }
       const hasBypassFlag =
         typeof next.dangerouslyBypassApprovalsAndSandbox === "boolean" ||
@@ -1678,7 +1685,7 @@ export function agentRoutes(
       req,
       (hireInput.adapterConfig ?? {}) as Record<string, unknown>,
     );
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const requestedAdapterConfig = await applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       ((hireInput.adapterConfig ?? {}) as Record<string, unknown>),
     );
@@ -1858,7 +1865,7 @@ export function agentRoutes(
       req,
       (createInput.adapterConfig ?? {}) as Record<string, unknown>,
     );
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const requestedAdapterConfig = await applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       ((createInput.adapterConfig ?? {}) as Record<string, unknown>),
     );
@@ -2560,7 +2567,7 @@ export function agentRoutes(
           rawEffectiveAdapterConfig,
         );
       }
-      const effectiveAdapterConfig = applyCreateDefaultsByAdapterType(
+      const effectiveAdapterConfig = await applyCreateDefaultsByAdapterType(
         requestedAdapterType,
         rawEffectiveAdapterConfig,
       );

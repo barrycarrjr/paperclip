@@ -5,6 +5,8 @@
  * agent status dots, etc.) should import from here so colors stay consistent.
  */
 
+import type { ModelTagKind } from "./model-display";
+
 // ---------------------------------------------------------------------------
 // Issue status descriptions
 // ---------------------------------------------------------------------------
@@ -152,6 +154,23 @@ export const teamWorkStateCardEdge: Record<string, string> = {
   needs_you: "border-amber-400/60 dark:border-amber-500/40",
   needs_review: "border-violet-400/60 dark:border-violet-500/40",
   error: "border-red-400/70 dark:border-red-500/50",
+};
+
+// ---------------------------------------------------------------------------
+// Model tags: the small labels beside a model name in every model picker
+// ---------------------------------------------------------------------------
+
+/**
+ * Pill colors for ModelLifecycleBadge. The hues are borrowed on purpose: blue
+ * for something new worth a look, amber for a model a person has to move off
+ * before a date, red for one that is gone. Default is only a fact, so it gets
+ * an outline rather than a color.
+ */
+export const modelTagBadge: Record<ModelTagKind, string> = {
+  new: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+  default: "border-border text-muted-foreground",
+  retiring: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+  unavailable: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
 };
 
 // ---------------------------------------------------------------------------

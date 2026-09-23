@@ -1,3 +1,4 @@
+import type { ModelLifecycleFields } from "@paperclipai/shared";
 import { api } from "./client";
 
 export type ChatMode = "chat" | "agent";
@@ -87,10 +88,14 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-export interface AvailableModel {
+export interface AvailableModel extends ModelLifecycleFields {
   provider: "anthropic" | "openai" | "ollama" | "gemini" | "adapter";
+  /** What a session stores: a plain id, or `adapter:<adapterType>:<modelId>`. */
   model: string;
+  /** Adapter type, for adapter-routed models. */
   source?: string;
+  /** Display name, when the provider gave one. */
+  label?: string;
 }
 
 function buildSessionListQuery(filters?: ChatSessionListFilters): string {

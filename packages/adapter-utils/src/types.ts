@@ -155,9 +155,36 @@ export interface AdapterExecutionContext {
   authToken?: string;
 }
 
+/**
+ * Where a model sits in its provider's lifecycle. `current` is offered and
+ * recommended, `legacy` still works but a newer release in the same family has
+ * replaced it, and `deprecated` has an announced retirement.
+ */
+export type AdapterModelStatus = "current" | "legacy" | "deprecated";
+
 export interface AdapterModel {
   id: string;
   label: string;
+  /** Lifecycle position, when known. Absent means unknown and reads as current. */
+  status?: AdapterModelStatus;
+  /** The provider's own default for the signed-in account. */
+  isDefault?: boolean;
+  /** Released in the last few weeks. */
+  isNew?: boolean;
+  /** Release date (YYYY-MM-DD), when known. */
+  releasedAt?: string;
+  /** When the provider stops serving the model (ISO timestamp), when announced. */
+  retiresAt?: string;
+  /** The model to move to: the provider's named successor, or the family's newest release. */
+  replacementId?: string;
+  /** The provider's own one-line note about the model's lifecycle. */
+  notice?: string;
+  /** Other ids that mean this same model, such as CLI aliases and dated snapshots. */
+  aliases?: string[];
+  /** Reasoning effort levels the model accepts, when the provider says. */
+  effortLevels?: string[];
+  /** Accepts image input, when known. */
+  supportsImages?: boolean;
 }
 
 export type AdapterEnvironmentCheckLevel = "info" | "warn" | "error";

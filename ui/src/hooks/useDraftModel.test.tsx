@@ -85,6 +85,45 @@ describe("useDraftModel", () => {
     expect(page.current!.draftModels.map((m) => m.model)).toEqual(["claude-sonnet-5"]);
   });
 
+  // A pick saved months ago can name a model the providers have since dropped.
+  // Drafting with it would fail, so the server's own pick is used instead.
+  it("drafts with the server's pick when the saved model is no longer offered", async () => {
+    localStorage.setItem("email-draftModel", "claude-opus-4-7");
+    const { page } = await mountTwo();
+
+    expect(page.current!.draftModel).toBe("");
+    // Left in storage, so the pick comes back if the provider lists it again.
+    expect(localStorage.getItem("email-draftModel")).toBe("claude-opus-4-7");
+  });
+
+  it("uses the listed id for a saved pick spelled another way", async () => {
+    localStorage.setItem("email-draftModel", "claude-sonnet-5[1m]");
+    const { page } = await mountTwo();
+
+    expect(page.current!.draftModel).toBe("claude-sonnet-5");
+  });
+
+  it("matches an adapter-routed pick against the adapter-routed entry", async () => {
+    mockChatApi.listModels.mockResolvedValue({
+      models: [
+        { provider: "anthropic", model: "claude-sonnet-5" },
+        { provider: "adapter", model: "adapter:codex_local:gpt-6-sol", source: "codex_local" },
+      ],
+    });
+    localStorage.setItem("email-draftModel", "adapter:codex_local:gpt-6-sol");
+    const { page } = await mountTwo();
+
+    expect(page.current!.draftModel).toBe("adapter:codex_local:gpt-6-sol");
+  });
+
+  it("does not trust a saved pick before the list has loaded", async () => {
+    localStorage.setItem("email-draftModel", "claude-sonnet-5");
+    mockChatApi.listModels.mockReturnValue(new Promise(() => {}));
+    const { page } = await mountTwo();
+
+    expect(page.current!.draftModel).toBe("");
+  });
+
   // The bug a per-component copy would have: the pop-out stays mounted under
   // the Email page, so it would keep drafting with the model saved at page
   // load after the operator had picked another one in the page's composer.

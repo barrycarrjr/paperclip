@@ -362,6 +362,24 @@ All follow the property row pattern: `text-xs text-muted-foreground` label on le
 **File:** `AgentConfigForm.tsx`
 **Usage:** Full agent creation/editing form with adapter type selection.
 
+### ModelPicker
+
+**File:** `ModelPicker.tsx`
+**Props:** `models` (or `groups` for one heading per provider), `value`, `onChange`, `emptyOption?` (a first row such as "Default"), `creatable?`, `loading?`, `onRefreshModels?`, `onDetectModel?`
+**Usage:** The one model picker used everywhere a model is chosen: agent settings, new agent, onboarding, issue overrides, Agent Defaults, Clippy and email drafts. Keeps the server's order (current models first, retiring next), folds `status: "legacy"` models under "Older models (N)" (opened when the saved model is one of them), tags rows with ModelLifecycleBadge, and shows a saved model the provider no longer lists as "Not available" rather than dropping it. Do not build a new model dropdown; use this.
+
+### ModelLifecycleBadge
+
+**File:** `ModelLifecycleBadge.tsx`
+**Props:** `model` (the lifecycle fields: `status`, `isNew`, `isDefault`, `retiresAt`), `unavailable?`
+**Usage:** Small tags beside a model name: "New", "Used by default", "Retires <date>" in the warning tone, or "Not available". Renders nothing for a plain current model. Wording lives in `lib/model-display.ts`.
+
+### SavedModelNotice
+
+**File:** `SavedModelNotice.tsx`
+**Props:** `models`, `value` (the saved model id), `onSwitch(id)`, `disabled?`
+**Usage:** One line under a model picker when the saved model has been replaced, is retiring, or is no longer offered, with a "Switch to <model>" button. Driven by `describeSavedModel` from `@paperclipai/shared`, so it follows a provider's named successor on to a current model. Renders nothing when the saved model is fine.
+
 ### AttachmentChipList
 
 **File:** `attachments/AttachmentChipList.tsx`

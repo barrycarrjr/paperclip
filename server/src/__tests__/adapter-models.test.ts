@@ -23,15 +23,18 @@ describe("adapter model listing", () => {
     expect(models).toEqual([]);
   });
 
+  // Asking the Codex CLI itself is covered in codex-models.test.ts; here the
+  // CLI is not asked (the test setup switches CLI discovery off), so these
+  // cover the fallbacks behind it.
   it("returns codex fallback models when no OpenAI key is available", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const models = await listAdapterModels("codex_local");
 
-    expect(models).toEqual(codexFallbackModels);
+    expect(models.map((m) => m.id).sort()).toEqual(codexFallbackModels.map((m) => m.id).sort());
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("loads codex models dynamically and merges fallback options", async () => {
+  it("uses OpenAI's list for an API key, chat models only, without adding the built-in list", async () => {
     process.env.OPENAI_API_KEY = "sk-test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -39,6 +42,9 @@ describe("adapter model listing", () => {
         data: [
           { id: "gpt-5-pro" },
           { id: "gpt-5" },
+          { id: "text-embedding-3-large" },
+          { id: "whisper-1" },
+          { id: "gpt-4o-realtime-preview" },
         ],
       }),
     } as Response);
@@ -48,8 +54,7 @@ describe("adapter model listing", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(first).toEqual(second);
-    expect(first.some((model) => model.id === "gpt-5-pro")).toBe(true);
-    expect(first.some((model) => model.id === "codex-mini-latest")).toBe(true);
+    expect(first.map((model) => model.id).sort()).toEqual(["gpt-5", "gpt-5-pro"]);
   });
 
   it("refreshes cached codex models on demand", async () => {
@@ -85,7 +90,7 @@ describe("adapter model listing", () => {
     } as Response);
 
     const models = await listAdapterModels("codex_local");
-    expect(models).toEqual(codexFallbackModels);
+    expect(models.map((m) => m.id).sort()).toEqual(codexFallbackModels.map((m) => m.id).sort());
   });
 
 

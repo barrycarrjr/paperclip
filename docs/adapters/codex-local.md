@@ -15,7 +15,7 @@ The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `cwd` | string | Yes | Working directory for the agent process (absolute path; created automatically if missing when permissions allow) |
-| `model` | string | No | Model to use |
+| `model` | string | No | Model to use. A new agent with no model gets the model Codex itself defaults to for the account. The picker lists what `codex app-server` reports, including retirement dates; see [Model Lists](/adapters/overview#model-lists) |
 | `promptTemplate` | string | No | Prompt used for all runs |
 | `env` | object | No | Environment variables (supports secret refs) |
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |

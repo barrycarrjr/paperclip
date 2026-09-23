@@ -41,7 +41,7 @@ The token never appears in logs or API responses, and the submit is synchronous 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `cwd` | string | Yes | Working directory for the agent process (absolute path; created automatically if missing when permissions allow) |
-| `model` | string | No | Claude model to use (e.g. `claude-opus-4-6`) |
+| `model` | string | No | Claude model to use (e.g. `claude-opus-5-5`, or an alias the CLI accepts such as `opus`). Leave blank to use the CLI default. The picker lists what the installed Claude Code CLI offers the account; see [Model Lists](/adapters/overview#model-lists) |
 | `promptTemplate` | string | No | Prompt used for all runs |
 | `env` | object | No | Environment variables (supports secret refs) |
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |

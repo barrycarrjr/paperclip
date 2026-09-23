@@ -1056,6 +1056,15 @@ export async function startServer(): Promise<StartedServer> {
                 "adapter model refresh completed",
               );
             }
+            if (r.announced.length > 0 || r.flagged.length > 0) {
+              logger.info(
+                {
+                  newModels: r.announced.map((a) => `${a.adapterType}:${a.model}`),
+                  agentsFlagged: r.flagged.map((f) => `${f.agentId}:${f.model}:${f.state}`),
+                },
+                "adapter model refresh found new models or agents on older models",
+              );
+            }
           })
           .catch((err) => {
             logger.error({ err }, "adapter model refresh failed");

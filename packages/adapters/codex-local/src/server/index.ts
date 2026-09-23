@@ -1,5 +1,7 @@
 export { execute, ensureCodexSkillsInjected, runCodexLogin } from "./execute.js";
 export { listCodexSkills, syncCodexSkills } from "./skills.js";
+export { listCodexAppServerModels, parseCodexAppServerModels } from "./app-server-models.js";
+export type { CodexAppServerModel } from "./app-server-models.js";
 export { testEnvironment } from "./test.js";
 export {
   detectCodexLoginRequired,

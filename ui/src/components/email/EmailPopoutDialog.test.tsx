@@ -24,9 +24,8 @@ const mockDraftsApi = vi.hoisted(() => ({ draftReply: vi.fn() }));
 
 vi.mock("../../api/emailTools", () => ({ makeEmailToolsApi: () => mockApi }));
 vi.mock("../../api/emailDrafts", () => ({ emailDraftsApi: mockDraftsApi }));
-vi.mock("../../api/chat", () => ({
-  chatApi: { listModels: vi.fn(async () => ({ models: [] })) },
-}));
+const mockChatApi = vi.hoisted(() => ({ listModels: vi.fn() }));
+vi.mock("../../api/chat", () => ({ chatApi: mockChatApi }));
 vi.mock("../../api/issues", () => ({ issuesApi: { create: vi.fn() } }));
 vi.mock("../../api/agents", () => ({ agentsApi: { list: vi.fn(async () => []), wakeup: vi.fn() } }));
 vi.mock("../../hooks/usePrintToolsPlugin", () => ({
@@ -116,6 +115,8 @@ function readToggle(): HTMLButtonElement {
 beforeEach(() => {
   for (const fn of Object.values(mockApi)) fn.mockReset();
   mockDraftsApi.draftReply.mockReset();
+  mockChatApi.listModels.mockReset();
+  mockChatApi.listModels.mockResolvedValue({ models: [] });
   localStorage.removeItem("email-draftModel");
   mockApi.fetchMessage.mockResolvedValue({
     uid: 42,
@@ -505,6 +506,8 @@ describe("EmailPopoutDialog AI draft", () => {
 
   it("drafts with the model the operator picked on the Email page", async () => {
     localStorage.setItem("email-draftModel", "claude-sonnet-5");
+    // The pick only counts while the providers still offer it.
+    mockChatApi.listModels.mockResolvedValue({ models: [{ provider: "anthropic", model: "claude-sonnet-5" }] });
     mockDraftsApi.draftReply.mockResolvedValue({ draft: "Sure.", model: "claude-sonnet-5" });
     await mountDialog(request());
 
@@ -512,6 +515,18 @@ describe("EmailPopoutDialog AI draft", () => {
     await clickByText("AI Draft");
 
     expect(mockDraftsApi.draftReply.mock.calls[0][0].model).toBe("claude-sonnet-5");
+  });
+
+  it("lets the server pick when the saved model is no longer offered", async () => {
+    localStorage.setItem("email-draftModel", "claude-opus-4-7");
+    mockChatApi.listModels.mockResolvedValue({ models: [{ provider: "anthropic", model: "claude-sonnet-5" }] });
+    mockDraftsApi.draftReply.mockResolvedValue({ draft: "Sure.", model: "claude-sonnet-5" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await clickByText("AI Draft");
+
+    expect(mockDraftsApi.draftReply.mock.calls[0][0].model).toBeUndefined();
   });
 
   it("says why a draft failed and leaves the reply alone", async () => {

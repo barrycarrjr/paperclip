@@ -1,6 +1,8 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { chatApi } from "../api/chat";
+import { findModelInList } from "@paperclipai/shared";
+import { chatApi, type AvailableModel } from "../api/chat";
+import { chatModelEntry } from "../lib/model-display";
 
 const STORAGE_KEY = "email-draftModel";
 
@@ -37,6 +39,18 @@ function saveDraftModel(model: string): void {
 }
 
 /**
+ * The saved pick, if the loaded list still offers it, as the list names it
+ * (a pick saved as `x[1m]` or as a dated snapshot matches its listed model).
+ * Otherwise "", so the server picks. That includes the time before the list
+ * has loaded: a pick saved on an earlier visit can name a model the providers
+ * have since dropped, and a draft must never go out on one of those.
+ */
+export function resolveDraftModel(saved: string, models: readonly AvailableModel[] | undefined): string {
+  if (!saved || !models) return "";
+  return findModelInList(models.map(chatModelEntry), saved)?.id ?? "";
+}
+
+/**
  * The model the AI Draft button uses, and the list to pick it from. An empty
  * string means "let the server pick".
  *
@@ -45,13 +59,17 @@ function saveDraftModel(model: string): void {
  * one's own state would freeze the pop-out on whatever was saved when the page
  * loaded, so a model chosen in the page's composer would not be the one the
  * pop-out drafted with. One store, read by both, keeps them the same.
+ *
+ * A saved pick the list no longer has is ignored rather than erased, so it
+ * comes back by itself if the provider lists that model again.
  */
 export function useDraftModel() {
-  const draftModel = useSyncExternalStore(subscribe, readDraftModel, readDraftModel);
+  const savedModel = useSyncExternalStore(subscribe, readDraftModel, readDraftModel);
   const { data } = useQuery({
     queryKey: ["email", "draftModels"],
     queryFn: () => chatApi.listModels().then((r) => r.models),
     staleTime: 5 * 60_000,
   });
+  const draftModel = useMemo(() => resolveDraftModel(savedModel, data), [savedModel, data]);
   return { draftModel, setDraftModel: saveDraftModel, draftModels: data ?? [] };
 }

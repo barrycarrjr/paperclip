@@ -9,6 +9,46 @@ import {
 
 const ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OLLAMA_HOST", "PAPERCLIP_OLLAMA_ENABLED"];
 
+/**
+ * Answer each provider's models endpoint the way it would today, and record
+ * every other URL fetched (Ollama, for one) so a test can prove it was not
+ * probed. Direct providers now read their model lists live, so a test that
+ * sets a key has to answer that call.
+ */
+function stubProviderModelLists() {
+  const otherUrls: string[] = [];
+  const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://api.anthropic.com/v1/models")) {
+        return json({
+          data: [
+            { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
+            { id: "claude-opus-4-7", display_name: "Claude Opus 4.7" },
+            { id: "claude-sonnet-5", display_name: "Claude Sonnet 5" },
+          ],
+        });
+      }
+      if (url.startsWith("https://api.openai.com/v1/models")) {
+        return json({ data: [{ id: "gpt-4.1" }, { id: "gpt-6-astra" }, { id: "text-embedding-3-large" }] });
+      }
+      if (url.startsWith("https://generativelanguage.googleapis.com/")) {
+        return json({
+          models: [
+            { name: "models/gemini-2.0-flash", supportedGenerationMethods: ["generateContent"] },
+            { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["generateContent"] },
+          ],
+        });
+      }
+      otherUrls.push(url);
+      return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+    }),
+  );
+  return { otherUrls };
+}
+
 describe("chat-providers", () => {
   const original: Record<string, string | undefined> = {};
 
@@ -59,12 +99,28 @@ describe("chat-providers", () => {
     }
   });
 
-  it("listAvailableModels includes Anthropic models when ANTHROPIC_API_KEY is set", async () => {
+  it("listAvailableModels lists the models Anthropic offers the key, with labels and lifecycle", async () => {
     process.env.ANTHROPIC_API_KEY = "test-key";
-    const models = await listAvailableModels();
-    const claudeModels = models.filter((m) => m.provider === "anthropic");
-    expect(claudeModels.length).toBeGreaterThan(0);
-    expect(claudeModels.map((m) => m.model)).toContain("claude-opus-4-7");
+    stubProviderModelLists();
+    try {
+      const models = await listAvailableModels();
+      const claudeModels = models.filter((m) => m.provider === "anthropic");
+      expect(claudeModels.map((m) => m.model)).toEqual(["claude-opus-5-5", "claude-sonnet-5", "claude-opus-4-7"]);
+      expect(claudeModels[0]).toMatchObject({ label: "Claude Opus 5.5", status: "current" });
+      expect(claudeModels.find((m) => m.model === "claude-opus-4-7")?.status).toBe("legacy");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("recognises image support in current families, not only the Claude 4 ones", async () => {
+    const { isVisionCapableModel } = await import("../services/chat-providers.js");
+    for (const model of ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5", "gpt-6-astra", "gpt-4o", "gemini-3.8-flash"]) {
+      expect(isVisionCapableModel(model)).toBe(true);
+    }
+    for (const model of ["o3", "o4-mini", "llama3.1:8b", "claude-2.1"]) {
+      expect(isVisionCapableModel(model)).toBe(false);
+    }
   });
 });
 
@@ -129,11 +185,19 @@ describe("pickBestDefaultModel", () => {
     expect(picked).toBe("claude-sonnet-4-6");
   });
 
-  it("falls back to a hardcoded id when nothing is configured at all", async () => {
+  it("falls back to the best of the built-in Claude list when nothing is configured at all", async () => {
     process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
     const mod = await loadWithAdapters([]);
     const picked = await mod.pickBestDefaultModel();
-    expect(picked).toBe("claude-opus-4-7");
+    expect(picked).toBe("claude-opus-5-5");
+  });
+
+  it("picks a newly released model over the one it replaces, the day it appears", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapters([
+      { type: "claude_local", modelIds: ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"] },
+    ]);
+    expect(await mod.pickBestDefaultModel()).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-5-5"));
   });
 
   it("regression: when claude_local is disabled, prefers codex_local gpt-5 over aider_local llama", async () => {
@@ -197,30 +261,34 @@ describe("pickOneShotModel", () => {
 
   it("pickOneShotModel prefers a configured native provider over adapters and Ollama", async () => {
     // Ollama is left enabled on purpose: a native key must win without the
-    // cascade ever probing Ollama, so the fetch spy doubles as the proof.
+    // cascade ever probing Ollama. The only call allowed is the provider's
+    // own models list, which is how the newest model gets picked.
     process.env.ANTHROPIC_API_KEY = "test";
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { otherUrls } = stubProviderModelLists();
     const mod = await loadWithAdapters([
       { type: "claude_local", modelIds: ["claude-opus-4-7", "claude-sonnet-4-6"] },
       { type: "codex_local", modelIds: ["gpt-5"] },
     ]);
     const picked = await mod.pickOneShotModel();
-    expect(picked).toBe("claude-opus-4-7");
-    expect(picked).not.toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-7"));
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(picked).toBe("claude-opus-5-5");
+    expect(picked).not.toBe(mod.encodeAdapterModel("claude_local", "claude-opus-5-5"));
+    expect(otherUrls).toEqual([]);
+    vi.unstubAllGlobals();
   });
 
-  it("pickOneShotModel walks the native order anthropic, openai, gemini", async () => {
+  it("pickOneShotModel walks the native order anthropic, openai, gemini, each on its newest model", async () => {
     process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
     process.env.OPENAI_API_KEY = "test";
     process.env.GEMINI_API_KEY = "test";
+    stubProviderModelLists();
     let mod = await loadWithAdapters([]);
-    expect(await mod.pickOneShotModel()).toBe("gpt-4.1");
+    expect(await mod.pickOneShotModel()).toBe("gpt-6-astra");
 
     delete process.env.OPENAI_API_KEY;
     vi.resetModules();
     mod = await loadWithAdapters([]);
-    expect(await mod.pickOneShotModel()).toBe("gemini-2.0-flash");
+    expect(await mod.pickOneShotModel()).toBe("gemini-3.8-flash");
+    vi.unstubAllGlobals();
   });
 
   it("pickOneShotModel falls through to the best discovered adapter model when nothing native is configured", async () => {
@@ -240,8 +308,8 @@ describe("pickOneShotModel", () => {
     const mod = await loadWithAdapters([]);
     const picked = await mod.pickOneShotModel();
     expect(picked).toBeNull();
-    // The sibling helper keeps its hardcoded fallback; this one must not.
-    expect(await mod.pickBestDefaultModel()).toBe("claude-opus-4-7");
+    // The sibling helper keeps a built-in fallback; this one must not.
+    expect(await mod.pickBestDefaultModel()).toBe("claude-opus-5-5");
   });
 
   it("pickOneShotModel honours PAPERCLIP_CHAT_DEFAULT_MODEL when no native provider is configured", async () => {
@@ -265,8 +333,10 @@ describe("pickOneShotModel", () => {
     // hundreds of milliseconds and an adapter or second hop costs seconds.
     process.env.OPENAI_API_KEY = "test";
     process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = "gpt-4.1";
+    stubProviderModelLists();
     const mod = await loadWithAdapters([]);
-    expect(await mod.pickOneShotModel()).toBe("claude-opus-4-7");
+    expect(await mod.pickOneShotModel()).toBe("claude-opus-5-5");
+    vi.unstubAllGlobals();
   });
 
   it("pickOneShotModel ignores an explicit choice whose provider has no key and falls through to discovery", async () => {

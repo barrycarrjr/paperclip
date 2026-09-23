@@ -1,7 +1,15 @@
 export const type = "claude_local";
 export const label = "Claude Code (local)";
 
+/**
+ * Built-in fallback only. Paperclip asks the installed Claude Code CLI for the
+ * models it offers (see server/cli-models.ts) and fills in older ones from the
+ * public model catalog; this list is used only when neither can be reached, so
+ * it does not need editing when a model ships.
+ */
 export const models = [
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+  { id: "claude-fable-5-1", label: "Claude Fable 5.1" },
   { id: "claude-fable-5", label: "Claude Fable 5" },
   { id: "claude-opus-5", label: "Claude Opus 5" },
   { id: "claude-opus-4-8", label: "Claude Opus 4.8" },

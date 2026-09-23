@@ -54,8 +54,9 @@ describe("gemini model discovery", () => {
       ]),
     );
     const models = await refreshGeminiModels();
-    expect(models).toContainEqual({ id: "auto", label: "Auto" });
-    expect(models).toContainEqual({ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" });
+    // "auto" (the CLI's own picker) stays first and is the default.
+    expect(models[0]).toMatchObject({ id: "auto", label: "Auto", isDefault: true, status: "current" });
+    expect(models).toContainEqual(expect.objectContaining({ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" }));
     // Embedding-only model (no generateContent) is excluded.
     expect(models.some((m) => m.id === "text-embedding-004")).toBe(false);
     // Curated concrete defaults are NOT merged into a successful live result, so

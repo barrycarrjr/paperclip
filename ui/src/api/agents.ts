@@ -14,6 +14,7 @@ import type {
   HeartbeatRun,
   Approval,
   AgentConfigRevision,
+  ModelLifecycleFields,
 } from "@paperclipai/shared";
 import type { Company } from "@paperclipai/shared";
 import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
@@ -26,7 +27,12 @@ export interface AgentKey {
   revokedAt: Date | null;
 }
 
-export interface AdapterModel {
+/**
+ * One model an adapter offers. Adapters that know about releases and
+ * retirements also send the lifecycle fields; the rest send only id and label,
+ * which pickers treat as a plain current model.
+ */
+export interface AdapterModel extends ModelLifecycleFields {
   id: string;
   label: string;
 }

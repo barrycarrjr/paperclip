@@ -208,7 +208,11 @@ describe("server adapter registry", () => {
     expect(setOverridePaused("claude_local", true)).toBe(true);
 
     expect(findActiveServerAdapter("claude_local")).not.toBe(plugin);
-    expect(await listAdapterModels("claude_local")).toEqual(builtIn?.models ?? []);
+    // Back on the built-in adapter: its own list (the built-in models, marked
+    // with their lifecycle, since discovery is off in tests), not the plugin's.
+    expect((await listAdapterModels("claude_local")).map((m) => m.id).sort()).toEqual(
+      (builtIn?.models ?? []).map((m) => m.id).sort(),
+    );
     expect(await detectAdapterModel("claude_local")).toBeNull();
     expect(detectModel).toHaveBeenCalledTimes(1);
   });

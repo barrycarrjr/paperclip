@@ -1202,3 +1202,20 @@ export type {
   PluginOperationPolicyEntry,
   ResolvedOperationPolicy,
 } from "./plugin-operation-policy.js";
+
+export {
+  describeSavedModel,
+  findModelInList,
+  groupModelsForPicker,
+  guessModelFamily,
+  hasModelSnapshotDate,
+  normalizeModelId,
+  stripModelSnapshotDate,
+} from "./model-lifecycle.js";
+
+export type {
+  ModelLifecycleFields,
+  ModelLifecycleStatus,
+  ModelListEntry,
+  SavedModelState,
+} from "./model-lifecycle.js";

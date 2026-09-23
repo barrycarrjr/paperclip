@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { File, Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,9 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -20,6 +18,8 @@ import {
   type PermissionMode,
 } from "../api/chat";
 import { cn } from "../lib/utils";
+import { chatModelEntry, type ModelPickerGroup } from "../lib/model-display";
+import { ModelPicker } from "./ModelPicker";
 import {
   DEFAULT_MAX_ATTACHMENT_BYTES,
   formatByteSize as formatBytes,
@@ -36,6 +36,12 @@ function formatModelDisplay(id: string): { model: string; adapter: string | null
   const sep = rest.indexOf(":");
   if (sep <= 0) return { model: id, adapter: null };
   return { model: rest.slice(sep + 1), adapter: rest.slice(0, sep) };
+}
+
+/** How the picker names a session model that is not in the list. */
+function describeSessionModel(id: string): { label: string; hint?: string } {
+  const display = formatModelDisplay(id);
+  return display.adapter ? { label: display.model, hint: `via ${display.adapter}` } : { label: display.model };
 }
 
 interface PendingUpload {
@@ -203,7 +209,19 @@ export function ClippyComposer({
     queryFn: () => chatApi.listModels().then((r) => r.models),
     staleTime: 60_000,
   });
-  const models = modelsQuery.data ?? [];
+  const models = useMemo(() => modelsQuery.data ?? [], [modelsQuery.data]);
+  // One heading per provider, each list in the server's order with its
+  // older models folded away.
+  const modelGroups = useMemo<ModelPickerGroup[]>(
+    () =>
+      groupModels(models).map((group) => ({
+        key: group.key,
+        label: group.label,
+        description: group.tagline,
+        models: group.items.map(chatModelEntry),
+      })),
+    [models],
+  );
 
   useEffect(() => {
     ref.current?.focus();
@@ -437,68 +455,23 @@ export function ClippyComposer({
                 <SelectItem value="bypass">Bypass permissions</SelectItem>
               </SelectContent>
             </Select>
-            <Select
+            {/* A session model that is no longer in the list (an adapter was
+                disabled, a model retired, or a stale id from before the
+                adapter:* encoding) still shows, marked Not available, so the
+                user sees what is selected. */}
+            <ModelPicker
+              groups={modelGroups}
               value={model}
-              onValueChange={(v) => onPatch({ model: v })}
+              onChange={(v) => onPatch({ model: v })}
               disabled={streaming || (models.length === 0 && !model)}
-            >
-              <SelectTrigger size="sm" className="h-7 w-auto gap-1 px-2 text-xs">
-                <SelectValue placeholder={model || "Pick a model"} />
-              </SelectTrigger>
-              <SelectContent>
-                {models.length === 0 ? (
-                  <SelectItem value={model || "no-model"} disabled>
-                    {model || "No models available"}
-                  </SelectItem>
-                ) : (
-                  <>
-                    {/* If the session's persisted model isn't in the discovered
-                        list (e.g. an adapter was disabled, or a stale id from
-                        before the adapter:* encoding), still surface it so the
-                        user sees what's selected — disabled, with a hint. */}
-                    {model && !models.some((m) => m.model === model) && (() => {
-                      const display = formatModelDisplay(model);
-                      return (
-                        <SelectItem value={model} disabled>
-                          <span className="font-mono">{display.model}</span>
-                          <span className="ml-2 text-[10px] text-muted-foreground">
-                            {display.adapter ? `via ${display.adapter} · unavailable` : "unavailable"}
-                          </span>
-                        </SelectItem>
-                      );
-                    })()}
-                    {groupModels(models).map((group) => (
-                      <SelectGroup key={group.key}>
-                        <SelectLabel className="px-2 pt-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-foreground">
-                          {group.label}
-                        </SelectLabel>
-                        <div className="px-2 pb-1 text-[10px] leading-snug text-muted-foreground">
-                          {group.tagline}
-                        </div>
-                        {group.items.map((m) => {
-                          const isAdapterRouted =
-                            m.provider === "adapter" && m.model.startsWith("adapter:");
-                          let displayModel = m.model;
-                          if (isAdapterRouted) {
-                            const rest = m.model.slice("adapter:".length);
-                            const sep = rest.indexOf(":");
-                            if (sep > 0) displayModel = rest.slice(sep + 1);
-                          }
-                          return (
-                            <SelectItem
-                              key={`${m.provider}:${m.model}:${m.source ?? ""}`}
-                              value={m.model}
-                            >
-                              <span className="font-mono">{displayModel}</span>
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectGroup>
-                    ))}
-                  </>
-                )}
-              </SelectContent>
-            </Select>
+              loading={modelsQuery.isLoading}
+              placeholder="Pick a model"
+              emptyMessage="No models available"
+              describeValue={describeSessionModel}
+              appearance="select"
+              triggerClassName="h-7 w-auto max-w-[16rem] gap-1 px-2 text-xs"
+              aria-label="Model"
+            />
             <Select
               value={effort}
               onValueChange={(v) => onPatch({ effort: v as EffortLevel })}

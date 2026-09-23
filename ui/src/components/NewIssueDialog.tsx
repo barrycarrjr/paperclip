@@ -58,11 +58,13 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { cn, formatDate } from "../lib/utils";
-import { extractProviderIdWithFallback } from "../lib/model-utils";
+import { groupModelsByProvider } from "../lib/model-display";
 import { issueStatusText, issueStatusTextDefault, priorityColor, priorityColorDefault } from "../lib/status-colors";
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { AgentIcon } from "./AgentIconPicker";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+import { ModelPicker } from "./ModelPicker";
+import { SavedModelNotice } from "./SavedModelNotice";
 
 const DRAFT_KEY = "paperclip:issue-draft";
 const DEBOUNCE_MS = 800;
@@ -410,7 +412,7 @@ export function NewIssueDialog() {
     });
   }, [agents, companyMembers?.users, orderedProjects]);
 
-  const { data: assigneeAdapterModels } = useQuery({
+  const { data: assigneeAdapterModels, isLoading: assigneeAdapterModelsLoading } = useQuery({
     queryKey:
       effectiveCompanyId && assigneeAdapterType
         ? queryKeys.agents.adapterModels(effectiveCompanyId, assigneeAdapterType)
@@ -952,23 +954,11 @@ export function NewIssueDialog() {
     setExecutionWorkspaceMode(defaultExecutionWorkspaceModeForProject(project));
     setSelectedExecutionWorkspaceId("");
   }, [newIssueOpen, orderedProjects, projectId]);
-  const modelOverrideOptions = useMemo<InlineEntityOption[]>(
-    () => {
-      return [...(assigneeAdapterModels ?? [])]
-        .sort((a, b) => {
-          const providerA = extractProviderIdWithFallback(a.id);
-          const providerB = extractProviderIdWithFallback(b.id);
-          const byProvider = providerA.localeCompare(providerB);
-          if (byProvider !== 0) return byProvider;
-          return a.id.localeCompare(b.id);
-        })
-        .map((model) => ({
-          id: model.id,
-          label: model.label,
-          searchText: `${model.id} ${extractProviderIdWithFallback(model.id)}`,
-        }));
-    },
-    [assigneeAdapterModels],
+  // The server's order, with OpenCode's provider/model ids under a heading per provider.
+  const modelOverrideModels = useMemo(() => assigneeAdapterModels ?? [], [assigneeAdapterModels]);
+  const modelOverrideGroups = useMemo(
+    () => (assigneeAdapterType === "opencode_local" ? groupModelsByProvider(modelOverrideModels) : undefined),
+    [assigneeAdapterType, modelOverrideModels],
   );
 
   return (
@@ -1457,15 +1447,22 @@ export function NewIssueDialog() {
               <div className="mt-2 rounded-md border border-border p-3 bg-muted/20 space-y-3">
                 <div className="space-y-1.5">
                   <div className="text-xs text-muted-foreground">Model</div>
-                  <InlineEntitySelector
+                  <ModelPicker
+                    models={modelOverrideModels}
+                    groups={modelOverrideGroups}
+                    showGroupCounts={assigneeAdapterType === "opencode_local"}
                     value={assigneeModelOverride}
-                    options={modelOverrideOptions}
-                    placeholder="Default model"
-                    disablePortal
-                    noneLabel="Default model"
-                    searchPlaceholder="Search models..."
-                    emptyMessage="No models found."
                     onChange={setAssigneeModelOverride}
+                    loading={assigneeAdapterModelsLoading}
+                    emptyOption={{ label: "Default model" }}
+                    emptyMessage="No models found."
+                    triggerClassName="w-auto max-w-full gap-1 bg-muted/40 px-2 py-1 font-medium"
+                    aria-label="Model"
+                  />
+                  <SavedModelNotice
+                    models={modelOverrideModels}
+                    value={assigneeModelOverride}
+                    onSwitch={setAssigneeModelOverride}
                   />
                 </div>
                 <div className="space-y-1.5">

@@ -1049,6 +1049,23 @@ async function resolveSpawnTarget(
   return { command: executable, args };
 }
 
+/**
+ * Resolve a local command the way a run would spawn it, for short helper
+ * processes (asking a CLI for its model list, for example) that do not go
+ * through runChildProcess. On Windows a `.cmd`/`.bat` shim, which is how npm
+ * installs most CLIs there, is run through cmd.exe, because a bare spawn of the
+ * shim fails.
+ */
+export async function resolveLocalSpawnCommand(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string = process.cwd(),
+): Promise<{ command: string; args: string[] }> {
+  const target = await resolveSpawnTarget(command, args, cwd, env);
+  return { command: target.command, args: target.args };
+}
+
 export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (typeof env.PATH === "string" && env.PATH.length > 0) return env;
   if (typeof env.Path === "string" && env.Path.length > 0) return env;

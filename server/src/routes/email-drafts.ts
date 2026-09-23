@@ -5,6 +5,7 @@ import { logger } from "../middleware/logger.js";
 import {
   getProviderForModel,
   listConfiguredProviders,
+  resolveNativeDefaultModel,
   type AdapterTurnContext,
   type CanonicalContentBlock,
   type CanonicalMessage,
@@ -78,9 +79,9 @@ const NEW_MESSAGE_SYSTEM_PROMPT = [
 // so we don't silently spin up an adapter CLI subprocess for someone who hasn't
 // opted into it. The auto-pick keeps Ollama last because its `isConfigured()`
 // returns true even when the daemon isn't actually running.
-function pickProviderAndModel(
+async function pickProviderAndModel(
   requestedModel: string | undefined,
-): { provider: ChatProvider; model: string } | null {
+): Promise<{ provider: ChatProvider; model: string } | null> {
   if (requestedModel) {
     const p = getProviderForModel(requestedModel);
     if (p && p.isConfigured()) return { provider: p, model: requestedModel };
@@ -89,7 +90,9 @@ function pickProviderAndModel(
   const preferred: Array<ChatProvider["name"]> = ["anthropic", "openai", "gemini", "ollama"];
   for (const name of preferred) {
     const p = listConfiguredProviders().find((x) => x.name === name);
-    if (p) return { provider: p, model: p.defaultModel() };
+    // Ask the provider for its current models, so the draft uses today's best
+    // one rather than whatever was newest when a list was last written down.
+    if (p) return { provider: p, model: await resolveNativeDefaultModel(p) };
   }
   return null;
 }
@@ -127,7 +130,7 @@ export function emailDraftRoutes() {
       throw badRequest("Tell the AI what the message should say, or fill in a subject first.");
     }
 
-    const pick = pickProviderAndModel(requestedModel);
+    const pick = await pickProviderAndModel(requestedModel);
     if (!pick) {
       throw badRequest(
         requestedModel

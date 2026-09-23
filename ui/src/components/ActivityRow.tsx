@@ -3,7 +3,7 @@ import { Identity } from "./Identity";
 import { IssueReferenceActivitySummary } from "./IssueReferenceActivitySummary";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
-import { formatActivityVerb } from "../lib/activity-format";
+import { activityNamesEntity, formatActivityReason, formatActivityVerb } from "../lib/activity-format";
 import { deriveProjectUrlKey, type ActivityEvent, type Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "../lib/company-members";
 
@@ -45,15 +45,18 @@ interface ActivityRowProps {
 
 export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, companyPrefix, className }: ActivityRowProps) {
   const verb = formatActivityVerb(event.action, event.details, { agentMap, userProfileMap });
+  const reason = formatActivityReason(event.action, event.details);
 
   const isHeartbeatEvent = event.entityType === "heartbeat_run";
   const heartbeatAgentId = isHeartbeatEvent
     ? (event.details as Record<string, unknown> | null)?.agentId as string | undefined
     : undefined;
 
-  const name = isHeartbeatEvent
-    ? (heartbeatAgentId ? entityNameMap.get(`agent:${heartbeatAgentId}`) : null)
-    : entityNameMap.get(`${event.entityType}:${event.entityId}`);
+  const name = !activityNamesEntity(event.action)
+    ? null
+    : isHeartbeatEvent
+      ? (heartbeatAgentId ? entityNameMap.get(`agent:${heartbeatAgentId}`) : null)
+      : entityNameMap.get(`${event.entityType}:${event.entityId}`);
 
   const entityTitle = entityTitleMap?.get(`${event.entityType}:${event.entityId}`);
 
@@ -83,6 +86,18 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
     </div>
   );
 
+  // Why it happened, for the events that record a reason (a model gone,
+  // replaced, or retiring). It wraps rather than truncating, because the
+  // reason is the part a person needs to act on.
+  const summary = reason ? (
+    <>
+      {headline}
+      <p className="mt-0.5 text-xs text-muted-foreground">{reason}</p>
+    </>
+  ) : (
+    headline
+  );
+
   const classes = cn(
     "px-4 py-2 text-sm space-y-2",
     link && "hover:bg-accent/50 transition-colors",
@@ -96,10 +111,10 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
     <div className={classes}>
       {link ? (
         <Link to={link} className="no-underline text-inherit block cursor-pointer">
-          {headline}
+          {summary}
         </Link>
       ) : (
-        headline
+        summary
       )}
       <IssueReferenceActivitySummary event={event} />
     </div>

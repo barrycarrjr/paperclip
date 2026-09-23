@@ -79,6 +79,54 @@ describe("ActivityRow", () => {
     expect(html).toContain('href="/issues/PER-3"');
   });
 
+  it("says why the daily model check flagged an agent", () => {
+    const event = buildEvent({
+      actorType: "system",
+      actorId: "adapter-model-refresh",
+      entityType: "agent",
+      entityId: "agent-1",
+      action: "agent.model_needs_update",
+      details: {
+        adapterType: "codex_local",
+        model: "gpt-5.5",
+        state: "retiring",
+        reason: "GPT-5.5 is retiring on 2026-10-14. Consider switching to GPT-5.6 Sol.",
+      },
+    });
+    const html = renderToStaticMarkup(
+      <ActivityRow
+        event={event}
+        agentMap={new Map()}
+        entityNameMap={new Map([["agent:agent-1", "Coder"]])}
+      />,
+    );
+
+    expect(html).toContain("flagged a model update for");
+    expect(html).toContain("Coder");
+    expect(html).toContain("GPT-5.5 is retiring on 2026-10-14. Consider switching to GPT-5.6 Sol.");
+  });
+
+  it("names the new model, not the company it was recorded against", () => {
+    const event = buildEvent({
+      actorType: "system",
+      actorId: "adapter-model-refresh",
+      entityType: "company",
+      entityId: "c-1",
+      action: "model.available",
+      details: { adapterType: "claude_local", model: "claude-opus-5-5", label: "Claude Opus 5.5" },
+    });
+    const html = renderToStaticMarkup(
+      <ActivityRow
+        event={event}
+        agentMap={new Map()}
+        entityNameMap={new Map([["company:c-1", "Acme"]])}
+      />,
+    );
+
+    expect(html).toContain("found a new model: Claude Opus 5.5");
+    expect(html).not.toContain("Acme");
+  });
+
   it("renders a non-link wrapper when the activity has no navigable entity", () => {
     const event = buildEvent({ entityType: "unknown", entityId: "x" });
     const html = renderToStaticMarkup(

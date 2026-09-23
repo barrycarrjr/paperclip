@@ -100,7 +100,14 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
   getGeneral: vi.fn(),
 }));
 
+const mockCurrentCodexDefaultModel = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
+
 function registerModuleMocks() {
+  vi.doMock("../adapters/codex-models.js", async () => {
+    const actual = await vi.importActual<typeof import("../adapters/codex-models.js")>("../adapters/codex-models.js");
+    return { ...actual, currentCodexDefaultModel: mockCurrentCodexDefaultModel };
+  });
+
   vi.doMock("@paperclipai/adapter-opencode-local/server", async () => {
     const actual = await vi.importActual<typeof import("@paperclipai/adapter-opencode-local/server")>("@paperclipai/adapter-opencode-local/server");
     return {
@@ -384,7 +391,39 @@ describe.sequential("agent permission routes", () => {
       censorUsernameInLogs: false,
     });
     mockLogActivity.mockResolvedValue(undefined);
+    mockCurrentCodexDefaultModel.mockReset();
+    mockCurrentCodexDefaultModel.mockResolvedValue(null);
   });
+
+  // The first route test in this file pays for loading the whole route
+  // module graph, so these allow more than the default five seconds.
+  async function createCodexAgentWithoutModel() {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({ name: "Codex Builder", role: "engineer", adapterType: "codex_local", adapterConfig: {} }));
+    expect(res.status).toBe(201);
+    return mockAgentService.create.mock.calls[0][1] as { adapterConfig: Record<string, unknown> };
+  }
+
+  it("starts a new Codex agent on the model Codex itself defaults to today", async () => {
+    mockCurrentCodexDefaultModel.mockResolvedValue("gpt-6-astra");
+    const created = await createCodexAgentWithoutModel();
+    expect(created.adapterConfig.model).toBe("gpt-6-astra");
+  }, 30_000);
+
+  it("falls back to the built-in Codex default only when Codex cannot be asked", async () => {
+    const { DEFAULT_CODEX_LOCAL_MODEL } = await import("@paperclipai/adapter-codex-local");
+    mockCurrentCodexDefaultModel.mockResolvedValue(null);
+    const created = await createCodexAgentWithoutModel();
+    expect(created.adapterConfig.model).toBe(DEFAULT_CODEX_LOCAL_MODEL);
+  }, 30_000);
 
   it("redacts agent detail for authenticated company members without agent admin permission", async () => {
     mockAccessService.canUser.mockResolvedValue(false);

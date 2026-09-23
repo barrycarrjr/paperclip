@@ -41,6 +41,8 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "agent.resumed": "resumed",
   "agent.terminated": "terminated",
   "agent.model_unavailable": "paused (assigned model no longer available) for",
+  "agent.model_needs_update": "flagged a model update for",
+  "model.available": "found a new model",
   "agent.key_created": "created API key for",
   "agent.budget_updated": "updated budget for",
   "agent.runtime_session_reset": "reset session for",
@@ -257,6 +259,33 @@ function formatStructuredIssueChange(input: {
   return null;
 }
 
+function detailText(details: ActivityDetails, key: string): string | null {
+  const value = details?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** Actions whose details carry a `reason` written for a person to read. */
+const ACTIONS_WITH_REASON = new Set(["agent.model_unavailable", "agent.model_needs_update"]);
+
+/**
+ * The line under an activity row that says why, for the events that record
+ * one: an agent paused because its model is gone, or told its model has been
+ * replaced or is retiring. Null for every other event.
+ */
+export function formatActivityReason(action: string, details?: Record<string, unknown> | null): string | null {
+  if (!ACTIONS_WITH_REASON.has(action)) return null;
+  return detailText(details, "reason");
+}
+
+/**
+ * True when the row should name the event's entity after the verb. A new
+ * model is recorded against the company, and the verb already names the
+ * model, so adding the company's name would only get in the way.
+ */
+export function activityNamesEntity(action: string): boolean {
+  return action !== "model.available";
+}
+
 export function formatActivityVerb(
   action: string,
   details?: Record<string, unknown> | null,
@@ -265,6 +294,11 @@ export function formatActivityVerb(
   if (action === "issue.updated") {
     const issueUpdatedVerb = formatIssueUpdatedVerb(details);
     if (issueUpdatedVerb) return issueUpdatedVerb;
+  }
+
+  if (action === "model.available") {
+    const model = detailText(details, "label") ?? detailText(details, "model");
+    return model ? `found a new model: ${model}` : ACTIVITY_ROW_VERBS[action];
   }
 
   const structuredChange = formatStructuredIssueChange({

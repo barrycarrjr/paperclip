@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AdapterAgent, AdapterAuthResult, AdapterAuthStatus } from "@paperclipai/adapter-utils";
-import type { ServerAdapterModule } from "./types.js";
+import type { AdapterModel, ServerAdapterModule } from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as aiderExecute,
@@ -1027,7 +1027,7 @@ export function getServerAdapter(type: string): ServerAdapterModule {
   return findActiveServerAdapter(type) ?? processAdapter;
 }
 
-export async function listAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function listAdapterModels(type: string): Promise<AdapterModel[]> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.listModels) {
@@ -1037,7 +1037,7 @@ export async function listAdapterModels(type: string): Promise<{ id: string; lab
   return adapter.models ?? [];
 }
 
-export async function refreshAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function refreshAdapterModels(type: string): Promise<AdapterModel[]> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.refreshModels) {
@@ -1053,12 +1053,13 @@ export async function refreshAdapterModels(type: string): Promise<{ id: string; 
 
 /**
  * Opt-in probe: validate a model list by actually exercising it, rather than
- * trusting a static or discovered list. Today only claude_local supports this
- * (its CLI can't enumerate a subscription's models, so we test-run each curated
- * candidate). Other adapters fall back to a normal live refresh. Probing spends
- * a little per model, so it is never the nightly path — only the on-demand one.
+ * trusting a discovered list. Today only claude_local supports this: its CLI
+ * lists current models, and the probe test-runs each listed candidate, older
+ * ones included. Other adapters fall back to a normal live refresh. Probing
+ * spends a little per model, so it is never the nightly path, only the
+ * on-demand one.
  */
-export async function probeAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function probeAdapterModels(type: string): Promise<AdapterModel[]> {
   if (type === "claude_local") {
     return probeClaudeModels();
   }

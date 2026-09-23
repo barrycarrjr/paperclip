@@ -76,7 +76,9 @@ export function ClippyConversation({ sessionId, onOpenSessionList }: Props) {
         sessionId={sessionId}
         permissionMode={session?.permissionMode ?? "ask"}
         effort={session?.effort ?? "auto"}
-        model={session?.model ?? "claude-opus-4-7"}
+        // The session's own model. Until the session loads there is none to
+        // show, and naming a guessed model here would put a stale id on screen.
+        model={session?.model ?? ""}
         streaming={streaming}
         onSend={(text, attachmentIds) => {
           void send(text, attachmentIds);

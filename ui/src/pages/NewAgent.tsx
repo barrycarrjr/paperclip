@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
@@ -24,28 +24,22 @@ import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { isValidAdapterType } from "../adapters/metadata";
 import { ReportsToPicker } from "../components/ReportsToPicker";
 import { buildNewAgentHirePayload } from "../lib/new-agent-hire-payload";
-import {
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL,
-} from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
-import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { useAdapterModelDefault } from "../hooks/useAdapterModelDefault";
+import { DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX } from "@paperclipai/adapter-codex-local";
 
+/**
+ * Fresh values for a new agent on this adapter. `model` is the filled-in
+ * default from useAdapterModelDefault: empty for adapters that pick their own.
+ */
 function createValuesForAdapterType(
   adapterType: CreateConfigValues["adapterType"],
+  model: string,
 ): CreateConfigValues {
   const { adapterType: _discard, ...defaults } = defaultCreateValues;
-  const nextValues: CreateConfigValues = { ...defaults, adapterType };
+  const nextValues: CreateConfigValues = { ...defaults, adapterType, model };
   if (adapterType === "codex_local") {
-    nextValues.model = DEFAULT_CODEX_LOCAL_MODEL;
     nextValues.dangerouslyBypassSandbox =
       DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
-  } else if (adapterType === "gemini_local") {
-    nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
-  } else if (adapterType === "cursor") {
-    nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
-  } else if (adapterType === "opencode_local") {
-    nextValues.model = "";
   }
   return nextValues;
 }
@@ -113,15 +107,30 @@ export function NewAgent() {
     }
   }, [isFirstAgent]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const setModel = useCallback(
+    (model: string) => setConfigValues((prev) => ({ ...prev, model })),
+    [],
+  );
+  const fillModelForAdapter = useAdapterModelDefault({
+    companyId: selectedCompanyId,
+    adapterType: configValues.adapterType,
+    model: configValues.model,
+    models: adapterModels,
+    setModel,
+  });
+
   useEffect(() => {
     const requested = presetAdapterType;
     if (!requested) return;
     if (!isValidAdapterType(requested)) return;
-    setConfigValues((prev) => {
-      if (prev.adapterType === requested) return prev;
-      return createValuesForAdapterType(requested as CreateConfigValues["adapterType"]);
-    });
-  }, [presetAdapterType]);
+    if (configValues.adapterType === requested) return;
+    setConfigValues(
+      createValuesForAdapterType(
+        requested as CreateConfigValues["adapterType"],
+        fillModelForAdapter(requested),
+      ),
+    );
+  }, [presetAdapterType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createAgent = useMutation({
     mutationFn: (data: Record<string, unknown>) =>

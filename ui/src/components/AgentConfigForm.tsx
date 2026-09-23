@@ -1,24 +1,23 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   Agent,
   AdapterEnvironmentTestResult,
   EnvBinding,
   Environment,
 } from "@paperclipai/shared";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter } from "@paperclipai/shared";
+import {
+  AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  findModelInList,
+  supportedEnvironmentDriversForAdapter,
+} from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
 import { agentsApi } from "../api/agents";
 import { environmentsApi } from "../api/environments";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { secretsApi } from "../api/secrets";
 import { assetsApi } from "../api/assets";
-import {
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL,
-} from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
-import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX } from "@paperclipai/adapter-codex-local";
 import {
   Popover,
   PopoverContent,
@@ -27,8 +26,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { FolderOpen, Heart, ChevronDown, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import { extractModelName, extractProviderId } from "../lib/model-utils";
+import { groupModelsByProvider } from "../lib/model-display";
 import { queryKeys } from "../lib/queryKeys";
+import { useAdapterModelDefault } from "../hooks/useAdapterModelDefault";
+import { useAdapterModelRefresh } from "../hooks/useAdapterModelRefresh";
+import { ModelPicker } from "./ModelPicker";
+import { SavedModelNotice } from "./SavedModelNotice";
 import { useCompany } from "../context/CompanyContext";
 import {
   Field,
@@ -178,7 +181,6 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const showCreateRunPolicySection = props.showCreateRunPolicySection ?? true;
   const hideInstructionsFile = props.hideInstructionsFile ?? false;
   const { selectedCompanyId } = useCompany();
-  const queryClient = useQueryClient();
 
   // Sync disabled adapter types from server so dropdown filters them out
   const disabledTypes = useDisabledAdaptersSync();
@@ -306,14 +308,20 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const {
     data: fetchedModels,
     error: fetchedModelsError,
+    isLoading: modelsLoading,
   } = useQuery({
     queryKey: modelQueryKey,
     queryFn: () => agentsApi.adapterModels(selectedCompanyId!, adapterType),
     enabled: Boolean(selectedCompanyId),
   });
-  const [refreshModelsError, setRefreshModelsError] = useState<string | null>(null);
-  const [refreshingModels, setRefreshingModels] = useState(false);
-  const models = fetchedModels ?? externalModels ?? [];
+  const modelRefresh = useAdapterModelRefresh(selectedCompanyId);
+  const refreshModelsError = modelRefresh.errorFor(adapterType);
+  const refreshingModels = modelRefresh.isRefreshing(adapterType);
+  // The parent's list is for the agent's saved adapter. Once the adapter is
+  // switched here it belongs to the old one, so it must not stand in while the
+  // new adapter's list loads.
+  const externalModelsApply = isCreate || overlay.adapterType === undefined;
+  const models = fetchedModels ?? (externalModelsApply ? externalModels : undefined) ?? [];
   const adapterCommandField =
     adapterType === "hermes_local" ? "hermesCommand" : "command";
   const {
@@ -402,18 +410,23 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? val!.model
     : eff("adapterConfig", "model", String(config.model ?? ""));
 
+  function setModel(model: string) {
+    if (isCreate) set!({ model });
+    else mark("adapterConfig", "model", model || undefined);
+  }
+
+  // Fills the model when the adapter type changes below, and swaps in the
+  // provider's own default once that adapter's list arrives.
+  const fillModelForAdapter = useAdapterModelDefault({
+    companyId: selectedCompanyId,
+    adapterType,
+    model: currentModelId,
+    models: fetchedModels,
+    setModel,
+  });
+
   async function handleRefreshModels() {
-    if (!selectedCompanyId) return;
-    setRefreshingModels(true);
-    setRefreshModelsError(null);
-    try {
-      const refreshed = await agentsApi.adapterModels(selectedCompanyId, adapterType, { refresh: true });
-      queryClient.setQueryData(modelQueryKey, refreshed);
-    } catch (error) {
-      setRefreshModelsError(error instanceof Error ? error.message : "Failed to refresh adapter models.");
-    } finally {
-      setRefreshingModels(false);
-    }
+    await modelRefresh.refresh(adapterType);
   }
 
   const thinkingEffortKey =
@@ -631,20 +644,17 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 value={adapterType}
                 disabledTypes={disabledTypes}
                 onChange={(t) => {
+                  // Codex, Gemini and Cursor start on a filled-in model: the
+                  // provider's own default when its list is loaded, else the
+                  // built-in one. Every other adapter starts on its default.
+                  const filledModel = fillModelForAdapter(t);
                   if (isCreate) {
                     // Reset all adapter-specific fields to defaults when switching adapter type
                     const { adapterType: _at, ...defaults } = defaultCreateValues;
-                    const nextValues: CreateConfigValues = { ...defaults, adapterType: t };
+                    const nextValues: CreateConfigValues = { ...defaults, adapterType: t, model: filledModel };
                     if (t === "codex_local") {
-                      nextValues.model = DEFAULT_CODEX_LOCAL_MODEL;
                       nextValues.dangerouslyBypassSandbox =
                         DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
-                    } else if (t === "gemini_local") {
-                      nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
-                    } else if (t === "cursor") {
-                      nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
-                    } else if (t === "opencode_local") {
-                      nextValues.model = "";
                     }
                     set!(nextValues);
                   } else {
@@ -654,14 +664,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       ...prev,
                       adapterType: t,
                       adapterConfig: {
-                        model:
-                          t === "codex_local"
-                            ? DEFAULT_CODEX_LOCAL_MODEL
-                            : t === "gemini_local"
-                              ? DEFAULT_GEMINI_LOCAL_MODEL
-                            : t === "cursor"
-                              ? DEFAULT_CURSOR_LOCAL_MODEL
-                            : "",
+                        model: filledModel,
                         effort: "",
                         modelReasoningEffort: "",
                         variant: "",
@@ -789,12 +792,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
 
               <ModelDropdown
                 models={models}
+                loading={modelsLoading}
                 value={currentModelId}
-                onChange={(v) =>
-                  isCreate
-                    ? set!({ model: v })
-                    : mark("adapterConfig", "model", v || undefined)
-                }
+                onChange={setModel}
                 open={modelOpen}
                 onOpenChange={setModelOpen}
                 allowDefault={adapterType !== "opencode_local"}
@@ -810,7 +810,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   const result = await refetchDetectedModel();
                   return result.data?.model ?? null;
                 }}
-                onRefreshModels={adapterType === "codex_local" ? handleRefreshModels : undefined}
+                onRefreshModels={selectedCompanyId ? handleRefreshModels : undefined}
                 refreshingModels={refreshingModels}
                 detectModelLabel="Detect model"
                 emptyDetectHint="No model detected. Select or enter one manually."
@@ -1138,8 +1138,13 @@ function AdapterTypeDropdown({
   );
 }
 
+/**
+ * The Model field: the shared model picker, plus the line under it when the
+ * saved model has been replaced, is retiring, or is no longer offered.
+ */
 function ModelDropdown({
   models,
+  loading,
   value,
   onChange,
   open,
@@ -1158,6 +1163,8 @@ function ModelDropdown({
   emptyDetectHint,
 }: {
   models: AdapterModel[];
+  /** The list is still loading, so a saved model cannot be called missing yet. */
+  loading?: boolean;
   value: string;
   onChange: (id: string) => void;
   open: boolean;
@@ -1180,294 +1187,52 @@ function ModelDropdown({
   detectModelLabel?: string;
   emptyDetectHint?: string;
 }) {
-  const [modelSearch, setModelSearch] = useState("");
-  const [detectingModel, setDetectingModel] = useState(false);
-  const selected = models.find((m) => m.id === value);
-  const manualModel = modelSearch.trim();
-  const canCreateManualModel = Boolean(
-    creatable &&
-      manualModel &&
-      !models.some((m) => m.id.toLowerCase() === manualModel.toLowerCase()),
+  const groups = useMemo(
+    () => (groupByProvider ? groupModelsByProvider(models) : undefined),
+    [groupByProvider, models],
   );
-  // Model IDs already shown as detected/candidate badges — exclude from regular list
-  const promotedModelIds = useMemo(() => {
-    const set = new Set<string>();
-    if (detectedModel) set.add(detectedModel);
-    for (const c of detectedModelCandidates ?? []) {
-      if (c) set.add(c);
-    }
-    return set;
-  }, [detectedModel, detectedModelCandidates]);
-
-  const filteredModels = useMemo(() => {
-    return models.filter((m) => {
-      if (promotedModelIds.has(m.id)) return false;
-      if (!modelSearch.trim()) return true;
-      const q = modelSearch.toLowerCase();
-      const provider = extractProviderId(m.id) ?? "";
-      return (
-        m.id.toLowerCase().includes(q) ||
-        m.label.toLowerCase().includes(q) ||
-        provider.toLowerCase().includes(q)
-      );
-    });
-  }, [models, modelSearch, promotedModelIds]);
-  const groupedModels = useMemo(() => {
-    if (!groupByProvider) {
-      return [
-        {
-          provider: "models",
-          entries: [...filteredModels].sort((a, b) => a.id.localeCompare(b.id)),
-        },
-      ];
-    }
-    const map = new Map<string, AdapterModel[]>();
-    for (const model of filteredModels) {
-      const provider = extractProviderId(model.id) ?? "other";
-      const group = map.get(provider) ?? [];
-      group.push(model);
-      map.set(provider, group);
-    }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([provider, entries]) => ({
-        provider,
-        entries: [...entries].sort((a, b) => a.id.localeCompare(b.id)),
-      }));
-  }, [filteredModels, groupByProvider]);
-
-  async function handleDetectModel() {
-    if (!onDetectModel) return;
-    setDetectingModel(true);
-    try {
-      const nextModel = await onDetectModel();
-      if (nextModel) {
-        onChange(nextModel);
-        onOpenChange(false);
-        setModelSearch("");
-      }
-    } finally {
-      setDetectingModel(false);
-    }
-  }
+  const instanceDefaultLabel = instanceDefaultModel
+    ? (findModelInList(models, instanceDefaultModel)?.label ?? instanceDefaultModel)
+    : null;
 
   return (
     <Field label="Model" hint={help.model}>
-      <Popover
-        open={open}
-        onOpenChange={(nextOpen) => {
-          onOpenChange(nextOpen);
-          if (!nextOpen) setModelSearch("");
-        }}
-      >
-        <PopoverTrigger asChild>
-          <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-accent/50 transition-colors w-full justify-between">
-            <span className={cn(!value && "text-muted-foreground")}>
-              {selected
-                ? selected.label
-                : value
-                  ? value
-                  : allowDefault
-                    ? instanceDefaultModel
-                      ? `Default (${instanceDefaultModel})`
-                      : "Default (adapter CLI fallback)"
-                    : required
-                      ? "Select model (required)"
-                      : "Select model"}
-            </span>
-            <ChevronDown className="h-3 w-3 text-muted-foreground" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-1" align="start">
-          <div className="relative mb-1">
-            <input
-              className="w-full px-2 py-1.5 pr-6 text-xs bg-transparent outline-none border-b border-border placeholder:text-muted-foreground/50"
-              placeholder={creatable ? "Search models... (type to create)" : "Search models..."}
-              value={modelSearch}
-              onChange={(e) => setModelSearch(e.target.value)}
-              autoFocus
-            />
-            {modelSearch && (
-              <button
-                type="button"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                onClick={() => setModelSearch("")}
-              >
-                <svg aria-hidden="true" focusable="false" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            )}
-          </div>
-          {onDetectModel && !modelSearch.trim() && (
-            <button
-              type="button"
-              className="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground"
-              onClick={() => {
-                void handleDetectModel();
-              }}
-              disabled={detectingModel}
-            >
-              <svg aria-hidden="true" focusable="false" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                <path d="M3 3v5h5" />
-              </svg>
-              {detectingModel ? "Detecting..." : detectedModel ? (detectModelLabel?.replace(/^Detect\b/, "Re-detect") ?? "Re-detect from config") : (detectModelLabel ?? "Detect from config")}
-            </button>
-          )}
-          {onRefreshModels && !modelSearch.trim() && (
-            <button
-              type="button"
-              className="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground"
-              onClick={() => {
-                void onRefreshModels();
-              }}
-              disabled={refreshingModels}
-            >
-              <svg aria-hidden="true" focusable="false" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 0 1 15.28-6.36L21 8" />
-                <path d="M21 3v5h-5" />
-                <path d="M21 12a9 9 0 0 1-15.28 6.36L3 16" />
-                <path d="M8 16H3v5" />
-              </svg>
-              {refreshingModels ? "Refreshing..." : "Refresh models"}
-            </button>
-          )}
-          {value && (!models.some((m) => m.id === value) || promotedModelIds.has(value)) && (
-            <button
-              type="button"
-              className={cn(
-                "flex items-center w-full px-2 py-1.5 text-sm rounded bg-accent/50",
-              )}
-              onClick={() => {
-                onOpenChange(false);
-              }}
-            >
-              <span className="block w-full text-left truncate font-mono text-xs" title={value}>
-                {models.find((m) => m.id === value)?.label ?? value}
-              </span>
-              <span className="shrink-0 ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20">
-                current
-              </span>
-            </button>
-          )}
-          {detectedModel && detectedModel !== value && (
-            <button
-              type="button"
-              className={cn(
-                "flex items-center w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-              )}
-              onClick={() => {
-                onChange(detectedModel);
-                onOpenChange(false);
-              }}
-            >
-              <span className="block w-full text-left truncate font-mono text-xs" title={detectedModel}>
-                {models.find((m) => m.id === detectedModel)?.label ?? detectedModel}
-              </span>
-              <span className="shrink-0 ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">
-                detected
-              </span>
-            </button>
-          )}
-          {detectedModelCandidates
-            ?.filter((candidate) => candidate && candidate !== detectedModel && candidate !== value)
-            .map((candidate) => {
-              const entry = models.find((m) => m.id === candidate);
-              return (
-                <button
-                  key={`detected-${candidate}`}
-                  type="button"
-                  className={cn(
-                    "flex items-center w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-                  )}
-                  onClick={() => {
-                    onChange(candidate);
-                    onOpenChange(false);
-                  }}
-                >
-                  <span className="block w-full text-left truncate font-mono text-xs" title={candidate}>
-                    {entry?.label ?? candidate}
-                  </span>
-                  <span className="shrink-0 ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/20">
-                    config
-                  </span>
-                </button>
-              );
-            })}
-          <div className="max-h-[240px] overflow-y-auto">
-            {allowDefault && (
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center justify-between gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-                  !value && "bg-accent",
-                )}
-                onClick={() => {
-                  onChange("");
-                  onOpenChange(false);
-                }}
-              >
-                <span>Default</span>
-                <span className="text-xs text-muted-foreground">
-                  {instanceDefaultModel ? instanceDefaultModel : "adapter CLI fallback"}
-                </span>
-              </button>
-            )}
-            {canCreateManualModel && (
-              <button
-                type="button"
-                className="flex items-center justify-between gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50"
-                onClick={() => {
-                  onChange(manualModel);
-                  onOpenChange(false);
-                  setModelSearch("");
-                }}
-              >
-                <span>Use manual model</span>
-                <span className="text-xs font-mono text-muted-foreground">{manualModel}</span>
-              </button>
-            )}
-            {groupedModels.map((group) => (
-              <div key={group.provider} className="mb-1 last:mb-0">
-                {groupByProvider && (
-                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {group.provider} ({group.entries.length})
-                  </div>
-                )}
-                {group.entries.map((m) => (
-                  <button
-                    type="button"
-                    key={m.id}
-                    className={cn(
-                      "flex items-center w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-                      m.id === value && "bg-accent",
-                    )}
-                    onClick={() => {
-                      onChange(m.id);
-                      onOpenChange(false);
-                    }}
-                  >
-                    <span className="block w-full text-left truncate" title={m.id}>
-                      {groupByProvider ? extractModelName(m.id) : m.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ))}
-            {filteredModels.length === 0 && !canCreateManualModel && promotedModelIds.size === 0 && (
-              <div className="px-2 py-2 space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  {onDetectModel
-                    ? (emptyDetectHint ?? "No model detected yet. Enter a provider/model manually.")
-                    : "No models found."}
-                </p>
-              </div>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
+      <div className="space-y-1.5">
+        <ModelPicker
+          models={models}
+          groups={groups}
+          showGroupCounts={groupByProvider}
+          value={value}
+          onChange={onChange}
+          open={open}
+          onOpenChange={onOpenChange}
+          loading={loading}
+          emptyOption={
+            allowDefault
+              ? {
+                  label: "Default",
+                  hint: instanceDefaultLabel ?? "adapter CLI fallback",
+                  triggerLabel: `Default (${instanceDefaultLabel ?? "adapter CLI fallback"})`,
+                }
+              : undefined
+          }
+          placeholder={required ? "Select model (required)" : "Select model"}
+          creatable={creatable}
+          detectedModel={detectedModel}
+          detectedModelCandidates={detectedModelCandidates}
+          onDetectModel={onDetectModel}
+          detectModelLabel={detectModelLabel}
+          onRefreshModels={onRefreshModels}
+          refreshingModels={refreshingModels}
+          emptyMessage={
+            onDetectModel
+              ? (emptyDetectHint ?? "No model detected yet. Enter a provider/model manually.")
+              : "No models found."
+          }
+          aria-label="Model"
+        />
+        <SavedModelNotice models={models} value={value} onSwitch={onChange} />
+      </div>
     </Field>
   );
 }

@@ -84,6 +84,35 @@ my-adapter/
 - **Need to call an external service?** Use `http`
 - **Need something custom?** [Create your own adapter](/adapters/creating-an-adapter) or [build an external adapter plugin](/adapters/external-adapters)
 
+## Model Lists
+
+Every model picker (agent settings, new agents, issue overrides, Agent Defaults, Clippy, email drafts) shows what the provider offers right now, not a list written into Paperclip. New models appear without a Paperclip update, and retired ones drop off.
+
+Where each list comes from, most trusted first:
+
+1. **The provider's own tool.** `claude_local` asks the installed Claude Code CLI which models it offers the signed-in account (its stream-json `initialize` handshake: no prompt is sent, nothing is billed). `codex_local` asks `codex app-server` (`model/list`), which also reports retirement dates and the model to move to. Gemini, OpenAI and Anthropic API keys use each provider's models endpoint. Cursor, OpenCode, Pi and Ollama use their own discovery as before.
+2. **A public model catalog** ([models.dev](https://models.dev), checked daily with an ETag and kept on disk) for release dates, model families, image support and deprecation flags. It also supplies the older Claude models the CLI still runs but no longer lists.
+3. **A built-in list** in each adapter package, used only when neither of the above can be reached.
+
+Each model is marked **current**, **legacy** (a newer release of the same family is out) or **deprecated** (the provider announced a retirement), and models released in the last 30 days are flagged as new. Pickers show current models first, retiring ones with their date, and older ones folded away.
+
+Once a day Paperclip re-reads every list and:
+
+- logs a `model.available` activity entry in each company that uses an adapter when a new model appears for it;
+- logs `agent.model_needs_update` once for each agent whose model has been replaced, is retiring, or is no longer listed, with the suggested replacement;
+- pauses (and logs `agent.model_unavailable`) an agent whose model has disappeared from a list that is known to be complete (Ollama, Aider, Gemini with a key, Codex). Claude subscription lists are not complete, so Claude agents are flagged, never paused.
+
+No agent is ever moved to another model automatically.
+
+Settings:
+
+| Variable | Effect |
+|----------|--------|
+| `PAPERCLIP_MODEL_CATALOG_URL` | Catalog address. `off` switches the catalog off (for air-gapped installs); any other value points at a mirror. |
+| `PAPERCLIP_MODEL_CLI_DISCOVERY` | `off` stops Paperclip from asking the Claude and Codex CLIs for their model lists. |
+
+The model picker's refresh button re-reads the list immediately (`?refresh=1` on the models endpoint); lists are otherwise reused for 30 minutes.
+
 ## UI Parser Contract
 
 External adapters can ship a self-contained UI parser that tells the Paperclip web UI how to render their stdout. Without it, the UI uses a generic shell parser. See the [UI Parser Contract](/adapters/adapter-ui-parser) for details.
