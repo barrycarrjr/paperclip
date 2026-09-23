@@ -61,6 +61,7 @@ const MAX_SENDER_CHARS = 60;
 const MAX_SUBJECT_CHARS = 80;
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
+import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
 import { EmptyState } from "../components/EmptyState";
 import { MailSearchBar } from "../components/MailSearchBar";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -1305,7 +1306,7 @@ function SenderGroup({
   );
 }
 
-function MessageRow({
+export function MessageRow({
   msg,
   senderMatchesPattern,
   autoTriageSet,
@@ -1330,10 +1331,16 @@ function MessageRow({
   const isDeletePending = deletePendingUid === msg.uid;
   const hasAutoTriageRule = senderMatchesPattern(msg, autoTriageSet);
   const hasKeepAlwaysRule = senderMatchesPattern(msg, keepAlwaysSet);
+  // Moving into the open "More actions" menu takes the pointer off the row,
+  // which would otherwise hide the toolbar, and the menu's own button with it.
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   return (
     <div
-      className="group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer"
+      className={cn(
+        ROW_WITH_HOVER_TOOLBAR,
+        "flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden hover:bg-accent/40 transition-colors cursor-pointer",
+      )}
       // Clicking the email reads the email. Going to the company is the rarer
       // intent and has its own button, so it no longer hijacks the common one.
       onClick={() => onPopoutMessage(msg)}
@@ -1372,10 +1379,7 @@ function MessageRow({
           )}
         </TooltipContent>
       </Tooltip>
-      <div
-        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <RowHoverToolbar forceVisible={moreMenuOpen}>
         {msg.unseen ? (
           <Button
             variant="ghost"
@@ -1478,7 +1482,7 @@ function MessageRow({
             <Trash2 className="h-3.5 w-3.5" />
           )}
         </Button>
-        <DropdownMenu>
+        <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -1503,7 +1507,7 @@ function MessageRow({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </RowHoverToolbar>
     </div>
   );
 }

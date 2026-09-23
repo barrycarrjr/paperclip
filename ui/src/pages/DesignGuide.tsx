@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Archive,
   BookOpen,
   Bot,
   Check,
@@ -13,7 +14,9 @@ import {
   LayoutDashboard,
   ListTodo,
   Mail,
+  MoveRight,
   Plus,
+  Reply,
   Search,
   Settings,
   Target,
@@ -122,6 +125,8 @@ import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { MailSearchBar } from "@/components/MailSearchBar";
 import { EmailStateIcons } from "@/components/email/EmailStateIcons";
+import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "@/components/email/RowHoverToolbar";
+import { cn } from "@/lib/utils";
 import { InlineEditor } from "@/components/InlineEditor";
 import { DraftInstructionsField } from "@/components/DraftInstructionsField";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -240,7 +245,7 @@ export function DesignGuide() {
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
-                "AttachmentComposer", "EmailStateIcons",
+                "AttachmentComposer", "EmailStateIcons", "RowHoverToolbar",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -1096,6 +1101,44 @@ export function DesignGuide() {
           <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
             <span>9/23/2026, 12:52:14 PM</span>
             <EmailStateIcons answered forwarded showLabels />
+          </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  ROW HOVER TOOLBAR                                            */}
+      {/* ============================================================ */}
+      <Section title="Row Hover Toolbar">
+        <p className="text-sm text-muted-foreground">
+          Quick actions for one list row. They float over the row's right end while you point at
+          that row (or tab into it) and take no width the rest of the time, so the text keeps the
+          whole row even in a narrow column. The row needs <code className="font-mono text-xs">ROW_WITH_HOVER_TOOLBAR</code>.
+        </p>
+        <SubSection title="Hover a row">
+          <div className="w-72 border border-border rounded-md divide-y divide-border">
+            {["Jordan Lee", "Accounts Payable"].map((who) => (
+              <div key={who} className={cn(ROW_WITH_HOVER_TOOLBAR, "px-3 py-2.5 hover:bg-accent/50")}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs truncate">{who} &lt;someone@example.com&gt;</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">5m ago</span>
+                </div>
+                <div className="text-xs text-muted-foreground truncate mt-0.5">
+                  A subject long enough to need the whole row to read
+                </div>
+                <RowHoverToolbar>
+                  <Button size="icon-sm" variant="ghost" aria-label="Reply"><Reply className="h-3.5 w-3.5" /></Button>
+                  <Button size="icon-sm" variant="ghost" aria-label="Archive"><Archive className="h-3.5 w-3.5" /></Button>
+                  <Button size="icon-sm" variant="ghost" aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
+                </RowHoverToolbar>
+              </div>
+            ))}
+          </div>
+        </SubSection>
+        <SubSection title="Forced open (its menu is open)">
+          <div className={cn(ROW_WITH_HOVER_TOOLBAR, "w-72 h-12 border border-border rounded-md")}>
+            <RowHoverToolbar forceVisible>
+              <Button size="icon-sm" variant="ghost" aria-label="Move to folder"><MoveRight className="h-3.5 w-3.5" /></Button>
+            </RowHoverToolbar>
           </div>
         </SubSection>
       </Section>

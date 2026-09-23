@@ -31,6 +31,7 @@ import {
   Maximize2,
   ListChecks,
   ChevronLeft,
+  MoreHorizontal,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +43,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -119,6 +124,7 @@ import {
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
+import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
 import { sendOutcomeText } from "../components/email/sendOutcome";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
@@ -128,7 +134,14 @@ import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
-import { emailPaneLayout } from "../lib/email-pane-layout";
+import {
+  clampListPaneWidth,
+  emailListKey,
+  emailPaneLayout,
+  LIST_PANE_DEFAULT_WIDTH,
+  listPaneMaxWidthCss,
+  startListPaneResize,
+} from "../lib/email-pane-layout";
 import {
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
@@ -518,6 +531,9 @@ export function Email() {
   });
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
+  // The narrow list's "More actions" menu, per row, so its toolbar stays up
+  // while the menu is open (see RowHoverToolbar's forceVisible).
+  const [moreMenuUid, setMoreMenuUid] = useState<number | null>(null);
   const [moveDropdownSender, setMoveDropdownSender] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<
     { text: string; issueId?: string; failed?: boolean } | null
@@ -585,6 +601,37 @@ export function Email() {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  };
+  // Width of the message list while a message is open beside it. Dragged like
+  // the mailbox column above and remembered the same way; see
+  // clampListPaneWidth for the bounds.
+  const [listPaneWidth, setListPaneWidth] = useState(() => {
+    try {
+      return clampListPaneWidth(localStorage.getItem("email-listPaneWidth") ?? LIST_PANE_DEFAULT_WIDTH);
+    } catch {
+      return LIST_PANE_DEFAULT_WIDTH;
+    }
+  });
+  const saveListPaneWidth = (width: number) => {
+    try { localStorage.setItem("email-listPaneWidth", String(width)); } catch {}
+  };
+  // The list may take at most half of what the mailbox column leaves; see
+  // listPaneMaxWidthCss.
+  const mailboxColumnWidth = leftPaneCollapsed ? LEFT_PANE_COLLAPSED_WIDTH : leftPaneWidth;
+  const listColumnRef = useRef<HTMLDivElement | null>(null);
+  const startListPaneDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const list = listColumnRef.current;
+    if (e.button !== 0 || !list) return;
+    // Without this the drag selects the text it passes over.
+    e.preventDefault();
+    startListPaneResize(list, e.currentTarget, e, mailboxColumnWidth, {
+      onResize: setListPaneWidth,
+      onDone: saveListPaneWidth,
+    });
+  };
+  const resetListPaneWidth = () => {
+    setListPaneWidth(LIST_PANE_DEFAULT_WIDTH);
+    saveListPaneWidth(LIST_PANE_DEFAULT_WIDTH);
   };
   // Reply panel state. The textarea content lives inside DraftTextarea so
   // typing doesn't re-render this entire (huge) component on every keystroke.
@@ -2031,7 +2078,13 @@ export function Email() {
 
   // ── Shared: inline row actions ────────────────────────────────────────────
 
-  function RowActions({ msg }: { msg: MailHeader }) {
+  // This and the list bodies below are plain functions, called rather than
+  // rendered as components. A component declared inside Email is a new one
+  // every time Email renders, so React threw the whole list away and built it
+  // again on every update: the list jumped back to the top, a menu opened from
+  // a row further down appeared off screen, and an open submenu closed by
+  // itself. Email.listStructure.test.ts keeps it that way.
+  function renderRowActions(msg: MailHeader, compact: boolean) {
     const isAutoTriagePending =
       autoTriageMutation.isPending && autoTriageMutation.variables?.uid === msg.uid;
     const isKeepPending =
@@ -2047,42 +2100,144 @@ export function Email() {
     const hasAutoTriageRule = senderMatchesPattern(msg, autoTriageSet);
     const hasKeepAlwaysRule = senderMatchesPattern(msg, keepAlwaysSet);
 
-    return (
-      <div
-        className="flex items-center gap-0.5 shrink-0"
-        onClick={(e) => e.stopPropagation()}
+    const readButton = msg.unseen ? (
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        title="Mark as read"
+        disabled={isMarkReadPending}
+        onClick={() => markReadMutation.mutate(msg)}
+        className="text-muted-foreground hover:text-foreground"
       >
-        {msg.unseen ? (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            title="Mark as read"
-            disabled={isMarkReadPending}
-            onClick={() => markReadMutation.mutate(msg)}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {isMarkReadPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <MailOpen className="h-3.5 w-3.5" />
-            )}
-          </Button>
+        {isMarkReadPending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            title="Mark as unread"
-            disabled={isMarkUnreadPending}
-            onClick={() => markUnreadMutation.mutate(msg)}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {isMarkUnreadPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Mail className="h-3.5 w-3.5" />
-            )}
-          </Button>
+          <MailOpen className="h-3.5 w-3.5" />
         )}
+      </Button>
+    ) : (
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        title="Mark as unread"
+        disabled={isMarkUnreadPending}
+        onClick={() => markUnreadMutation.mutate(msg)}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        {isMarkUnreadPending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Mail className="h-3.5 w-3.5" />
+        )}
+      </Button>
+    );
+
+    const deleteButton = (
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        title="Delete (move to Trash)"
+        disabled={isDeletePending}
+        onClick={() => deleteMutation.mutate(msg)}
+        className="text-muted-foreground hover:text-destructive"
+      >
+        {isDeletePending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="h-3.5 w-3.5" />
+        )}
+      </Button>
+    );
+
+    const startRowAction = (action: "reply" | "forward" | "handoff") => {
+      setSelectedUid(msg.uid);
+      setPendingRowAction({ uid: msg.uid, action });
+    };
+
+    // Beside an open message the list is narrow, and all eight buttons would
+    // cover the row, so a click meant to open a message would press whichever
+    // button ended up under the pointer. Two quick ones stay; the rest are one
+    // menu away. The open message has its own full toolbar anyway.
+    if (compact) {
+      return (
+        <RowHoverToolbar forceVisible={moreMenuUid === msg.uid}>
+          {readButton}
+          {deleteButton}
+          <DropdownMenu
+            open={moreMenuUid === msg.uid}
+            onOpenChange={(open) => setMoreMenuUid(open ? msg.uid : null)}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                title="More actions"
+                disabled={isKeepPending || isAutoTriagePending || isMovePending}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {isKeepPending || isAutoTriagePending || isMovePending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => startRowAction("reply")}>
+                <Reply className="h-3.5 w-3.5 mr-2" />
+                Reply
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => startRowAction("forward")}>
+                <Forward className="h-3.5 w-3.5 mr-2" />
+                Forward
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => startRowAction("handoff")}>
+                <Bot className="h-3.5 w-3.5 mr-2" />
+                Hand off to agent
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => keepAlwaysMutation.mutate(msg)}>
+                <Check className="h-3.5 w-3.5 mr-2" strokeWidth={hasKeepAlwaysRule ? 3.5 : 2} />
+                {hasKeepAlwaysRule ? "Keep always (rule active)" : "Keep always"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => autoTriageMutation.mutate(msg)}>
+                <Archive className={cn("h-3.5 w-3.5 mr-2", hasAutoTriageRule && "fill-current")} />
+                {hasAutoTriageRule ? "Auto-triage (rule active)" : "Auto-triage"}
+              </DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <MoveRight className="h-3.5 w-3.5 mr-2" />
+                  Move to folder
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+                  {folders.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">Loading folders…</div>
+                  ) : (
+                    folders
+                      .filter((f) => f !== selectedFolder)
+                      .map((f) => (
+                        <DropdownMenuItem
+                          key={f}
+                          onSelect={() => moveToFolderMutation.mutate({ msg, targetFolder: f })}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                          {f}
+                        </DropdownMenuItem>
+                      ))
+                  )}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </RowHoverToolbar>
+      );
+    }
+
+    return (
+      // Floats over the row's right end on hover rather than taking its width;
+      // held open while its move-to-folder menu is.
+      <RowHoverToolbar forceVisible={moveDropdownUid === msg.uid}>
+        {readButton}
 
         <Button
           size="icon-sm"
@@ -2208,21 +2363,8 @@ export function Email() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          title="Delete (move to Trash)"
-          disabled={isDeletePending}
-          onClick={() => deleteMutation.mutate(msg)}
-          className="text-muted-foreground hover:text-destructive"
-        >
-          {isDeletePending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Trash2 className="h-3.5 w-3.5" />
-          )}
-        </Button>
-      </div>
+        {deleteButton}
+      </RowHoverToolbar>
     );
   }
 
@@ -2236,7 +2378,8 @@ export function Email() {
       <div
         key={msg.uid}
         className={cn(
-          "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
+          ROW_WITH_HOVER_TOOLBAR,
+          "flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
           ticked ? "bg-accent/60" : selectedUid === msg.uid && "bg-accent",
           compact ? "py-2.5" : "py-3",
         )}
@@ -2292,9 +2435,7 @@ export function Email() {
             </div>
           )}
         </div>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <RowActions msg={msg} />
-        </div>
+        {renderRowActions(msg, compact)}
       </div>
     );
   }
@@ -2348,7 +2489,18 @@ export function Email() {
     );
   }
 
-  function SearchListBody({ compact }: { compact: boolean }) {
+  // The list's scroll box is keyed on which list it shows, so a different
+  // list starts at the top; see emailListKey for what counts as different.
+  const listScrollKey = emailListKey({
+    companyId: selectedCompanyId,
+    mailbox: selectedMailbox,
+    folder: selectedFolder,
+    view: listView,
+    groupBySender,
+    search: searchQuery,
+  });
+
+  function renderSearchListBody(compact: boolean) {
     if (searchFetching && searchResults.length === 0) {
       return (
         <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
@@ -2374,7 +2526,7 @@ export function Email() {
       );
     }
     return (
-      <ScrollArea className="flex-1">
+      <ScrollArea key={listScrollKey} className="flex-1">
         <div className="divide-y divide-border">
           {searchResults.map((hit) => renderSearchRow(hit, compact))}
         </div>
@@ -2382,8 +2534,8 @@ export function Email() {
     );
   }
 
-  function MessageListBody({ compact }: { compact: boolean }) {
-    if (searchActive) return <SearchListBody compact={compact} />;
+  function renderMessageListBody(compact: boolean) {
+    if (searchActive) return renderSearchListBody(compact);
     // Built from the handover records rather than from the mailbox: a message
     // that has been handed over is usually already read and usually not in
     // the newest fifty, so re-reading the mailbox would miss most of them.
@@ -2425,7 +2577,7 @@ export function Email() {
 
     if (!groupBySender) {
       return (
-        <ScrollArea className="flex-1">
+        <ScrollArea key={listScrollKey} className="flex-1">
           <div className="divide-y divide-border">
             {messages.map((msg) => renderRow(msg, compact))}
           </div>
@@ -2439,7 +2591,7 @@ export function Email() {
     const groups = senderGroups;
 
     return (
-      <ScrollArea className="flex-1">
+      <ScrollArea key={listScrollKey} className="flex-1">
         <div className="space-y-3 p-2">
           {groups.map((g) => {
             const senderHasAutoTriage = autoTriageSet.has(g.sender.toLowerCase()) ||
@@ -2452,7 +2604,10 @@ export function Email() {
                 className="rounded-lg border border-border bg-card shadow-sm overflow-hidden divide-y divide-border/60"
               >
                 <div
-                  className="flex items-center gap-2 px-3 py-2.5 bg-muted border-b border-border"
+                  className={cn(
+                    ROW_WITH_HOVER_TOOLBAR,
+                    "flex items-center gap-2 px-3 py-2.5 bg-muted border-b border-border",
+                  )}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Users className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -2464,17 +2619,19 @@ export function Email() {
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
+                  {/* Same floating toolbar as the rows, so the sender's name
+                      keeps the header's width in a narrow list. */}
+                  <RowHoverToolbar forceVisible={moveDropdownSender === g.sender}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon"
+                          size="icon-sm"
                           variant="ghost"
                           onClick={() => { for (const m of g.msgs) markReadMutation.mutate(m); }}
                           aria-label="Mark all read"
                           className="text-muted-foreground hover:text-foreground"
                         >
-                          <MailOpen className="h-5 w-5" />
+                          <MailOpen className="h-3.5 w-3.5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Mark all read</TooltipContent>
@@ -2482,7 +2639,7 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon"
+                          size="icon-sm"
                           variant="ghost"
                           onClick={() => {
                             if (g.msgs.length > 0) keepAlwaysMutation.mutate(g.msgs[0]!);
@@ -2493,7 +2650,7 @@ export function Email() {
                           )}
                         >
                           <Check
-                            className="h-5 w-5"
+                            className="h-3.5 w-3.5"
                             strokeWidth={senderHasKeepAlways ? 3.5 : 2}
                           />
                         </Button>
@@ -2505,7 +2662,7 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon"
+                          size="icon-sm"
                           variant="ghost"
                           onClick={() => {
                             if (g.msgs.length > 0) autoTriageMutation.mutate(g.msgs[0]!);
@@ -2516,7 +2673,7 @@ export function Email() {
                           )}
                         >
                           <Archive
-                            className={cn("h-5 w-5", senderHasAutoTriage && "fill-current")}
+                            className={cn("h-3.5 w-3.5", senderHasAutoTriage && "fill-current")}
                             strokeWidth={senderHasAutoTriage ? 2.5 : 2}
                           />
                         </Button>
@@ -2533,12 +2690,12 @@ export function Email() {
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
                             <Button
-                              size="icon"
+                              size="icon-sm"
                               variant="ghost"
                               aria-label="Move all to folder"
                               className="text-muted-foreground hover:text-foreground"
                             >
-                              <MoveRight className="h-5 w-5" />
+                              <MoveRight className="h-3.5 w-3.5" />
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
@@ -2568,18 +2725,18 @@ export function Email() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          size="icon"
+                          size="icon-sm"
                           variant="ghost"
                           onClick={() => { for (const m of g.msgs) deleteMutation.mutate(m); }}
                           aria-label="Delete all from this sender"
                           className="text-muted-foreground hover:text-destructive"
                         >
-                          <Trash2 className="h-5 w-5" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Delete all from this sender</TooltipContent>
                     </Tooltip>
-                  </div>
+                  </RowHoverToolbar>
                 </div>
                 {g.msgs.map((msg) => renderRow(msg, compact))}
               </div>
@@ -2647,14 +2804,34 @@ export function Email() {
               so the open message takes the whole width and the list comes back
               when you close it. */}
           {panes.messageList && (
-          <div className="w-72 shrink-0 border-r border-border flex flex-col group">
+          <>
+          {/* No `group` here: row buttons reveal on their own row's hover
+              (see RowHoverToolbar), and a group on the whole column made
+              pointing anywhere at it light up every row at once. */}
+          {/* Capped at half of what the mailbox column leaves, so a width
+              saved on a wide screen cannot squeeze the message, or this
+              column's own drag handle, out of view on a narrower one. */}
+          <div
+            ref={listColumnRef}
+            className="shrink-0 border-r border-border flex flex-col"
+            style={{ width: listPaneWidth, maxWidth: listPaneMaxWidthCss(mailboxColumnWidth) }}
+          >
             {listHeader}
             {listViewTabs}
             {takeOverNoticeBar}
             {searchBar}
             {selectionBar}
-            <MessageListBody compact />
+            {renderMessageListBody(true)}
           </div>
+          {panes.columnDragHandle && (
+            <div
+              className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+              onPointerDown={startListPaneDrag}
+              onDoubleClick={resetListPaneWidth}
+              title="Drag to resize the list · double-click for the usual width"
+            />
+          )}
+          </>
           )}
 
           {/* Right: message detail */}
@@ -3173,7 +3350,7 @@ export function Email() {
           {takeOverNoticeBar}
           {searchBar}
           {selectionBar}
-          <MessageListBody compact={false} />
+          {renderMessageListBody(false)}
         </div>
       )}
 

@@ -36,6 +36,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkTriageBar } from "./BulkTriageBar";
 import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn, ellipsize } from "../lib/utils";
+import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "./email/RowHoverToolbar";
 import { useToastActions } from "@/context/ToastContext";
 
 const MAX_SENDER_CHARS = 50;
@@ -415,7 +416,11 @@ function ConversationRow({
   return (
     <div
       className={cn(
-        "group flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden transition-colors cursor-pointer",
+        // `group` still drives the checkbox swap below; the named row group
+        // reveals the floating toolbar.
+        "group",
+        ROW_WITH_HOVER_TOOLBAR,
+        "flex items-center gap-2 px-2 py-2.5 min-w-0 overflow-hidden transition-colors cursor-pointer",
         selected ? "bg-accent/60" : "hover:bg-accent/40",
       )}
       onClick={() => onOpen(conv.id)}
@@ -487,10 +492,7 @@ function ConversationRow({
           )}
         </TooltipContent>
       </Tooltip>
-      <div
-        className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [&_button]:size-7 [&_svg]:size-3"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <RowHoverToolbar>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -631,7 +633,7 @@ function ConversationRow({
             <Trash2 className="h-3.5 w-3.5" />
           )}
         </Button>
-      </div>
+      </RowHoverToolbar>
     </div>
   );
 }

@@ -170,6 +170,21 @@ Always use in a responsive grid: `grid md:grid-cols-2 xl:grid-cols-4 gap-4`.
 </span>
 ```
 
+### RowHoverToolbar
+
+**File:** `email/RowHoverToolbar.tsx`
+**Props:** `children: ReactNode`, `forceVisible?: boolean`, `className?: string`; plus the `ROW_WITH_HOVER_TOOLBAR` class string for the row.
+**Usage:** Quick actions for one list row (every email list uses it: the company Email page, Portfolio Email, the Help Scout panel). It floats over the row's right end while that row is hovered or has keyboard focus, and takes no width otherwise, so the row's text keeps the whole row in a narrow column. The row must carry `ROW_WITH_HOVER_TOOLBAR` (`relative group/row`); the named group matters, because a plain `group-hover` fires for any hovered `group` ancestor and lit up every row when the list column was one. Pass `forceVisible` while a menu opened from the toolbar is open. Keep it short in a narrow column (two or three buttons plus a "More actions" menu): it appears under the pointer, so wherever it covers the row a click presses a button instead of opening the row. It reveals on keyboard focus (`:focus-visible`), not plain focus, so a clicked button does not leave it stuck open.
+
+```tsx
+<div className={cn(ROW_WITH_HOVER_TOOLBAR, "flex items-center gap-2 px-3 py-2.5")}>
+  {/* row text: sender, time, subject */}
+  <RowHoverToolbar forceVisible={menuOpen}>
+    <Button size="icon-sm" variant="ghost" aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
+  </RowHoverToolbar>
+</div>
+```
+
 ### Identity
 
 **File:** `Identity.tsx`

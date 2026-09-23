@@ -1,5 +1,111 @@
 import { describe, expect, it } from "vitest";
-import { emailPaneLayout } from "./email-pane-layout";
+import {
+  clampListPaneWidth,
+  dragListPaneWidth,
+  emailListKey,
+  emailPaneLayout,
+  LIST_PANE_DEFAULT_WIDTH,
+  LIST_PANE_MAX_WIDTH,
+  LIST_PANE_MIN_WIDTH,
+  listPaneMaxWidthCss,
+  listPaneMaxWidthPx,
+} from "./email-pane-layout";
+
+describe("the message list's width beside an open message", () => {
+  it("starts where the old fixed column was", () => {
+    expect(LIST_PANE_DEFAULT_WIDTH).toBe(288);
+  });
+
+  it("keeps a dragged width within bounds", () => {
+    expect(clampListPaneWidth(400)).toBe(400);
+    expect(clampListPaneWidth(10)).toBe(LIST_PANE_MIN_WIDTH);
+    expect(clampListPaneWidth(5000)).toBe(LIST_PANE_MAX_WIDTH);
+    expect(clampListPaneWidth(333.6)).toBe(334);
+  });
+
+  it("recovers from a stored width that is not a number", () => {
+    // Read back from localStorage, so it arrives as a string or as junk.
+    expect(clampListPaneWidth("420")).toBe(420);
+    expect(clampListPaneWidth("wide")).toBe(LIST_PANE_DEFAULT_WIDTH);
+    expect(clampListPaneWidth(null)).toBe(LIST_PANE_DEFAULT_WIDTH);
+    expect(clampListPaneWidth(Number.NaN)).toBe(LIST_PANE_DEFAULT_WIDTH);
+  });
+
+  it("leaves the message at least half of what the mailbox column leaves", () => {
+    expect(listPaneMaxWidthPx(1100, 176)).toBe(462);
+    // The case half the whole page got wrong: a 400 pixel mailbox column on
+    // an 800 pixel page left the message nothing.
+    expect(listPaneMaxWidthPx(800, 400)).toBe(200);
+    expect(listPaneMaxWidthCss(400)).toBe("calc((100% - 400px) / 2)");
+  });
+
+  it("treats a mailbox width that is not a real width as no column", () => {
+    // Read back from localStorage, so junk is possible.
+    expect(listPaneMaxWidthCss(Number.NaN)).toBe("calc((100% - 0px) / 2)");
+    expect(listPaneMaxWidthPx(800, Number.NaN)).toBe(400);
+    expect(listPaneMaxWidthPx(300, 400)).toBe(0);
+  });
+
+  it("drags from the width on screen, so the edge stays under the pointer", () => {
+    // Stored 640 but held to 550 by the cap: one pixel left is 549, not the
+    // 90 pixel dead zone that starting from 640 gave.
+    expect(dragListPaneWidth(550, -1, 550)).toBe(549);
+    expect(dragListPaneWidth(300, 50, 900)).toBe(350);
+  });
+
+  it("stops a drag at the cap and at the bounds", () => {
+    expect(dragListPaneWidth(500, 200, 550)).toBe(550);
+    expect(dragListPaneWidth(500, 500, 2000)).toBe(LIST_PANE_MAX_WIDTH);
+    expect(dragListPaneWidth(300, -200, 550)).toBe(LIST_PANE_MIN_WIDTH);
+    // Too narrow a screen for the minimum: the cap wins, so the list cannot
+    // be dragged over the message.
+    expect(dragListPaneWidth(200, 100, 200)).toBe(200);
+    expect(dragListPaneWidth(300, 10.4, Number.NaN)).toBe(310);
+  });
+});
+
+describe("which list the page is showing", () => {
+  const inbox = {
+    companyId: "company-a",
+    mailbox: "sales",
+    folder: "INBOX",
+    view: "all",
+    groupBySender: false,
+    search: "",
+  };
+
+  it("stays the same while the list updates in place, so its scroll is kept", () => {
+    expect(emailListKey({ ...inbox })).toBe(emailListKey(inbox));
+  });
+
+  it("changes with anything that shows a different list, so that list starts at the top", () => {
+    const others = [
+      { ...inbox, companyId: "company-b" },
+      { ...inbox, mailbox: "support" },
+      { ...inbox, folder: "Archive" },
+      { ...inbox, view: "unread" },
+      { ...inbox, groupBySender: true },
+      { ...inbox, search: "invoice" },
+    ];
+    for (const other of others) expect(emailListKey(other)).not.toBe(emailListKey(inbox));
+  });
+
+  it("keeps a search's place while its results are opened from other folders", () => {
+    // Opening a result switches to that result's mailbox and folder. The
+    // results themselves do not change, so neither may their scroll.
+    const searching = { ...inbox, search: "invoice" };
+    const afterOpeningAResult = {
+      ...searching,
+      mailbox: "support",
+      folder: "Sent",
+      view: "unread",
+      groupBySender: true,
+    };
+    expect(emailListKey(afterOpeningAResult)).toBe(emailListKey(searching));
+    expect(emailListKey({ ...searching, search: "quote" })).not.toBe(emailListKey(searching));
+    expect(emailListKey({ ...searching, companyId: "company-b" })).not.toBe(emailListKey(searching));
+  });
+});
 
 const cases = [
   { isMobile: false, messageOpen: false },
