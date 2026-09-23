@@ -22,6 +22,10 @@ export interface MailHeader {
   date: string;
   snippet: string;
   unseen: boolean;
+  /** Replied to, from any mail program (the mailbox's \Answered flag). Absent from email-tools before 0.19. */
+  answered?: boolean;
+  /** Forwarded, from any mail program (the $Forwarded keyword). Absent from email-tools before 0.19. */
+  forwarded?: boolean;
 }
 
 export interface EmailAttachmentMeta {
@@ -56,6 +60,50 @@ export interface ParsedEmailMessage {
   html: string;
   markdown: string;
   attachments: EmailAttachmentMeta[];
+  /** Replied to (\Answered). Absent from email-tools before 0.19. */
+  answered?: boolean;
+  /** Forwarded ($Forwarded). Absent from email-tools before 0.19. */
+  forwarded?: boolean;
+}
+
+/**
+ * What became of the copy a send leaves in the mailbox's Sent folder.
+ * email-tools 0.19+ reports it; the send itself has succeeded either way.
+ */
+export interface EmailSentCopy {
+  /** A copy is in Sent, or the provider (Gmail, Microsoft 365) keeps its own. */
+  ok: boolean;
+  folder?: string;
+  /** The provider that keeps the copy itself, so none was uploaded. */
+  filedBy?: string;
+  alreadyThere?: boolean;
+  /** Still being saved when the send had to answer; it finishes on its own. */
+  pending?: boolean;
+  /** Why no copy was saved. */
+  error?: string;
+}
+
+/** Whether the message a reply or forward answered was marked as such. */
+export interface EmailOriginalMark {
+  ok: boolean;
+  flag: string;
+  folder: string;
+  uid?: number;
+  notFound?: boolean;
+  /** The mail server can never keep this flag (reported once by Test connection). */
+  unsupported?: boolean;
+  /** Still being set when the send had to answer. */
+  pending?: boolean;
+  error?: string;
+}
+
+export interface EmailSendResult {
+  ok: boolean;
+  messageId: string;
+  /** Absent from email-tools before 0.19. */
+  sentCopy?: EmailSentCopy;
+  /** Present for a reply, or a forward that named its original. */
+  original?: EmailOriginalMark;
 }
 
 export interface ListMessagesOptions {
@@ -225,7 +273,7 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       folder: string,
       body: string,
       opts?: { body_html?: string; replyAll?: boolean; attachments?: EmailSendAttachment[] },
-    ): Promise<{ ok: boolean; messageId: string }> => {
+    ): Promise<EmailSendResult> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,
         "email.send-reply",
@@ -240,8 +288,18 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       to: string | string[],
       subject: string,
       body: string,
-      opts?: { cc?: string; bcc?: string; body_html?: string; attachments?: EmailSendAttachment[] },
-    ): Promise<{ ok: boolean; messageId: string }> => {
+      opts?: {
+        cc?: string;
+        bcc?: string;
+        body_html?: string;
+        attachments?: EmailSendAttachment[];
+        /**
+         * The message this one forwards, so the mailbox can mark it forwarded.
+         * The Message-ID, when known, is checked before anything is marked.
+         */
+        forwardOf?: { uid: number; folder: string; messageId?: string };
+      },
+    ): Promise<EmailSendResult> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,
         "email.send-new",

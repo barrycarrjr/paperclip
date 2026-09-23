@@ -234,6 +234,23 @@ export function isImapMessageListKey(
 }
 
 /**
+ * The cache key of one opened IMAP message on the Email page:
+ * `["email", pluginId, companyId, mailboxKey, folder, uid]`. Built in one place
+ * so the query that reads the message and the refresh after a reply or
+ * forward, which must reach it to show the new mark, cannot drift apart.
+ * isImapMessageListKey deliberately does not match it.
+ */
+export function imapMessageKey(
+  pluginId: string | null,
+  companyId: string | null,
+  mailboxKey: string | null,
+  folder: string,
+  uid: number | null,
+): readonly unknown[] {
+  return ["email", pluginId, companyId, mailboxKey, folder, uid];
+}
+
+/**
  * Matches every cached variant of the Help Scout conversation list for one
  * mailbox: `["helpscout", pluginId, companyId, accountKey, mailboxId, <status>]`.
  *

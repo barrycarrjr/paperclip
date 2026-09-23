@@ -310,9 +310,69 @@ describe("useEmailMessageActions", () => {
     await settle();
 
     expect(mockApi.sendNew.mock.calls[0][2]).toBe("Fwd: Quarterly numbers");
-    // No attachments on the original means none are fetched or sent.
+    // No attachments on the original means none are fetched or sent; the
+    // options carry only the original's location, for the forwarded mark.
     expect(mockApi.getAttachment).not.toHaveBeenCalled();
-    expect(mockApi.sendNew.mock.calls[0][4]).toBeUndefined();
+    expect(mockApi.sendNew.mock.calls[0][4]).toEqual({
+      forwardOf: { uid: 42, folder: "INBOX", messageId: "<m1>" },
+    });
+  });
+
+  it("leaves the original unnamed when it has no real uid, since the plugin would refuse the send", async () => {
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.forward.mutate({ msg: parsed({ uid: Number.NaN }), to: "c@example.com", note: "" });
+    });
+    await settle();
+
+    expect(mockApi.sendNew).toHaveBeenCalledTimes(1);
+    expect(mockApi.sendNew.mock.calls[0][4]).toEqual({});
+  });
+
+  it("warns, without calling it a failure, when a reply went out but no copy reached Sent", async () => {
+    mockApi.sendReply.mockResolvedValue({
+      ok: true,
+      messageId: "<r1>",
+      sentCopy: { ok: false, error: "This mailbox has no Sent folder." },
+      original: { ok: true, flag: "\\Answered", folder: "INBOX", uid: 42 },
+    });
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.reply.mutate({ msg: header(), body: "Thanks", replyAll: false });
+    });
+    await settle();
+
+    expect(actions.current!.reply.isError).toBe(false);
+    expect(onToast).toHaveBeenCalledWith(
+      "Reply sent, but no copy was saved in your Sent folder (This mailbox has no Sent folder.)",
+      undefined,
+      true,
+    );
+  });
+
+  it("warns when a forward went out but the original could not be marked forwarded", async () => {
+    mockApi.sendNew.mockResolvedValue({
+      ok: true,
+      messageId: "<f1>",
+      sentCopy: { ok: true, folder: "INBOX.Sent Items" },
+      original: { ok: false, flag: "$Forwarded", folder: "INBOX", uid: 42, error: "flag not stored" },
+    });
+    const onToast = vi.fn();
+    const actions = mountActions({ onToast });
+
+    await act(async () => {
+      actions.current!.forward.mutate({ msg: parsed(), to: "c@example.com", note: "" });
+    });
+    await settle();
+
+    expect(onToast).toHaveBeenCalledWith(
+      "Forwarded, but the original was not marked forwarded (flag not stored)",
+      undefined,
+      true,
+    );
   });
 
   it("carries the original attachments along on a forward, skipping inline parts", async () => {
@@ -336,6 +396,7 @@ describe("useEmailMessageActions", () => {
       attachments: [
         { name: "numbers.pdf", mime: "application/pdf", contentBase64: "aGVsbG8=" },
       ],
+      forwardOf: { uid: 42, folder: "INBOX", messageId: "<m1>" },
     });
     expect(onToast).toHaveBeenCalledWith("Forwarded with 1 attachment");
   });

@@ -157,6 +157,19 @@ Always use in a responsive grid: `grid md:grid-cols-2 xl:grid-cols-4 gap-4`.
 />
 ```
 
+### EmailStateIcons
+
+**File:** `email/EmailStateIcons.tsx`
+**Props:** `answered?: boolean`, `forwarded?: boolean`, `showLabels?: boolean`, `className?: string`
+**Usage:** The replied and forwarded marks on an email, read from the mailbox (the `\Answered` flag and the `$Forwarded` keyword), so they match Outlook whichever program replied. Every email list row and every open message uses it: icon-only in a row, grouped with the time on the right of the sender line; `showLabels` on an open message. Renders nothing when neither applies. Uses a native `title` rather than a Tooltip because list rows are already tooltip triggers.
+
+```tsx
+<span className="flex shrink-0 items-center gap-1.5">
+  <EmailStateIcons answered={msg.answered} forwarded={msg.forwarded} />
+  <span className="text-[10px] text-muted-foreground">{timeAgo(new Date(msg.date))}</span>
+</span>
+```
+
 ### Identity
 
 **File:** `Identity.tsx`

@@ -121,6 +121,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { MailSearchBar } from "@/components/MailSearchBar";
+import { EmailStateIcons } from "@/components/email/EmailStateIcons";
 import { InlineEditor } from "@/components/InlineEditor";
 import { DraftInstructionsField } from "@/components/DraftInstructionsField";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -239,7 +240,7 @@ export function DesignGuide() {
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
-                "AttachmentComposer",
+                "AttachmentComposer", "EmailStateIcons",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -1057,6 +1058,44 @@ export function DesignGuide() {
               summary="3 results"
               note="Could not search personal/Archive. Results may be incomplete."
             />
+          </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  EMAIL STATE ICONS                                            */}
+      {/* ============================================================ */}
+      <Section title="Email State Icons">
+        <p className="text-sm text-muted-foreground">
+          The replied and forwarded marks on an email, read from the mailbox, so they match
+          Outlook whichever program did the replying. Icon-only in list rows, beside the time;
+          with words on an open message. Renders nothing when neither applies.
+        </p>
+        <SubSection title="In a list row">
+          <div className="border border-border rounded-md divide-y divide-border max-w-md">
+            {[
+              { from: "Jordan Lee <jordan@example.com>", subject: "Long time no see", answered: true, forwarded: false, when: "12m" },
+              { from: "Accounts <billing@example.com>", subject: "Invoice 4471", answered: false, forwarded: true, when: "2h" },
+              { from: "Printer <ops@example.com>", subject: "Press schedule", answered: true, forwarded: true, when: "1d" },
+              { from: "Newsletter <news@example.com>", subject: "This week", answered: false, forwarded: false, when: "3d" },
+            ].map((row) => (
+              <div key={row.subject} className="px-3 py-2.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs truncate">{row.from}</span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <EmailStateIcons answered={row.answered} forwarded={row.forwarded} />
+                    <span className="text-[10px] text-muted-foreground">{row.when}</span>
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground truncate mt-0.5">{row.subject}</div>
+              </div>
+            ))}
+          </div>
+        </SubSection>
+        <SubSection title="On an open message">
+          <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+            <span>9/23/2026, 12:52:14 PM</span>
+            <EmailStateIcons answered forwarded showLabels />
           </div>
         </SubSection>
       </Section>

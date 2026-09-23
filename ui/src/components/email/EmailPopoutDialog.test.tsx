@@ -244,6 +244,69 @@ async function typeInto(selector: string, value: string) {
   await settle();
 }
 
+describe("EmailPopoutDialog replied and forwarded marks", () => {
+  // The pop-out is how Portfolio Email opens a message, so this is where the
+  // operator looks for the replied icon Outlook would show.
+  it("says a message was replied to and forwarded when the mailbox says so", async () => {
+    mockApi.fetchMessage.mockResolvedValue({
+      ...(await mockApi.fetchMessage()),
+      answered: true,
+      forwarded: true,
+    });
+    await mountDialog(request());
+
+    expect(document.querySelector('[title="Replied"]')?.textContent).toBe("Replied");
+    expect(document.querySelector('[title="Forwarded"]')?.textContent).toBe("Forwarded");
+  });
+
+  it("shows no mark on a message nobody has answered", async () => {
+    await mountDialog(request());
+
+    expect(document.querySelector('[title="Replied"]')).toBeNull();
+    expect(document.querySelector('[title="Forwarded"]')).toBeNull();
+  });
+
+  it("picks up the replied mark on the message still open after replying from it", async () => {
+    // The dialog stays open after a reply, so the message it shows has to be
+    // fetched again or it goes on looking unanswered.
+    const unmarked = await mockApi.fetchMessage();
+    mockApi.fetchMessage.mockResolvedValue({ ...unmarked, answered: true });
+    mockApi.fetchMessage.mockResolvedValueOnce(unmarked);
+    mockApi.sendReply.mockResolvedValue({ ok: true, messageId: "<r1>" });
+    await mountDialog(request());
+    expect(document.querySelector('[title="Replied"]')).toBeNull();
+
+    await clickToolbar("Reply");
+    await typeReply("Thanks");
+    await clickByText("Send reply");
+    await settle();
+    await settle();
+
+    expect(document.querySelector('[title="Replied"]')?.textContent).toBe("Replied");
+  });
+
+  it("picks up the forwarded mark on the message still open after forwarding it", async () => {
+    const unmarked = await mockApi.fetchMessage();
+    mockApi.fetchMessage.mockResolvedValue({ ...unmarked, forwarded: true });
+    mockApi.fetchMessage.mockResolvedValueOnce(unmarked);
+    mockApi.sendNew.mockResolvedValue({ ok: true, messageId: "<f1>" });
+    await mountDialog(request());
+    expect(document.querySelector('[title="Forwarded"]')).toBeNull();
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Send forward");
+    await settle();
+    await settle();
+
+    expect(document.querySelector('[title="Forwarded"]')?.textContent).toBe("Forwarded");
+    // The forward named the message it forwarded, so the mailbox could mark it.
+    expect(mockApi.sendNew.mock.calls[0][4]).toEqual({
+      forwardOf: { uid: 42, folder: "INBOX", messageId: "<m1>" },
+    });
+  });
+});
+
 describe("EmailPopoutDialog failure reporting", () => {
   // The bug: the operator filled in a forward, clicked send, the server
   // rejected it, and the dialog showed nothing at all. The composer stayed

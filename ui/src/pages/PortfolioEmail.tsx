@@ -60,6 +60,7 @@ import { cn, ellipsize } from "../lib/utils";
 const MAX_SENDER_CHARS = 60;
 const MAX_SUBJECT_CHARS = 80;
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { EmailStateIcons } from "../components/email/EmailStateIcons";
 import { EmptyState } from "../components/EmptyState";
 import { MailSearchBar } from "../components/MailSearchBar";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -115,6 +116,9 @@ interface PortfolioSearchRow {
   subject: string;
   /** Needs attention: IMAP unread, or a Help Scout conversation still active. */
   unseen: boolean;
+  /** IMAP only: replied to / forwarded, from any mail program. */
+  answered?: boolean;
+  forwarded?: boolean;
   /** Which mailbox and folder this came from. */
   where: string;
   company: Company | null;
@@ -349,6 +353,8 @@ export function PortfolioEmail() {
           from: hit.from,
           subject: hit.subject,
           unseen: hit.unseen,
+          answered: hit.answered,
+          forwarded: hit.forwarded,
           where: `${mb.name || mb.key} · ${hit.folder}`,
           company: mb.primaryCompany,
           // Pass the hit's own folder, not the mailbox's polled folder, or the
@@ -660,8 +666,11 @@ export function PortfolioEmail() {
                       <span className={cn("text-xs truncate", row.unseen && "font-semibold")}>
                         {ellipsize(row.from, MAX_SENDER_CHARS)}
                       </span>
-                      <span className="text-[10px] text-muted-foreground shrink-0">
-                        {row.date ? timeAgo(new Date(row.date)) : ""}
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <EmailStateIcons answered={row.answered} forwarded={row.forwarded} />
+                        <span className="text-[10px] text-muted-foreground">
+                          {row.date ? timeAgo(new Date(row.date)) : ""}
+                        </span>
                       </span>
                     </div>
                     <div className="text-xs text-muted-foreground truncate mt-0.5">
@@ -1342,8 +1351,11 @@ function MessageRow({
               <span className={cn("text-xs truncate min-w-0", msg.unseen && "font-semibold")}>
                 {ellipsize(msg.from, MAX_SENDER_CHARS)}
               </span>
-              <span className="text-[10px] text-muted-foreground shrink-0">
-                {timeAgo(new Date(msg.date))}
+              <span className="flex shrink-0 items-center gap-1.5">
+                <EmailStateIcons answered={msg.answered} forwarded={msg.forwarded} />
+                <span className="text-[10px] text-muted-foreground">
+                  {timeAgo(new Date(msg.date))}
+                </span>
               </span>
             </div>
             <div className="text-xs text-muted-foreground truncate mt-0.5">

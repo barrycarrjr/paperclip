@@ -9,6 +9,7 @@ import {
 import { buildEmailHandoffOriginId, EMAIL_HANDOFF_ORIGIN_KIND } from "@paperclipai/shared";
 import { visibleEmailAttachments } from "../../lib/attachments";
 import { actionFailureText } from "./actionFailure";
+import { sendOutcomeText } from "./sendOutcome";
 import { issuesApi } from "../../api/issues";
 import { agentsApi } from "../../api/agents";
 
@@ -172,7 +173,7 @@ export function useEmailMessageActions(
       attachments?: EmailSendAttachment[];
     }) => {
       const { api, target } = mustHaveMailbox();
-      await api.sendReply(target.mailbox, msg.uid, target.folder, body, {
+      const sent = await api.sendReply(target.mailbox, msg.uid, target.folder, body, {
         replyAll,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
@@ -185,11 +186,14 @@ export function useEmailMessageActions(
         // ignore
       }
       await hooks.onSenderEngaged?.(msg);
+      return sent;
     },
-    onSuccess: (_r, { msg }) => {
+    onSuccess: (sent, { msg }) => {
       hooks.onOptimistic?.(msg.uid, "read");
       hooks.onSettled?.();
-      hooks.onToast?.("Reply sent");
+      const outcome = sendOutcomeText("Reply sent", sent);
+      if (outcome.warn) hooks.onToast?.(outcome.text, undefined, true);
+      else hooks.onToast?.(outcome.text);
     },
     onError: (err) => reportFailure(hooks, "Reply", err),
   });
@@ -238,18 +242,32 @@ export function useEmailMessageActions(
           contentBase64: fetched.contentBase64,
         });
       }
-      return api.sendNew(
-        target.mailbox,
-        to,
-        subject,
-        quoted,
-        attachments.length > 0 ? { attachments } : undefined,
-      );
+      return api.sendNew(target.mailbox, to, subject, quoted, {
+        ...(attachments.length > 0 ? { attachments } : {}),
+        // Names the original so the mailbox marks it forwarded: the icon
+        // Outlook and the Email pages show. Left off when there is no real
+        // UID to name, since the plugin refuses a malformed one outright. The
+        // Message-ID lets the plugin check it is marking the right message.
+        ...(Number.isInteger(msg.uid)
+          ? {
+              forwardOf: {
+                uid: msg.uid,
+                folder: target.folder,
+                ...(msg.messageId ? { messageId: msg.messageId } : {}),
+              },
+            }
+          : {}),
+      });
     },
-    onSuccess: (_r, { msg }) => {
+    onSuccess: (sent, { msg }) => {
       hooks.onSettled?.();
       const count = visibleEmailAttachments(msg.attachments).length;
-      hooks.onToast?.(count > 0 ? `Forwarded with ${count} attachment${count === 1 ? "" : "s"}` : "Forwarded");
+      const outcome = sendOutcomeText(
+        count > 0 ? `Forwarded with ${count} attachment${count === 1 ? "" : "s"}` : "Forwarded",
+        sent,
+      );
+      if (outcome.warn) hooks.onToast?.(outcome.text, undefined, true);
+      else hooks.onToast?.(outcome.text);
     },
     onError: (err) => reportFailure(hooks, "Forward", err),
   });

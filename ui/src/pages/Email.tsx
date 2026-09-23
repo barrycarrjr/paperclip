@@ -118,6 +118,8 @@ import {
 } from "../lib/email-selection";
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
+import { EmailStateIcons } from "../components/email/EmailStateIcons";
+import { sendOutcomeText } from "../components/email/sendOutcome";
 import { DraftModelSelect } from "../components/DraftModelSelect";
 import { DraftInstructionsField } from "../components/DraftInstructionsField";
 import { emailDraftsApi } from "../api/emailDrafts";
@@ -135,10 +137,12 @@ import { cn } from "../lib/utils";
 import {
   applyImapOverrides,
   imapMailboxScope,
+  imapMessageKey,
   imapOverrideStore,
   isImapMessageListKey,
   type ImapOverrideKind,
 } from "../lib/mailboxTriageOverrides";
+import { forwardOfFor, type ForwardSource } from "../lib/email-forward";
 import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
 
 const TRIAGE_FOLDER = "_paperclip/triage";
@@ -617,6 +621,10 @@ export function Email() {
   // uses the singleton compose-* keys, "forward" uses per-message forward-*.
   const [composeMode, setComposeMode] = useState<"new" | "forward">("new");
   const [composeSourceUid, setComposeSourceUid] = useState<number | null>(null);
+  // Where the message being forwarded lives, captured when the forward opens.
+  // The send names it so the mailbox can mark it forwarded, and a uid is only
+  // meaningful in the mailbox and folder it came from.
+  const [composeSourcePlace, setComposeSourcePlace] = useState<ForwardSource | null>(null);
   // Steering text for the compose dialog's AI Draft. Only offered for "new" —
   // rewriting a forward would mangle the message being forwarded.
   const [composeInstructions, setComposeInstructions] = useState("");
@@ -939,7 +947,7 @@ export function Email() {
   // ── Full message body ─────────────────────────────────────────────────────
 
   const { data: fullMessage, isLoading: messageLoading } = useQuery({
-    queryKey: ["email", pluginId, selectedCompanyId, selectedMailbox, selectedFolder, selectedUid],
+    queryKey: imapMessageKey(pluginId, selectedCompanyId, selectedMailbox, selectedFolder, selectedUid),
     queryFn: () => emailApi!.fetchMessage(selectedMailbox!, selectedUid!, selectedFolder),
     enabled: !!emailApi && !!selectedMailbox && selectedUid !== null,
   });
@@ -981,6 +989,9 @@ export function Email() {
     const body = saved || fresh;
     setComposeMode("forward");
     setComposeSourceUid(msg.uid);
+    setComposeSourcePlace(
+      selectedMailbox ? { mailbox: selectedMailbox, folder: selectedFolder, messageId: msg.messageId } : null,
+    );
     setComposeInitial({ to: "", subject: fwdSubj, body });
     setComposeToHasContent(false);
     setComposeSubjectHasContent(fwdSubj.trim().length > 0);
@@ -1006,6 +1017,7 @@ export function Email() {
     const body = loadDraft(composeDraftKey(selectedCompanyId, "body"));
     setComposeMode("new");
     setComposeSourceUid(null);
+    setComposeSourcePlace(null);
     setComposeInitial({ to, subject, body });
     setComposeToHasContent(to.trim().length > 0);
     setComposeSubjectHasContent(subject.trim().length > 0);
@@ -1065,6 +1077,18 @@ export function Email() {
     setTimeout(() => setActionToast(null), 4000);
   }
 
+  // A send that went out. Anything it left undone (no copy in Sent, say) is
+  // shown the way a failure is, so it is not missed, but worded as the success
+  // it was, so nobody sends it a second time.
+  function showSent(outcome: { text: string; warn: boolean }) {
+    if (!outcome.warn) {
+      showToast(outcome.text);
+      return;
+    }
+    setActionToast({ text: outcome.text, failed: true });
+    setTimeout(() => setActionToast(null), 6000);
+  }
+
   const emailPrinter = usePrintEmail(selectedCompanyId, {
     onDone: (text) => showToast(text),
   });
@@ -1092,6 +1116,16 @@ export function Email() {
           companyId: selectedCompanyId,
           mailboxKey: selectedMailbox,
         }),
+    });
+  }
+
+  // A message just replied to or forwarded carries a new mark. The list
+  // refresh above does not reach the message itself, which is cached under its
+  // own key, so without this it would reopen from cache without the mark.
+  function refreshOpenMessage(mailbox: string | null, folder: string, uid: number) {
+    if (!pluginId || !selectedCompanyId || !mailbox) return;
+    void queryClient.invalidateQueries({
+      queryKey: imapMessageKey(pluginId, selectedCompanyId, mailbox, folder, uid),
     });
   }
 
@@ -1406,7 +1440,7 @@ export function Email() {
       rAll: boolean;
       attachments?: EmailSendAttachment[];
     }) => {
-      await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, {
+      const sent = await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, {
         replyAll: rAll,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
@@ -1415,17 +1449,19 @@ export function Email() {
       try { await emailApi!.markRead(selectedMailbox!, uid, selectedFolder); } catch {}
       const msg = messages.find((m) => m.uid === uid);
       if (msg) await maybeAddImplicitKeepAlways(msg);
+      return sent;
     },
-    onSuccess: (_, { uid }) => {
+    onSuccess: (sent, { uid }) => {
       noteOverride(uid, "read");
       invalidateRules();
       invalidateMessageLists();
+      refreshOpenMessage(selectedMailbox, selectedFolder, uid);
       if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
       setReplyOpen(false);
       setReplyHasContent(false);
       setDraftInstructions("");
       replyAttachments.clear();
-      showToast("Reply sent");
+      showSent(sendOutcomeText("Reply sent", sent));
     },
     onError: (err) => showFailure("Reply", err),
   });
@@ -1510,11 +1546,24 @@ export function Email() {
       body: string;
       attachments?: EmailSendAttachment[];
     }) => {
-      await emailApi!.sendNew(selectedMailbox!, to, subject, body, {
+      // A forward names its original so the mailbox marks it forwarded; see
+      // forwardOfFor for when it is safe to.
+      const forwardOf = forwardOfFor({
+        mode: composeMode,
+        sourceUid: composeSourceUid,
+        source: composeSourcePlace,
+        sendingMailbox: selectedMailbox,
+      });
+      return emailApi!.sendNew(selectedMailbox!, to, subject, body, {
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(forwardOf ? { forwardOf } : {}),
       });
     },
-    onSuccess: () => {
+    onSuccess: (sent) => {
+      if (composeMode === "forward" && composeSourcePlace && composeSourceUid !== null) {
+        refreshOpenMessage(composeSourcePlace.mailbox, composeSourcePlace.folder, composeSourceUid);
+        invalidateMessageLists();
+      }
       if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
         clearDraft(forwardDraftKey(selectedMailbox, composeSourceUid));
       } else {
@@ -1529,8 +1578,9 @@ export function Email() {
       setComposeInstructions("");
       setComposeMode("new");
       setComposeSourceUid(null);
+      setComposeSourcePlace(null);
       composeAttachments.clear();
-      showToast("Message sent");
+      showSent(sendOutcomeText("Message sent", sent));
     },
     // The dialog stays open on a failure so the message is not lost, and the
     // reason is shown inside it as well as in the toast.
@@ -2223,8 +2273,11 @@ export function Email() {
             <span className={cn("text-xs truncate", msg.unseen && "font-semibold")}>
               {msg.from}
             </span>
-            <span className="text-[10px] text-muted-foreground shrink-0">
-              {timeAgo(new Date(msg.date))}
+            <span className="flex shrink-0 items-center gap-1.5">
+              <EmailStateIcons answered={msg.answered} forwarded={msg.forwarded} />
+              <span className="text-[10px] text-muted-foreground">
+                {timeAgo(new Date(msg.date))}
+              </span>
             </span>
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">{msg.subject}</div>
@@ -2277,8 +2330,11 @@ export function Email() {
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline justify-between gap-2">
             <span className={cn("text-xs truncate", hit.unseen && "font-semibold")}>{hit.from}</span>
-            <span className="text-[10px] text-muted-foreground shrink-0">
-              {hit.date ? timeAgo(new Date(hit.date)) : ""}
+            <span className="flex shrink-0 items-center gap-1.5">
+              <EmailStateIcons answered={hit.answered} forwarded={hit.forwarded} />
+              <span className="text-[10px] text-muted-foreground">
+                {hit.date ? timeAgo(new Date(hit.date)) : ""}
+              </span>
             </span>
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">{hit.subject}</div>
@@ -2904,8 +2960,13 @@ export function Email() {
                     <span className="font-medium text-foreground">{fullMessage.from}</span>
                     {fullMessage.to.length > 0 && <span> → {fullMessage.to.join(", ")}</span>}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(fullMessage.date).toLocaleString()}
+                  <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                    <span>{new Date(fullMessage.date).toLocaleString()}</span>
+                    <EmailStateIcons
+                      answered={fullMessage.answered}
+                      forwarded={fullMessage.forwarded}
+                      showLabels
+                    />
                   </div>
                 </div>
 
@@ -3373,8 +3434,17 @@ export function Email() {
         actionHooks={{
           onOptimistic: (uid, kind) => noteOverride(uid, kind),
           onRevert: (uid) => clearOverride(uid),
-          onSettled: () => invalidateMessageLists(),
-          onToast: (text, issueId) => showToast(text, issueId),
+          // The message behind the dialog is usually the one it shows, and a
+          // reply or forward from the dialog gives it a new mark. Its cache
+          // entry is out of reach of the list refresh (see imapMessageKey).
+          onSettled: () => {
+            invalidateMessageLists();
+            if (popout) refreshOpenMessage(popout.mailbox, popout.folder, popout.uid);
+          },
+          // `failed` covers a rejected action and a send that went out with
+          // something left undone. Dropping it showed both as plain successes.
+          onToast: (text, issueId, failed) =>
+            failed ? showSent({ text, warn: true }) : showToast(text, issueId),
         }}
       />
     </div>

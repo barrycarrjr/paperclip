@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Forward,
@@ -45,6 +45,7 @@ import { resolveActionHeader } from "./emailActionHeader";
 import { actionFailureText, inlineFailureText } from "./actionFailure";
 import { SendingIdentityLine } from "./SendingIdentityLine";
 import { describeSendingIdentity, findSelectedMailbox } from "./sendingIdentity";
+import { EmailStateIcons } from "./EmailStateIcons";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -198,6 +199,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     enabled: Boolean(request && handOffOpen),
   });
 
+  const queryClient = useQueryClient();
   const actions = useEmailMessageActions(
     request
       ? {
@@ -209,6 +211,13 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
       : null,
     actionHooks,
   );
+
+  // A reply or forward puts a new mark on the message still shown here, which
+  // is cached under this dialog's own key, out of reach of the caller's list
+  // refresh. Without this the dialog keeps showing it unmarked.
+  function refreshShownMessage() {
+    void queryClient.invalidateQueries({ queryKey: ["email-popout"] });
+  }
 
   const printer = usePrintEmail(request?.companyId ?? null, {
     onDone: (text) => setPrintNote(text),
@@ -312,10 +321,13 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                   <span className="font-medium text-foreground">{message.from}</span>
                   {message.to.length > 0 && <span> to {message.to.join(", ")}</span>}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {new Date(message.date).toLocaleString()}
-                  {request?.mailboxName ? ` · ${request.mailboxName}` : ""}
-                  {request?.companyName ? ` · ${request.companyName}` : ""}
+                <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                  <span>
+                    {new Date(message.date).toLocaleString()}
+                    {request?.mailboxName ? ` · ${request.mailboxName}` : ""}
+                    {request?.companyName ? ` · ${request.companyName}` : ""}
+                  </span>
+                  <EmailStateIcons answered={message.answered} forwarded={message.forwarded} showLabels />
                 </div>
               </>
             )}
@@ -560,6 +572,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                         // Replying marks the message read, so the toolbar has
                         // to stop offering to do it again.
                         setReadStateChange(false);
+                        refreshShownMessage();
                       },
                     },
                   )}
@@ -599,7 +612,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 onClick={() =>
                   actions.forward.mutate(
                     { msg: message, to: forwardTo.trim(), note: body },
-                    { onSuccess: () => { setComposer(null); setBody(""); setForwardTo(""); } },
+                    {
+                      onSuccess: () => {
+                        setComposer(null);
+                        setBody("");
+                        setForwardTo("");
+                        refreshShownMessage();
+                      },
+                    },
                   )}
               >
                 {actions.forward.isPending ? (
