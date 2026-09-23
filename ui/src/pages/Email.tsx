@@ -142,6 +142,7 @@ import {
   listPaneMaxWidthCss,
   startListPaneResize,
 } from "../lib/email-pane-layout";
+import { followOpenRow, type ListRow, revealRowInList, sameListRow } from "../lib/reveal-in-list";
 import {
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
@@ -534,6 +535,14 @@ export function Email() {
   // The narrow list's "More actions" menu, per row, so its toolbar stays up
   // while the menu is open (see RowHoverToolbar's forceVisible).
   const [moreMenuUid, setMoreMenuUid] = useState<number | null>(null);
+  // The message open last and, just after it closes, the row the full-width
+  // list brings back into view; see followOpenRow.
+  const [lastOpened, setLastOpened] = useState<ListRow | null>(null);
+  const [revealAfterClose, setRevealAfterClose] = useState<ListRow | null>(null);
+  useEffect(() => {
+    // Only once: the list that came back has had its chance to show it.
+    if (revealAfterClose) setRevealAfterClose(null);
+  }, [revealAfterClose]);
   const [moveDropdownSender, setMoveDropdownSender] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<
     { text: string; issueId?: string; failed?: boolean } | null
@@ -2377,6 +2386,14 @@ export function Email() {
     return (
       <div
         key={msg.uid}
+        // The open message's row scrolls itself into view, so the narrow list
+        // that replaces the full-width one shows the message you just opened,
+        // and the full-width list shows it again once you close it.
+        ref={
+          sameListRow(revealRow, { uid: msg.uid, mailbox: selectedMailbox, folder: selectedFolder })
+            ? revealRowInList
+            : undefined
+        }
         className={cn(
           ROW_WITH_HOVER_TOOLBAR,
           "flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
@@ -2455,6 +2472,9 @@ export function Email() {
     return (
       <div
         key={`${hit.mailbox}:${hit.folder}:${hit.uid}`}
+        // Matched on the result's own folder, not the selected one: the
+        // folder tree can change the selection while the results stay up.
+        ref={sameListRow(revealRow, hit) ? revealRowInList : undefined}
         className={cn(
           "group flex items-center gap-2 px-3 hover:bg-accent/50 transition-colors cursor-pointer",
           isOpen && "bg-accent",
@@ -2499,6 +2519,15 @@ export function Email() {
     groupBySender,
     search: searchQuery,
   });
+  // The row the list brings into view when it appears: the open message's,
+  // or once, just after it closes, the one that was open. Kept up to date
+  // during render, which settles after one extra pass.
+  const openRow: ListRow | null =
+    selectedUid !== null ? { uid: selectedUid, mailbox: selectedMailbox, folder: selectedFolder } : null;
+  const followed = followOpenRow(lastOpened, openRow);
+  if (followed.remembered !== lastOpened) setLastOpened(followed.remembered);
+  if (followed.justClosed) setRevealAfterClose(followed.justClosed);
+  const revealRow = openRow ?? revealAfterClose;
 
   function renderSearchListBody(compact: boolean) {
     if (searchFetching && searchResults.length === 0) {

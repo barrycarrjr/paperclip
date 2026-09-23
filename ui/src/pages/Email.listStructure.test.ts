@@ -52,4 +52,44 @@ describe("the Email page's message list", () => {
     expect(scrollBoxes).toHaveLength(3);
     for (const box of scrollBoxes) expect(box).toContain("key={listScrollKey}");
   });
+
+  /**
+   * Opening a message from the full-width list replaces it with the narrow
+   * list beside the message, and closing the message swaps them back. Either
+   * list starts at the top when it appears, so the row of the message you
+   * are on has to bring itself into view. See revealRowInList.
+   */
+  it("scrolls the open message's row into view, in the folder list and in search results", () => {
+    const body = emailBody();
+    for (const renderer of ["function renderRow(", "function renderSearchRow("]) {
+      const start = body.indexOf(renderer);
+      expect(start, `expected ${renderer} in Email.tsx`).toBeGreaterThan(-1);
+      const end = body.indexOf("\n  }", start);
+      expect(body.slice(start, end)).toMatch(
+        /ref=\{[\s\S]*?\brevealRow\b[\s\S]*?\?\s*revealRowInList\s*:\s*undefined\s*\}/,
+      );
+    }
+  });
+
+  it("matches that row on its folder as well as its number", () => {
+    // Every folder numbers its own messages, and search results mix folders,
+    // so a number alone scrolled to a different message sharing it.
+    const body = emailBody();
+    const row = body.slice(body.indexOf("function renderRow("));
+    expect(row.slice(0, row.indexOf("\n  }"))).toContain(
+      "sameListRow(revealRow, { uid: msg.uid, mailbox: selectedMailbox, folder: selectedFolder })",
+    );
+    const hit = body.slice(body.indexOf("function renderSearchRow("));
+    expect(hit.slice(0, hit.indexOf("\n  }"))).toContain("sameListRow(revealRow, hit)");
+  });
+
+  it("brings a closed message back into view once, not whenever its row reappears", () => {
+    // A message archived from the reading pane is closed too; if the server
+    // refused and the row came back later, the list jumped to it.
+    const body = emailBody();
+    expect(body).toContain("const revealRow = openRow ?? revealAfterClose;");
+    expect(body).toMatch(
+      /useEffect\(\(\) => \{\s*(?:\/\/[^\n]*\n\s*)*if \(revealAfterClose\) setRevealAfterClose\(null\);\s*\}, \[revealAfterClose\]\);/,
+    );
+  });
 });
