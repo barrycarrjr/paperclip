@@ -78,6 +78,12 @@ import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
 import { ImageGalleryModal } from "../components/ImageGalleryModal";
+import {
+  AttachmentFileIcon,
+  AttachmentPreviewCard,
+  AttachmentViewerModal,
+  describeAttachmentUploader,
+} from "../components/attachments/AttachmentPreview";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { ScrollToTop } from "../components/ScrollToTop";
 import { StatusIcon } from "../components/StatusIcon";
@@ -141,6 +147,7 @@ import {
   type RequestConfirmationInteraction,
   type SuggestTasksInteraction,
   type IssueTreeControlMode,
+  formatByteSize,
 } from "@paperclipai/shared";
 
 type CommentReassignment = IssueCommentReassignment;
@@ -984,6 +991,8 @@ export function IssueDetail() {
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
   const [treeControlOpen, setTreeControlOpen] = useState(false);
   const [treeControlMode, setTreeControlMode] = useState<IssueTreeControlMode>("pause");
   const [treeControlReason, setTreeControlReason] = useState("");
@@ -2329,6 +2338,25 @@ export function IssueDetail() {
   const attachmentList = attachments ?? [];
   const imageAttachments = attachmentList.filter(isImageAttachment);
   const nonImageAttachments = attachmentList.filter((a) => !isImageAttachment(a));
+  // The viewer steps through every attachment in the order they are shown:
+  // the image grid first, then the file rows.
+  const viewerAttachments = useMemo(
+    () => [...imageAttachments, ...nonImageAttachments],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [attachments],
+  );
+  const openAttachmentViewer = useCallback(
+    (attachmentId: string) => {
+      const idx = viewerAttachments.findIndex((a) => a.id === attachmentId);
+      setViewerIndex(idx >= 0 ? idx : 0);
+      setViewerOpen(true);
+    },
+    [viewerAttachments],
+  );
+  const attachmentUploaderLabel = useCallback(
+    (attachment: IssueAttachment) => describeAttachmentUploader(attachment, agentMap, userProfileMap),
+    [agentMap, userProfileMap],
+  );
 
   const handleChatImageClick = useCallback(
     (src: string) => {
@@ -3131,11 +3159,7 @@ export function IssueDetail() {
               <div
                 key={attachment.id}
                 className="group relative aspect-square rounded-lg overflow-hidden border border-border bg-accent/10 cursor-pointer"
-                onClick={() => {
-                  const idx = imageAttachments.findIndex((a) => a.id === attachment.id);
-                  setGalleryIndex(idx >= 0 ? idx : 0);
-                  setGalleryOpen(true);
-                }}
+                onClick={() => openAttachmentViewer(attachment.id)}
               >
                 <img
                   src={attachment.contentPath}
@@ -3198,15 +3222,21 @@ export function IssueDetail() {
             {nonImageAttachments.map((attachment) => (
               <div key={attachment.id} className="border border-border rounded-md p-2">
                 <div className="flex items-center justify-between gap-2">
-                  <a
-                    href={attachment.contentPath}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs hover:underline truncate"
-                    title={attachment.originalFilename ?? attachment.id}
-                  >
-                    {attachment.originalFilename ?? attachment.id}
-                  </a>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <AttachmentFileIcon contentType={attachment.contentType} filename={attachment.originalFilename} />
+                    <AttachmentPreviewCard
+                      attachment={attachment}
+                      uploadedBy={attachmentUploaderLabel(attachment)}
+                    >
+                      <button
+                        type="button"
+                        className="min-w-0 truncate text-left text-xs hover:underline focus-visible:underline focus-visible:outline-none"
+                        onClick={() => openAttachmentViewer(attachment.id)}
+                      >
+                        {attachment.originalFilename ?? attachment.id}
+                      </button>
+                    </AttachmentPreviewCard>
+                  </div>
                   <button
                     type="button"
                     className="text-muted-foreground hover:text-destructive"
@@ -3218,7 +3248,7 @@ export function IssueDetail() {
                   </button>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  {attachment.contentType} · {(attachment.byteSize / 1024).toFixed(1)} KB
+                  {attachment.contentType} · {formatByteSize(attachment.byteSize)}
                 </p>
               </div>
             ))}
@@ -3233,6 +3263,14 @@ export function IssueDetail() {
         initialIndex={galleryIndex}
         open={galleryOpen}
         onOpenChange={setGalleryOpen}
+      />
+
+      <AttachmentViewerModal
+        attachments={viewerAttachments}
+        initialIndex={viewerIndex}
+        open={viewerOpen}
+        onOpenChange={setViewerOpen}
+        uploaderLabel={attachmentUploaderLabel}
       />
 
       <IssueWorkspaceCard

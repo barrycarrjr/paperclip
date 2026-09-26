@@ -138,6 +138,11 @@ import { Identity } from "@/components/Identity";
 import { IssueReferencePill } from "@/components/IssueReferencePill";
 import { AttachmentChipList } from "@/components/attachments/AttachmentChipList";
 import {
+  AttachmentFileIcon,
+  AttachmentPreviewCard,
+  AttachmentViewerModal,
+} from "@/components/attachments/AttachmentPreview";
+import {
   AttachmentComposer,
   useComposeAttachments,
 } from "@/components/attachments/AttachmentComposer";
@@ -146,6 +151,31 @@ import { EMAIL_ATTACHMENT_MAX_BYTES } from "@/lib/attachments";
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
 /* ------------------------------------------------------------------ */
+
+// Sample issue files for the attachment preview showcase. Data URLs stand in
+// for server content so the page needs no issue to exist.
+const demoIssueFiles = [
+  {
+    id: "demo-notes",
+    contentType: "text/csv",
+    byteSize: 64,
+    originalFilename: "orders-by-month.csv",
+    contentPath: `data:text/csv,${encodeURIComponent("month,orders,revenue\nJanuary,120,4800\nFebruary,135,5400\n")}`,
+    createdAt: new Date(),
+    createdByAgentId: "demo-agent",
+    createdByUserId: null,
+  },
+  {
+    id: "demo-contract",
+    contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    byteSize: 48 * 1024,
+    originalFilename: "lease-agreement.docx",
+    contentPath: "data:application/octet-stream,",
+    createdAt: new Date(),
+    createdByAgentId: null,
+    createdByUserId: "demo-user",
+  },
+];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -210,6 +240,8 @@ const DEMO_MODELS: ModelPickerEntry[] = [
 /* ------------------------------------------------------------------ */
 
 export function DesignGuide() {
+  const [demoViewerOpen, setDemoViewerOpen] = useState(false);
+  const [demoViewerIndex, setDemoViewerIndex] = useState(0);
   const [status, setStatus] = useState("todo");
   const [priority, setPriority] = useState("medium");
   const [selectValue, setSelectValue] = useState("in_progress");
@@ -268,7 +300,7 @@ export function DesignGuide() {
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
-                "AttachmentComposer", "EmailStateIcons", "RowHoverToolbar",
+                "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "RowHoverToolbar",
                 "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
@@ -654,6 +686,38 @@ export function DesignGuide() {
             <p className="text-xs text-muted-foreground">
               Multi-file picker with per-file read status. Over-limit files become error chips
               and are never sent; gate send on <code className="font-mono">state.allReady</code>.
+            </p>
+          </SubSection>
+          <SubSection title="AttachmentPreviewCard + AttachmentViewerModal (issue files)">
+            <div className="space-y-2">
+              {demoIssueFiles.map((file, index) => (
+                <div key={file.id} className="flex items-center gap-1.5 rounded-md border border-border p-2">
+                  <AttachmentFileIcon contentType={file.contentType} filename={file.originalFilename} />
+                  <AttachmentPreviewCard attachment={file} uploadedBy="Corporate Operations">
+                    <button
+                      type="button"
+                      className="min-w-0 truncate text-left text-xs hover:underline focus-visible:underline focus-visible:outline-none"
+                      onClick={() => {
+                        setDemoViewerIndex(index);
+                        setDemoViewerOpen(true);
+                      }}
+                    >
+                      {file.originalFilename}
+                    </button>
+                  </AttachmentPreviewCard>
+                </div>
+              ))}
+            </div>
+            <AttachmentViewerModal
+              attachments={demoIssueFiles}
+              initialIndex={demoViewerIndex}
+              open={demoViewerOpen}
+              onOpenChange={setDemoViewerOpen}
+            />
+            <p className="text-xs text-muted-foreground">
+              Hover or tab to a file name for details and a preview (PDF first page, the first
+              40 lines of text, CSV or JSON, or &quot;no preview&quot;). Click opens the viewer;
+              arrow keys step through every attachment, Escape closes, Download saves.
             </p>
           </SubSection>
         </div>
