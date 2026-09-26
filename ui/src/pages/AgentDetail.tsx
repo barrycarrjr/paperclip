@@ -1766,6 +1766,7 @@ function ConfigurationTab({
 
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canAssignTasks = Boolean(agent.access?.canAssignTasks);
+  const canCreateBoardReminders = Boolean(agent.access?.canCreateBoardReminders);
   const taskAssignSource = agent.access?.taskAssignSource ?? "none";
   const taskAssignLocked = agent.role === "ceo" || canCreateAgents;
   const taskAssignHint =
@@ -1831,6 +1832,26 @@ function ConfigurationTab({
                 })
               }
               disabled={updatePermissions.isPending || taskAssignLocked}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <div className="space-y-1">
+              <div>Can set reminders for you</div>
+              <p className="text-xs text-muted-foreground">
+                Lets this agent put reminders on your calendar, with the same desktop and Slack
+                alerts as your own. They belong to you, and each one is recorded in the activity log.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={canCreateBoardReminders}
+              onCheckedChange={() =>
+                updatePermissions.mutate({
+                  canCreateAgents,
+                  canAssignTasks,
+                  canCreateBoardReminders: !canCreateBoardReminders,
+                })
+              }
+              disabled={updatePermissions.isPending}
             />
           </div>
         </div>

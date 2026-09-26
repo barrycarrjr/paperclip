@@ -132,6 +132,11 @@ export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canAssignTasks: z.boolean(),
+  /**
+   * Optional so existing callers that only send the two flags above leave the
+   * reminder grant untouched. Only a person may set it; see the route.
+   */
+  canCreateBoardReminders: z.boolean().optional(),
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;

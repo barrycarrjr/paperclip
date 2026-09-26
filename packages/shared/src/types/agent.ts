@@ -48,6 +48,11 @@ export interface AgentInstructionsBundle {
 export interface AgentAccessState {
   canAssignTasks: boolean;
   taskAssignSource: "explicit_grant" | "agent_creator" | "ceo_role" | "none";
+  /**
+   * True when the agent holds `reminders:create_for_board`: it may create
+   * reminders, and they belong to the person who granted it.
+   */
+  canCreateBoardReminders: boolean;
   membership: CompanyMembership | null;
   grants: PrincipalPermissionGrant[];
 }
