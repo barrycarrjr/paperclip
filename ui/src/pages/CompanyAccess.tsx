@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AGENT_ONLY_PERMISSION_KEYS,
   HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS,
   PERMISSION_KEYS,
   type Agent,
@@ -37,7 +38,12 @@ const permissionLabels: Record<PermissionKey, string> = {
   "tasks:manage_active_checkouts": "Manage active task checkouts",
   "joins:approve": "Approve join requests",
   "environments:manage": "Manage environments",
+  "reminders:create_for_board": "Set reminders for the person who granted it",
 };
+
+/** Grants a person can hold. Agent-only grants are managed on the agent's own page. */
+const agentOnlyPermissionKeys = new Set<PermissionKey>(AGENT_ONLY_PERMISSION_KEYS);
+const humanPermissionKeys = PERMISSION_KEYS.filter((key) => !agentOnlyPermissionKeys.has(key));
 
 function formatGrantSummary(member: CompanyMember) {
   if (member.grants.length === 0) return "No explicit grants";
@@ -475,7 +481,7 @@ export function CompanyAccess() {
                   ) : null}
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
-                  {PERMISSION_KEYS.map((permissionKey) => (
+                  {humanPermissionKeys.map((permissionKey) => (
                     <label
                       key={permissionKey}
                       className="flex items-start gap-3 rounded-lg border border-border px-3 py-2"

@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { createEventSchema, updateEventSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { calendarService, companyService, logActivity } from "../services/index.js";
+import { accessService, calendarService, companyService, logActivity } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
@@ -32,6 +32,28 @@ export function calendarRoutes(db: Db) {
   const router = Router();
   const svc = calendarService(db);
   const companySvc = companyService(db);
+  const access = accessService(db);
+
+  /**
+   * The person an agent's reminders belong to, or null when the agent may not
+   * create reminders in this company. An agent needs the
+   * `reminders:create_for_board` grant, which only a person can give (see the
+   * agent permissions route), and the reminder is owned by that person. A grant
+   * with no person recorded behind it is treated as no grant.
+   */
+  async function reminderOwnerForAgent(req: Request, companyId: string): Promise<string | null> {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return null;
+    const allowed = await access.hasPermission(
+      companyId,
+      "agent",
+      req.actor.agentId,
+      "reminders:create_for_board",
+    );
+    if (!allowed) return null;
+    const grants = await access.listPrincipalGrants(companyId, "agent", req.actor.agentId);
+    const grant = grants.find((g) => g.permissionKey === "reminders:create_for_board");
+    return grant?.grantedByUserId ?? null;
+  }
 
   /**
    * True when the requester may read across the whole portfolio from the
@@ -60,6 +82,16 @@ export function calendarRoutes(db: Db) {
     assertCompanyAccess(req, ev.companyId);
     if (req.actor.type === "board" && req.actor.source === "local_implicit") {
       return ev;
+    }
+    // An agent may change or remove reminders it created itself, for as long
+    // as it still holds the grant (so moving a deadline after an extension
+    // does not need a person), but never anyone else's.
+    if (req.actor.type === "agent") {
+      const ownsIt = Boolean(req.actor.agentId) && ev.createdByAgentId === req.actor.agentId;
+      if (ownsIt && (await reminderOwnerForAgent(req, ev.companyId)) !== null) {
+        return ev;
+      }
+      throw forbidden("You can only modify reminders you created");
     }
     const actorUserId = isUserDrivenActor(req) ? req.actor.userId ?? null : null;
     if (actorUserId !== ev.userId) {
@@ -169,11 +201,19 @@ export function calendarRoutes(db: Db) {
   router.post("/companies/:companyId/events", validate(createEventSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    if (!isUserDrivenActor(req)) {
-      throw forbidden("Reminders can only be created by a user");
+    let userId: string;
+    let agentId: string | null = null;
+    if (isUserDrivenActor(req)) {
+      userId = req.actor.userId ?? "board";
+    } else {
+      const owner = await reminderOwnerForAgent(req, companyId);
+      if (owner === null) {
+        throw forbidden("Reminders can only be created by a user");
+      }
+      userId = owner;
+      agentId = req.actor.agentId ?? null;
     }
-    const userId = req.actor.userId ?? "board";
-    const created = await svc.create(companyId, req.body, { userId, agentId: null });
+    const created = await svc.create(companyId, req.body, { userId, agentId });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,

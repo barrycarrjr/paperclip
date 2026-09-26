@@ -77,6 +77,8 @@ export interface AgentHireResponse {
 export interface AgentPermissionUpdate {
   canCreateAgents: boolean;
   canAssignTasks: boolean;
+  /** Omit to leave the reminder grant as it is. */
+  canCreateBoardReminders?: boolean;
 }
 
 function withCompanyScope(path: string, companyId?: string) {

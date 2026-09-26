@@ -1285,6 +1285,123 @@ describe.sequential("agent permission routes", () => {
     expect(res.body.access.taskAssignSource).toBe("agent_creator");
   });
 
+  describe("reminder grant (reminders:create_for_board)", () => {
+    const boardActor = {
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    };
+
+    it("lets a person grant it, recording them as the granter, without storing it on the agent row", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: false, canCreateBoardReminders: true }));
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId,
+        "agent",
+        agentId,
+        "reminders:create_for_board",
+        true,
+        "board-user",
+      );
+      expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(agentId, {
+        canCreateAgents: false,
+        canAssignTasks: false,
+      });
+      expect(mockLogActivity).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "agent.permissions_updated",
+          details: expect.objectContaining({ canCreateBoardReminders: true }),
+        }),
+      );
+    });
+
+    it("lets a person withdraw it", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: false, canCreateBoardReminders: false }));
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId,
+        "agent",
+        agentId,
+        "reminders:create_for_board",
+        false,
+        "board-user",
+      );
+    });
+
+    it("leaves the grant alone when the flag is not sent", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: true }));
+
+      expect(res.status).toBe(200);
+      const reminderCalls = mockAccessService.setPrincipalPermission.mock.calls.filter(
+        (call) => call[3] === "reminders:create_for_board",
+      );
+      expect(reminderCalls).toHaveLength(0);
+    });
+
+    it("refuses a CEO agent that tries to grant it, and changes nothing", async () => {
+      const ceoId = "33333333-3333-4333-8333-333333333333";
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === ceoId ? { ...baseAgent, id: ceoId, role: "ceo", name: "CEO" } : baseAgent,
+      );
+      const app = await createApp({
+        type: "agent",
+        agentId: ceoId,
+        companyId,
+        runId: "run-1",
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: false, canCreateBoardReminders: true }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("Only a person can change whether an agent may create reminders");
+      expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+      expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+    });
+
+    it("reports the grant on the agent detail", async () => {
+      mockAccessService.listPrincipalGrants.mockResolvedValue([
+        {
+          id: "grant-1",
+          companyId,
+          principalType: "agent",
+          principalId: agentId,
+          permissionKey: "reminders:create_for_board",
+          scope: null,
+          grantedByUserId: "board-user",
+          createdAt: new Date("2026-03-19T00:00:00.000Z"),
+          updatedAt: new Date("2026-03-19T00:00:00.000Z"),
+        },
+      ]);
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/agents/${agentId}`));
+
+      expect(res.status).toBe(200);
+      expect(res.body.access.canCreateBoardReminders).toBe(true);
+      expect(res.body.access.canAssignTasks).toBe(false);
+    });
+  });
+
   it("exposes a dedicated agent route for the inbox mine view", async () => {
     mockIssueService.list.mockResolvedValue([
       {

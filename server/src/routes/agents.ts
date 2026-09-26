@@ -232,11 +232,15 @@ export function agentRoutes(
       ? await access.listPrincipalGrants(agent.companyId, "agent", agent.id)
       : [];
     const hasExplicitTaskAssignGrant = grants.some((grant) => grant.permissionKey === "tasks:assign");
+    const canCreateBoardReminders = grants.some(
+      (grant) => grant.permissionKey === "reminders:create_for_board",
+    );
 
     if (agent.role === "ceo") {
       return {
         canAssignTasks: true,
         taskAssignSource: "ceo_role" as const,
+        canCreateBoardReminders,
         membership,
         grants,
       };
@@ -246,6 +250,7 @@ export function agentRoutes(
       return {
         canAssignTasks: true,
         taskAssignSource: "agent_creator" as const,
+        canCreateBoardReminders,
         membership,
         grants,
       };
@@ -255,6 +260,7 @@ export function agentRoutes(
       return {
         canAssignTasks: true,
         taskAssignSource: "explicit_grant" as const,
+        canCreateBoardReminders,
         membership,
         grants,
       };
@@ -263,6 +269,7 @@ export function agentRoutes(
     return {
       canAssignTasks: false,
       taskAssignSource: "none" as const,
+      canCreateBoardReminders,
       membership,
       grants,
     };
@@ -1962,7 +1969,18 @@ export function agentRoutes(
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
 
-    const agent = await svc.updatePermissions(id, req.body);
+    // Reminders an agent creates belong to whoever granted the permission, so
+    // only a person may grant or withdraw it. A CEO agent can manage the other
+    // flags but cannot hand an agent the right to put reminders on someone's
+    // calendar.
+    const reminderGrantRequested = req.body.canCreateBoardReminders;
+    if (reminderGrantRequested !== undefined && req.actor.type !== "board") {
+      res.status(403).json({ error: "Only a person can change whether an agent may create reminders" });
+      return;
+    }
+
+    const { canCreateBoardReminders: _reminderFlag, ...agentPermissionFlags } = req.body;
+    const agent = await svc.updatePermissions(id, agentPermissionFlags);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
@@ -1979,6 +1997,16 @@ export function agentRoutes(
       effectiveCanAssignTasks,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+    if (reminderGrantRequested !== undefined) {
+      await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "reminders:create_for_board",
+        reminderGrantRequested,
+        req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+      );
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -1993,6 +2021,9 @@ export function agentRoutes(
       details: {
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canAssignTasks: effectiveCanAssignTasks,
+        ...(reminderGrantRequested !== undefined
+          ? { canCreateBoardReminders: reminderGrantRequested }
+          : {}),
       },
     });
 

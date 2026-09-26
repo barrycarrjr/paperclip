@@ -4,10 +4,13 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  agents,
   calendarEventDeliveries,
   calendarEvents,
   companies,
+  companyMemberships,
   createDb,
+  principalPermissionGrants,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -69,6 +72,9 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     await db.delete(activityLog);
     await db.delete(calendarEventDeliveries);
     await db.delete(calendarEvents);
+    await db.delete(principalPermissionGrants);
+    await db.delete(companyMemberships);
+    await db.delete(agents);
     await db.delete(companies);
   });
 
@@ -287,6 +293,147 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("Reminders can only be created by a user");
+  });
+
+  // --- 3b. Agents holding the reminder grant --------------------------------
+
+  /**
+   * A real agent row (calendar_events.created_by_agent_id references it) with
+   * an active membership, and optionally the reminder grant given by `grantedBy`.
+   */
+  async function seedAgent(
+    companyId: string,
+    opts: { grant?: boolean; grantedBy?: string | null } = {},
+  ): Promise<string> {
+    const agentId = randomUUID();
+    await db.insert(agents).values({ id: agentId, companyId, name: "Corporate Operations" });
+    await db.insert(companyMemberships).values({
+      companyId,
+      principalType: "agent",
+      principalId: agentId,
+      status: "active",
+      membershipRole: "member",
+    });
+    if (opts.grant) {
+      await db.insert(principalPermissionGrants).values({
+        companyId,
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "reminders:create_for_board",
+        grantedByUserId: opts.grantedBy === undefined ? USER_A : opts.grantedBy,
+      });
+    }
+    return agentId;
+  }
+
+  function grantedAgentActor(agentId: string, companyId: string): Record<string, unknown> {
+    // No runId: activity_log.run_id references heartbeat_runs, and this test has no run.
+    return { type: "agent", agentId, companyId, source: "agent_key" };
+  }
+
+  const reminderBody = {
+    title: "Federal return due in 30 days",
+    scheduleKind: "once",
+    channels: ["desktop"],
+    anchorAt: "2026-08-03T09:00:00-04:00",
+  };
+
+  it("lets an agent holding the grant create a reminder owned by the person who granted it", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId, { grant: true, grantedBy: USER_A });
+    const agentApp = createApp(grantedAgentActor(agentId, companyId));
+
+    const res = await request(agentApp).post(`/api/companies/${companyId}/events`).send(reminderBody);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.userId).toBe(USER_A);
+    expect(res.body.createdByAgentId).toBe(agentId);
+
+    // It shows up for the owner exactly like one they made themselves.
+    const ownerApp = createApp(toolSessionActor(USER_A, companyId));
+    const detail = await request(ownerApp).get(`/api/events/${res.body.id}`);
+    expect(detail.status).toBe(200);
+
+    const activity = await db.select().from(activityLog);
+    expect(activity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "calendar_event.created",
+          entityId: res.body.id,
+          agentId,
+        }),
+      ]),
+    );
+  });
+
+  it("refuses an agent whose grant has no person recorded behind it", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId, { grant: true, grantedBy: null });
+    const agentApp = createApp(grantedAgentActor(agentId, companyId));
+
+    const res = await request(agentApp).post(`/api/companies/${companyId}/events`).send(reminderBody);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Reminders can only be created by a user");
+  });
+
+  it("refuses an agent without the grant", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId);
+    const agentApp = createApp(grantedAgentActor(agentId, companyId));
+
+    const res = await request(agentApp).post(`/api/companies/${companyId}/events`).send(reminderBody);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("does not let a granted agent create reminders in another company", async () => {
+    const homeCompanyId = await seedCompany();
+    const otherCompanyId = await seedCompany();
+    const agentId = await seedAgent(homeCompanyId, { grant: true });
+    const agentApp = createApp(grantedAgentActor(agentId, homeCompanyId));
+
+    const res = await request(agentApp)
+      .post(`/api/companies/${otherCompanyId}/events`)
+      .send(reminderBody);
+
+    expect(res.status).toBe(403);
+    expect(await db.select().from(calendarEvents)).toHaveLength(0);
+  });
+
+  it("lets a granted agent move its own reminder, but not a person's, and not after the grant is withdrawn", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId, { grant: true, grantedBy: USER_A });
+    const agentApp = createApp(grantedAgentActor(agentId, companyId));
+    const ownerApp = createApp(toolSessionActor(USER_A, companyId));
+
+    const agentMade = await request(agentApp)
+      .post(`/api/companies/${companyId}/events`)
+      .send(reminderBody);
+    expect(agentMade.status).toBe(201);
+    const personMade = await request(ownerApp)
+      .post(`/api/companies/${companyId}/events`)
+      .send({ ...reminderBody, title: "Barry's own reminder" });
+    expect(personMade.status).toBe(201);
+
+    const moveOwn = await request(agentApp)
+      .patch(`/api/events/${agentMade.body.id}`)
+      .send({ anchorAt: "2026-10-15T09:00:00-04:00" });
+    expect(moveOwn.status, JSON.stringify(moveOwn.body)).toBe(200);
+
+    const movePersons = await request(agentApp)
+      .patch(`/api/events/${personMade.body.id}`)
+      .send({ title: "changed by agent" });
+    expect(movePersons.status).toBe(403);
+    expect(movePersons.body.error).toBe("You can only modify reminders you created");
+
+    await db.delete(principalPermissionGrants);
+    const afterRevoke = await request(agentApp).delete(`/api/events/${agentMade.body.id}`);
+    expect(afterRevoke.status).toBe(403);
+
+    // The person still owns and controls the agent-made reminder.
+    const ownerDelete = await request(ownerApp).delete(`/api/events/${agentMade.body.id}`);
+    expect(ownerDelete.status).toBe(204);
   });
 
   // --- 4. Desktop notification queue -----------------------------------------

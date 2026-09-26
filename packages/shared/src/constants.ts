@@ -608,8 +608,17 @@ export const PERMISSION_KEYS = [
   "tasks:assign_scope",
   "tasks:manage_active_checkouts",
   "joins:approve",
+  "reminders:create_for_board",
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+
+/**
+ * Grants that only mean something for an agent. A person can already create
+ * their own reminders, so `reminders:create_for_board` (an agent may create
+ * reminders owned by the person who granted it) is hidden from the human
+ * member editor rather than shown as a checkbox that does nothing.
+ */
+export const AGENT_ONLY_PERMISSION_KEYS = ["reminders:create_for_board"] as const satisfies readonly PermissionKey[];
 
 // ---------------------------------------------------------------------------
 // Plugin System — see doc/plugins/PLUGIN_SPEC.md for the full specification
