@@ -298,6 +298,27 @@ async function listSqlMigrationFiles(migrationsDir: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * Fingerprint of a migration file with its line endings made uniform, so the
+ * same file checked out on Windows (CRLF) and on Linux (LF) is one migration,
+ * not a "changed" one.
+ */
+export function migrationChecksum(content: string): string {
+  return sha256(content.replace(/\r\n/g, "\n"));
+}
+
+/**
+ * Every fingerprint an already-applied migration may have been recorded with:
+ * the current line-ending-neutral one, plus the raw-bytes fingerprints older
+ * builds stored, for either line ending. A real edit to the SQL matches none.
+ */
+export function acceptedMigrationChecksums(content: string): string[] {
+  const lf = content.replace(/\r\n/g, "\n");
+  return [...new Set([migrationChecksum(content), sha256(content), sha256(lf), sha256(lf.replace(/\n/g, "\r\n"))])];
+}
+
 function resolveMigrationsDir(packageRoot: string, migrationsDir: string): string {
   const resolvedRoot = path.resolve(packageRoot);
   const resolvedDir = path.resolve(resolvedRoot, migrationsDir);
@@ -419,7 +440,7 @@ export function pluginDatabaseService(db: Db) {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
         for (const migrationKey of migrationFiles) {
           const content = await readFile(path.join(migrationDir, migrationKey), "utf8");
-          const checksum = createHash("sha256").update(content).digest("hex");
+          const checksum = migrationChecksum(content);
           const existingRows = await tx
             .select()
             .from(pluginMigrations)
@@ -427,7 +448,7 @@ export function pluginDatabaseService(db: Db) {
             .limit(1);
           const existing = existingRows[0] as PluginMigrationRecord | undefined;
           if (existing?.status === "applied") {
-            if (existing.checksum !== checksum) {
+            if (!acceptedMigrationChecksums(content).includes(existing.checksum)) {
               throw new Error(`Plugin migration checksum mismatch for ${migrationKey}`);
             }
             continue;

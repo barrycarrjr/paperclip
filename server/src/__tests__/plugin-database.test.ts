@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +19,9 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import {
+  acceptedMigrationChecksums,
   derivePluginDatabaseNamespace,
+  migrationChecksum,
   pluginDatabaseService,
   validatePluginMigrationStatement,
   validatePluginRuntimeExecute,
@@ -79,6 +81,33 @@ describe("plugin database SQL validation", () => {
     expect(() =>
       validatePluginMigrationStatement("DO $$ BEGIN END $$;", "plugin_test")
     ).toThrow(/disallowed/i);
+  });
+});
+
+describe("plugin migration checksums", () => {
+  const lf = "CREATE TABLE ns.t (id uuid);\nCREATE INDEX t_idx ON ns.t (id);\n";
+  const crlf = lf.replace(/\n/g, "\r\n");
+  const rawHash = (text: string) => createHash("sha256").update(text).digest("hex");
+
+  it("gives the same fingerprint to a file whatever its line endings", () => {
+    expect(migrationChecksum(crlf)).toBe(migrationChecksum(lf));
+  });
+
+  it("still accepts fingerprints older builds recorded from raw bytes, with either line ending", () => {
+    for (const onDisk of [lf, crlf]) {
+      const accepted = acceptedMigrationChecksums(onDisk);
+      expect(accepted).toContain(rawHash(lf));
+      expect(accepted).toContain(rawHash(crlf));
+      expect(accepted).toContain(migrationChecksum(onDisk));
+    }
+  });
+
+  it("does not accept a real change to the SQL", () => {
+    const edited = lf.replace("(id uuid)", "(id uuid, note text)");
+    const accepted = acceptedMigrationChecksums(edited);
+    for (const old of [migrationChecksum(lf), rawHash(lf), rawHash(crlf)]) {
+      expect(accepted).not.toContain(old);
+    }
   });
 });
 
@@ -265,5 +294,18 @@ describeEmbeddedPostgres("plugin database namespaces", () => {
 
     await expect(pluginDb.applyMigrations(pluginId, pluginManifest, packageRoot))
       .rejects.toThrow(/checksum mismatch/i);
+  });
+
+  it("treats a migration whose line endings changed as the same migration", async () => {
+    const pluginManifest = manifest();
+    const namespace = derivePluginDatabaseNamespace(pluginManifest.id);
+    const lf = `CREATE TABLE ${namespace}.eol_rows (id uuid PRIMARY KEY);\nCREATE INDEX eol_rows_idx ON ${namespace}.eol_rows (id);\n`;
+    const packageRoot = await createPluginPackage(pluginManifest, lf);
+    const pluginId = await installPluginRecord(pluginManifest);
+    const pluginDb = pluginDatabaseService(db);
+    await pluginDb.applyMigrations(pluginId, pluginManifest, packageRoot);
+
+    await writeFile(path.join(packageRoot, "migrations", "001_init.sql"), lf.replace(/\n/g, "\r\n"), "utf8");
+    await expect(pluginDb.applyMigrations(pluginId, pluginManifest, packageRoot)).resolves.not.toThrow();
   });
 });
