@@ -44,9 +44,7 @@ import { getSecretProvider } from "../secrets/provider-registry.js";
 import { logger } from "../middleware/logger.js";
 import { pluginRegistryService } from "./plugin-registry.js";
 import {
-  collectSecretRefPaths,
   isUuidSecretRef,
-  readConfigValueAtPath,
 } from "./json-schema-secret-refs.js";
 
 // ---------------------------------------------------------------------------
@@ -99,18 +97,43 @@ export function extractSecretRefsFromConfig(
   const refs = new Set<string>();
   if (configJson == null || typeof configJson !== "object") return refs;
 
-  const secretPaths = collectSecretRefPaths(schema);
-
-  // If schema declares secret-ref paths, extract only those values.
-  if (secretPaths.size > 0) {
-    for (const dotPath of secretPaths) {
-      const current = readConfigValueAtPath(configJson as Record<string, unknown>, dotPath);
-      if (typeof current === "string" && isUuidSecretRef(current)) {
-        refs.add(current);
+  let hasSecretAnnotation = false;
+  function walkSchema(node: Record<string, unknown>, value: unknown): void {
+    if (node.format === "secret-ref") {
+      hasSecretAnnotation = true;
+      if (typeof value === "string" && isUuidSecretRef(value)) refs.add(value);
+    }
+    for (const keyword of ["allOf", "anyOf", "oneOf"] as const) {
+      const branches = node[keyword];
+      if (Array.isArray(branches)) {
+        for (const branch of branches) {
+          if (branch && typeof branch === "object" && !Array.isArray(branch)) {
+            walkSchema(branch as Record<string, unknown>, value);
+          }
+        }
       }
     }
-    return refs;
+    const properties = node.properties;
+    if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+      for (const [key, child] of Object.entries(properties)) {
+        if (child && typeof child === "object" && !Array.isArray(child)) {
+          const childValue = value && typeof value === "object" && !Array.isArray(value)
+            ? (value as Record<string, unknown>)[key] : undefined;
+          walkSchema(child as Record<string, unknown>, childValue);
+        }
+      }
+    }
+    const itemSchema = node.items;
+    if (itemSchema && typeof itemSchema === "object" && !Array.isArray(itemSchema)) {
+      if (Array.isArray(value)) {
+        for (const item of value) walkSchema(itemSchema as Record<string, unknown>, item);
+      } else {
+        walkSchema(itemSchema as Record<string, unknown>, undefined);
+      }
+    }
   }
+  if (schema) walkSchema(schema, configJson);
+  if (hasSecretAnnotation) return refs;
 
   // Fallback: no schema or no secret-ref annotations — collect all UUIDs.
   // This preserves backwards compatibility for plugins that omit
@@ -141,6 +164,8 @@ export function extractSecretRefsFromConfig(
 export interface PluginSecretsResolveParams {
   /** The secret reference string (a secret UUID). */
   secretRef: string;
+  /** Optional owning company required for company-scoped actions. */
+  companyId?: string;
 }
 
 /**
@@ -265,7 +290,7 @@ export function createPluginSecretsHandler(
 
   return {
     async resolve(params: PluginSecretsResolveParams): Promise<string> {
-      const { secretRef } = params;
+      const { secretRef, companyId } = params;
 
       // ---------------------------------------------------------------
       // 1. Validate the ref format
@@ -332,6 +357,9 @@ export function createPluginSecretsHandler(
         .then((rows) => rows[0] ?? null);
 
       if (!secret) {
+        throw secretNotFound(trimmedRef);
+      }
+      if (companyId !== undefined && secret.companyId !== companyId) {
         throw secretNotFound(trimmedRef);
       }
 

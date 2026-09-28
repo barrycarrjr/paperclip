@@ -6,7 +6,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { createPluginSecretsHandler } from "../services/plugin-secrets-handler.js";
+import { createPluginSecretsHandler, extractSecretRefsFromConfig } from "../services/plugin-secrets-handler.js";
 import { secretService } from "../services/secrets.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -23,6 +23,22 @@ if (!embeddedPostgresSupport.supported) {
  * so a change to the production constant has to be a deliberate edit here too.
  */
 const UNKNOWN_REF_LIMIT = 30;
+
+it("finds only annotated secret references inside configuration arrays", () => {
+  const passwordRef = randomUUID();
+  const companyId = randomUUID();
+  const schema = {
+    type: "object",
+    properties: {
+      profiles: { type: "array", items: { type: "object", properties: {
+        companyId: { type: "string" },
+        passwordRef: { type: "string", format: "secret-ref" },
+      } } },
+    },
+  };
+  expect(extractSecretRefsFromConfig({ profiles: [{ companyId, passwordRef }] }, schema))
+    .toEqual(new Set([passwordRef]));
+});
 
 describeEmbeddedPostgres("plugin secrets handler rate limiting", () => {
   let db!: ReturnType<typeof createDb>;
@@ -99,8 +115,15 @@ describeEmbeddedPostgres("plugin secrets handler rate limiting", () => {
       configJson: { mailboxes: [{ key: "personal", pass: secret.id }] },
     });
 
-    return { pluginId, secretRef: secret.id };
+    return { pluginId, secretRef: secret.id, companyId };
   }
+
+  it("requires a configured secret to belong to the action company when supplied", async () => {
+    const { pluginId, secretRef, companyId } = await installPluginWithSecret();
+    const handler = createPluginSecretsHandler({ db, pluginId });
+    await expect(handler.resolve({ secretRef, companyId })).resolves.toBe("hunter2");
+    await expect(handler.resolve({ secretRef, companyId: randomUUID() })).rejects.toThrow(/Secret not found/);
+  });
 
   it("resolves a configured secret far more often than the enumeration budget", async () => {
     const { pluginId, secretRef } = await installPluginWithSecret();

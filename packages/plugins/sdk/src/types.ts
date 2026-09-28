@@ -635,7 +635,8 @@ export interface PluginSecretsClient {
    * @param secretRef - The secret reference string from plugin config
    * @returns The resolved secret value
    */
-  resolve(secretRef: string): Promise<string>;
+  /** When an action is company-scoped, require the secret to belong to that company. */
+  resolve(secretRef: string, companyId?: string): Promise<string>;
 }
 
 /**
