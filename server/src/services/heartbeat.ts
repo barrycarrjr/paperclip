@@ -121,7 +121,9 @@ import {
 import { readAdapterAccountState, saveAdapterAccountRouting } from "./adapter-accounts.js";
 import {
   accountCredentialEnvVarFor,
-  resolveAdapterAccountEnv,
+  explainSwitchboardFallbackFailure,
+  forgetSwitchboardAccountAfterSignInFailure,
+  resolveAdapterAccountForRun,
   resolvedEnvForExecution,
   switchboardChoiceLogFields,
   type ResolvedAccountEnv,
@@ -5184,8 +5186,39 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // here, and a remote target must get this environment re-merged with the
     // lane token blanked once it is: see resolvedEnvForExecution.
     let resolvedAccountEnv: ResolvedAccountEnv | null = null;
+    // The Switchboard account this run is on, kept until the run finishes so a
+    // sign-in failure on it can stop it being reused. See
+    // forgetSwitchboardAccountAfterSignInFailure where the run finishes.
+    let switchboardAccountInUse: { provider: string; accountId: string } | null = null;
+    // Cleared before deciding, because a retry starts from a copy of the
+    // context of the run it retries. Left in place, a retry that falls back to
+    // the machine's own sign-in would still name the account the earlier run
+    // used, and a retry that gets an account would still carry the earlier
+    // fallback and have its sign-in failure explained as one.
+    delete context.switchboardAccount;
+    delete context.switchboardFallback;
+    delete context.switchboardReplay;
     if (!agentPinsItsOwn) {
-      const resolved = await resolveAdapterAccountEnv(agent.adapterType);
+      const resolution = await resolveAdapterAccountForRun(agent.adapterType, {
+        // Only decides what is recorded below, never which account is chosen:
+        // a run whose own env names a key, token or folder for the tool may
+        // fail on that, so its failure is not blamed on Switchboard.
+        runEnv: parseObject((runtimeConfig as Record<string, unknown>).env),
+      });
+      const { resolved } = resolution;
+      // Switchboard was asked and named no account, and none it named
+      // recently could stand in, so this run signs in with whatever the server
+      // inherited. Recorded on the run so the record says why, and so a
+      // sign-in failure can be explained as this rather than as the agent's own
+      // (see explainSwitchboardFallbackFailure where the run finishes). The
+      // warning in the log is written once per change by services/switchboard.ts,
+      // not here, so a long outage does not write one line per run.
+      if (resolution.switchboardFallback) context.switchboardFallback = resolution.switchboardFallback;
+      // Or it named none and the account it named most recently stands in.
+      // Recorded for the same reason: if that account is what is broken, its
+      // sign-in failure otherwise looks exactly like the 2026-09-18 runs did.
+      if (resolution.switchboardReplay) context.switchboardReplay = resolution.switchboardReplay;
+      switchboardAccountInUse = resolution.switchboardAccountInUse;
       if (resolved) {
         resolvedAccountEnv = resolved;
         runtimeConfig = {
@@ -5427,6 +5460,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           ...resolvedEnvForExecution(resolvedAccountEnv, adapterExecutionTargetIsRemote(executionTarget)),
         },
       } as typeof runtimeConfig;
+    }
+    // A remote run signs in on the remote host, with whatever sign-in that
+    // host has. What Switchboard said about THIS computer's accounts is not
+    // what it signed in with, so the run must not be recorded or explained as
+    // having used this computer's sign-in or a reused account here, and its
+    // sign-in failure must not make Paperclip forget an account on this
+    // computer. Removed here because this is the first point that knows where
+    // the run executes; every later write of the context carries the removal.
+    if (adapterExecutionTargetIsRemote(executionTarget)) {
+      delete context.switchboardFallback;
+      delete context.switchboardReplay;
+      switchboardAccountInUse = null;
     }
     context.paperclipEnvironment = {
       id: selectedEnvironment.id,
@@ -5917,15 +5962,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       } else {
         outcome = "failed";
       }
-      const runErrorMessage =
-        outcome === "cancelled"
-          ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
-          : outcome === "succeeded"
-            ? null
-            : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
-                currentUserRedactionOptions,
-              );
       const runErrorCode =
         outcome === "timed_out"
           ? "timeout"
@@ -5934,6 +5970,35 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             : outcome === "failed"
               ? (adapterResult.errorCode ?? "adapter_failed")
               : null;
+      // A sign-in failure on a run that fell back to the machine's own sign-in,
+      // or to the account Switchboard named most recently, gets a plain
+      // explanation in front of the adapter's words; any other run's message
+      // is unchanged. Inside the redaction, because the explanation repeats
+      // Switchboard's reason, which can name a local path.
+      const runErrorMessage =
+        outcome === "cancelled"
+          ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
+          : outcome === "succeeded"
+            ? null
+            : redactCurrentUserText(
+                explainSwitchboardFallbackFailure({
+                  errorMessage:
+                    adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                  errorCode: runErrorCode,
+                  switchboardFallback: context.switchboardFallback,
+                  switchboardReplay: context.switchboardReplay,
+                }),
+                currentUserRedactionOptions,
+              );
+      // And a run on a Switchboard account that could not sign in makes
+      // Paperclip stop reusing that account, so the next run while Switchboard
+      // is quiet takes the machine's own sign-in, which is recorded and
+      // explained, rather than the same dead folder for up to a day. This only
+      // changes what later runs are handed; this run's retry and the agent's
+      // status are settled below exactly as before.
+      if (outcome === "failed") {
+        forgetSwitchboardAccountAfterSignInFailure(runErrorCode, switchboardAccountInUse);
+      }
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {

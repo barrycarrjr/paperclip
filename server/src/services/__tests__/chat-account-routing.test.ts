@@ -29,7 +29,11 @@ import {
  */
 vi.mock("../switchboard.js", () => ({
   switchboardAccountFor: vi.fn(async () => null),
+  // What active-account actually calls; "never asked" is the no-Switchboard answer.
+  switchboardAnswerFor: vi.fn(async () => ({ account: null, noAnswer: null })),
   switchboardAccountEnv: vi.fn(() => ({})),
+  envCarriesOwnSignIn: vi.fn(() => false),
+  forgetSwitchboardAccount: vi.fn(() => false),
 }));
 
 /**

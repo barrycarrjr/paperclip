@@ -17,7 +17,12 @@
 import { getServerAdapter } from "../adapters/index.js";
 import { activeAccount, forgetExpiredAccountLimits } from "./adapter-account-router.js";
 import { readAdapterAccountState } from "./adapter-accounts.js";
-import { switchboardAccountEnv, switchboardAccountFor } from "./switchboard.js";
+import {
+  envCarriesOwnSignIn,
+  forgetSwitchboardAccount,
+  switchboardAccountEnv,
+  switchboardAnswerFor,
+} from "./switchboard.js";
 
 /**
  * The environment variable this adapter's credential travels in, or null when
@@ -112,29 +117,247 @@ export async function resolveAdapterAccountEnv(
   adapterType: string,
   now = Date.now(),
 ): Promise<ResolvedAccountEnv | null> {
+  return (await resolveAdapterAccountForRun(adapterType, { now })).resolved;
+}
+
+/**
+ * What a run records when Switchboard was asked, named no usable account, and
+ * had named none recently enough to reuse, so the run is on whatever sign-in
+ * the server inherited when it started.
+ *
+ * Stored on the run's context as `switchboardFallback`, next to
+ * `switchboardAccount`, which it replaces: a run has one or the other. On
+ * 2026-09-18 four runs in a row took this path with nothing on their record
+ * to say so, only a missing `switchboardAccount`, which is also what a machine
+ * with no Switchboard looks like.
+ *
+ * Only recorded when that really is the sign-in the run used: not when the
+ * run's own environment names a key, token or folder for the tool (see
+ * envCarriesOwnSignIn), and not on a remote target, which the heartbeat
+ * removes it for once it knows where the run executes.
+ */
+export interface SwitchboardFallbackRecord {
+  /** The tool Switchboard was asked about, e.g. "claude". */
+  provider: string;
+  /** Why it named nothing, in Switchboard's own words where it gave any. */
+  reason: string;
+}
+
+/**
+ * What a run records when Switchboard named nothing and the run was put on the
+ * account it had named most recently instead.
+ *
+ * Stored on the run's context as `switchboardReplay`, alongside
+ * `switchboardAccount`, which still names the account. Without it a reused
+ * account that has since been signed out fails exactly like the 2026-09-18
+ * runs did, with the adapter's bare words and nothing to say Switchboard had
+ * gone quiet. Same conditions as SwitchboardFallbackRecord for being recorded.
+ */
+export interface SwitchboardReplayRecord {
+  /** The tool Switchboard was asked about, e.g. "claude". */
+  provider: string;
+  /** The reused account's label, as `switchboardAccount` has it. */
+  account: string;
+  /** Why Switchboard named nothing this time. */
+  reason: string;
+  /** How long before this run Switchboard last named the account. */
+  agedMinutes: number;
+}
+
+/** Everything the run path learns from resolving an account. */
+export interface RunAccountResolution {
+  resolved: ResolvedAccountEnv | null;
+  switchboardFallback: SwitchboardFallbackRecord | null;
+  switchboardReplay: SwitchboardReplayRecord | null;
+  /**
+   * The Switchboard account this run signs in with, freshly named or reused,
+   * so a sign-in failure on it can stop it being reused (see
+   * forgetSwitchboardAccountAfterSignInFailure). Null when the run is on
+   * anything else, or when its own environment names a sign-in of its own,
+   * because then a failure may be that credential's and not the account's.
+   */
+  switchboardAccountInUse: { provider: string; accountId: string } | null;
+}
+
+const NOTHING_TO_RECORD = {
+  switchboardFallback: null,
+  switchboardReplay: null,
+  switchboardAccountInUse: null,
+} as const;
+
+/**
+ * resolveAdapterAccountEnv for the run path, which also has somewhere to
+ * record a fall back to the machine's own sign-in or to a reused account. The
+ * other callers (chat, the model lists) have nowhere to put that, so they keep
+ * the plain answer.
+ *
+ * `runEnv` is the run's merged environment before any account is added, and
+ * only decides what is recorded, never which account is chosen: an agent whose
+ * own env carries a key or a folder still gets Switchboard's answer exactly as
+ * before, it just is not told that a sign-in failure was Switchboard's doing.
+ */
+export async function resolveAdapterAccountForRun(
+  adapterType: string,
+  { now = Date.now(), runEnv = {} }: { now?: number; runEnv?: Record<string, unknown> } = {},
+): Promise<RunAccountResolution> {
   const own = await resolveActiveAccount(adapterType, now);
   if (own) {
     return {
-      source: "paperclip",
-      env: { [own.envVar]: own.credential },
-      slot: own.slot,
-      label: own.label,
-      reason: null,
+      resolved: {
+        source: "paperclip",
+        env: { [own.envVar]: own.credential },
+        slot: own.slot,
+        label: own.label,
+        reason: null,
+      },
+      ...NOTHING_TO_RECORD,
     };
   }
 
   const provider = switchboardProviderFor(adapterType);
-  if (!provider) return null;
-  const chosen = await switchboardAccountFor(provider, { now });
-  if (!chosen) return null;
+  if (!provider) return { resolved: null, ...NOTHING_TO_RECORD };
+  const { account: chosen, noAnswer } = await switchboardAnswerFor(provider, { now });
+  const signsItselfIn = envCarriesOwnSignIn(provider, runEnv);
+  if (!chosen) {
+    return {
+      resolved: null,
+      ...NOTHING_TO_RECORD,
+      switchboardFallback:
+        noAnswer?.usedInstead === "machine_sign_in" && !signsItselfIn
+          ? { provider, reason: noAnswer.reason }
+          : null,
+    };
+  }
 
   return {
-    source: "switchboard",
-    env: switchboardAccountEnv(chosen),
-    slot: null,
-    label: chosen.label,
-    reason: chosen.reason,
+    resolved: {
+      source: "switchboard",
+      env: switchboardAccountEnv(chosen),
+      slot: null,
+      label: chosen.label,
+      // A reused account keeps the reason Switchboard gave when it last named
+      // it, which could be "Subscription has capacity" from hours ago. With the
+      // replay window now a day long that would make the run log say the
+      // opposite of what happened, so a reuse says it is one.
+      reason:
+        noAnswer?.usedInstead === "recent_account"
+          ? `Reused the account Switchboard named most recently, because it named none just now: ${noAnswer.reason}`
+          : chosen.reason,
+    },
+    switchboardFallback: null,
+    switchboardReplay:
+      noAnswer?.usedInstead === "recent_account" && !signsItselfIn
+        ? {
+            provider,
+            account: chosen.label,
+            reason: noAnswer.reason,
+            agedMinutes: Math.round(noAnswer.agedMs / 60_000),
+          }
+        : null,
+    switchboardAccountInUse: signsItselfIn ? null : { provider, accountId: chosen.accountId },
   };
+}
+
+/**
+ * The error codes adapters write for a sign-in failure: `<adapter>_auth_required`,
+ * the same code the run-failure guidance and the signed-out count read. Keyed on
+ * the code so no error text is re-parsed here.
+ */
+function isSignInFailure(errorCode: string | null | undefined): boolean {
+  return typeof errorCode === "string" && errorCode.endsWith("_auth_required");
+}
+
+/**
+ * After a run finishes: if it was on an account Switchboard named and failed
+ * to sign in, stop reusing that account while Switchboard names nothing. See
+ * forgetSwitchboardAccount for why, and for why only that one account.
+ *
+ * `accountInUse` is RunAccountResolution's `switchboardAccountInUse`, which is
+ * already null for a run whose own environment carried a sign-in, and which
+ * the heartbeat clears for a run on a remote target: in both cases the failure
+ * says nothing about the account on this computer. Returns whether anything
+ * was forgotten.
+ */
+export function forgetSwitchboardAccountAfterSignInFailure(
+  errorCode: string | null | undefined,
+  accountInUse: { provider: string; accountId: string } | null,
+): boolean {
+  if (!accountInUse || !isSignInFailure(errorCode)) return false;
+  return forgetSwitchboardAccount(accountInUse.provider, accountInUse.accountId);
+}
+
+/** "3 minutes earlier", "about 3 hours earlier": a replay's age for a person. */
+function describeAge(minutes: number): string {
+  if (minutes < 1) return "less than a minute earlier";
+  if (minutes < 90) return `${minutes} minute${minutes === 1 ? "" : "s"} earlier`;
+  return `about ${Math.round(minutes / 60)} hours earlier`;
+}
+
+/**
+ * A run's error message, with a plain explanation put in front when the run
+ * was not on an account Switchboard vouched for at the time and its sign-in is
+ * what failed. Two cases:
+ *
+ * - It fell back to the machine's own sign-in. Without the explanation the run
+ *   said only "Failed to authenticate: OAuth session expired and could not be
+ *   refreshed", which reads as "this agent's login broke" and sends a person
+ *   looking at the agent, when the real story is that Switchboard had no
+ *   account to give and the machine's own sign-in, which nothing was meant to
+ *   be using, had long expired.
+ * - It reused the account Switchboard named most recently, and that account
+ *   could not sign in, often the very reason Switchboard stopped naming it.
+ *   The run that fails this way also makes Paperclip stop reusing the account
+ *   (forgetSwitchboardAccountAfterSignInFailure), which the message says.
+ *
+ * Keyed on the `<adapter>_auth_required` error code (see isSignInFailure). The
+ * original message is kept whole after the explanation, so anything matching
+ * on it still matches. The records are read back from the run context, which is
+ * why they are taken as unknown and checked here.
+ */
+export function explainSwitchboardFallbackFailure(input: {
+  errorMessage: string;
+  errorCode: string | null | undefined;
+  /** The run context's `switchboardFallback`, as read back from the context. */
+  switchboardFallback: unknown;
+  /** The run context's `switchboardReplay`, as read back from the context. */
+  switchboardReplay?: unknown;
+}): string {
+  const { errorMessage, errorCode, switchboardFallback, switchboardReplay } = input;
+  if (!isSignInFailure(errorCode)) return errorMessage;
+
+  const fallback = readRecord(switchboardFallback);
+  const replay = fallback ? null : readRecord(switchboardReplay);
+  const record = fallback ?? replay;
+  if (!record) return errorMessage;
+  const tool = record.provider.charAt(0).toUpperCase() + record.provider.slice(1);
+  const why = record.reason ? ` Why Switchboard had no account: ${record.reason}.` : "";
+
+  if (fallback) {
+    return (
+      `Switchboard had no ${tool} account available when this run started, so the run used this computer's own ${tool} sign-in, which has expired or been signed out.` +
+      `${why} Original error: ${errorMessage}`
+    );
+  }
+  const raw = switchboardReplay as Partial<SwitchboardReplayRecord>;
+  const account = typeof raw.account === "string" && raw.account.trim() ? `"${raw.account.trim()}"` : "the account";
+  const age =
+    typeof raw.agedMinutes === "number" && Number.isFinite(raw.agedMinutes) && raw.agedMinutes >= 0
+      ? ` (${describeAge(Math.round(raw.agedMinutes))})`
+      : "";
+  return (
+    `Switchboard had no ${tool} account available when this run started, so the run reused ${account}, the account Switchboard had named most recently${age}, and that account could not sign in. ` +
+    `Paperclip will not reuse it again unless Switchboard names it.${why} Original error: ${errorMessage}`
+  );
+}
+
+/** The provider and reason from a record read back off a run context, or null. */
+function readRecord(value: unknown): { provider: string; reason: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as { provider?: unknown; reason?: unknown };
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  if (!provider) return null;
+  const reason = typeof record.reason === "string" ? record.reason.trim().replace(/\.+$/, "") : "";
+  return { provider, reason };
 }
 
 /**

@@ -30,6 +30,16 @@
  * So an install that has never heard of Switchboard behaves exactly as it does
  * now, and so does one where Switchboard is installed but has no lanes set up.
  *
+ * Between 3 and 4 sits one more step, for a Switchboard that is installed and
+ * working but names nothing this time: the account it named most recently, for
+ * up to a day, or until a run on it fails to sign in (see lastGoodAnswer and
+ * forgetSwitchboardAccount). Only when there is no such account does a
+ * run reach 4, and then it is no longer silent: the change is logged as a
+ * warning once, and the run records it (see switchboardAnswerFor). That is the
+ * lesson of 2026-09-18, when an agent ran four times on the machine's expired
+ * sign-in and nothing anywhere said Switchboard had been asked and had named
+ * nobody.
+ *
  * @module server/services/switchboard
  */
 
@@ -129,6 +139,46 @@ const ANTHROPIC_API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as 
 /** True when this machine is deliberately running Claude on an API key. */
 export function hasDeliberateApiKey(env: NodeJS.ProcessEnv = process.env): boolean {
   return ANTHROPIC_API_KEY_VARS.some((name) => String(env[name] ?? "").trim().length > 0);
+}
+
+/**
+ * The variables through which a run's own configuration can say how a tool
+ * signs in, apart from the folder variable in PROVIDER_ENV: its API keys, and
+ * for Claude the subscription tokens too. Each list is what that tool's adapter
+ * itself treats as a credential (the billing-type checks in the claude-local,
+ * codex-local and gemini-local execute.ts). Qwen has no adapter that asks
+ * Switchboard yet, so only its folder variable counts.
+ */
+const PROVIDER_OWN_CREDENTIAL_VARS: Record<string, readonly string[]> = {
+  claude: [...ANTHROPIC_API_KEY_VARS, ...CLAUDE_SUBSCRIPTION_TOKEN_VARS],
+  codex: ["OPENAI_API_KEY"],
+  gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+};
+
+/**
+ * Does a run's own environment already say how this tool signs in?
+ *
+ * `env` is the run's merged environment (the agent's adapter env with project
+ * and issue overrides applied), before anything Switchboard chose is added.
+ * When it names a key, a token or a config folder of its own, a sign-in failure
+ * on that run may be that credential's fault, not the fault of the account
+ * Switchboard named or of the sign-in the server inherited, so nothing is
+ * recorded or explained as either. Two older checks miss these: the heartbeat's
+ * pinned-credential check sees only the one variable an adapter declares for
+ * Paperclip's own account list, which Codex and Gemini do not declare at all,
+ * and hasDeliberateApiKey reads only the server's own environment.
+ *
+ * Reads presence, never a value, and ignores blanks, because an empty value is
+ * Paperclip's own way of switching a variable off for one spawn.
+ */
+export function envCarriesOwnSignIn(provider: string, env: Record<string, unknown>): boolean {
+  const names = [...(PROVIDER_OWN_CREDENTIAL_VARS[provider] ?? [])];
+  const folder = PROVIDER_ENV[provider]?.envVar;
+  if (folder) names.push(folder);
+  return names.some((name) => {
+    const value = env[name];
+    return typeof value === "string" && value.trim().length > 0;
+  });
 }
 
 /**
@@ -381,8 +431,110 @@ export function parseSwitchboardLane(stdout: string): {
   return null;
 }
 
+/** The longest reason repeated into a log line or a run record. */
+const MAX_REASON_CHARS = 200;
+
+function capReason(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > MAX_REASON_CHARS ? `${oneLine.slice(0, MAX_REASON_CHARS - 3)}...` : oneLine;
+}
+
+/**
+ * Why a reply from Switchboard named no account, in words fit for a warning
+ * and a run record.
+ *
+ * Only ever called on output parseSwitchboardLane has already turned down, so
+ * it never decides whether an answer is usable, only says why it was not.
+ * Switchboard's own `reason` is repeated whenever the reply carries one,
+ * because it is the only party that knows ("Quota state is unknown or
+ * unreadable" and "No lanes are configured." ask different things of a
+ * person). It is repeated, never interpreted: parseSwitchboardLane treats
+ * every unavailable answer alike on purpose, and this keeps it that way.
+ *
+ * Raw output is never echoed, only the parsed `reason` field. The reply can
+ * carry a lane token (--with-token), and a half-written JSON line cut off by
+ * the timeout would otherwise put that secret straight into the log.
+ */
+export function describeSwitchboardRefusal(stdout: string): string {
+  const lines = String(stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return "Switchboard printed nothing";
+  let answeredWithoutAccount = false;
+  for (const text of lines) {
+    if (!text.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const reply = parsed as Record<string, unknown>;
+    if (reply.available === true) {
+      // Said yes but left out the lane, the vendor or the account, which is
+      // why parseSwitchboardLane turned it down. Keep looking for a "no".
+      answeredWithoutAccount = true;
+      continue;
+    }
+    const reason = typeof reply.reason === "string" ? capReason(reply.reason) : "";
+    return reason || "Switchboard said no account is available, without saying why";
+  }
+  return answeredWithoutAccount
+    ? "Switchboard answered without naming a lane and an account"
+    : "Switchboard's answer was not the JSON Paperclip asked for";
+}
+
+/**
+ * Why asking Switchboard failed outright, when it printed nothing at all to
+ * read a reason from. A timeout is named as one because it is the likeliest
+ * cause and the one a person can do something about. Anything else gets the
+ * first line of what Switchboard wrote to stderr, which is where an Electron
+ * app reports a crash; the lane token only ever travels on stdout.
+ */
+function describeAskFailure(err: unknown): string {
+  const failure = (err ?? {}) as { killed?: unknown; code?: unknown; stderr?: unknown };
+  if (failure.killed === true) {
+    return `Switchboard did not answer within ${LANE_TIMEOUT_MS / 1000} seconds`;
+  }
+  const stderr = String(failure.stderr ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+  if (typeof failure.code === "number") {
+    return stderr
+      ? `Switchboard exited with code ${failure.code}: ${capReason(stderr)}`
+      : `Switchboard exited with code ${failure.code} and printed nothing`;
+  }
+  const code = typeof failure.code === "string" && failure.code ? ` (${failure.code})` : "";
+  return `Switchboard could not be started${code}`;
+}
+
+/**
+ * Switchboard was there to ask, and named no account this run may use.
+ *
+ * Kept apart from a plain null on purpose. Null still means "there is no
+ * Switchboard to ask" (not installed, or switched off), which is how every
+ * install behaved before this existed and is not worth a word. This means
+ * Switchboard is installed and working and said no, which is exactly the
+ * situation that went unreported on 2026-09-18.
+ *
+ * `available: false` mirrors Switchboard's own reply, and is also what tells
+ * this apart from a SwitchboardAccount, which never carries the field.
+ */
+export interface SwitchboardNoAccount {
+  available: false;
+  /** Why, in Switchboard's own words when its reply carried any. */
+  reason: string;
+}
+
+/** Everything asking Switchboard can come back with. Null: no Switchboard to ask. */
+export type SwitchboardReply = SwitchboardAccount | SwitchboardNoAccount | null;
+
+function isNoAccount(reply: SwitchboardReply): reply is SwitchboardNoAccount {
+  return reply !== null && "available" in reply && reply.available === false;
+}
+
 /** Cached answers per provider, so a burst of wake-ups asks once. */
-const answerCache = new Map<string, { at: number; account: SwitchboardAccount | null }>();
+const answerCache = new Map<string, { at: number; reply: SwitchboardReply }>();
 
 /**
  * The last account Switchboard actually named for each tool, kept longer than
@@ -398,32 +550,159 @@ const answerCache = new Map<string, { at: number; account: SwitchboardAccount | 
  * Falling all the way back to the machine's inherited sign-in on that answer is
  * the worst of the options, because that sign-in is exactly the one that may be
  * dead - it is what caused the outage this module exists to prevent. Reusing the
- * account Switchboard named a few minutes ago is strictly better: if it really
+ * account Switchboard named most recently is strictly better: if it really
  * has run out, the run fails as plan_exhausted, which Paperclip already handles
  * by moving or parking the work, rather than as a signed-out failure, which it
  * does not.
  *
  * What is remembered here never includes a lane token. A replayed answer can
- * be up to thirty minutes old, and replaying a possibly rotated or revoked
- * secret hard-fails the run it was meant to save, while replaying just the
- * folder pointer falls back to the well-understood file sign-in. The token is
- * stripped when the answer is stored, not when it is replayed, so no future
+ * be up to a day old (LAST_GOOD_TTL_MS), and replaying a possibly rotated or
+ * revoked secret hard-fails the run it was meant to save, while replaying just
+ * the folder pointer falls back to the well-understood file sign-in. The token
+ * is stripped when the answer is stored, not when it is replayed, so no future
  * reader of this map can forget to.
+ *
+ * Held in memory only, so a server restart forgets it, and the first runs after
+ * a restart during a Switchboard outage still reach the machine's own sign-in.
+ * A run on the account that fails to sign in forgets it too: see
+ * forgetSwitchboardAccount.
  */
 const lastGoodAnswer = new Map<string, { at: number; account: SwitchboardAccount }>();
 
 /**
- * How long a previously-named account stands in for a momentary "nothing
- * available". Long enough to ride out a failed quota fetch, short enough that a
- * real change of circumstances is picked up within the hour.
+ * How long a previously-named account stands in for a Switchboard that names
+ * nothing.
+ *
+ * This was thirty minutes, sized for a single failed quota fetch. On
+ * 2026-09-18 Switchboard named nothing for about three hours; the remembered
+ * account had lapsed long before a new-mail wake at 19:17 UTC, so four runs in
+ * a row signed in with the machine's own sign-in, which had expired, and the
+ * agent sat in error for ten days. Thirty minutes protected against the short
+ * blip and not against the long one, and the long one is what did the damage.
+ *
+ * A day, because the remembered account is the last one Switchboard judged
+ * healthy, and the machine's own sign-in is the one nothing vouches for. If the
+ * remembered account has since run out, the run fails as plan_exhausted, which
+ * Paperclip already handles. Nor does the length delay a real change: a fresh
+ * answer from Switchboard always wins the moment it arrives, so this only
+ * decides how long a SILENT Switchboard is bridged.
+ *
+ * The replay is not free, though, and an earlier version of this comment said
+ * it could not do worse than the machine's own sign-in. It can. A replay runs
+ * in folder mode, which blanks every Claude token variable (see
+ * switchboardAccountEnv), so it also strips a fresh token someone saved
+ * host-wide with the Adapters sign-in button. If Switchboard fell silent
+ * because the remembered account was signed out, or because someone removed
+ * that lane on purpose, every run for the rest of the day would go to a dead
+ * folder while a working token sat unused, and fail with nothing on the record
+ * to say why. Two things keep that short. The first run on the account that
+ * fails to sign in makes Paperclip forget it (forgetSwitchboardAccount), so the
+ * next run takes the machine's own sign-in, which is recorded and explained.
+ * And a run on a reused account is recorded as one, so its own sign-in failure
+ * is explained rather than bare. The cost is one failed run per dead account,
+ * against three hours of failed runs in the incident above.
+ *
+ * Still bounded, so an account someone has deliberately taken out of
+ * Switchboard is not used on the strength of an answer from last week; by the
+ * time a day has passed the warning logged when the replay began has been
+ * sitting there all day.
  */
-const LAST_GOOD_TTL_MS = 30 * 60_000;
+const LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * What each tool's last answer amounted to, so the warning in noteState is
+ * said once when things change rather than on every run: a Switchboard that is
+ * down for three hours would otherwise write the same line for every wake-up
+ * of every agent in that time.
+ *
+ * Keyed on which way the run went, not on Switchboard's exact wording, so a
+ * reason that flips between two phrasings does not re-trigger it. The wording
+ * of each run's reason is not lost: it goes on the run record instead.
+ */
+type SwitchboardState = "answered" | "recent_account" | "machine_sign_in";
+const lastState = new Map<string, SwitchboardState>();
 
 /** Forget the memoised CLI path and every cached answer. Tests only. */
 export function resetSwitchboardCache(): void {
   resolvedCli = undefined;
   answerCache.clear();
   lastGoodAnswer.clear();
+  lastState.clear();
+}
+
+/**
+ * What Switchboard's answer means for one run.
+ *
+ * `account` is what to sign in with, and null still means "leave the machine's
+ * own sign-in alone". `noAnswer` is set only when Switchboard was there to ask
+ * and named nothing usable, and says what stood in for it: a recent account
+ * (`recent_account`), or the machine's own sign-in (`machine_sign_in`). It is
+ * null when Switchboard answered, and also when it was never asked (not
+ * installed, switched off, an API key in use, a tool it cannot move), because
+ * none of those is something going wrong.
+ */
+export interface SwitchboardAnswer {
+  account: SwitchboardAccount | null;
+  noAnswer:
+    | {
+        /** Why Switchboard named nothing, in its own words where it gave any. */
+        reason: string;
+        usedInstead: "machine_sign_in";
+      }
+    | {
+        reason: string;
+        usedInstead: "recent_account";
+        /** How long ago Switchboard named the account being reused. */
+        agedMs: number;
+      }
+    | null;
+}
+
+const NOT_ASKED: SwitchboardAnswer = { account: null, noAnswer: null };
+
+/**
+ * Log a change in how a tool's runs are signing in, once per change.
+ *
+ * WARN for both unhappy states, because both mean a run is not on an account
+ * Switchboard currently vouches for, and the machine's own sign-in in
+ * particular is the one that took an agent down on 2026-09-18 without a single
+ * line at info or warn. Coming back is INFO: good news, but worth a line so the
+ * warning has a visible end.
+ */
+function noteState(
+  provider: string,
+  state: SwitchboardState,
+  detail: { reason?: string; account?: string; agedMs?: number } = {},
+): void {
+  const previous = lastState.get(provider);
+  lastState.set(provider, state);
+  if (previous === state) return;
+  if (state === "answered") {
+    // The first answer after a start-up is the normal case and says nothing;
+    // "Switchboard found" has already been logged by then.
+    if (previous) log.info({ provider }, "Switchboard is naming an account again");
+    return;
+  }
+  if (state === "recent_account") {
+    log.warn(
+      {
+        provider,
+        reason: detail.reason,
+        usedInstead: "recent_account",
+        account: detail.account,
+        agedMinutes: Math.round((detail.agedMs ?? 0) / 60_000),
+      },
+      "Switchboard named no usable account; runs will reuse the account it named most recently until it answers again",
+    );
+    return;
+  }
+  // "No recent account to reuse" covers both ways to get here: the last one
+  // Switchboard named is more than a day old, or a run on it failed to sign in
+  // and it was forgotten (see forgetSwitchboardAccount, which says so itself).
+  log.warn(
+    { provider, reason: detail.reason, usedInstead: "machine_sign_in" },
+    "Switchboard named no usable account and there is no recent one to reuse; runs will use this machine's own sign-in, which may be expired",
+  );
 }
 
 /**
@@ -438,71 +717,172 @@ export function resetSwitchboardCache(): void {
  * The one exception is a tool Switchboard has named an account for recently:
  * see lastGoodAnswer above for why a momentary "nothing available" is answered
  * with that account rather than with nothing.
+ *
+ * Just the account, for callers that have nowhere to record why. The run path
+ * uses switchboardAnswerFor, which also says when Switchboard named nothing.
  */
 export async function switchboardAccountFor(
   provider: string,
-  {
-    now = Date.now(),
-    cwd,
-    // Injected so the caching and fall-back-to-last-good rules can be tested
-    // without a Switchboard on the machine running the suite.
-    ask = askSwitchboard,
-  }: {
-    now?: number;
-    cwd?: string;
-    ask?: (
-      provider: string,
-      providerEnv: { envVar: string; envShape: "home" | "parent"; vendor: string },
-      cwd: string | undefined,
-    ) => Promise<SwitchboardAccount | null>;
-  } = {},
+  options: SwitchboardAskOptions = {},
 ): Promise<SwitchboardAccount | null> {
+  return (await switchboardAnswerFor(provider, options)).account;
+}
+
+export interface SwitchboardAskOptions {
+  now?: number;
+  cwd?: string;
+  /**
+   * Injected so the caching and fall-back-to-last-good rules can be tested
+   * without a Switchboard on the machine running the suite. Resolves to an
+   * account, to SwitchboardNoAccount when Switchboard was asked and said no,
+   * or to null when there is no Switchboard to ask.
+   */
+  ask?: (
+    provider: string,
+    providerEnv: { envVar: string; envShape: "home" | "parent"; vendor: string },
+    cwd: string | undefined,
+  ) => Promise<SwitchboardReply>;
+}
+
+/**
+ * Which account should this tool sign in with right now, and if Switchboard
+ * named none, what stood in for it. Same rules as switchboardAccountFor, which
+ * is this without the second half.
+ *
+ * The second half exists because of 2026-09-18: Switchboard named no account
+ * for about three hours, a run fell back to the machine's own expired sign-in
+ * four times, and nothing about it was logged above debug level. So a
+ * Switchboard that is installed but says no is now logged as a warning when it
+ * starts (and an info line when it stops), and the caller is told, so the run
+ * that falls back can carry the reason on its own record.
+ */
+export async function switchboardAnswerFor(
+  provider: string,
+  { now = Date.now(), cwd, ask = askSwitchboard }: SwitchboardAskOptions = {},
+): Promise<SwitchboardAnswer> {
   const providerEnv = PROVIDER_ENV[provider];
-  if (!providerEnv) return null;
+  if (!providerEnv) return NOT_ASKED;
   // An API key is a deliberate choice to pay per token. Overriding it with a
   // subscription folder would silently change how the work is billed.
-  if (provider === "claude" && hasDeliberateApiKey()) return null;
+  if (provider === "claude" && hasDeliberateApiKey()) return NOT_ASKED;
 
   const cached = answerCache.get(provider);
   if (cached && now - cached.at < ANSWER_TTL_MS) {
-    if (cached.account) return cached.account;
-    // A cached null gets the same last-good courtesy a fresh null gets below.
-    // Without this, the first null of a Switchboard hiccup shadowed the
-    // fallback for a full minute: the null was cached, the cache was consulted
-    // first, and the still-valid last good answer sat unused.
-    return lastGoodWithinTtl(provider, now);
+    // A cached "no" gets the same last-good courtesy a fresh one gets, because
+    // both go through settleReply. Without this, the first null of a
+    // Switchboard hiccup shadowed the fallback for a full minute: the null was
+    // cached, the cache was consulted first, and the still-valid last good
+    // answer sat unused.
+    return settleReply(provider, cached.reply, now);
   }
 
-  const account = await ask(provider, providerEnv, cwd);
-  answerCache.set(provider, { at: now, account });
-  if (account) {
+  const reply = await ask(provider, providerEnv, cwd);
+  answerCache.set(provider, { at: now, reply });
+  if (reply && !isNoAccount(reply)) {
     // Remembered without its token: see lastGoodAnswer above for why a stale
     // replay must run in folder mode rather than on a possibly dead secret.
-    lastGoodAnswer.set(provider, { at: now, account: { ...account, token: null } });
-    return account;
+    lastGoodAnswer.set(provider, { at: now, account: { ...reply, token: null } });
   }
-
-  return lastGoodWithinTtl(provider, now);
+  return settleReply(provider, reply, now);
 }
 
-/** The shared tail of both null paths: the last good answer, while it is still fresh. */
-function lastGoodWithinTtl(provider: string, now: number): SwitchboardAccount | null {
+/** Turn one reply, fresh or cached, into what the run should do. */
+function settleReply(provider: string, reply: SwitchboardReply, now: number): SwitchboardAnswer {
+  if (reply && !isNoAccount(reply)) {
+    noteState(provider, "answered");
+    return { account: reply, noAnswer: null };
+  }
+  const previous = lastGoodWithinTtl(provider, now);
+  if (!reply) {
+    // No Switchboard to ask. In practice there is then never a last good
+    // answer either, because the CLI lookup is memoised for the life of the
+    // process; the replay is kept for the same reason it always was, and
+    // nothing is logged, because an install without Switchboard is not a
+    // fault.
+    return { account: previous?.account ?? null, noAnswer: null };
+  }
+  if (previous) {
+    noteState(provider, "recent_account", {
+      reason: reply.reason,
+      account: previous.account.label,
+      agedMs: previous.agedMs,
+    });
+    return {
+      account: previous.account,
+      noAnswer: { reason: reply.reason, usedInstead: "recent_account", agedMs: previous.agedMs },
+    };
+  }
+  noteState(provider, "machine_sign_in", { reason: reply.reason });
+  return { account: null, noAnswer: { reason: reply.reason, usedInstead: "machine_sign_in" } };
+}
+
+/** The last good answer, while it is still fresh, with how old it is. */
+function lastGoodWithinTtl(
+  provider: string,
+  now: number,
+): { account: SwitchboardAccount; agedMs: number } | null {
   const previous = lastGoodAnswer.get(provider);
   if (previous && now - previous.at < LAST_GOOD_TTL_MS) {
     log.debug(
       { provider, account: previous.account.label, agedMs: now - previous.at },
-      "Switchboard named no account this time; reusing the one it named a few minutes ago",
+      "Switchboard named no account this time; reusing the one it named most recently",
     );
-    return previous.account;
+    return { account: previous.account, agedMs: now - previous.at };
   }
   return null;
+}
+
+/**
+ * Stop reusing an account after a run on it failed to sign in.
+ *
+ * The replay above hands out the last account Switchboard named for up to a
+ * day, in folder mode. If that account is what is broken (signed out, or its
+ * lane removed on purpose, which is often exactly WHY Switchboard stopped
+ * naming it), every replayed run fails to sign in, and each one also strips a
+ * host-wide token that might have worked. So the first sign-in failure on the
+ * account ends the reuse, and later runs take the machine's own sign-in, which
+ * is recorded on the run and explained if it fails as well.
+ *
+ * Only the account the failed run was on is forgotten: Switchboard may have
+ * named a different one since that run started, and that one has done nothing
+ * wrong. A cached answer naming the failed account is dropped too, so the next
+ * run asks Switchboard afresh instead of being handed the same folder for up to
+ * another minute. If Switchboard names it again, that fresh answer wins as it
+ * always does, because Switchboard is the one that can check.
+ *
+ * A sign-in failure is taken at its word, even though runs sharing one folder
+ * can now and then trip over each other's token refresh. Wrongly forgetting a
+ * healthy account costs the reuse until Switchboard next names an account;
+ * wrongly keeping a dead one cost the incident recorded at LAST_GOOD_TTL_MS.
+ *
+ * Warns only when something was actually forgotten, so a burst of runs failing
+ * on the same account writes one line, not one per run. Returns whether it did.
+ */
+export function forgetSwitchboardAccount(provider: string, accountId: string): boolean {
+  let label: string | null = null;
+  const remembered = lastGoodAnswer.get(provider);
+  if (remembered && remembered.account.accountId === accountId) {
+    lastGoodAnswer.delete(provider);
+    label = remembered.account.label;
+  }
+  const cached = answerCache.get(provider)?.reply ?? null;
+  if (cached && !isNoAccount(cached) && cached.accountId === accountId) {
+    answerCache.delete(provider);
+    label = label ?? cached.label;
+  }
+  if (label === null) return false;
+  log.warn(
+    { provider, account: label },
+    "A run on the account Switchboard named could not sign in; Paperclip will not reuse that account unless Switchboard names it again",
+  );
+  return true;
 }
 
 async function askSwitchboard(
   provider: string,
   providerEnv: { envVar: string; envShape: "home" | "parent"; vendor: string },
   cwd: string | undefined,
-): Promise<SwitchboardAccount | null> {
+): Promise<SwitchboardReply> {
   const cli = switchboardCli();
   if (!cli) return null;
 
@@ -535,12 +915,15 @@ async function askSwitchboard(
         { provider, err: err instanceof Error ? err.message : String(err) },
         "Switchboard named no account; leaving the existing sign-in alone",
       );
-      return null;
+      // Installed, asked, and no answer: a "no" with a reason rather than the
+      // null that means "no Switchboard here", so it is reported. See
+      // SwitchboardNoAccount.
+      return { available: false, reason: describeAskFailure(err) };
     }
   }
 
   const lane = parseSwitchboardLane(stdout);
-  if (!lane) return null;
+  if (!lane) return { available: false, reason: describeSwitchboardRefusal(stdout) };
   // Matched on the TOOL, not the vendor. The vendor filter above narrows the
   // pool, but this is the check that actually keeps a run on the tool it was
   // set up for, and it still holds if Switchboard ever widens what --provider
@@ -554,16 +937,23 @@ async function askSwitchboard(
       { asked: provider, offered: laneTool, laneId: lane.laneId },
       "Switchboard offered a different tool than the one asked about; declining",
     );
-    return null;
+    return { available: false, reason: `Switchboard offered a ${laneTool} lane, not ${provider}` };
   }
 
   const registered = readRegisteredAccounts().get(lane.accountId);
   if (!registered) {
-    log.warn(
+    // This used to be its own warning, written on every ask (once a minute
+    // while it lasted). The same fact now travels as the reason, so it is said
+    // once by noteState along with which sign-in the run fell back to, and is
+    // kept here at debug for anyone tracing a single ask.
+    log.debug(
       { accountId: lane.accountId, provider },
       "Switchboard named an account that is not in its own accounts file; leaving the existing sign-in alone",
     );
-    return null;
+    return {
+      available: false,
+      reason: `Switchboard named account "${lane.accountId}", which is not in its own accounts file`,
+    };
   }
 
   const home = path.resolve(registered.home);

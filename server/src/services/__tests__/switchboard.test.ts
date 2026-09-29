@@ -430,7 +430,7 @@ describe("riding out a momentary no-answer", () => {
   });
 
   /**
-   * A replayed answer can be up to thirty minutes old, and a token that old
+   * A replayed answer can be up to a day old, and a token that old
    * may have been rotated or revoked in between. Replaying it would hard-fail
    * the very run the replay was meant to save, while replaying just the folder
    * pointer falls back to the file sign-in, which is the behaviour that was
@@ -452,9 +452,24 @@ describe("riding out a momentary no-answer", () => {
     expect(switchboardAccountEnv(replayed!).CLAUDE_CODE_OAUTH_TOKEN).toBe("");
   });
 
+  /**
+   * The incident this window was widened for: Switchboard named nothing for
+   * about three hours on 2026-09-18, and at the old thirty minutes the runs in
+   * the middle of that went to the machine's own expired sign-in. Each check
+   * is past the one-minute answer cache, so every one genuinely asks again.
+   */
+  it("keeps reusing it through a three-hour silence, and up to a day", async () => {
+    await switchboardAccountFor("claude", { now: START, ask: async () => account });
+    for (const minutes of [31, 3 * 60, 12 * 60, 24 * 60 - 1]) {
+      expect(
+        await switchboardAccountFor("claude", { now: START + minutes * 60_000, ask: async () => null }),
+      ).toEqual(account);
+    }
+  });
+
   it("stops reusing it once it is properly stale", async () => {
     await switchboardAccountFor("claude", { now: START, ask: async () => account });
-    const muchLater = START + 31 * 60_000;
+    const muchLater = START + 24 * 60 * 60_000 + 60_000;
     expect(await switchboardAccountFor("claude", { now: muchLater, ask: async () => null })).toBeNull();
   });
 
