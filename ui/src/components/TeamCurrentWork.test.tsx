@@ -19,12 +19,16 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const listAgents = vi.fn();
+const invokeAgent = vi.fn();
 const liveRuns = vi.fn();
 const listIssues = vi.fn();
 const pendingInteractions = vi.fn();
 
 vi.mock("../api/agents", () => ({
-  agentsApi: { list: (companyId: string) => listAgents(companyId) },
+  agentsApi: {
+    list: (companyId: string) => listAgents(companyId),
+    invoke: (agentId: string, companyId: string) => invokeAgent(agentId, companyId),
+  },
 }));
 
 vi.mock("../api/heartbeats", () => ({
@@ -93,6 +97,7 @@ describe("TeamCurrentWork", () => {
 
   beforeEach(() => {
     listAgents.mockReset();
+    invokeAgent.mockReset();
     liveRuns.mockReset();
     listIssues.mockReset();
     pendingInteractions.mockReset();
@@ -432,6 +437,43 @@ describe("TeamCurrentWork", () => {
     expect(panel!.textContent).toContain("Reports to Erin");
   });
 
+  it("explains an executive's expired sign-in in the grouped view, where they head a section", async () => {
+    const raw =
+      "Claude run failed: subtype=success: Failed to authenticate: OAuth session expired and could not be refreshed";
+    listAgents.mockResolvedValue(
+      companyWithHierarchy().map((one) =>
+        one.id === "cto"
+          ? { ...one, status: "error", adapterType: "claude_local", lastError: raw }
+          : one,
+      ),
+    );
+
+    await render();
+
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "By organization",
+    );
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+
+    const text = container.textContent ?? "";
+    // The section header and the Needs you list both say it in plain words.
+    expect(text.split("Its last run could not sign in to Claude.").length - 1).toBe(2);
+    expect(text).toContain("Try again. If it fails again, sign in again under Adapters.");
+    // The provider's own words appear once, and only inside the toggle.
+    expect(text.split(raw).length - 1).toBe(1);
+    const details = container.querySelectorAll("details");
+    expect(details).toHaveLength(1);
+    expect(details[0]!.textContent).toContain(raw);
+
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.find((link) => link.textContent === "Adapters")?.getAttribute("href")).toBe(
+      "/instance/settings/adapters",
+    );
+    expect(links.find((link) => link.textContent === "See its runs")?.getAttribute("href")).toBe(
+      "/agents/cass/runs",
+    );
+  });
+
   it("says nothing about attention when the whole company is healthy", async () => {
     listAgents.mockResolvedValue(companyWithHierarchy());
 
@@ -461,5 +503,68 @@ describe("TeamCurrentWork", () => {
     expect(labels).toContain("Stop");
     expect(labels).toContain("Resume");
     expect(labels).toContain("Wake");
+  });
+
+  it("explains an expired sign-in in plain words and keeps the raw text to one Details toggle", async () => {
+    const raw =
+      "Claude run failed: subtype=success: Failed to authenticate: OAuth session expired and could not be refreshed";
+    listAgents.mockResolvedValue([
+      agent({
+        id: "cos",
+        name: "Chief of Staff",
+        urlKey: "chief-of-staff",
+        status: "error",
+        adapterType: "claude_local",
+        lastError: raw,
+      }),
+    ]);
+
+    await render();
+
+    const text = container.textContent ?? "";
+    // Said in plain words, on the card and in the Needs you list alike.
+    expect(text.split("Its last run could not sign in to Claude.").length - 1).toBe(2);
+    // The provider's own words appear once, and only inside the toggle.
+    expect(text.split(raw).length - 1).toBe(1);
+    const details = container.querySelectorAll("details");
+    expect(details).toHaveLength(1);
+    expect(details[0]!.querySelector("summary")!.textContent).toBe("Details");
+    expect(details[0]!.textContent).toContain(raw);
+
+    const adapters = Array.from(container.querySelectorAll("a")).find(
+      (link) => link.textContent === "Adapters",
+    );
+    expect(adapters?.getAttribute("href")).toBe("/instance/settings/adapters");
+    const runs = Array.from(container.querySelectorAll("a")).find(
+      (link) => link.textContent === "See its runs",
+    );
+    expect(runs?.getAttribute("href")).toBe("/agents/chief-of-staff/runs");
+  });
+
+  it("offers Try again, not Wake, for an agent that stopped with an error, and it still wakes the agent", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "a1", name: "Fallen", urlKey: "fallen", status: "error", lastError: "Tests failed" }),
+    ]);
+
+    await render();
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const labels = buttons.map((el) => el.textContent);
+    expect(labels).toContain("Try again");
+    expect(labels).not.toContain("Wake");
+    // Never hidden or disabled: the failure may well have cleared by now.
+    const tryAgain = buttons.filter((el) => el.textContent === "Try again");
+    expect(tryAgain.length).toBeGreaterThan(0);
+    for (const button of tryAgain) expect(button.disabled).toBe(false);
+    // The same call Wake makes, only named for what the person is doing.
+    invokeAgent.mockResolvedValue({});
+    await act(async () => {
+      tryAgain[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await settle();
+    expect(invokeAgent).toHaveBeenCalledWith("a1", "company-1");
+    // An error we do not recognise keeps its own words and gets no toggle.
+    expect(container.textContent).toContain("Tests failed");
+    expect(container.querySelector("details")).toBeNull();
   });
 });

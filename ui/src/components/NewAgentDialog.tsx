@@ -83,6 +83,9 @@ export function NewAgentDialog() {
   function handleAskCeo() {
     closeNewAgent();
     openNewIssue({
+      // The company the CEO was looked up in. Named, so that on a portfolio
+      // page the form files the request there instead of asking which company.
+      companyId: selectedCompanyId ?? undefined,
       assigneeAgentId: ceoAgent?.id,
       title: "Create a new agent",
       description: "(type in what kind of agent you want here)",

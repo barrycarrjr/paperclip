@@ -5,8 +5,6 @@ import type { Agent, ActivityEvent, HeartbeatRun } from "@paperclipai/shared";
 import { Activity, CheckCircle2, Clock, History, Radio, Wrench } from "lucide-react";
 import { activityApi } from "../api/activity";
 import { agentsApi } from "../api/agents";
-import { heartbeatsApi } from "../api/heartbeats";
-import { issuesApi } from "../api/issues";
 import { accessApi } from "../api/access";
 import { queryKeys } from "../lib/queryKeys";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
@@ -14,18 +12,8 @@ import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-
 import { agentActivityToShow } from "../lib/agent-activity-filter";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { RUN_NOW_LINE_TONE_CLASSES, runNowLine } from "../lib/run-now-line";
-import {
-  buildTeamCurrentWork,
-  TEAM_WORK_STATE_DESCRIPTIONS,
-  TEAM_WORK_STATE_LABELS,
-  type TeamAgentWork,
-} from "../lib/team-current-work";
-import {
-  teamWorkStateBadge,
-  teamWorkStateCardEdge,
-  teamWorkStateDot,
-  teamWorkStateDotDefault,
-} from "../lib/status-colors";
+import { buildTeamCurrentWork, type TeamAgentWork } from "../lib/team-current-work";
+import { teamWorkStateCardEdge } from "../lib/status-colors";
 import { AGENT_HEALTH_WINDOW_DAYS, formatSuccessRate, summarizeAgentHealth } from "../lib/agent-health";
 import { formatElapsed } from "../lib/clippy-tool-labels";
 import { cn, relativeTime } from "../lib/utils";
@@ -35,7 +23,10 @@ import { ActivityRow } from "./ActivityRow";
 import { RunWorkProductsCard } from "./RunWorkProductsCard";
 import { RunDocumentsCard } from "./RunDocumentsCard";
 import { TeamMemberControls } from "./TeamMemberControls";
+import { TeamWorkStateBadge } from "./AgentStatusBadge";
+import { AgentErrorNote } from "./AgentErrorNote";
 import { useTeamMemberActions } from "../hooks/useTeamMemberActions";
+import { useTeamWorkSources } from "../hooks/useAgentWorkState";
 import { useNowTick } from "../hooks/useNowTick";
 
 /** How many activity entries to show before sending you to the full page. */
@@ -91,31 +82,23 @@ export function AgentCurrentWork({
 }) {
   const nowMs = useNowTick(true, CLOCK_TICK_MS);
 
-  const { data: liveRuns } = useQuery({
-    queryKey: [...queryKeys.liveRuns(companyId), "agent-current-work"],
-    queryFn: () => heartbeatsApi.liveRunsForCompany(companyId),
-    refetchInterval: 15_000,
-  });
-
-  const { data: issues } = useQuery({
-    queryKey: queryKeys.issues.list(companyId),
-    queryFn: () => issuesApi.list(companyId),
-  });
-
-  const { data: pendingInteractions } = useQuery({
-    queryKey: [...queryKeys.issues.list(companyId), "pending-interactions", 50],
-    queryFn: () => issuesApi.listPendingInteractions(companyId, 50),
-  });
+  // Shared with the header badge on this page, which reads the same three
+  // lists under the same keys, so they are fetched once.
+  const { liveRuns, issues, pendingInteractions } = useTeamWorkSources(companyId);
 
   // Three places record why an agent stopped and any of them can be empty:
   // the roster's copy, the runtime row, and the failed run itself. The runs
   // are already loaded for this page, so the last one costs nothing to read
-  // and is the one that actually had the message in practice.
-  const lastFailedRunError = useMemo(() => {
+  // and is the one that actually had the message in practice. The newest
+  // failed run is also what "See what went wrong" opens.
+  const { lastFailedRun, lastFailedRunError } = useMemo(() => {
     const failed = [...runs]
-      .filter((run) => run.error && (run.status === "failed" || run.status === "timed_out"))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-    return failed?.error ?? null;
+      .filter((run) => run.status === "failed" || run.status === "timed_out")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return {
+      lastFailedRun: failed[0] ?? null,
+      lastFailedRunError: failed.find((run) => run.error)?.error ?? null,
+    };
   }, [runs]);
 
   const row = useMemo<TeamAgentWork | null>(() => {
@@ -180,6 +163,7 @@ export function AgentCurrentWork({
           companyId={companyId}
           nowMs={nowMs}
           latestRun={latestRun}
+          failedRunId={lastFailedRun?.id ?? null}
           agentRouteId={agentRouteId}
         />
       )}
@@ -229,12 +213,15 @@ function CurrentTaskPanel({
   companyId,
   nowMs,
   latestRun,
+  failedRunId,
   agentRouteId,
 }: {
   row: TeamAgentWork;
   companyId: string;
   nowMs: number;
   latestRun: HeartbeatRun | null;
+  /** The newest failed run, for the link to what went wrong. */
+  failedRunId: string | null;
   agentRouteId: string;
 }) {
   const actions = useTeamMemberActions(companyId);
@@ -258,22 +245,7 @@ function CurrentTaskPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
-            <span
-              title={TEAM_WORK_STATE_DESCRIPTIONS[row.state]}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
-                teamWorkStateBadge[row.state] ?? "bg-muted text-muted-foreground",
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  "inline-block h-1.5 w-1.5 rounded-full",
-                  teamWorkStateDot[row.state] ?? teamWorkStateDotDefault,
-                )}
-              />
-              {TEAM_WORK_STATE_LABELS[row.state]}
-            </span>
+            <TeamWorkStateBadge state={row.state} />
             {row.runId && (
               <Link
                 to={`/agents/${agentRouteId}/runs/${row.runId}`}
@@ -296,6 +268,18 @@ function CurrentTaskPanel({
             >
               {row.detail}
             </p>
+          )}
+          {row.state === "error" && (
+            <AgentErrorNote
+              lastError={row.agent.lastError}
+              adapterType={row.agent.adapterType}
+              runLink={
+                failedRunId
+                  ? { to: `/agents/${agentRouteId}/runs/${failedRunId}`, label: "See what went wrong" }
+                  : null
+              }
+              className="pt-1"
+            />
           )}
         </div>
 

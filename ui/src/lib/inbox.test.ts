@@ -16,6 +16,7 @@ import {
   buildGroupedInboxSections,
   buildInboxKeyboardNavEntries,
   buildInboxDismissedAtByKey,
+  collapseRepeatedInboxWorkItems,
   filterInboxIssues,
   getArchivedInboxSearchIssues,
   getAvailableInboxIssueColumns,
@@ -23,6 +24,7 @@ import {
   getApprovalsForTab,
   getInboxWorkItems,
   getInboxKeyboardSelectionIndex,
+  getInboxRecencyBucket,
   getInboxSearchSupplementIssues,
   getRecentTouchedIssues,
   getUnreadTouchedIssues,
@@ -384,9 +386,10 @@ describe("inbox helpers", () => {
       },
     ];
 
+    // Approved one is already decided, so Mine leaves it out even though
+    // user-1 asked for it. Recent and All still show it.
     expect(getApprovalsForTab(approvals, "mine", "all", "user-1").map((approval) => approval.id)).toEqual([
       "approval-revision",
-      "approval-approved",
       "approval-pending",
     ]);
     expect(getApprovalsForTab(approvals, "recent", "all").map((approval) => approval.id)).toEqual([
@@ -1295,5 +1298,141 @@ describe("inbox helpers", () => {
     expect(shouldResetInboxWorkspaceGrouping("workspace", false, true)).toBe(true);
     expect(shouldResetInboxWorkspaceGrouping("workspace", true, true)).toBe(false);
     expect(shouldResetInboxWorkspaceGrouping("none", false, true)).toBe(false);
+  });
+
+  it("keeps decided approvals out of mine, however they involve you", () => {
+    const approvals = [
+      { ...makeApprovalWithTimestamps("approval-rejected", "rejected", "2026-03-11T04:00:00.000Z"), decidedByUserId: "user-1" },
+      { ...makeApprovalWithTimestamps("approval-approved", "approved", "2026-03-11T03:00:00.000Z"), requestedByUserId: "user-1" },
+      { ...makeApprovalWithTimestamps("approval-cancelled", "cancelled", "2026-03-11T02:00:00.000Z"), requestedByUserId: "user-1" },
+      makeApprovalWithTimestamps("approval-pending", "pending", "2026-03-11T01:00:00.000Z"),
+    ];
+
+    expect(getApprovalsForTab(approvals, "mine", "all", "user-1").map((approval) => approval.id)).toEqual([
+      "approval-cancelled",
+      "approval-pending",
+    ]);
+    expect(getApprovalsForTab(approvals, "recent", "all", "user-1").map((approval) => approval.id)).toEqual([
+      "approval-rejected",
+      "approval-approved",
+      "approval-cancelled",
+      "approval-pending",
+    ]);
+    expect(getApprovalsForTab(approvals, "all", "all", "user-1")).toHaveLength(4);
+  });
+
+  describe("collapseRepeatedInboxWorkItems", () => {
+    function issueItem(id: string, title: string, timestamp: number, status: Issue["status"] = "todo"): InboxWorkItem {
+      return { kind: "issue", timestamp, issue: { ...makeIssue(id, false), title, status } };
+    }
+
+    function approvalItem(id: string, status: Approval["status"], title: string, timestamp: number): InboxWorkItem {
+      return {
+        kind: "approval",
+        timestamp,
+        approval: {
+          ...makeApprovalWithTimestamps(id, status, new Date(timestamp).toISOString()),
+          type: "hire_agent",
+          payload: { name: title },
+        },
+      };
+    }
+
+    it("folds exact repeats into the newest one and counts them", () => {
+      const items = [
+        approvalItem("approval-3", "approved", "Slack DM", 3_000),
+        issueItem("issue-a", "Something else", 2_500),
+        approvalItem("approval-2", "approved", "Slack DM", 2_000),
+        approvalItem("approval-1", "approved", "Slack DM", 1_000),
+      ];
+
+      const { items: collapsed, repeatCountByKey } = collapseRepeatedInboxWorkItems(items);
+
+      expect(collapsed.map(getInboxWorkItemKey)).toEqual(["approval:approval-3", "issue:issue-a"]);
+      expect(repeatCountByKey.get("approval:approval-3")).toBe(3);
+      expect(repeatCountByKey.has("issue:issue-a")).toBe(false);
+    });
+
+    it("does not fold rows that differ in kind, title or state", () => {
+      const items = [
+        approvalItem("approval-pending", "pending", "Slack DM", 4_000),
+        approvalItem("approval-approved", "approved", "Slack DM", 3_000),
+        issueItem("issue-todo", "Slack DM", 2_000, "todo"),
+        issueItem("issue-done", "Slack DM", 1_500, "done"),
+        issueItem("issue-other", "Another title", 1_000, "todo"),
+      ];
+
+      const { items: collapsed, repeatCountByKey } = collapseRepeatedInboxWorkItems(items);
+
+      expect(collapsed).toHaveLength(5);
+      expect(repeatCountByKey.size).toBe(0);
+    });
+
+    it("never folds failed runs or join requests", () => {
+      const items: InboxWorkItem[] = [
+        { kind: "failed_run", timestamp: 2_000, run: makeRun("run-1", "failed", "2026-03-11T02:00:00.000Z") },
+        { kind: "failed_run", timestamp: 1_000, run: makeRun("run-2", "failed", "2026-03-11T01:00:00.000Z") },
+        { kind: "join_request", timestamp: 900, joinRequest: makeJoinRequest("join-1") },
+        { kind: "join_request", timestamp: 800, joinRequest: makeJoinRequest("join-2") },
+      ];
+
+      expect(collapseRepeatedInboxWorkItems(items).items).toHaveLength(4);
+    });
+
+    it("never folds run failures from the attention queue, even with the same wording", () => {
+      // One agent, same error text, two different issues: the server keeps
+      // these apart, and so must the Inbox.
+      const items: InboxWorkItem[] = [
+        {
+          kind: "attention",
+          timestamp: 2_000,
+          row: makeAttentionRow({ key: "run:r-2", kind: "run_failure", blocking: "stopped", title: "Sadie failed with no retry left", detail: "exit 1", count: 2 }),
+        },
+        {
+          kind: "attention",
+          timestamp: 1_000,
+          row: makeAttentionRow({ key: "run:r-1", kind: "run_failure", blocking: "stopped", title: "Sadie failed with no retry left", detail: "exit 1", count: 3 }),
+        },
+      ];
+
+      const { items: collapsed, repeatCountByKey } = collapseRepeatedInboxWorkItems(items);
+
+      expect(collapsed.map(getInboxWorkItemKey)).toEqual(["attention:run:r-2", "attention:run:r-1"]);
+      expect(collapsed.map((item) => (item.kind === "attention" ? item.row.count : null))).toEqual([2, 3]);
+      expect(repeatCountByKey.size).toBe(0);
+    });
+
+    it("adds folded attention rows to the kept row's own count, but only for the same detail", () => {
+      const items: InboxWorkItem[] = [
+        { kind: "attention", timestamp: 3_000, row: makeAttentionRow({ key: "q:1", title: "Send reminder?", detail: "Annual report", count: 2 }) },
+        { kind: "attention", timestamp: 2_000, row: makeAttentionRow({ key: "q:2", title: "Send reminder?", detail: "Annual report" }) },
+        { kind: "attention", timestamp: 1_000, row: makeAttentionRow({ key: "q:3", title: "Send reminder?", detail: "Tax filing" }) },
+      ];
+
+      const { items: collapsed, repeatCountByKey } = collapseRepeatedInboxWorkItems(items);
+
+      expect(collapsed.map(getInboxWorkItemKey)).toEqual(["attention:q:1", "attention:q:3"]);
+      const kept = collapsed[0];
+      expect(kept?.kind === "attention" ? kept.row.count : null).toBe(3);
+      expect(repeatCountByKey.size).toBe(0);
+      // The input row is not changed in place.
+      const original = items[0];
+      expect(original?.kind === "attention" ? original.row.count : null).toBe(2);
+    });
+  });
+
+  describe("getInboxRecencyBucket", () => {
+    it("splits by local midnight, the last seven days, and anything older", () => {
+      const now = new Date(2026, 8, 28, 15, 0, 0).getTime();
+      const startOfToday = new Date(2026, 8, 28, 0, 0, 0).getTime();
+      const day = 24 * 60 * 60 * 1000;
+
+      expect(getInboxRecencyBucket(now - 60_000, now)).toBe("today");
+      expect(getInboxRecencyBucket(startOfToday, now)).toBe("today");
+      expect(getInboxRecencyBucket(startOfToday - 1, now)).toBe("this_week");
+      expect(getInboxRecencyBucket(now - 7 * day, now)).toBe("this_week");
+      expect(getInboxRecencyBucket(now - 7 * day - 1, now)).toBe("older");
+      expect(getInboxRecencyBucket(now - 120 * day, now)).toBe("older");
+    });
   });
 });

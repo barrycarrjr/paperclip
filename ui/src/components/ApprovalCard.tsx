@@ -8,6 +8,9 @@ import {
   typeIcon,
   defaultTypeIcon,
   ApprovalPayloadRenderer,
+  FullRequestToggle,
+  outboundDraftPreview,
+  outboundToolLabel,
   typeLabel,
 } from "./ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
@@ -45,14 +48,25 @@ export function ApprovalCard({
   const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
   const kindLabel = typeLabel[approval.type] ?? approval.type;
   const subject = approvalSubject(payload);
+  // An outgoing message shows its recipient and text in the body, so the
+  // title names the kind of message instead of repeating the same summary.
+  const draftPreview = approval.type === "outbound_tool_draft" ? outboundDraftPreview(payload) : null;
+  const title = draftPreview
+    ? outboundToolLabel(typeof payload?.toolName === "string" ? payload.toolName : null)
+    : subject ?? kindLabel;
   const showResolutionButtons =
     Boolean(onApprove && onReject) &&
     approval.type !== "budget_override_required" &&
     (approval.status === "pending" || approval.status === "revision_requested");
-  const hasFooter = showResolutionButtons || Boolean(detailLink || onOpen);
+  const detailsClassName = cn(
+    buttonVariants({ variant: "ghost", size: "sm" }),
+    "h-auto px-2 py-0.5 text-xs text-muted-foreground",
+  );
 
   return (
-    <div className="rounded-md border border-border/70 bg-card p-4 shadow-sm">
+    // min-w-0: the card sits in grid and flex lists, and without it one long
+    // unbroken value inside makes the whole card wider than the page.
+    <div className="min-w-0 rounded-md border border-border/70 bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-3">
@@ -75,8 +89,8 @@ export function ApprovalCard({
                 )}
               </div>
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold leading-6 text-foreground">
-                  {subject ?? kindLabel}
+                <h3 className="text-sm font-semibold leading-6 text-foreground wrap-anywhere">
+                  {title}
                 </h3>
                 <p className="text-xs leading-5 text-muted-foreground">
                   Approval request created {timeAgo(approval.createdAt)}
@@ -85,20 +99,31 @@ export function ApprovalCard({
             </div>
           </div>
         </div>
-        <div className="shrink-0">
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
           <div className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-xs text-muted-foreground">
             {statusIcon(approval.status)}
             <span className="capitalize">{approval.status.replace(/_/g, " ")}</span>
           </div>
+          {detailLink ? (
+            <Link to={detailLink} className={detailsClassName}>
+              View details
+            </Link>
+          ) : onOpen ? (
+            <Button variant="ghost" size="sm" className={detailsClassName} onClick={onOpen}>
+              View details
+            </Button>
+          ) : null}
         </div>
       </div>
 
-      <div className="mt-4 border-t border-border/60 pt-4">
+      <div className="mt-4 min-w-0 border-t border-border/60 pt-4">
         <ApprovalPayloadRenderer
           type={approval.type}
           payload={approval.payload}
           hidePrimaryTitle={Boolean(subject)}
+          compact
         />
+        <FullRequestToggle payload={approval.payload} className="mt-3" />
       </div>
 
       {approval.decisionNote && (
@@ -107,44 +132,24 @@ export function ApprovalCard({
         </div>
       )}
 
-      {hasFooter ? (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {showResolutionButtons && (
-              <>
-                <Button
-                  size="sm"
-                  className="bg-green-700 hover:bg-green-600 text-white"
-                  onClick={onApprove}
-                  disabled={isPending}
-                >
-                  {pendingAction === "approve" ? "Approving..." : "Approve"}
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={onReject}
-                  disabled={isPending}
-                >
-                  {pendingAction === "reject" ? "Rejecting..." : "Reject"}
-                </Button>
-              </>
-            )}
-          </div>
-          {(detailLink || onOpen) ? (
-            detailLink ? (
-              <Link
-                to={detailLink}
-                className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-auto px-2 text-xs text-muted-foreground")}
-              >
-                View details
-              </Link>
-            ) : (
-              <Button variant="ghost" size="sm" className="h-auto px-2 text-xs text-muted-foreground" onClick={onOpen}>
-                View details
-              </Button>
-            )
-          ) : null}
+      {showResolutionButtons ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 pt-4">
+          <Button
+            size="sm"
+            className="bg-green-700 hover:bg-green-600 text-white"
+            onClick={onApprove}
+            disabled={isPending}
+          >
+            {pendingAction === "approve" ? "Approving..." : "Approve"}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onReject}
+            disabled={isPending}
+          >
+            {pendingAction === "reject" ? "Rejecting..." : "Reject"}
+          </Button>
         </div>
       ) : null}
     </div>

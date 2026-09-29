@@ -1353,4 +1353,294 @@ describe("IssuesList", () => {
       root.unmount();
     });
   });
+
+  describe("company task list defaults", () => {
+    const openIssue = createIssue({ id: "issue-open", identifier: "PAP-40", title: "Open task", status: "in_progress" });
+    const doneIssue = createIssue({ id: "issue-done", identifier: "PAP-41", title: "Done task", status: "done" });
+    const cancelledIssue = createIssue({ id: "issue-cancelled", identifier: "PAP-42", title: "Cancelled task", status: "cancelled" });
+
+    function findShowFinishedSwitch() {
+      return Array.from(container.querySelectorAll("label")).find(
+        (label) => label.textContent?.includes("Show finished"),
+      )?.querySelector('[role="switch"]') as HTMLButtonElement | null | undefined;
+    }
+
+    it("hides finished work until the viewer turns on Show finished, and remembers the choice", async () => {
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[openIssue, doneIssue, cancelledIssue]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          hideFinishedByDefault
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Open task");
+        expect(container.textContent).not.toContain("Done task");
+        expect(container.textContent).not.toContain("Cancelled task");
+        expect(container.textContent).toContain("Show finished (2)");
+        expect(findShowFinishedSwitch()?.getAttribute("aria-checked")).toBe("false");
+      });
+
+      await act(async () => {
+        findShowFinishedSwitch()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Done task");
+        expect(container.textContent).toContain("Cancelled task");
+        expect(findShowFinishedSwitch()?.getAttribute("aria-checked")).toBe("true");
+      });
+      expect(JSON.parse(localStorage.getItem("paperclip:test-issues:company-1") ?? "{}").showFinished).toBe(true);
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("lets a saved status filter win over the finished default", async () => {
+      localStorage.setItem("paperclip:test-issues:company-1", JSON.stringify({ statuses: ["done"] }));
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[openIssue, doneIssue]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          hideFinishedByDefault
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Done task");
+        expect(container.textContent).not.toContain("Open task");
+        expect(container.textContent).not.toContain("Show finished");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("keeps finished work visible in lists that do not opt in", async () => {
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[openIssue, doneIssue]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Open task");
+        expect(container.textContent).toContain("Done task");
+        expect(container.textContent).not.toContain("Show finished");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("shows the supplied default columns until the viewer saves their own", async () => {
+      const assignedIssue = createIssue({
+        id: "issue-assigned",
+        identifier: "PAP-43",
+        title: "Assigned task",
+        assigneeAgentId: "agent-1",
+      });
+      const render = () => renderWithQueryClient(
+        <IssuesList
+          issues={[assignedIssue]}
+          agents={[{ id: "agent-1", name: "Agent One" }]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          defaultIssueColumns={["status", "id", "assignee", "updated"]}
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      const first = render();
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Agent One");
+      });
+      act(() => {
+        first.root.unmount();
+      });
+
+      localStorage.setItem("paperclip:test-issues:company-1:issue-columns", JSON.stringify(["id"]));
+      const second = render();
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("PAP-43");
+        expect(container.textContent).not.toContain("Agent One");
+      });
+      act(() => {
+        second.root.unmount();
+      });
+    });
+
+    it("says how many routine runs are hidden, and Show brings them back", async () => {
+      const manualIssue = createIssue({ id: "issue-manual", title: "Manual task", originKind: "manual" });
+      const routineIssues = [1, 2].map((n) => createIssue({
+        id: `issue-routine-${n}`,
+        identifier: `PAP-5${n}`,
+        title: `Routine task ${n}`,
+        originKind: "routine_execution",
+      }));
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[manualIssue, ...routineIssues]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          enableRoutineVisibilityFilter
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Manual task");
+        expect(container.textContent).not.toContain("Routine task 1");
+        expect(container.textContent).toContain("2 routine runs hidden");
+      });
+
+      await act(async () => {
+        const showButton = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent === "Show",
+        );
+        showButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Routine task 1");
+        expect(container.textContent).toContain("Routine task 2");
+        expect(container.textContent).not.toContain("routine runs hidden");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("marks an open todo that nobody is assigned to", async () => {
+      localStorage.setItem("paperclip:test-issues:company-1:issue-columns", JSON.stringify(["id", "assignee"]));
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[
+            createIssue({ id: "issue-a", identifier: "PAP-60", title: "Unowned todo", status: "todo" }),
+            createIssue({ id: "issue-b", identifier: "PAP-61", title: "Unowned backlog", status: "backlog" }),
+            createIssue({ id: "issue-c", identifier: "PAP-62", title: "Owned todo", status: "todo", assigneeAgentId: "agent-1" }),
+          ]}
+          agents={[{ id: "agent-1", name: "Agent One" }]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          flagUnassignedTodos
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        const rows = Array.from(container.querySelectorAll('[data-testid="issue-row"]'));
+        const rowText = (title: string) => rows.find((row) => row.textContent?.includes(title))?.textContent ?? "";
+        expect(rowText("Unowned todo")).toContain("Nobody assigned");
+        expect(rowText("Unowned backlog")).not.toContain("Nobody assigned");
+        expect(rowText("Owned todo")).not.toContain("Nobody assigned");
+        expect(rowText("Owned todo")).toContain("Agent One");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("does not mark unassigned todos in lists that do not opt in", async () => {
+      localStorage.setItem("paperclip:test-issues:company-1:issue-columns", JSON.stringify(["id", "assignee"]));
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[createIssue({ id: "issue-a", identifier: "PAP-60", title: "Unowned todo", status: "todo" })]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Unowned todo");
+        expect(container.textContent).not.toContain("Nobody assigned");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+
+    it("brings finished work back when the viewer picks the All quick filter", async () => {
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[openIssue, doneIssue]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          hideFinishedByDefault
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).not.toContain("Done task");
+      });
+
+      await act(async () => {
+        const filterButton = Array.from(document.body.querySelectorAll("button")).find(
+          (button) => button.getAttribute("title") === "Filter",
+        );
+        filterButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      const findAllButton = () => Array.from(document.body.querySelectorAll("button")).find(
+        (button) => button.textContent === "All",
+      );
+      // The list is not showing everything, so the popover must not say it is.
+      await waitForAssertion(() => {
+        expect(findAllButton()).not.toBeUndefined();
+        expect(findAllButton()?.className).not.toContain("bg-primary");
+      });
+
+      await act(async () => {
+        findAllButton()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Done task");
+        expect(findShowFinishedSwitch()?.getAttribute("aria-checked")).toBe("true");
+        expect(findAllButton()?.className).toContain("bg-primary");
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    });
+  });
 });

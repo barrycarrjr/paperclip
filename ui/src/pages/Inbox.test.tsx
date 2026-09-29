@@ -11,6 +11,7 @@ import {
   InboxGroupHeader,
   InboxIssueMetaLeading,
   InboxIssueTrailingColumns,
+  RepeatCountBadge,
   formatJoinRequestInboxLabel,
 } from "./Inbox";
 
@@ -365,6 +366,43 @@ describe("InboxGroupHeader", () => {
     expect(button?.getAttribute("aria-expanded")).toBe("false");
     const caret = container.querySelector("svg");
     expect(caret?.className.baseVal).not.toContain("rotate-90");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+});
+
+describe("RepeatCountBadge", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("shows the count only when a row stands for more than one", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(<RepeatCountBadge count={3} />);
+    });
+    expect(container.textContent).toBe("×3");
+    expect(container.querySelector("span")?.getAttribute("title")).toBe("3 of these. Opens the newest.");
+
+    act(() => {
+      root.render(<RepeatCountBadge count={1} />);
+    });
+    expect(container.textContent).toBe("");
+
+    act(() => {
+      root.render(<RepeatCountBadge count={undefined} />);
+    });
+    expect(container.textContent).toBe("");
 
     act(() => {
       root.unmount();

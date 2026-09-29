@@ -64,6 +64,24 @@ Location: `ui/src/components/`
 
 Use for displaying status in properties panels, entity rows, and list views. Never hardcode status colors — always use this component.
 
+### AgentStatusBadge and TeamWorkStateBadge
+
+**File:** `AgentStatusBadge.tsx`
+**Props:** `AgentStatusBadge`: `status: string`, `workState: TeamWorkState | null`. `TeamWorkStateBadge`: `state: TeamWorkState`, `className?`
+**Usage:** `TeamWorkStateBadge` is the Team page's pill (dot, label, meaning on hover) for one of the right-now states in `lib/team-current-work.ts`. `AgentStatusBadge` shows an agent's stored status, except that "Needs you" and "Ready for review" replace it when the Team page's reading says the agent is waiting on a person, so such an agent never reads as "idle".
+
+```tsx
+<AgentStatusBadge status={agent.status} workState={useAgentWorkState(agent, companyId)} />
+```
+
+The agent page header uses `AgentHeaderStatusBadge` (`AgentHeaderStatusBadge.tsx`, props `agent`, `companyId`, `view`, `isPluginTab`), which does that wiring and only reads the state on the dashboard tab, where the current-work panel already loads the same lists.
+
+### AgentErrorNote
+
+**File:** `AgentErrorNote.tsx`
+**Props:** `lastError`, `adapterType`, `runLink?: { to, label }`, `className?`
+**Usage:** Goes under an agent's one-line error. For a failure `lib/agent-error-explanation.ts` recognises (an expired sign-in), it says what to do with a link to the fix, and keeps the raw error behind a Details toggle, the only place the raw text appears. Shows the run link for any error.
+
 ### StatusIcon
 
 **File:** `StatusIcon.tsx`

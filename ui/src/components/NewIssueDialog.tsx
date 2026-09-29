@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent, type DragEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { pickTextColorForSolidBg } from "@/lib/color-contrast";
+import { useLocation } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
@@ -18,6 +19,7 @@ import { useProjectOrder } from "../hooks/useProjectOrder";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
 import { getRecentProjectIds, trackRecentProject } from "../lib/recent-projects";
 import { buildExecutionPolicy } from "../lib/issue-execution-policy";
+import { isPortfolioRoutePath } from "../lib/scope-kind";
 import { useToastActions } from "../context/ToastContext";
 import {
   assigneeValueFromSelection,
@@ -291,6 +293,28 @@ function issueExecutionWorkspaceModeForExistingWorkspace(mode: string | null | u
   return "shared_workspace";
 }
 
+/** A company's first three letters on its brand colour, as the company lists in this form show it. */
+function CompanyCodeBadge({ company }: { company: { name: string; brandColor: string | null } }) {
+  return (
+    <span
+      className={cn(
+        "px-1 py-0.5 rounded text-[10px] font-semibold leading-none",
+        !company.brandColor && "bg-muted",
+      )}
+      style={
+        company.brandColor
+          ? {
+              backgroundColor: company.brandColor,
+              color: pickTextColorForSolidBg(company.brandColor),
+            }
+          : undefined
+      }
+    >
+      {company.name.slice(0, 3).toUpperCase()}
+    </span>
+  );
+}
+
 export function NewIssueDialog() {
   const { newIssueOpen, newIssueDefaults, closeNewIssue } = useDialog();
   const { companies, selectedCompanyId, selectedCompany } = useCompany();
@@ -316,14 +340,42 @@ export function NewIssueDialog() {
   const [selectedExecutionWorkspaceId, setSelectedExecutionWorkspaceId] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [dialogCompanyId, setDialogCompanyId] = useState<string | null>(null);
+  // Whether this opening of the form asks which company the issue is for.
+  // null until the open effect below has worked it out.
+  const [companyChoiceRequired, setCompanyChoiceRequired] = useState<boolean | null>(null);
   const [stagedFiles, setStagedFiles] = useState<StagedIssueFile[]>([]);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executionWorkspaceDefaultProjectId = useRef<string | null>(null);
   const dialogInitialized = useRef(false);
+  const location = useLocation();
 
-  const effectiveCompanyId = dialogCompanyId ?? selectedCompanyId;
-  const dialogCompany = companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
+  // A portfolio page adds every company together, so it is not inside any one
+  // of them, even though its address sits under HQ's. Opened from there with
+  // no company named, the form starts with none and asks, rather than quietly
+  // filing the issue under HQ. A project or an agent in the defaults does not
+  // count as naming one: this form never looks up whose they are, so the
+  // opener has to pass companyId as well. A parent task is the one exception,
+  // because a sub-issue cannot change company here (handleCompanyChange), so
+  // asking would leave no way to finish. That assumes the parent belongs to
+  // the selected company, which holds for every sub-issue opener today, all
+  // of them on one company's pages. The open effect below holds this answer
+  // for as long as the form stays open, so moving to another page meanwhile
+  // does not pick a company either. Until that effect has run it is read
+  // straight from the page, so HQ never shows, not even for one render.
+  const opensWithoutCompany = isPortfolioRoutePath(location.pathname)
+    && !newIssueDefaults.companyId
+    && !newIssueDefaults.parentId;
+  const asksForCompany = companyChoiceRequired ?? opensWithoutCompany;
+  const awaitingCompanyChoice = asksForCompany && !dialogCompanyId;
+  const effectiveCompanyId = awaitingCompanyChoice ? null : (dialogCompanyId ?? selectedCompanyId);
+  const dialogCompany = awaitingCompanyChoice
+    ? null
+    : companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
+  const pickableCompanies = useMemo(
+    () => companies.filter((c) => c.status !== "archived"),
+    [companies],
+  );
   const isSubIssueMode = Boolean(newIssueDefaults.parentId);
   const parentIssueLabel = newIssueDefaults.parentIdentifier
     ?? (newIssueDefaults.parentId ? newIssueDefaults.parentId.slice(0, 8) : "");
@@ -495,7 +547,9 @@ export function NewIssueDialog() {
 
   // Save draft on meaningful changes
   useEffect(() => {
-    if (!newIssueOpen) return;
+    // Drafts are kept per company, so there is nowhere to keep one until a
+    // company has been chosen.
+    if (!newIssueOpen || awaitingCompanyChoice) return;
     scheduleSave(effectiveCompanyId, {
       title,
       description,
@@ -530,23 +584,41 @@ export function NewIssueDialog() {
     newIssueOpen,
     scheduleSave,
     effectiveCompanyId,
+    awaitingCompanyChoice,
   ]);
 
   // Restore draft or apply defaults when dialog opens
   useEffect(() => {
     if (!newIssueOpen) {
       dialogInitialized.current = false;
+      // Cleared so the next opening's first render cannot show the company
+      // from this one before the block below has set it again.
+      setCompanyChoiceRequired(null);
+      setDialogCompanyId(null);
       return;
     }
+    // companyChoiceRequired is still null on the first run for an opening
+    // (the setState below hasn't committed), and set on every later run.
+    const choiceRequired = companyChoiceRequired ?? opensWithoutCompany;
     if (!dialogInitialized.current) {
       dialogInitialized.current = true;
-      setDialogCompanyId(newIssueDefaults.companyId ?? selectedCompanyId);
+      setCompanyChoiceRequired(opensWithoutCompany);
+      setDialogCompanyId(opensWithoutCompany ? null : (newIssueDefaults.companyId ?? selectedCompanyId));
+    } else if (choiceRequired) {
+      // Picking the company loads its projects, which runs this again. The
+      // defaults were applied when the form opened, and applying them again
+      // would throw away the status, priority and text set before the pick.
+      // Nothing here needs the projects in this case, because picking a
+      // company clears any project anyway (handleCompanyChange).
+      return;
     }
     executionWorkspaceDefaultProjectId.current = null;
 
     // Matches the dialogCompanyId assignment above — dialogCompanyId itself
     // isn't readable yet this render (the setState above hasn't committed).
-    const draft = loadDraft(newIssueDefaults.companyId ?? selectedCompanyId);
+    // Nothing is restored while the company is still to be chosen: drafts are
+    // kept per company, and the only one to hand would be HQ's.
+    const draft = choiceRequired ? null : loadDraft(newIssueDefaults.companyId ?? selectedCompanyId);
     if (newIssueDefaults.parentId) {
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
@@ -1002,7 +1074,8 @@ export function NewIssueDialog() {
         {/* Header bar */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <div className="relative">
+            {/* Hidden until a company is chosen: the question under this bar asks for it. */}
+            <div className={cn("relative", awaitingCompanyChoice && "hidden")}>
               <button
                 ref={companyBadgeRef}
                 className={cn(
@@ -1029,7 +1102,7 @@ export function NewIssueDialog() {
                   ref={companyDropdownRef}
                   className="absolute left-0 top-full mt-1 z-[200] w-48 rounded-md border bg-popover p-1 shadow-md"
                 >
-                  {companies.filter((c) => c.status !== "archived").map((c) => (
+                  {pickableCompanies.map((c) => (
                     <button
                       key={c.id}
                       type="button"
@@ -1043,29 +1116,14 @@ export function NewIssueDialog() {
                         setCompanyOpen(false);
                       }}
                     >
-                      <span
-                        className={cn(
-                          "px-1 py-0.5 rounded text-[10px] font-semibold leading-none",
-                          !c.brandColor && "bg-muted",
-                        )}
-                        style={
-                          c.brandColor
-                            ? {
-                                backgroundColor: c.brandColor,
-                                color: pickTextColorForSolidBg(c.brandColor),
-                              }
-                            : undefined
-                        }
-                      >
-                        {c.name.slice(0, 3).toUpperCase()}
-                      </span>
+                      <CompanyCodeBadge company={c} />
                       <span className="truncate">{c.name}</span>
                     </button>
                   ))}
                 </div>
               )}
             </div>
-            <span className="text-muted-foreground/60">&rsaquo;</span>
+            <span className={cn("text-muted-foreground/60", awaitingCompanyChoice && "hidden")}>&rsaquo;</span>
             <span>{isSubIssueMode ? "New sub-issue" : "New issue"}</span>
           </div>
           <div className="flex items-center gap-1">
@@ -1091,6 +1149,40 @@ export function NewIssueDialog() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {/* Company picker, only when opened from a portfolio page (see opensWithoutCompany) */}
+          {asksForCompany ? (
+            <div className="border-b border-border/60 px-4 py-3">
+              <div className="text-sm font-medium text-foreground">Which company is this for?</div>
+              {awaitingCompanyChoice ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  You are looking at all your companies, so pick one first.
+                </div>
+              ) : null}
+              <div
+                role="group"
+                aria-label="Which company is this for?"
+                className="mt-2 flex flex-wrap gap-1.5"
+              >
+                {pickableCompanies.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    aria-pressed={c.id === dialogCompanyId}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors",
+                      c.id === dialogCompanyId && "border-foreground/30 bg-accent",
+                    )}
+                    onClick={() => handleCompanyChange(c.id)}
+                    disabled={createIssue.isPending}
+                  >
+                    <CompanyCodeBadge company={c} />
+                    <span className="truncate">{c.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {/* Title */}
           <div className="px-4 pt-4 pb-2">
             <textarea
@@ -1796,7 +1888,7 @@ export function NewIssueDialog() {
             <Button
               size="sm"
               className={cn("min-w-[8.5rem]", createIssue.isPending && "disabled:opacity-100")}
-              disabled={!title.trim() || createIssue.isPending}
+              disabled={!title.trim() || !effectiveCompanyId || createIssue.isPending}
               onClick={handleSubmit}
               aria-busy={createIssue.isPending}
             >

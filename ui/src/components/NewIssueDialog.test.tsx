@@ -5,7 +5,11 @@ import type { ComponentProps, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NewIssueDialog } from "./NewIssueDialog";
+import { NewIssueDialog, draftStorageKey } from "./NewIssueDialog";
+
+const routerState = vi.hoisted(() => ({
+  pathname: "/PAP/issues",
+}));
 
 const dialogState = vi.hoisted(() => ({
   newIssueOpen: true,
@@ -66,6 +70,10 @@ const mockAssetsApi = vi.hoisted(() => ({
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
+}));
+
+vi.mock("@/lib/router", () => ({
+  useLocation: () => ({ pathname: routerState.pathname, search: "", hash: "", state: null, key: "default" }),
 }));
 
 vi.mock("../context/DialogContext", () => ({
@@ -240,12 +248,61 @@ function renderDialog(container: HTMLDivElement) {
   return { root, queryClient };
 }
 
+function typeTitle(container: HTMLDivElement, text: string) {
+  const titleInput = container.querySelector<HTMLTextAreaElement>('textarea[placeholder="Issue title"]');
+  expect(titleInput).not.toBeNull();
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(titleInput!, text);
+    titleInput!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function findButton(root: ParentNode, text: string) {
+  return Array.from(root.querySelectorAll("button")).find((button) => button.textContent?.includes(text));
+}
+
+function companyQuestion(container: HTMLDivElement) {
+  return container.querySelector('[role="group"][aria-label="Which company is this for?"]');
+}
+
+function typeDescription(container: HTMLDivElement, text: string) {
+  const descriptionInput = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Add description..."]');
+  expect(descriptionInput).not.toBeNull();
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(descriptionInput!, text);
+    descriptionInput!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function click(button: HTMLButtonElement | undefined) {
+  expect(button).not.toBeUndefined();
+  await act(async () => {
+    button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+/** Picks a company in the form's question and waits for its projects to load. */
+async function pickCompany(container: HTMLDivElement, name: string) {
+  await click(findButton(companyQuestion(container)!, name));
+  await flush();
+  await flush();
+}
+
 describe("NewIssueDialog", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    routerState.pathname = "/PAP/issues";
     dialogState.newIssueOpen = true;
     dialogState.newIssueDefaults = {};
     dialogState.closeNewIssue.mockReset();
@@ -552,5 +609,313 @@ describe("NewIssueDialog", () => {
     companyState.selectedCompanyId = originalSelectedId;
     companyState.selectedCompany = originalSelected;
     act(() => root.unmount());
+  });
+
+  // Portfolio pages sit under HQ's address, so HQ is the selected company
+  // there. The form used to take that as the company and file new work under
+  // HQ without saying so, although the page's own scope note promises it never
+  // quietly goes to HQ.
+  describe("which company the issue is for", () => {
+    const hq = {
+      id: "hq",
+      name: "HQ",
+      status: "active",
+      brandColor: "#111111",
+      issuePrefix: "HQ",
+    };
+    const acme = {
+      id: "company-2",
+      name: "Acme",
+      status: "active",
+      brandColor: "#654321",
+      issuePrefix: "ACM",
+    };
+    let originalCompanies: typeof companyState.companies;
+    let originalSelectedId: string;
+    let originalSelected: typeof companyState.selectedCompany;
+
+    beforeEach(() => {
+      originalCompanies = companyState.companies;
+      originalSelectedId = companyState.selectedCompanyId;
+      originalSelected = companyState.selectedCompany;
+      companyState.companies = [hq, ...originalCompanies, acme];
+      companyState.selectedCompanyId = hq.id;
+      companyState.selectedCompany = hq;
+      routerState.pathname = "/HQ/portfolio-brief";
+      mockProjectsApi.list.mockClear();
+      mockAgentsApi.list.mockClear();
+    });
+
+    afterEach(() => {
+      companyState.companies = originalCompanies;
+      companyState.selectedCompanyId = originalSelectedId;
+      companyState.selectedCompany = originalSelected;
+      localStorage.clear();
+    });
+
+    it("asks for a company on a portfolio page and keeps Create off until one is picked", async () => {
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(container.textContent).toContain("Which company is this for?");
+      expect(companyQuestion(container)).not.toBeNull();
+      // Nothing is loaded for HQ while no company has been picked.
+      expect(mockProjectsApi.list).not.toHaveBeenCalled();
+      expect(mockAgentsApi.list).not.toHaveBeenCalled();
+
+      typeTitle(container, "Reprint the flyers");
+      await flush();
+      expect(findButton(container, "Create Issue")?.hasAttribute("disabled")).toBe(true);
+
+      // Leaving the portfolio page with the form still open does not pick HQ.
+      routerState.pathname = "/HQ/dashboard";
+      typeTitle(container, "Reprint the flyers today");
+      await flush();
+      expect(findButton(container, "Create Issue")?.hasAttribute("disabled")).toBe(true);
+      expect(container.textContent).toContain("Which company is this for?");
+
+      const acmeChoice = findButton(companyQuestion(container)!, "Acme");
+      expect(acmeChoice?.getAttribute("aria-pressed")).toBe("false");
+      await act(async () => {
+        acmeChoice!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flush();
+
+      expect(acmeChoice?.getAttribute("aria-pressed")).toBe("true");
+      expect(mockProjectsApi.list).toHaveBeenCalledWith("company-2");
+      const submitButton = findButton(container, "Create Issue");
+      expect(submitButton?.hasAttribute("disabled")).toBe(false);
+
+      await act(async () => {
+        submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledTimes(1);
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "company-2",
+        expect.objectContaining({ title: "Reprint the flyers today" }),
+      );
+
+      act(() => root.unmount());
+    });
+
+    it("does not bring back HQ's saved draft on a portfolio page", async () => {
+      localStorage.setItem(
+        draftStorageKey("hq"),
+        JSON.stringify({
+          title: "HQ only draft",
+          description: "",
+          status: "todo",
+          priority: "",
+          assigneeValue: "",
+          reviewerValue: "",
+          approverValue: "",
+          projectId: "",
+          assigneeModelOverride: "",
+          assigneeThinkingEffort: "",
+          assigneeChrome: false,
+        }),
+      );
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      const titleInput = container.querySelector<HTMLTextAreaElement>('textarea[placeholder="Issue title"]');
+      expect(titleInput?.value).toBe("");
+
+      act(() => root.unmount());
+
+      // The same draft still comes back on HQ's own pages, where it belongs.
+      routerState.pathname = "/HQ/issues";
+      const onHqPage = renderDialog(container);
+      await flush();
+      expect(
+        container.querySelector<HTMLTextAreaElement>('textarea[placeholder="Issue title"]')?.value,
+      ).toBe("HQ only draft");
+
+      act(() => onHqPage.root.unmount());
+    });
+
+    it("uses the company a portfolio page names without asking", async () => {
+      dialogState.newIssueDefaults = { companyId: "company-2" };
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(companyQuestion(container)).toBeNull();
+      expect(container.textContent).not.toContain("Which company is this for?");
+
+      typeTitle(container, "Order more paper");
+      await flush();
+      const submitButton = findButton(container, "Create Issue");
+      expect(submitButton?.hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "company-2",
+        expect.objectContaining({ title: "Order more paper" }),
+      );
+
+      act(() => root.unmount());
+    });
+
+    it("does not ask inside one company, and files the issue there", async () => {
+      companyState.selectedCompanyId = "company-1";
+      companyState.selectedCompany = originalSelected;
+      routerState.pathname = "/PAP/issues";
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(companyQuestion(container)).toBeNull();
+      expect(container.textContent).not.toContain("Which company is this for?");
+      expect(findButton(container, "PAP")).not.toBeUndefined();
+
+      typeTitle(container, "Order more paper");
+      await flush();
+      const submitButton = findButton(container, "Create Issue");
+      expect(submitButton?.hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "company-1",
+        expect.objectContaining({ title: "Order more paper" }),
+      );
+
+      act(() => root.unmount());
+    });
+
+    it("does not ask on HQ's own pages", async () => {
+      routerState.pathname = "/HQ/issues";
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(companyQuestion(container)).toBeNull();
+      typeTitle(container, "Plan the quarter");
+      await flush();
+      expect(findButton(container, "Create Issue")?.hasAttribute("disabled")).toBe(false);
+
+      act(() => root.unmount());
+    });
+
+    // Picking the company loads its projects, and that used to re-apply the
+    // opening defaults, so choices made before the pick were quietly lost.
+    it("keeps the status and priority chosen before the company is picked", async () => {
+      const { root } = renderDialog(container);
+      await flush();
+
+      await click(findButton(container, "In Progress"));
+      await click(findButton(container, "High"));
+      await pickCompany(container, "Acme");
+
+      typeTitle(container, "Reprint the flyers");
+      await flush();
+      await click(findButton(container, "Create Issue"));
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "company-2",
+        expect.objectContaining({
+          title: "Reprint the flyers",
+          status: "in_progress",
+          priority: "high",
+        }),
+      );
+
+      act(() => root.unmount());
+    });
+
+    it("keeps text written before the company is picked over the opener's own", async () => {
+      dialogState.newIssueDefaults = {
+        title: "Ask about paper",
+        description: "Opener text",
+      };
+
+      const { root } = renderDialog(container);
+      await flush();
+      expect(companyQuestion(container)).not.toBeNull();
+
+      typeTitle(container, "Ask about card stock");
+      typeDescription(container, "My own words");
+      await flush();
+      await pickCompany(container, "Acme");
+
+      expect(
+        container.querySelector<HTMLTextAreaElement>('textarea[placeholder="Issue title"]')?.value,
+      ).toBe("Ask about card stock");
+      expect(
+        container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Add description..."]')?.value,
+      ).toBe("My own words");
+
+      await click(findButton(container, "Create Issue"));
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "company-2",
+        expect.objectContaining({ title: "Ask about card stock", description: "My own words" }),
+      );
+
+      act(() => root.unmount());
+    });
+
+    // The form cannot tell which company an agent belongs to, so an agent
+    // alone does not name one. Before, this filed the issue under HQ.
+    it("still asks on a portfolio page when the opener names only an agent", async () => {
+      dialogState.newIssueDefaults = { assigneeAgentId: "agent-1" };
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(companyQuestion(container)).not.toBeNull();
+      typeTitle(container, "Order more paper");
+      await flush();
+      expect(findButton(container, "Create Issue")?.hasAttribute("disabled")).toBe(true);
+
+      await pickCompany(container, "Acme");
+      await click(findButton(container, "Create Issue"));
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledTimes(1);
+      const [companyId, body] = mockIssuesApi.create.mock.calls[0]!;
+      expect(companyId).toBe("company-2");
+      // Picking a company clears an agent that may belong to another one.
+      expect(body).not.toHaveProperty("assigneeAgentId");
+
+      act(() => root.unmount());
+    });
+
+    // The one exception to asking. A sub-issue cannot change company in this
+    // form, so it goes where the selected company is. Every sub-issue opener
+    // today is on one company's pages, where that is the parent's company.
+    it("does not ask for a sub-issue, which stays with the selected company", async () => {
+      dialogState.newIssueDefaults = {
+        parentId: "issue-1",
+        parentIdentifier: "HQ-1",
+        parentTitle: "Parent issue",
+        title: "Child issue",
+      };
+
+      const { root } = renderDialog(container);
+      await flush();
+
+      expect(companyQuestion(container)).toBeNull();
+      await click(findButton(container, "Create Sub-Issue"));
+      await flush();
+
+      expect(mockIssuesApi.create).toHaveBeenCalledWith(
+        "hq",
+        expect.objectContaining({ title: "Child issue", parentId: "issue-1" }),
+      );
+
+      act(() => root.unmount());
+    });
   });
 });

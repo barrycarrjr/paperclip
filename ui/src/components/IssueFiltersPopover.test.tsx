@@ -81,4 +81,67 @@ describe("IssueFiltersPopover", () => {
     expect(layoutGrid?.className).toContain("grid-cols-1");
     expect(popoverContent?.textContent).toContain("Live runs only");
   });
+
+  function quickFilterButton(label: string) {
+    return Array.from(container.querySelectorAll("button")).find((button) => button.textContent === label);
+  }
+
+  it("does not mark All while finished work is hidden, and choosing it brings finished work back", () => {
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    const onShowFinished = vi.fn();
+
+    act(() => {
+      root.render(
+        <IssueFiltersPopover
+          state={defaultIssueFilterState}
+          onChange={onChange}
+          activeFilterCount={0}
+          finishedHidden
+          onShowFinished={onShowFinished}
+        />,
+      );
+    });
+
+    const allButton = quickFilterButton("All");
+    expect(allButton?.className).not.toContain("bg-primary");
+
+    act(() => {
+      allButton?.click();
+    });
+    expect(onChange).toHaveBeenCalledWith({ statuses: [] });
+    expect(onShowFinished).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("marks All when nothing is hidden, and choosing it again does not ask to show finished work", () => {
+    const root = createRoot(container);
+    const onShowFinished = vi.fn();
+
+    act(() => {
+      root.render(
+        <IssueFiltersPopover
+          state={defaultIssueFilterState}
+          onChange={vi.fn()}
+          activeFilterCount={0}
+          onShowFinished={onShowFinished}
+        />,
+      );
+    });
+
+    const allButton = quickFilterButton("All");
+    expect(allButton?.className).toContain("bg-primary");
+
+    act(() => {
+      allButton?.click();
+    });
+    expect(onShowFinished).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+  });
 });

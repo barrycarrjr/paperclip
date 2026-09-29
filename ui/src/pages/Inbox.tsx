@@ -117,7 +117,10 @@ import {
   DEFAULT_INBOX_ISSUE_COLUMNS,
   buildGroupedInboxSections,
   buildInboxKeyboardNavEntries,
+  collapseRepeatedInboxWorkItems,
   getAvailableInboxIssueColumns,
+  getInboxRecencyBucket,
+  inboxRecencyLabels,
   getInboxWorkItemKey,
   getApprovalsForTab,
   getArchivedInboxSearchIssues,
@@ -152,6 +155,7 @@ import {
   saveLastInboxTab,
   shouldShowInboxSection,
   type InboxGroupedSection,
+  type InboxRecencyBucket,
   type InboxTab,
   type InboxWorkItem,
   type InboxWorkItemGroupBy,
@@ -235,6 +239,22 @@ export function formatJoinRequestInboxLabel(
 
 
 type NonIssueUnreadState = "visible" | "fading" | "hidden" | null;
+
+/** "×3" on a row that stands for exact repeats folded into it. */
+export function RepeatCountBadge({ count, className }: { count: number | undefined; className?: string }) {
+  if (!count || count <= 1) return null;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-px align-middle text-[10px] font-semibold text-muted-foreground",
+        className,
+      )}
+      title={`${count} of these. Opens the newest.`}
+    >
+      ×{count}
+    </span>
+  );
+}
 
 export function FailedRunInboxRow({
   run,
@@ -416,6 +436,7 @@ function ApprovalInboxRow({
   archiveDisabled,
   selected = false,
   className,
+  repeatCount,
 }: {
   approval: Approval;
   requesterName: string | null;
@@ -428,6 +449,7 @@ function ApprovalInboxRow({
   archiveDisabled?: boolean;
   selected?: boolean;
   className?: string;
+  repeatCount?: number;
 }) {
   const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
   const label = approvalLabel(approval.type, approval.payload as Record<string, unknown> | null);
@@ -494,6 +516,8 @@ function ApprovalInboxRow({
             </span>
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <span className="capitalize">{approvalStatusLabel(approval.status)}</span>
+              {/* In the meta line, not after the label: long labels truncate and would hide it. */}
+              <RepeatCountBadge count={repeatCount} />
               {requesterName ? <span>requested by {requesterName}</span> : null}
               <span>updated {timeAgo(approval.updatedAt)}</span>
             </span>
@@ -1326,8 +1350,15 @@ export function Inbox() {
       return next;
     });
   }, [selectedCompanyId]);
+  // Six copies of one reminder read as one row "×6". Folded after search, so a
+  // search still matches every copy, and only for display: the search
+  // supplement above still sees every row, so no copy reappears as "Other".
+  const { items: collapsedWorkItems, repeatCountByKey } = useMemo(
+    () => collapseRepeatedInboxWorkItems(filteredWorkItems),
+    [filteredWorkItems],
+  );
   const groupedSections = useMemo<InboxGroupedSection[]>(() => [
-    ...buildGroupedInboxSections(filteredWorkItems, groupBy, inboxWorkspaceGrouping, { nestingEnabled }),
+    ...buildGroupedInboxSections(collapsedWorkItems, groupBy, inboxWorkspaceGrouping, { nestingEnabled }),
     ...buildGroupedInboxSections(
       getInboxWorkItems({ issues: archivedSearchIssues, approvals: [] }),
       groupBy,
@@ -1342,7 +1373,7 @@ export function Inbox() {
     ),
   ], [
     archivedSearchIssues,
-    filteredWorkItems,
+    collapsedWorkItems,
     groupBy,
     inboxWorkspaceGrouping,
     issueSearchSupplementResults,
@@ -2313,6 +2344,9 @@ export function Inbox() {
                             showStatus={visibleIssueColumnSet.has("status") && availableIssueColumnSet.has("status")}
                             showIdentifier={visibleIssueColumnSet.has("id") && availableIssueColumnSet.has("id")}
                           />
+                          {/* Here, not after the title: long titles truncate and would hide it.
+                              This line is also the meta line on phones. */}
+                          <RepeatCountBadge count={repeatCountByKey.get(`issue:${issue.id}`)} />
                         </>
                       }
                       titleSuffix={hasChildren && !isExpanded && depth === 0 ? (
@@ -2368,7 +2402,8 @@ export function Inbox() {
                   );
                 };
 
-                let previousTimestamp = Number.POSITIVE_INFINITY;
+                const nowMs = Date.now();
+                let previousRecency: InboxRecencyBucket | null = null;
                 return groupedSections.flatMap((group, groupIndex) => {
                   const elements: ReactNode[] = [];
                   const isGroupCollapsed = collapsedGroupKeys.has(group.key);
@@ -2429,21 +2464,20 @@ export function Inbox() {
                         {child}
                       </div>
                     );
-                    const todayCutoff = Date.now() - 24 * 60 * 60 * 1000;
+                    // Today, This week, Older: one divider each time the age
+                    // band changes. Was a single "Earlier" that held months.
                     const datesThisRow = item.kind !== "attention";
-                    const showTodayDivider =
-                      datesThisRow &&
-                      groupBy === "none" &&
-                      item.timestamp > 0 &&
-                      item.timestamp < todayCutoff &&
-                      previousTimestamp >= todayCutoff;
-                    if (datesThisRow && item.timestamp > 0) previousTimestamp = item.timestamp;
-                    if (showTodayDivider) {
+                    const recency = datesThisRow && groupBy === "none" && item.timestamp > 0
+                      ? getInboxRecencyBucket(item.timestamp, nowMs)
+                      : null;
+                    const showRecencyDivider = recency !== null && recency !== previousRecency;
+                    if (recency !== null) previousRecency = recency;
+                    if (showRecencyDivider) {
                       elements.push(
-                        <div key={`today-divider-${group.key}-${index}`} className="my-2 flex items-center gap-3 px-4">
+                        <div key={`recency-divider-${group.key}-${index}`} className="my-2 flex items-center gap-3 px-4">
                           <div className="flex-1 border-t border-zinc-600" />
                           <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
-                            Earlier
+                            {inboxRecencyLabels[recency]}
                           </span>
                         </div>,
                       );
@@ -2458,6 +2492,7 @@ export function Inbox() {
                           key={approvalKey}
                           approval={item.approval}
                           selected={isSelected}
+                          repeatCount={repeatCountByKey.get(approvalKey)}
                           requesterName={agentName(item.approval.requestedByAgentId)}
                           onApprove={() => approveMutation.mutate(item.approval.id)}
                           onReject={() => rejectMutation.mutate(item.approval.id)}

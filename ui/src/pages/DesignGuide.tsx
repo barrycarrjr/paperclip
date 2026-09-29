@@ -116,6 +116,8 @@ import {
   AvatarGroupCount,
 } from "@/components/ui/avatar";
 import { StatusBadge } from "@/components/StatusBadge";
+import { AgentStatusBadge, TeamWorkStateBadge } from "@/components/AgentStatusBadge";
+import { AgentErrorNote } from "@/components/AgentErrorNote";
 import { StatusIcon } from "@/components/StatusIcon";
 import { PriorityIcon } from "@/components/PriorityIcon";
 import { agentStatusDot, agentStatusDotDefault } from "@/lib/status-colors";
@@ -302,6 +304,7 @@ export function DesignGuide() {
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
                 "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "RowHoverToolbar",
                 "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
+                "AgentStatusBadge", "TeamWorkStateBadge", "AgentErrorNote",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -526,6 +529,49 @@ export function DesignGuide() {
                 <span className="text-xs text-muted-foreground">{label}</span>
               </div>
             ))}
+          </div>
+        </SubSection>
+
+        <SubSection title="TeamWorkStateBadge (the Team page's right-now states)">
+          <div className="flex items-center gap-2 flex-wrap">
+            {(
+              ["needs_you", "needs_review", "working", "retrying", "error", "paused", "waiting", "quiet"] as const
+            ).map((state) => (
+              <TeamWorkStateBadge key={state} state={state} />
+            ))}
+          </div>
+        </SubSection>
+
+        <SubSection title="AgentStatusBadge (stored status, unless the agent is waiting on a person)">
+          <div className="flex items-center gap-2 flex-wrap">
+            <AgentStatusBadge status="idle" workState="needs_you" />
+            <AgentStatusBadge status="idle" workState="needs_review" />
+            <AgentStatusBadge status="idle" workState="quiet" />
+            <AgentStatusBadge status="running" workState="working" />
+            <AgentStatusBadge status="error" workState="error" />
+          </div>
+        </SubSection>
+
+        <SubSection title="AgentErrorNote (under an agent's error line)">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1 rounded-md border border-border p-3">
+              <p className="text-xs text-red-600 dark:text-red-400">
+                Its last run could not sign in to Claude.
+              </p>
+              <AgentErrorNote
+                lastError="Claude run failed: subtype=success: Failed to authenticate: OAuth session expired and could not be refreshed"
+                adapterType="claude_local"
+                runLink={{ to: "/design-guide", label: "See what went wrong" }}
+              />
+            </div>
+            <div className="space-y-1 rounded-md border border-border p-3">
+              <p className="text-xs text-red-600 dark:text-red-400">Tests failed</p>
+              <AgentErrorNote
+                lastError="Tests failed"
+                adapterType="claude_local"
+                runLink={{ to: "/design-guide", label: "See its runs" }}
+              />
+            </div>
           </div>
         </SubSection>
 

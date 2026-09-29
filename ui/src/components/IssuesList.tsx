@@ -65,6 +65,7 @@ import { IssueRow } from "./IssueRow";
 import { PageSkeleton } from "./PageSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2 } from "lucide-react";
@@ -112,6 +113,9 @@ export type IssueViewState = IssueFilterState & {
   nestingEnabled: boolean;
   collapsedGroups: string[];
   collapsedParents: string[];
+  // Only read by lists that pass hideFinishedByDefault. Absent means the
+  // default (finished hidden), so a view saved before this existed gets it too.
+  showFinished: boolean;
 };
 
 const defaultViewState: IssueViewState = {
@@ -123,6 +127,7 @@ const defaultViewState: IssueViewState = {
   nestingEnabled: true,
   collapsedGroups: [],
   collapsedParents: [],
+  showFinished: false,
 };
 
 function getViewState(key: string): IssueViewState {
@@ -190,15 +195,15 @@ function getIssueColumnsStorageKey(key: string): string {
   return `${key}:issue-columns`;
 }
 
-function loadIssueColumns(key: string): InboxIssueColumn[] {
+function loadIssueColumns(key: string, defaultColumns: InboxIssueColumn[]): InboxIssueColumn[] {
   try {
     const raw = localStorage.getItem(getIssueColumnsStorageKey(key));
-    if (raw === null) return DEFAULT_INBOX_ISSUE_COLUMNS;
+    if (raw === null) return defaultColumns;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return DEFAULT_INBOX_ISSUE_COLUMNS;
+    if (!Array.isArray(parsed)) return defaultColumns;
     return normalizeInboxIssueColumns(parsed);
   } catch {
-    return DEFAULT_INBOX_ISSUE_COLUMNS;
+    return defaultColumns;
   }
 }
 
@@ -279,6 +284,18 @@ function isActionableWorkflowStatus(status: IssueStatus): boolean {
   return status !== "done" && status !== "cancelled" && status !== "blocked";
 }
 
+function isFinishedIssue(issue: Issue): boolean {
+  return issue.status === "done" || issue.status === "cancelled";
+}
+
+// A todo with nobody on it will not move by itself, so its row says so.
+function isUnassignedTodo(issue: Issue): boolean {
+  return issue.status === "todo" && !issue.assigneeAgentId && !issue.assigneeUserId;
+}
+
+const amberPillClassName =
+  "inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300";
+
 function buildChecklistStepNumberMap(issues: Issue[], nestingEnabled: boolean): Map<string, string> {
   const stepNumberByIssueId = new Map<string, string>();
 
@@ -346,6 +363,16 @@ interface IssuesListProps {
   defaultSortField?: IssueSortField;
   showProgressSummary?: boolean;
   enableRoutineVisibilityFilter?: boolean;
+  /**
+   * Opt-in: the list view leaves out Done and Cancelled unless the viewer
+   * turns on "Show finished" or picks statuses themselves. For the company
+   * task list, where finished work had crowded open work off the first page.
+   */
+  hideFinishedByDefault?: boolean;
+  /** Columns shown until the viewer saves their own choice. */
+  defaultIssueColumns?: InboxIssueColumn[];
+  /** Opt-in: an amber "Nobody assigned" in the assignee cell of a todo nobody has. */
+  flagUnassignedTodos?: boolean;
   mutedIssueIds?: Set<string>;
   issueBadgeById?: Map<string, string>;
   showStatusGuide?: boolean;
@@ -517,6 +544,9 @@ export function IssuesList({
   defaultSortField,
   showProgressSummary = false,
   enableRoutineVisibilityFilter = false,
+  hideFinishedByDefault = false,
+  defaultIssueColumns = DEFAULT_INBOX_ISSUE_COLUMNS,
+  flagUnassignedTodos = false,
   mutedIssueIds,
   issueBadgeById,
   showStatusGuide = false,
@@ -557,7 +587,7 @@ export function IssuesList({
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const [issueSearch, setIssueSearch] = useState(initialSearch ?? "");
   const [renderedIssueRowLimit, setRenderedIssueRowLimit] = useState(INITIAL_ISSUE_ROW_RENDER_LIMIT);
-  const [visibleIssueColumns, setVisibleIssueColumns] = useState<InboxIssueColumn[]>(() => loadIssueColumns(scopedKey));
+  const [visibleIssueColumns, setVisibleIssueColumns] = useState<InboxIssueColumn[]>(() => loadIssueColumns(scopedKey, defaultIssueColumns));
   const [visibleKanbanFields, setVisibleKanbanFields] = useState<KanbanCardField[]>(() => loadKanbanCardFields(scopedKey));
   const deferredIssueSearch = useDeferredValue(issueSearch);
   const normalizedIssueSearch = deferredIssueSearch.trim().toLowerCase();
@@ -588,9 +618,9 @@ export function IssuesList({
   useEffect(() => {
     if (prevColumnsScopedKey.current !== scopedKey) {
       prevColumnsScopedKey.current = scopedKey;
-      setVisibleIssueColumns(loadIssueColumns(scopedKey));
+      setVisibleIssueColumns(loadIssueColumns(scopedKey, defaultIssueColumns));
     }
-  }, [scopedKey]);
+  }, [scopedKey, defaultIssueColumns]);
 
   // Unlike viewState/kanban-fields/columns above, a typed search term has no
   // per-company persistence to reload — it just needs to not survive a
@@ -891,7 +921,15 @@ export function IssuesList({
     [boardIssueQueries, searchWithinLoadedIssues, viewState.viewMode],
   );
 
-  const filtered = useMemo(() => {
+  // Statuses the viewer picked always win over the finished default. The board
+  // is left alone: it already gives Done and Cancelled their own columns.
+  const showFinishedToggle = hideFinishedByDefault
+    && viewState.viewMode === "list"
+    && viewState.statuses.length === 0;
+  const hidesFinished = showFinishedToggle && viewState.showFinished !== true;
+  const hidesRoutineRuns = enableRoutineVisibilityFilter && viewState.hideRoutineExecutions;
+
+  const { filtered, hiddenFinishedCount, hiddenRoutineRunCount } = useMemo(() => {
     const useRemoteSearch = normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues;
     const sourceIssues = boardIssues ?? (useRemoteSearch ? searchedIssues : issues);
     const searchScopedIssues = normalizedIssueSearch.length > 0 && searchWithinLoadedIssues
@@ -905,7 +943,28 @@ export function IssuesList({
       liveIssueIds,
       issueFilterWorkspaceContext,
     );
-    return sortIssues(filteredByControls, viewState);
+    const visible = hidesFinished
+      ? filteredByControls.filter((issue) => !isFinishedIssue(issue))
+      : filteredByControls;
+    // Counted, not shown: how many rows "Show" would bring back, so the list
+    // can say routine runs are hidden instead of leaving them silently missing.
+    const routineRunsHidden = hidesRoutineRuns
+      ? applyIssueFilters(
+        searchScopedIssues,
+        { ...viewState, hideRoutineExecutions: false },
+        currentUserId,
+        enableRoutineVisibilityFilter,
+        liveIssueIds,
+        issueFilterWorkspaceContext,
+      ).filter((issue) =>
+        issue.originKind === "routine_execution" && !(hidesFinished && isFinishedIssue(issue)),
+      ).length
+      : 0;
+    return {
+      filtered: sortIssues(visible, viewState),
+      hiddenFinishedCount: filteredByControls.length - visible.length,
+      hiddenRoutineRunCount: routineRunsHidden,
+    };
   }, [
     boardIssues,
     issues,
@@ -917,6 +976,8 @@ export function IssuesList({
     enableRoutineVisibilityFilter,
     liveIssueIds,
     issueFilterWorkspaceContext,
+    hidesFinished,
+    hidesRoutineRuns,
   ]);
 
   const progressSummary = useMemo(
@@ -1188,8 +1249,9 @@ export function IssuesList({
               availableColumns={availableIssueColumns}
               visibleColumnSet={visibleIssueColumnSet}
               onToggleColumn={toggleIssueColumn}
-              onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
+              onResetColumns={() => setIssueColumns(defaultIssueColumns)}
               title="Choose which issue columns stay visible"
+              resetSummary={defaultIssueColumns.join(", ")}
               iconOnly
             />
           ) : (
@@ -1214,6 +1276,8 @@ export function IssuesList({
             enableRoutineVisibilityFilter={enableRoutineVisibilityFilter}
             iconOnly
             workspaces={isolatedWorkspacesEnabled ? workspaceOptions : undefined}
+            finishedHidden={hidesFinished}
+            onShowFinished={hideFinishedByDefault ? () => updateView({ showFinished: true }) : undefined}
           />
 
           {/* Sort (list view only) */}
@@ -1296,6 +1360,37 @@ export function IssuesList({
         </div>
       </div>
 
+      {(showFinishedToggle || hiddenRoutineRunCount > 0) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          {showFinishedToggle && (
+            <label className="inline-flex cursor-pointer items-center gap-2">
+              <ToggleSwitch
+                checked={viewState.showFinished === true}
+                onCheckedChange={(checked) => updateView({ showFinished: checked })}
+              />
+              <span>
+                Show finished
+                {hiddenFinishedCount > 0 ? ` (${hiddenFinishedCount})` : null}
+              </span>
+            </label>
+          )}
+          {hiddenRoutineRunCount > 0 && (
+            <span className="inline-flex items-center gap-1">
+              {hiddenRoutineRunCount} routine run{hiddenRoutineRunCount === 1 ? "" : "s"} hidden
+              <Button
+                type="button"
+                variant="link"
+                size="xs"
+                className="h-auto px-1 py-0"
+                onClick={() => updateView({ hideRoutineExecutions: false })}
+              >
+                Show
+              </Button>
+            </span>
+          )}
+        </div>
+      )}
+
       {showStatusGuide && !isLoading && filtered.length > 0 && (
         <IssueStatusGuide />
       )}
@@ -1315,7 +1410,9 @@ export function IssuesList({
       {!isLoading && filtered.length === 0 && viewState.viewMode === "list" && (
         <EmptyState
           icon={CircleDot}
-          message="No issues match the current filters or search."
+          message={hiddenFinishedCount > 0
+            ? "No unfinished issues match. Finished ones are hidden."
+            : "No issues match the current filters or search."}
           action={createActionLabel}
           onAction={() => openCreateIssueDialog()}
         />
@@ -1484,7 +1581,7 @@ export function IssuesList({
                                   Paused
                                 </span>
                               ) : (
-                                <span className="ml-1.5 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                <span className={cn("ml-1.5", amberPillClassName)}>
                                   {issueBadge}
                                 </span>
                               )
@@ -1573,6 +1670,8 @@ export function IssuesList({
                                           size="sm"
                                           className="min-w-0"
                                         />
+                                      ) : flagUnassignedTodos && isUnassignedTodo(issue) ? (
+                                        <span className={amberPillClassName}>Nobody assigned</span>
                                       ) : (
                                         <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                                           <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-muted-foreground/35 bg-muted/30">

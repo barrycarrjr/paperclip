@@ -7,6 +7,7 @@ import type {
   Issue,
   JoinRequest,
 } from "@paperclipai/shared";
+import { approvalLabel } from "@paperclipai/shared";
 import {
   applyIssueFilters,
   defaultIssueFilterState,
@@ -17,6 +18,7 @@ import {
 export const RECENT_ISSUES_LIMIT = 100;
 export const FAILED_RUN_STATUSES = new Set(["failed", "timed_out"]);
 export const ACTIONABLE_APPROVAL_STATUSES = new Set(["pending", "revision_requested"]);
+export const DECIDED_APPROVAL_STATUSES = new Set(["approved", "rejected"]);
 export const DISMISSED_KEY = "paperclip:inbox:dismissed";
 export const READ_ITEMS_KEY = "paperclip:inbox:read-items";
 export const INBOX_LAST_TAB_KEY = "paperclip:inbox:last-tab";
@@ -46,6 +48,10 @@ export const inboxIssueColumns = [
 ] as const;
 export type InboxIssueColumn = (typeof inboxIssueColumns)[number];
 export const DEFAULT_INBOX_ISSUE_COLUMNS: InboxIssueColumn[] = ["status", "id", "updated"];
+// The company task list also shows who has each task. Inbox rows are already
+// yours, but on the whole company's list "who is on this?" is the first
+// question, and a task nobody has is the one most worth spotting.
+export const DEFAULT_TASK_LIST_ISSUE_COLUMNS: InboxIssueColumn[] = ["status", "id", "assignee", "updated"];
 
 export const kanbanCardFields = [
   "id",
@@ -753,6 +759,9 @@ export function isApprovalVisibleInMine(
   currentUserId?: string | null,
 ): boolean {
   if (ACTIONABLE_APPROVAL_STATUSES.has(approval.status)) return true;
+  // Already approved or rejected: nothing is left to do, so it stays out of
+  // Mine and lives in Recent and All. Mine had filled up with months of these.
+  if (DECIDED_APPROVAL_STATUSES.has(approval.status)) return false;
   if (!currentUserId) return false;
   return approval.requestedByUserId === currentUserId || approval.decidedByUserId === currentUserId;
 }
@@ -1012,6 +1021,82 @@ export function getInboxWorkItemKey(item: InboxWorkItem): string {
   if (item.kind === "failed_run") return `run:${item.run.id}`;
   if (item.kind === "attention") return `attention:${item.row.key}`;
   return `join:${item.joinRequest.id}`;
+}
+
+/**
+ * What makes two rows the same thing to a reader: same kind, same title, and
+ * the same state, so a pending approval never hides behind an approved one.
+ * Null means never fold. A failed run or a join request is its own event.
+ */
+function inboxRepeatKey(item: InboxWorkItem): string | null {
+  if (item.kind === "issue") {
+    return JSON.stringify(["issue", item.issue.status, item.issue.title]);
+  }
+  if (item.kind === "approval") {
+    const label = approvalLabel(item.approval.type, item.approval.payload as Record<string, unknown> | null);
+    return JSON.stringify(["approval", item.approval.status, label]);
+  }
+  if (item.kind === "attention") {
+    // The server already groups run failures, and keeps two crashes with no
+    // error code apart on purpose: they can be two different bugs.
+    if (item.row.kind === "run_failure") return null;
+    // Detail is part of it: it names the issue or recipient, and two questions
+    // with the same wording about different work are not repeats.
+    return JSON.stringify(["attention", item.row.kind, item.row.blocking, item.row.title, item.row.detail ?? ""]);
+  }
+  return null;
+}
+
+export interface CollapsedInboxWorkItems {
+  items: InboxWorkItem[];
+  /** How many rows a kept row stands for, by getInboxWorkItemKey. Only set above 1. */
+  repeatCountByKey: Map<string, number>;
+}
+
+/**
+ * Folds exact repeats into the first of them. The list is newest first, so
+ * the row that stays, and the one a click opens, is the newest. Attention
+ * rows already carry a count of the occurrences they stand for, so a folded
+ * one adds to that instead, and the row's own count pill shows the total.
+ */
+export function collapseRepeatedInboxWorkItems(items: InboxWorkItem[]): CollapsedInboxWorkItems {
+  const kept: InboxWorkItem[] = [];
+  const keptIndexByRepeatKey = new Map<string, number>();
+  const repeatCountByKey = new Map<string, number>();
+  for (const item of items) {
+    const repeatKey = inboxRepeatKey(item);
+    const keptIndex = repeatKey === null ? undefined : keptIndexByRepeatKey.get(repeatKey);
+    if (keptIndex === undefined) {
+      if (repeatKey !== null) keptIndexByRepeatKey.set(repeatKey, kept.length);
+      kept.push(item);
+      continue;
+    }
+    const keptItem = kept[keptIndex]!;
+    if (keptItem.kind === "attention" && item.kind === "attention") {
+      kept[keptIndex] = { ...keptItem, row: { ...keptItem.row, count: keptItem.row.count + item.row.count } };
+      continue;
+    }
+    const keptKey = getInboxWorkItemKey(keptItem);
+    repeatCountByKey.set(keptKey, (repeatCountByKey.get(keptKey) ?? 1) + 1);
+  }
+  return { items: kept, repeatCountByKey };
+}
+
+export type InboxRecencyBucket = "today" | "this_week" | "older";
+
+export const inboxRecencyLabels: Record<InboxRecencyBucket, string> = {
+  today: "Today",
+  this_week: "This week",
+  older: "Older",
+};
+
+/** Today by the wall clock (since local midnight); this week is the last seven days. */
+export function getInboxRecencyBucket(timestamp: number, nowMs: number): InboxRecencyBucket {
+  const startOfToday = new Date(nowMs);
+  startOfToday.setHours(0, 0, 0, 0);
+  if (timestamp >= startOfToday.getTime()) return "today";
+  if (timestamp >= nowMs - 7 * 24 * 60 * 60 * 1000) return "this_week";
+  return "older";
 }
 
 export function buildInboxKeyboardNavEntries(

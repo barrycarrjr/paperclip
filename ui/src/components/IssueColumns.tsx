@@ -153,6 +153,7 @@ export function IssueColumnPicker({
   onToggleColumn,
   onResetColumns,
   title,
+  resetSummary = "status, id, updated",
   iconOnly = false,
 }: {
   availableColumns: InboxIssueColumn[];
@@ -160,6 +161,7 @@ export function IssueColumnPicker({
   onToggleColumn: (column: InboxIssueColumn, enabled: boolean) => void;
   onResetColumns: () => void;
   title: string;
+  resetSummary?: string;
   iconOnly?: boolean;
 }) {
   return (
@@ -172,7 +174,7 @@ export function IssueColumnPicker({
       title={title}
       labels={issueColumnLabels}
       descriptions={issueColumnDescriptions}
-      resetSummary="status, id, updated"
+      resetSummary={resetSummary}
       iconOnly={iconOnly}
     />
   );

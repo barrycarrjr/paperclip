@@ -30,6 +30,7 @@ import { agentsApi } from "../api/agents";
 import { AttentionRow } from "../components/AttentionRow";
 import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import { SetAsideNotice } from "../components/SetAsideNotice";
+import { BriefHealthLine, BRIEF_HEALTH_BAR_CLASS } from "../components/BriefHealthLine";
 import { GroupedRunsCard, groupRunsByIssue } from "../components/GroupedRunsCard";
 import { useLiveRunTranscripts } from "../components/transcript/useLiveRunTranscripts";
 import type { TranscriptEntry } from "../adapters";
@@ -43,6 +44,12 @@ import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { StatusIcon } from "../components/StatusIcon";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { briefHealth } from "../lib/brief-health";
+import {
+  portfolioBriefCompanies,
+  portfolioBriefTotals,
+  portfolioErroredAgents,
+} from "../lib/portfolio-brief-health";
 import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
@@ -282,8 +289,7 @@ export function PortfolioBrief() {
   // automatically. Falls back to the natural map order when the user hasn't
   // dragged anything yet.
   const filteredCompanies = useMemo(() => {
-    return Array.from(companyMap.values())
-      .filter((c) => !c.isPortfolioRoot && c.status !== "archived");
+    return portfolioBriefCompanies(Array.from(companyMap.values()));
   }, [companyMap]);
   const currentUserId = session?.user?.id ?? null;
   const { orderedCompanies: companies } = useCompanyOrder({
@@ -674,37 +680,23 @@ export function PortfolioBrief() {
     "there";
 
   // Aggregate hero numbers across the portfolio (excluding HQ itself).
-  const totals = (() => {
-    let pendingApprovals = 0;
-    let errors = 0;
-    let runningAgents = 0;
-    let monthSpendCents = 0;
-    let activeIncidents = 0;
-    for (const c of companies) {
-      const s = summariesByCompanyId.get(c.id);
-      if (!s) continue;
-      pendingApprovals += s.pendingApprovals ?? 0;
-      errors += s.agents?.error ?? 0;
-      runningAgents += s.agents?.running ?? 0;
-      monthSpendCents += s.costs?.monthSpendCents ?? 0;
-      activeIncidents += s.budgets?.activeIncidents ?? 0;
-    }
-    return { pendingApprovals, errors, runningAgents, monthSpendCents, activeIncidents };
-  })();
+  const totals = portfolioBriefTotals(companies, summariesByCompanyId);
 
   const overnightTotal = outcomeBuckets.reduce((sum, b) => sum + b.total, 0);
   const issuesTotal = issueBuckets.reduce((sum, b) => sum + b.total, 0);
   const reviewTotal = reviewQueueBuckets.reduce((sum, b) => sum + b.total, 0);
 
-  const heroTone: "emerald" | "amber" | "red" =
-    totals.errors > 0 || totals.activeIncidents > 0 ? "red" : attentionTotal > 0 ? "amber" : "emerald";
-  const heroBarClass = {
-    emerald: "bg-emerald-500/55",
-    amber: "bg-amber-500/55",
-    red: "bg-red-500/55",
-  }[heroTone];
-
-  const allClear = totals.errors === 0 && totals.activeIncidents === 0;
+  const health = briefHealth({
+    agentErrors: totals.errors,
+    budgetIncidents: totals.activeIncidents,
+    blockedTasks: totals.blockedTasks,
+    waitingOnYou: attentionTotal,
+    pendingApprovals: totals.pendingApprovals,
+  });
+  const heroBarClass = BRIEF_HEALTH_BAR_CLASS[health.tone];
+  // Named from the same companies the totals above cover, so HQ's own agents
+  // and archived companies are not named in a count that leaves them out.
+  const erroredAgents = portfolioErroredAgents(companies, agentsByCompany);
 
   return (
     <div className="space-y-8">
@@ -726,31 +718,10 @@ export function PortfolioBrief() {
               Across {companies.length} compan{companies.length === 1 ? "y" : "ies"} in your portfolio.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5",
-                  allClear ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400",
-                )}
-              >
-                <span
-                  className={cn(
-                    "inline-block h-1.5 w-1.5 rounded-full",
-                    allClear ? "bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.18)]" : "bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,0.18)]",
-                  )}
-                />
-                <span className="font-medium text-foreground">
-                  {allClear
-                    ? "All systems green."
-                    : totals.errors > 0
-                      ? `${totals.errors} agent error${totals.errors === 1 ? "" : "s"}.`
-                      : `${totals.activeIncidents} budget incident${totals.activeIncidents === 1 ? "" : "s"}.`}
-                </span>
-              </span>
+              <BriefHealthLine health={health} erroredAgents={erroredAgents} />
               <span className="text-muted-foreground">{overnightTotal} outcomes overnight</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span className="text-muted-foreground">
-                {attentionTotal} waiting on you
-              </span>
+              {/* "N waiting on you" is part of the health line now, which also
+                  keeps a bare "0 waiting on you" from reading as all clear. */}
               <span className="text-muted-foreground/60">·</span>
               <span className="text-muted-foreground">
                 {totals.runningAgents} agent{totals.runningAgents === 1 ? "" : "s"} running

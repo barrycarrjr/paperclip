@@ -6,6 +6,7 @@ import {
   buildTeamCurrentWork,
   countTeamAttention,
   countTeamWorkStates,
+  personWaitingState,
   TEAM_WORK_STATE_LABELS,
 } from "./team-current-work";
 
@@ -398,5 +399,44 @@ describe("buildTeamCurrentWork", () => {
     });
 
     expect(countTeamAttention(rows)).toBe(2);
+  });
+
+  it("says an expired sign-in in plain words instead of the provider's own text", () => {
+    const rows = build({
+      agents: [
+        agent({
+          id: "a1",
+          name: "Chief of Staff",
+          status: "error",
+          adapterType: "claude_local",
+          lastError:
+            "Claude run failed: subtype=success: Failed to authenticate: OAuth session expired and could not be refreshed",
+        } as never),
+      ],
+    });
+
+    expect(rows[0]!.state).toBe("error");
+    expect(rows[0]!.detail).toBe("Its last run could not sign in to Claude.");
+    expect(rows[0]!.detail).not.toContain("OAuth");
+  });
+
+  it("names only the two waiting-on-a-person states for pages that show a stored status", () => {
+    expect(personWaitingState("needs_you")).toBe("needs_you");
+    expect(personWaitingState("needs_review")).toBe("needs_review");
+    // An error already reads as an error in the stored status; the rest are
+    // the agent's own business, not a person's.
+    for (const state of ["error", "working", "retrying", "paused", "waiting", "quiet"] as const) {
+      expect(personWaitingState(state)).toBeNull();
+    }
+    expect(personWaitingState(null)).toBeNull();
+  });
+
+  it("gives an agent with a question and nothing running the Needs you state, not idle", () => {
+    const rows = build({
+      agents: [agent({ id: "a1", name: "COO", status: "idle" as never })],
+      pendingInteractions: [question({ id: "q1", createdByAgentId: "a1" })],
+    });
+
+    expect(personWaitingState(rows[0]!.state)).toBe("needs_you");
   });
 });

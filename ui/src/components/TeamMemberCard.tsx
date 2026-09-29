@@ -3,6 +3,7 @@ import { Bot, Clock, Radio } from "lucide-react";
 import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { AgentIcon } from "./AgentIconPicker";
 import { TeamMemberControls } from "./TeamMemberControls";
+import { AgentErrorNote } from "./AgentErrorNote";
 import type { TeamMemberActions } from "../hooks/useTeamMemberActions";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { RUN_NOW_LINE_TONE_CLASSES } from "../lib/run-now-line";
@@ -127,6 +128,15 @@ export function TeamMemberCard({
           >
             {row.detail}
           </p>
+        )}
+        {row.state === "error" && (
+          <AgentErrorNote
+            lastError={agent.lastError}
+            adapterType={agent.adapterType}
+            // The failed run itself is not on this page's data, so this is
+            // the agent's run list, which opens on its newest run.
+            runLink={{ to: `${agentUrl(agent)}/runs`, label: "See its runs" }}
+          />
         )}
       </div>
 

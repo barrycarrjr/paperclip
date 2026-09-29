@@ -6,6 +6,7 @@ import {
   Square,
   MessageSquareReply,
   ClipboardCheck,
+  RotateCcw,
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -117,19 +118,23 @@ export function TeamMemberControls({
           </Button>
         );
       case "wake":
-      default:
+      default: {
+        // Same call either way. For an agent that stopped with an error it
+        // is named for what the person is doing: having another go.
+        const retry = row.state === "error";
         return (
           <Button
             size={buttonSize}
             variant="outline"
             disabled={disabled}
             onClick={() => actions.wake.mutate(agent.id)}
-            title="Start a run now instead of waiting for the schedule"
+            title={retry ? "Start a new run now" : "Start a run now instead of waiting for the schedule"}
           >
-            <Zap />
-            Wake
+            {retry ? <RotateCcw /> : <Zap />}
+            {retry ? "Try again" : "Wake"}
           </Button>
         );
+      }
     }
   })();
 

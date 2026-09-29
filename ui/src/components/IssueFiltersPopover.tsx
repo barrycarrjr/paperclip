@@ -60,6 +60,8 @@ export function IssueFiltersPopover({
   iconOnly = false,
   workspaces,
   creators,
+  finishedHidden = false,
+  onShowFinished,
 }: {
   state: IssueFilterState;
   onChange: (patch: Partial<IssueFilterState>) => void;
@@ -73,6 +75,13 @@ export function IssueFiltersPopover({
   iconOnly?: boolean;
   workspaces?: WorkspaceOption[];
   creators?: CreatorOption[];
+  /**
+   * The list is leaving out Done and Cancelled while no status is picked. Then
+   * the list is not showing "All", so it is not marked, and choosing it calls
+   * onShowFinished to bring finished work back.
+   */
+  finishedHidden?: boolean;
+  onShowFinished?: () => void;
 }) {
   const [creatorSearch, setCreatorSearch] = useState("");
   const creatorOptions = creators ?? [];
@@ -146,7 +155,9 @@ export function IssueFiltersPopover({
             <span className="text-xs text-muted-foreground">Quick filters</span>
             <div className="flex flex-wrap gap-1.5">
               {issueQuickFilterPresets.map((preset) => {
-                const isActive = issueFilterArraysEqual(state.statuses, preset.statuses);
+                const isAllPreset = preset.statuses.length === 0;
+                const isActive = issueFilterArraysEqual(state.statuses, preset.statuses)
+                  && !(isAllPreset && finishedHidden);
                 return (
                   <button
                     key={preset.label}
@@ -156,7 +167,10 @@ export function IssueFiltersPopover({
                         ? "border-primary bg-primary text-primary-foreground"
                         : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
                     }`}
-                    onClick={() => onChange({ statuses: isActive ? [] : [...preset.statuses] })}
+                    onClick={() => {
+                      onChange({ statuses: isActive ? [] : [...preset.statuses] });
+                      if (isAllPreset && !isActive) onShowFinished?.();
+                    }}
                   >
                     {preset.label}
                   </button>

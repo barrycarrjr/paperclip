@@ -4,8 +4,10 @@ import { Bot, ChevronDown, ChevronRight, Filter } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
 import { TeamMemberCard } from "./TeamMemberCard";
 import { TeamMemberControls } from "./TeamMemberControls";
+import { AgentErrorNote } from "./AgentErrorNote";
 import { OrgRollupStrip, ReportsToLine } from "./TeamOrgContextLine";
 import type { TeamMemberActions } from "../hooks/useTeamMemberActions";
+import { RUN_NOW_LINE_TONE_CLASSES } from "../lib/run-now-line";
 import {
   TEAM_WORK_STATE_DESCRIPTIONS,
   TEAM_WORK_STATE_LABELS,
@@ -157,6 +159,31 @@ function TeamGroupSection({
               <>
                 {leaderOrg && <ReportsToLine context={leaderOrg} className="pt-0.5" />}
                 <p className="truncate pt-0.5 text-xs text-muted-foreground">{leader.line}</p>
+                {leader.state === "error" && (
+                  // A heading has room for one line, but an executive who
+                  // stopped with an error needs the same reason and next step
+                  // as a card, or the reason shows nowhere on this view.
+                  <>
+                    {leader.detail && (
+                      <p
+                        className={cn(
+                          "pt-0.5 text-xs",
+                          leader.detailTone
+                            ? RUN_NOW_LINE_TONE_CLASSES[leader.detailTone]
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {leader.detail}
+                      </p>
+                    )}
+                    <AgentErrorNote
+                      lastError={leader.agent.lastError}
+                      adapterType={leader.agent.adapterType}
+                      runLink={{ to: `${agentUrl(leader.agent)}/runs`, label: "See its runs" }}
+                      className="pt-0.5"
+                    />
+                  </>
+                )}
               </>
             )}
             {!leader && hasMembers && section.rollup && (

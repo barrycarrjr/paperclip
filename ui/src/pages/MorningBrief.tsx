@@ -38,6 +38,11 @@ import { AttentionRow } from "../components/AttentionRow";
 import { useAttentionRowActions } from "../hooks/useAttentionRowActions";
 import { SetAsideNotice } from "../components/SetAsideNotice";
 import {
+  BriefHealthLine,
+  BRIEF_HEALTH_BAR_CLASS,
+  type BriefErroredAgent,
+} from "../components/BriefHealthLine";
+import {
   ChartCard,
   RunActivityChart,
   PriorityChart,
@@ -45,7 +50,8 @@ import {
   SuccessRateChart,
 } from "../components/ActivityCharts";
 import { timeAgo } from "../lib/timeAgo";
-import { cn, formatCents } from "../lib/utils";
+import { agentUrl, cn, formatCents } from "../lib/utils";
+import { briefHealth } from "../lib/brief-health";
 import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
@@ -419,16 +425,6 @@ export function MorningBrief() {
   // Count outcomes only from last OVERNIGHT_HOURS
   const overnightCount = outcomes.length;
 
-  const allClear = errors === 0 && (summary?.budgets.activeIncidents ?? 0) === 0;
-  const heroTone: "emerald" | "amber" | "red" =
-    errors > 0 ? "red" : attentionRows.length > 0 ? "amber" : "emerald";
-
-  const heroBarClass = {
-    emerald: "bg-emerald-500/55",
-    amber: "bg-amber-500/55",
-    red: "bg-red-500/55",
-  }[heroTone];
-
   // Metric card state (absorbed from old Dashboard)
   const totalAgents = summary
     ? summary.agents.active + summary.agents.running + summary.agents.paused + summary.agents.error
@@ -447,6 +443,24 @@ export function MorningBrief() {
   })();
   const pendingTotal = summary ? summary.pendingApprovals + summary.budgets.pendingApprovals : 0;
   const approvalsTone: "default" | "warning" = pendingTotal > 0 ? "warning" : "default";
+
+  // Rows that have gone quiet are not waiting on anyone and the Attention badge
+  // does not count them, so neither does the headline, even while they show.
+  const liveAttentionCount = showSetAside
+    ? Math.max(0, attentionRows.length - (attention?.setAside ?? 0))
+    : attentionRows.length;
+  const health = briefHealth({
+    agentErrors: errors,
+    budgetIncidents: summary?.budgets.activeIncidents ?? 0,
+    blockedTasks: summary?.tasks.blocked ?? 0,
+    waitingOnYou: liveAttentionCount,
+    // Not pendingTotal: this count already holds the budget overrides.
+    pendingApprovals: summary?.pendingApprovals ?? 0,
+  });
+  const heroBarClass = BRIEF_HEALTH_BAR_CLASS[health.tone];
+  const erroredAgents: BriefErroredAgent[] = (agents ?? [])
+    .filter((agent) => agent.status === "error")
+    .map((agent) => ({ id: agent.id, name: agent.name, href: agentUrl(agent) }));
 
   const attentionToShow = attentionExpanded ? attentionRows : attentionRows.slice(0, ATTENTION_SHOWN);
   const remainingAttention = attentionExpanded
@@ -515,12 +529,11 @@ export function MorningBrief() {
               Here's what your agents got done overnight, and what's lined up today.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
-              <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.18)]" />
-                <span className="font-medium text-foreground">
-                  {allClear ? "All systems green." : errors > 0 ? `${errors} agent error${errors === 1 ? "" : "s"}.` : "Mostly clear."}
-                </span>
-              </span>
+              <BriefHealthLine
+                health={health}
+                erroredAgents={erroredAgents}
+                moreAgentsHref="/agents/error"
+              />
               <span className="text-muted-foreground">{overnightCount} outcomes overnight</span>
             </div>
           </div>
@@ -591,7 +604,7 @@ export function MorningBrief() {
 
       {/* Awaiting your tap — the attention queue, plus email senders (not a queue kind yet) */}
       <section aria-label="Awaiting your tap">
-        <div className="mb-3 flex items-baseline justify-between">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex items-center gap-2">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Awaiting your tap
@@ -612,6 +625,16 @@ export function MorningBrief() {
               </span>
             )}
           </div>
+          {/* The same place the sidebar's Attention item goes, so this list
+              and the full one are never more than a tap apart. */}
+          <Link
+            to="/inbox"
+            className="shrink-0 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            {liveAttentionCount > 0
+              ? `See all in Attention (${liveAttentionCount})`
+              : "See all in Attention"}
+          </Link>
         </div>
 
         {attentionRows.length === 0 && reviewQueue.length === 0 ? (

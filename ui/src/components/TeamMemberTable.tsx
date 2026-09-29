@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Bot, ChevronsUpDown } from "lucide-react";
 import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { AgentIcon } from "./AgentIconPicker";
 import { TeamMemberControls } from "./TeamMemberControls";
+import { AgentErrorNote } from "./AgentErrorNote";
 import type { TeamMemberActions } from "../hooks/useTeamMemberActions";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { RUN_NOW_LINE_TONE_CLASSES } from "../lib/run-now-line";
@@ -283,6 +284,14 @@ function TeamMemberTableRow({
           >
             {row.detail}
           </p>
+        )}
+        {row.state === "error" && (
+          <AgentErrorNote
+            lastError={agent.lastError}
+            adapterType={agent.adapterType}
+            runLink={{ to: `${agentUrl(agent)}/runs`, label: "See its runs" }}
+            className="pt-0.5"
+          />
         )}
         {startedMs !== null && Number.isFinite(startedMs) && (
           <p className="text-[11px] text-muted-foreground">

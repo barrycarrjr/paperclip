@@ -34,6 +34,7 @@ import { AiInstructionsAssistDialog } from "../components/AiInstructionsAssistDi
 import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
+import { AgentHeaderStatusBadge } from "../components/AgentHeaderStatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { ClaudeSignInScope } from "../components/ClaudeSignInScope";
@@ -1003,7 +1004,15 @@ export function AgentDetail() {
             onResume={() => agentAction.mutate("resume")}
             disabled={agentAction.isPending || isPendingApproval}
           />
-          <span className="hidden sm:inline"><StatusBadge status={agent.status} /></span>
+          <span className="hidden sm:inline">
+            {/* The Team page's reading of this agent, on the dashboard tab only. */}
+            <AgentHeaderStatusBadge
+              agent={agent}
+              companyId={resolvedCompanyId}
+              view={activeView}
+              isPluginTab={isPluginTab}
+            />
+          </span>
           {mobileLiveRun && (
             <Link
               to={`/agents/${canonicalAgentRef}/runs/${mobileLiveRun.id}`}

@@ -1,6 +1,7 @@
 import type { Agent, Issue } from "@paperclipai/shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import type { PendingCompanyInteraction } from "../api/issues";
+import { explainAgentError } from "./agent-error-explanation";
 import { formatNextWake, nextWakeAtMs } from "./next-wake";
 import { runNowLine, type RunNowLine } from "./run-now-line";
 
@@ -103,6 +104,23 @@ export const TEAM_ATTENTION_STATES: readonly TeamWorkState[] = [
 ];
 
 /**
+ * The two states where the agent itself is fine and simply waiting for a
+ * person: a question to answer, or finished work to look at.
+ *
+ * Pages that otherwise show only the agent's stored status show one of these
+ * instead, because that status says "idle" for an agent that is waiting on
+ * you. An error is left out on purpose: the stored status already says
+ * "error", so there is nothing to correct.
+ */
+export type TeamPersonWaitingState = "needs_you" | "needs_review";
+
+export function personWaitingState(
+  state: TeamWorkState | null | undefined,
+): TeamPersonWaitingState | null {
+  return state === "needs_you" || state === "needs_review" ? state : null;
+}
+
+/**
  * The four groups the eight states collapse into.
  *
  * They live here rather than beside the tiles that first used them because
@@ -177,6 +195,10 @@ const NO_ERROR_REASON = "No reason was recorded.";
 /**
  * Why this agent stopped, in as much of its own words as fits on one line.
  *
+ * A failure we recognise, such as an expired sign-in, is said in plain words
+ * instead (lib/agent-error-explanation.ts), and the raw text is left for a
+ * Details toggle rather than repeated on every row.
+ *
  * An adapter error is often a stack trace or a wall of output, so only the
  * first meaningful line is used and it is cut short. When there is nothing
  * recorded, or the reader is not allowed to see it, the row says so rather
@@ -185,6 +207,8 @@ const NO_ERROR_REASON = "No reason was recorded.";
 function errorDetail(agent: Agent): string {
   const raw = typeof agent.lastError === "string" ? agent.lastError.trim() : "";
   if (!raw) return NO_ERROR_REASON;
+  const explained = explainAgentError(raw, agent.adapterType);
+  if (explained) return explained.summary;
   const firstLine = raw.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
   if (!firstLine) return NO_ERROR_REASON;
   return firstLine.length > ERROR_DETAIL_MAX_CHARS
