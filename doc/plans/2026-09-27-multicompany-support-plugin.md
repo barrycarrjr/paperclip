@@ -184,6 +184,40 @@ The plugin now has company remote access groups scoped to an exact target, DNS d
 
 ## Verification gates
 
+### Interactive Clippy support (2026-09-29)
+
+Live discovery correction: adapter sessions can defer MCP tool schemas, so installing a support tool alone does not ensure Clippy selects it. The host now supplies a compact directory of current plugin capabilities on every turn and directs Clippy to discover the matching plugin before shell fallbacks or credential requests. Support's entry-point description explicitly covers workstation investigations with saved company access and no pre-existing ticket. The directory comes from installed tools and contains no deployment credentials or company-specific targets.
+
+A live read-only Clippy rehearsal now opened an internal case and completed connectivity, performance, storage and services checks through saved company access. This exposed and corrected case/action mutations sent through the host's read-only query API; tests now enforce the read/write contract. Diagnostic summaries must describe their limited snapshot rather than declare the entire computer healthy. No live repair was performed in this rehearsal.
+
+### Expanded IT toolkit (2026-09-29)
+
+Implemented: 16 bounded diagnostic checks covering inventory/capabilities, performance samples, storage/services, events, networking, printing, applied computer policy, domain/account metadata, applications, updates, tasks, certificates and shares. Diagnostic option values are encoded as data; secondary network probes must resolve inside the same company's access groups. Missing modules and partial results are explicit. Inventory stores a company snapshot without network-wide scanning.
+
+Seven structured repair recipes prepare scripts for the existing inline/delegated execution path: start/restart service, restart spooler, flush DNS, refresh computer policy, restart/cancel an exact print job. They include verification, disruption and recovery notes; preparation cannot execute. Print jobs bind to observed submission times to reject recycled IDs. Broader custom PowerShell repairs retain the existing confirmation and durable attempt rules.
+
+Live rehearsal exposed the default 30-second worker RPC limit on the repeated performance check. Tools now declare a validated bounded execution timeout, clamped by the host to five minutes and never controlled by tool parameters. The remote runner serializes tasks per computer with a 30-second queue-wait limit; timed-out waiters cannot execute later or allow another request to overtake the active task. A timeout still does not cancel an already-started remote action.
+
+Verification: 42 plugin tests, plugin/SDK/server builds and server/plugin typechecks passed, together with targeted host timeout and permission tests. Live read-only rehearsals completed the additional Windows checks, article retrieval, device/knowledge lookup and repair preparation. The final repeated-performance/share request completed without worker errors or retries. The dashboard's data endpoint returned the current catalogs and inventory. Browser automation was unavailable, so visual layout was not checked. No live write repair was performed.
+
+Reference discovery searches a curated directory of 20 official sources locally and retrieves current article excerpts with source URLs and timestamps. Reference downloads have host/redirect, timeout and size limits; text cannot grant execution authority. Company support knowledge publication requires inline confirmation. A verified fix must link to successful action verification in the person's own case; cross-company knowledge and inventory access is rejected. The dashboard displays the catalogs, snapshots, notes and recorded diagnostic findings.
+
+Remaining connector-dependent expansion: Linux/SSH, cloud/email administration, vendor hardware/software APIs, interactive remote desktop, full domain replication analysis, domain-wide GPO administration with finer permission scope, long-running maintenance jobs and central Approvals integration. Knowledge entries are append-only initially; versioned editing/retirement and configurable retention remain future work. Recovery still requires actual prior-state capture or backups for changes that need it.
+
+### Repair workflow reliability and symptom outcomes (2026-09-29)
+
+Repair and verification now hold one target slot for their entire sequence, including outcome recording. Delegation and case review are rechecked after the wait. A unique database index also prevents two running actions on the same normalized hostname across worker restarts. Unknown outcomes block new cases on that hostname until an operator inspects and reviews the original case. DNS aliases and alternate IPs are not automatically identified as the same device. Existing overlapping running attempts must be reconciled before installing the new index.
+
+Failed proposals release their pending case claim but retain the exact request fingerprint, so a lost response cannot silently replay a change. Clippy history returns repair/verification exit codes, script hashes and recovery notes. The new confirmed outcome tool records resolved, still present or needs-follow-up, with observed or requester-confirmed symptom evidence. It advances the case review and ends delegation; it cannot close/reopen a currently unknown or running attempt to bypass inspection. Board re-review clears stale symptom evidence.
+
+Verification includes a Windows PowerShell rehearsal using an injected local executor and an isolated temporary file: write, separate verification, recovery/removal, and a lost response after a real write with replay prevention. This validates the action workflow without changing staff computers; it does not establish remote repair execution on production devices. Live Clippy rehearsal denied both repair and outcome confirmations and then confirmed no action started and the case remained open. Company permission, stale review, outcome evidence, cross-case sequence ordering, restart state and delegation revocation during a queue wait have offline coverage.
+
+The approved human workflow keeps consent in the conversation. An authorized person can name a computer without an incoming ticket, see diagnostic results, review the proposed repair and confirm it with a button or a short reply. Emergency delegation is limited to one case, person, conversation and target for one hour. It does not grant extra permissions. Automatic intake continues through the reviewed case workflow; central Approvals queue integration remains future work.
+
+Implemented in the current development changes: host-issued tool permission and inline-consent context for native and MCP Clippy, company `support:diagnose` and `support:repair` grants, fixed Windows diagnostics, conversation-owned internal cases, exact repair/verification scripts with recovery notes, delegation/revocation, and durable repair retry protection. External communication routes are optional for direct Clippy requests. Credentials and allowed device groups remain deployment settings. The plugin fails closed when the host cannot attest a person's grant or consent.
+
+Offline tests cover company/person/conversation boundaries, permission changes while waiting, consent spoofing, delegation expiry, stale review versions, concurrent repairs and unknown outcomes. Live Clippy repair rehearsal remains required. Audit records describe changes; actual recovery needs captured state or backups where supported. Stopping a conversation does not guarantee cancellation of a command already running. Domain-admin scripts are not an operating-system sandbox, and a connection target alone cannot constrain every downstream effect.
+
 - State-machine tests for duplicate and out-of-order events, concurrent reviews, stale drafts, restart recovery, and partial send or issue failures.
 - Two-company authorization tests for shared sources, routes, secrets, agent tools, case APIs, dashboard queries, and portfolio summaries.
 - Connector contract tests with fake provider responses, including unsafe customer instructions.
@@ -206,3 +240,15 @@ The plugin now has company remote access groups scoped to an exact target, DNS d
 
 - Paperclip: `doc/GOAL.md`, `doc/PRODUCT.md`, `doc/SPEC-implementation.md`, `doc/plugins/PLUGIN_AUTHORING_GUIDE.md`, `packages/plugins/sdk/README.md`.
 - Reusable plugin sources: `../paperclip-extensions/plugins/customer-support/`, `../paperclip-extensions/plugins/help-scout/`, `../paperclip-extensions/plugins/slack-tools/`.
+
+## 2026-09-29: Reviewed outbound communication
+
+Implemented saved Slack reply and vendor email drafts, person-confirmed delivery in Clippy or the case dashboard, the company permission `support:respond`, pinned source accounts, provider receipt tracking and metadata-only connector ledgers. The host plugin event API connects Support Desk to Slack Tools and Email Tools without sharing channel credentials. Exact channels/recipients are opt-in on the connector; each send rechecks company access. Approvals expire after ten minutes. A claimed ID never automatically replays; only a confirmed not-sent result can prepare a freshly approved retry. Slack SDK retries are disabled for this path. Pending/unknown states must never be described as sent. Provider acceptance does not establish recipient delivery/read status or case resolution.
+
+Help Scout/source-email/WHMCS replies and automatic Jira form submission remain future adapters. Jira escalation uses the configured public form. This stage does not automatically mark the separate manual escalation record submitted. Tests use isolated databases and fake senders; no live message is sent as part of validation. Empty connector destination lists leave the new sending capability disabled.
+
+Verification for this stage: Support Desk 56 tests, Email Tools 126 tests and Slack Tools 14 tests pass with type checks and builds. The host/UI permission and presentation tests pass (31 targeted tests); shared/SDK/server/UI checks and builds pass. All three updated local plugins report ready; the live case data includes outbound history and the tool registry includes all four communication tools. Destination opt-in lists remain empty. No external messages or office repair were sent/run. Browser visual validation and the full repository suite were not rerun for this stage.
+
+Checkpoint policy: save each completed milestone in a separate commit after checking the pending content for credentials, company identifiers and private paths. Push reviewed checkpoints to the fork's main branch for host changes and the support feature branch for extension changes. Deployment settings, secret values and local agent configuration stay out of these commits.
+
+Checkpoint verification: 69 targeted host/UI tests pass and the host pre-commit hook passes the full workspace type check. The IT toolkit snapshot passes 48 tests, type check and build independently of the communication milestone. The combined plugin checks above remain applicable; Email Tools' 126 tests pass after replacing a real mailbox fixture with generic examples. The pending source content and both SDK archives were scanned, and each staged milestone was checked again before committing.
