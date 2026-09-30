@@ -675,6 +675,7 @@ export interface WorkerToHostMethods {
   ];
 
   // Secrets
+  "secrets.store": [params: { companyId: string; key: string; value: string }, result: { secretRef: string }];
   "secrets.resolve": [
     params: { secretRef: string; companyId?: string },
     result: string,

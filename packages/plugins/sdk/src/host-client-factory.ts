@@ -123,6 +123,7 @@ export interface HostServices {
 
   /** Provides `secrets.resolve`. */
   secrets: {
+    store?(params: WorkerToHostMethods["secrets.store"][0]): Promise<{ secretRef: string }>;
     resolve(params: WorkerToHostMethods["secrets.resolve"][0]): Promise<string>;
   };
 
@@ -314,6 +315,7 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
 
   // Secrets
   "secrets.resolve": "secrets.read-ref",
+  "secrets.store": "secrets.store",
 
   // AI
   "ai.complete": "ai.complete",
@@ -500,6 +502,10 @@ export function createHostClientHandlers(
     }),
 
     // Secrets
+    "secrets.store": gated("secrets.store", async (params) => {
+      if (!services.secrets.store) throw new Error("Encrypted plugin storage is unavailable on this host");
+      return services.secrets.store(params);
+    }),
     "secrets.resolve": gated("secrets.resolve", async (params) => {
       return services.secrets.resolve(params);
     }),

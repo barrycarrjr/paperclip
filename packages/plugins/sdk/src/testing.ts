@@ -585,6 +585,10 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
     },
     secrets: {
+      async store(_companyId, _key, _value) {
+        requireCapability(manifest, capabilitySet, "secrets.store");
+        return { secretRef: randomUUID() };
+      },
       async resolve(secretRef) {
         requireCapability(manifest, capabilitySet, "secrets.read-ref");
         return `resolved:${secretRef}`;

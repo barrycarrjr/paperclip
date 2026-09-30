@@ -627,6 +627,9 @@ export interface PluginHttpClient {
  * @see PLUGIN_SPEC.md §22 — Secrets
  */
 export interface PluginSecretsClient {
+  /** Store immutable plugin-owned material in encrypted company Secrets. Returns only its reference.
+   * Requires secrets.store. A repeated key with different material is rejected, never rotated. */
+  store(companyId: string, key: string, value: string): Promise<{ secretRef: string }>;
   /**
    * Resolve a secret reference to its current value.
    *

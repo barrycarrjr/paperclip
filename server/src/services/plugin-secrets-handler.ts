@@ -43,6 +43,8 @@ import type { SecretProvider } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
 import { logger } from "../middleware/logger.js";
 import { pluginRegistryService } from "./plugin-registry.js";
+import { secretService } from "./secrets.js";
+import { storePluginSecret, pluginStorageOwner } from "./plugin-secret-storage.js";
 import {
   isUuidSecretRef,
 } from "./json-schema-secret-refs.js";
@@ -186,6 +188,7 @@ export interface PluginSecretsHandlerOptions {
  * The `HostServices.secrets` adapter for the plugin host-client factory.
  */
 export interface PluginSecretsService {
+  store(params: { companyId: string; key: string; value: string }): Promise<{ secretRef: string }>;
   /**
    * Resolve a secret reference to its current plaintext value.
    *
@@ -266,6 +269,7 @@ export function createPluginSecretsHandler(
 ): PluginSecretsService {
   const { db, pluginId } = options;
   const registry = pluginRegistryService(db);
+  const storageLimiter = createRateLimiter(120, RATE_LIMIT_WINDOW_MS);
 
   // Two separate budgets. Enumeration attempts (refs outside this plugin's own
   // config) are the thing worth throttling hard; resolutions of the plugin's
@@ -289,6 +293,10 @@ export function createPluginSecretsHandler(
   const CONFIG_CACHE_TTL_MS = 30_000; // 30 seconds, matches event bus TTL
 
   return {
+    async store(params) {
+      if (!storageLimiter.check(pluginId)) throw rateLimitExceeded();
+      return storePluginSecret(secretService(db), pluginId, params);
+    },
     async resolve(params: PluginSecretsResolveParams): Promise<string> {
       const { secretRef, companyId } = params;
 
@@ -328,9 +336,13 @@ export function createPluginSecretsHandler(
       }
 
       if (!cachedAllowedRefs.has(trimmedRef)) {
+        // Dynamic intake references are readable only by their creator plugin,
+        // with an explicit company. Never relax access to other off-config refs.
         chargeUnknownRefAttempt();
-        // Return "not found" to avoid leaking whether the secret exists
-        throw secretNotFound(trimmedRef);
+        const owned = companyId ? await db.select().from(companySecrets)
+          .where(and(eq(companySecrets.id, trimmedRef), eq(companySecrets.companyId, companyId)))
+          .then(rows => rows[0] ?? null) : null;
+        if (!owned || owned.description !== pluginStorageOwner(pluginId)) throw secretNotFound(trimmedRef);
       }
 
       // ---------------------------------------------------------------

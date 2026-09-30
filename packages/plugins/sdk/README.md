@@ -41,6 +41,8 @@ pnpm add @paperclipai/plugin-sdk
 
 ## Current deployment caveats
 
+`ctx.secrets.store(companyId, key, value)` requires `secrets.store` and writes immutable plugin-owned material to encrypted company Secrets. `key` is a 64-character lowercase SHA-256 identifier. Repeating it with different material is rejected. Only the reference is returned. The creator plugin can resolve that dynamic reference with `secrets.read-ref` and an explicit matching company; other off-configuration references remain denied. Values must never enter ordinary plugin data, logs or tool responses.
+
 The SDK is stable enough for local development and first-party examples, but the runtime deployment model is still early.
 
 - Plugin workers and plugin UI should both be treated as trusted code today.

@@ -125,6 +125,20 @@ describeEmbeddedPostgres("plugin secrets handler rate limiting", () => {
     await expect(handler.resolve({ secretRef, companyId: randomUUID() })).rejects.toThrow(/Secret not found/);
   });
 
+  it("resolves immutable plugin-owned intake only with its company and denies another plugin", async () => {
+    const { pluginId, companyId } = await installPluginWithSecret();
+    const handler = createPluginSecretsHandler({ db, pluginId });
+    const input = { companyId, key: "a".repeat(64), value: "synthetic protected source" };
+    const stored = await handler.store(input);
+    expect(await handler.store(input)).toEqual(stored);
+    await expect(handler.store({ ...input, value: "changed source" })).rejects.toThrow("different material");
+    await expect(handler.resolve({ secretRef: stored.secretRef, companyId })).resolves.toBe(input.value);
+    await expect(handler.resolve({ secretRef: stored.secretRef })).rejects.toThrow("Secret not found");
+    await expect(handler.resolve({ secretRef: stored.secretRef, companyId: randomUUID() })).rejects.toThrow("Secret not found");
+    const other = await installPluginWithSecret();
+    await expect(createPluginSecretsHandler({ db, pluginId: other.pluginId }).resolve({ secretRef: stored.secretRef, companyId })).rejects.toThrow("Secret not found");
+  });
+
   it("resolves a configured secret far more often than the enumeration budget", async () => {
     const { pluginId, secretRef } = await installPluginWithSecret();
     const handler = createPluginSecretsHandler({ db, pluginId });

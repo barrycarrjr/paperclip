@@ -1032,6 +1032,13 @@ export function buildHostServices(
     },
 
     secrets: {
+      async store(params) {
+        const result = await secretsHandler.store(params);
+        await logActivity(db, { companyId: params.companyId, actorType: "plugin", actorId: pluginId,
+          action: "plugin.secret_stored", entityType: "secret", entityId: result.secretRef,
+          details: { pluginId } });
+        return result;
+      },
       async resolve(params) {
         return secretsHandler.resolve(params);
       },
