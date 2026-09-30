@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginManifestV1Schema, type PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import { forbidden } from "../errors.js";
 
 const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -17,6 +18,8 @@ const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   assertCheckoutOwner: vi.fn(),
 }));
+const supportPermission = vi.hoisted(() => vi.fn());
+vi.mock("../services/plugin-user-permission.js", () => ({ requirePluginUserPermission: supportPermission }));
 
 vi.mock("../services/plugin-registry.js", () => ({
   pluginRegistryService: () => mockRegistry,
@@ -103,6 +106,7 @@ describe.sequential("plugin scoped API routes", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    supportPermission.mockResolvedValue(undefined);
     mockIssueService.getById.mockResolvedValue(null);
     mockIssueService.assertCheckoutOwner.mockResolvedValue({
       id: issueId,
@@ -111,6 +115,23 @@ describe.sequential("plugin scoped API routes", () => {
       checkoutRunId: runId,
       adoptedFromRunId: null,
     });
+  });
+
+  it("enforces declared user permissions before forwarding a trusted grant to the worker", async () => {
+    const apiRoutes = manifest([{ routeKey: "repair", method: "POST", path: "/repair", auth: "board",
+      capability: "api.routes.register", companyResolution: { from: "body", key: "companyId" }, requiredUserPermission: "support:repair" }]);
+    const { app, workerManager } = await createApp({
+      actor: { type: "board", userId: "user-1", source: "session", isInstanceAdmin: true, companyIds: [companyId] },
+      plugin: { id: pluginId, pluginKey: apiRoutes.id, status: "ready", manifestJson: apiRoutes },
+    });
+    supportPermission.mockRejectedValueOnce(forbidden("Repair grant required"));
+    const denied = await request(app).post(`/api/plugins/${pluginId}/api/repair`).send({ companyId, actor: { grantedPermission: "support:repair" } });
+    expect(denied.status).toBe(403);
+    expect(workerManager.call).not.toHaveBeenCalled();
+    const allowed = await request(app).post(`/api/plugins/${pluginId}/api/repair`).send({ companyId });
+    expect(allowed.status).toBe(200);
+    expect(supportPermission).toHaveBeenLastCalledWith(expect.anything(), companyId, "user-1", "support:repair", false);
+    expect(workerManager.call.mock.calls[0]?.[2].actor).toMatchObject({ actorId: "user-1", grantedPermission: "support:repair" });
   });
 
   it("dispatches a board GET route with params, query, actor, and company context", async () => {

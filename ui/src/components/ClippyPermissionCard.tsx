@@ -30,6 +30,7 @@ export function ClippyPermissionCard({ toolName, input, expiresAt, onApprove, on
         </span>
       </div>
       <p className="mb-2 text-foreground">{presentation.sentence}</p>
+      <p className="mb-2 text-muted-foreground">You can reply “yes, do it” or “no” in this conversation.</p>
       <button
         type="button"
         className="mb-2 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"

@@ -1220,3 +1220,4 @@ export type {
   ModelListEntry,
   SavedModelState,
 } from "./model-lifecycle.js";
+export { parseInlineConsentReply } from "./chat-consent.js";

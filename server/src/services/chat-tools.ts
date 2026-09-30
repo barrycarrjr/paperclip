@@ -25,6 +25,7 @@ import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
 import { personalCompanyOwner } from "./personal-companies.js";
+import { requestChatToolConfirmation } from "./chat-tool-interactions.js";
 
 export type ToolActor = {
   userId: string;
@@ -1305,6 +1306,7 @@ export async function executePluginChatTool(
     };
   }
   const namespacedName = chatNameToPluginTool(chatName);
+  await assertCompanyAccess(ctx, ctx.defaultCompanyId);
   const runContext = {
     agentId: `clippy:${ctx.actor.userId}`,
     runId: randomUUID(),
@@ -1317,7 +1319,10 @@ export async function executePluginChatTool(
     userId: ctx.actor.userId ?? null,
   };
   try {
-    const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext);
+    const exec = await dispatcher.executeTool(namespacedName, rawInput, runContext, {
+      localTrustedUser: ctx.actor.isInstanceAdmin && ctx.actor.userId === "local-board",
+      requestUserConfirmation: (name, input) => requestChatToolConfirmation(ctx.chatSessionId, name, input),
+    });
     if (exec.result.error) {
       // Give the model the failure code's instruction, not just the prose.
       // Without it "Help Scout returned 401" and "Help Scout returned 503"

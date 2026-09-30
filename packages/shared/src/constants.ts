@@ -609,6 +609,9 @@ export const PERMISSION_KEYS = [
   "tasks:manage_active_checkouts",
   "joins:approve",
   "reminders:create_for_board",
+  "support:diagnose",
+  "support:repair",
+  "support:respond",
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 

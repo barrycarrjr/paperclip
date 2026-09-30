@@ -98,6 +98,9 @@ export interface RegisteredTool {
    * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
    */
   writes: boolean;
+  requiredUserPermission?: import("@paperclipai/shared").PermissionKey;
+  requiresUserConfirmation?: boolean;
+  executionTimeoutMs?: number;
   /**
    * True when the operator said an agent must get a human yes before this
    * runs. Set from the install's operation policy, never from the manifest —
@@ -310,6 +313,9 @@ export function createPluginToolRegistry(
       description: decl.description,
       parametersSchema: decl.parametersSchema,
       isOperation: false,
+      requiredUserPermission: decl.requiredUserPermission,
+      requiresUserConfirmation: decl.requiresUserConfirmation,
+      executionTimeoutMs: decl.executionTimeoutMs,
       audience: "agents",
       writes: decl.writes === true,
       requiresApproval: false,
@@ -603,7 +609,11 @@ export function createPluginToolRegistry(
         runContext,
       };
 
-      const raw = await workerManager.call(dbId, "executeTool", rpcParams);
+      // Only manifest metadata extends a call, never tool parameters.
+      const requestedTimeout = tool.executionTimeoutMs;
+      const timeout = typeof requestedTimeout === "number" && Number.isInteger(requestedTimeout) && requestedTimeout >= 1_000
+        ? Math.min(requestedTimeout, 300_000) : undefined;
+      const raw = await workerManager.call(dbId, "executeTool", rpcParams, timeout);
       const result = normalizeToolResult(raw);
 
       log.debug(

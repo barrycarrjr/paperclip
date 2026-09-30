@@ -69,6 +69,24 @@ const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = 
 export function describeChatTool(name: string, input: unknown): ToolPresentation {
   const inputObj =
     input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const supportName = name.replace("customer-support:", "customer-support__");
+  if (supportName === "customer-support__support_send_message") {
+    const destination = inputObj.destination as Record<string,unknown> | undefined;
+    return { label: "Send the reviewed support message",via: "Support Desk",
+      sentence: `Send to ${asString(destination?.to) || asString(destination?.channelId) || "the saved destination"}${destination?.threadTs ? ` in thread ${destination.threadTs}` : ""}${destination?.subject ? `, subject: ${destination.subject}` : ""}. Message: ${asString(inputObj.body) || "see the saved draft"}. This sends one external message; repair delegation does not approve it.` };
+  }
+  if (supportName === "customer-support__support_run_repair") return {
+    label: "Run the proposed repair", via: "Support Desk",
+    sentence: `On ${asString(inputObj.target) || "the case computer"}: ${asString(inputObj.expectedEffect) || "run the proposed repair"}. Recovery: ${asString(inputObj.recoveryNotes) || "see the proposal"}. The repair and verification scripts are available below.`,
+  };
+  if (supportName === "customer-support__support_delegate_case") return {
+    label: "Handle repairs for this case", via: "Support Desk",
+    sentence: `Authorize repairs on ${asString(inputObj.target) || "the case computer"} for this case and conversation for one hour, without a prompt for each change. ${asString(inputObj.purpose) || ""}`,
+  };
+  if (supportName === "customer-support__support_record_outcome") return {
+    label: "Record the support outcome", via: "Support Desk",
+    sentence: `For ${asString(inputObj.target) || "the case computer"}, record the problem as ${(asString(inputObj.outcome) || "reviewed").replaceAll("_", " ")}. ${asString(inputObj.summary) || ""} Evidence: ${asString(inputObj.evidence) || "see the details"}. This ends the case's previous repair delegation.`,
+  };
 
   const builtIn = BUILT_IN[name];
   if (builtIn) {

@@ -13,6 +13,7 @@ import {
   type ToolContext,
 } from "./chat-tools.js";
 import { DRAFT_RESULT_HEADER } from "./tool-draft-gate.js";
+import { pluginDiscoveryInstructions } from "./chat-plugin-discovery.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { CHAT_PERMISSION_TTL_MS, chatPermissions } from "./chat-permissions.js";
 import {
@@ -193,7 +194,7 @@ export async function appendApprovedDraftResultToChatSession(
 
 export interface ChatActor extends ToolActor {}
 
-function systemPromptFor(session: ChatSession, defaultCompanyId: string | null): string {
+export function systemPromptFor(session: ChatSession, defaultCompanyId: string | null, pluginTools: ReturnType<typeof listChatToolSpecs> = []): string {
   const lines = [
     "You are Clippy, Paperclip's in-app assistant for board users. You can help the user understand the state of their Paperclip companies and take actions on their behalf via tools.",
     "Be concise. Prefer short, direct answers. When you call a tool, briefly say what you are about to do.",
@@ -211,6 +212,8 @@ function systemPromptFor(session: ChatSession, defaultCompanyId: string | null):
   if (session.pageContext) {
     lines.push(`User's current page when this chat was opened: ${session.pageContext}`);
   }
+  const pluginDirectory = pluginDiscoveryInstructions(pluginTools);
+  if (pluginDirectory) lines.push(pluginDirectory);
   return lines.join("\n\n");
 }
 
@@ -241,19 +244,30 @@ function isDraftedToolOutcome(result: unknown): boolean {
   return false;
 }
 
-function buildCanonicalMessages(messages: ChatMessage[]): CanonicalMessage[] {
+export function buildCanonicalMessages(messages: ChatMessage[]): CanonicalMessage[] {
   // chat_messages.content stores Anthropic-shape blocks already.
   // user messages map directly. tool_result messages (stored under role 'tool')
   // map to Anthropic's "user with tool_result blocks" convention.
-  return messages.map((msg): CanonicalMessage => {
+  const result: CanonicalMessage[] = [];
+  for (const msg of messages) {
     if (msg.role === "tool") {
-      return { role: "user", content: msg.content as CanonicalContentBlock[] };
+      // Inline consent is visible as a user message in the UI. Providers need
+      // tool results immediately after their assistant tool calls; combine the
+      // intervening consent text into that same user message, results first.
+      const preceding: CanonicalContentBlock[] = [];
+      while (result.at(-1)?.role === "user") {
+        const content = result.pop()!.content;
+        preceding.unshift(...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content));
+      }
+      result.push({ role: "user", content: [...msg.content as CanonicalContentBlock[], ...preceding] });
+      continue;
     }
-    return {
+    result.push({
       role: msg.role,
       content: msg.content as CanonicalContentBlock[] | string,
-    };
-  });
+    });
+  }
+  return result;
 }
 
 function collectAttachmentIds(messages: CanonicalMessage[]): string[] {
@@ -667,7 +681,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       const resolved = await loadAttachmentsForMessages(canonical);
       const turnStream = provider.streamTurn({
         model: session.model,
-        system: systemPromptFor(session, defaultCompanyId),
+        system: systemPromptFor(session, defaultCompanyId, plugin),
         messages: canonical,
         tools,
         effort: session.effort,
@@ -757,6 +771,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
 
         let approved: boolean = !mutating || session.permissionMode === "bypass";
         if (mutating && session.permissionMode === "ask") {
+          const pendingDecision = chatPermissions.await(block.id, sessionId);
           yield {
             type: "permission_required",
             toolUseId: block.id,
@@ -764,7 +779,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
             input: block.input,
             ttlMs: CHAT_PERMISSION_TTL_MS,
           };
-          const decision = await chatPermissions.await(block.id, sessionId);
+          const decision = await pendingDecision;
           approved = decision === "approve";
         }
 
@@ -870,8 +885,12 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     sessionId: string,
     toolUseId: string,
     decision: "approve" | "deny",
+    responseText?: string,
   ) {
     await getSession(actor, sessionId);
+    if (!chatPermissions.hasPending(sessionId, toolUseId)) throw notFound("No pending permission for this tool use");
+    await appendUserMessage(sessionId, responseText?.trim() ||
+      (decision === "approve" ? "Approved the action shown in Clippy." : "Denied the action shown in Clippy."));
     const ok = chatPermissions.resolve(sessionId, toolUseId, decision);
     if (!ok) throw notFound("No pending permission for this tool use");
   }

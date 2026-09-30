@@ -67,6 +67,7 @@ import {
 import { logActivity } from "../services/activity-log.js";
 import { publishGlobalLiveEvent } from "../services/live-events.js";
 import { issueService } from "../services/issues.js";
+import { requirePluginUserPermission } from "../services/plugin-user-permission.js";
 import type { PluginJobScheduler } from "../services/plugin-job-scheduler.js";
 import type { PluginJobStore } from "../services/plugin-job-store.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -417,6 +418,7 @@ interface PluginScopedApiRequest {
   query: Record<string, string | string[]>;
   body: unknown;
   actor: {
+    grantedPermission?: string;
     actorType: "user" | "agent";
     actorId: string;
     agentId?: string | null;
@@ -2512,6 +2514,11 @@ export function pluginRoutes(
         return;
       }
       assertCompanyAccess(req, companyId);
+      if (match.route.requiredUserPermission) {
+        assertBoard(req);
+        await requirePluginUserPermission(db, companyId, req.actor.userId,
+          match.route.requiredUserPermission, req.actor.source === "local_implicit");
+      }
       await enforceScopedApiCheckout(req, match.route, match.params, companyId);
       if (req.method !== "GET" && req.headers["content-type"] && !req.is("application/json")) {
         res.status(415).json({ error: "Plugin API routes accept JSON requests only" });
@@ -2534,6 +2541,7 @@ export function pluginRoutes(
         body: requestBody,
         actor: {
           actorType: actor.actorType,
+          grantedPermission: match.route.requiredUserPermission,
           actorId: actor.actorId,
           agentId: actor.agentId,
           userId: actor.actorType === "user" ? actor.actorId : null,

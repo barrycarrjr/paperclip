@@ -136,8 +136,8 @@ export const chatApi = {
   deleteSession: (id: string) => api.delete<void>(`/chat/sessions/${id}`),
   listMessages: (id: string) =>
     api.get<{ messages: ChatMessage[] }>(`/chat/sessions/${id}/messages`),
-  decidePermission: (sessionId: string, toolUseId: string, decision: "approve" | "deny") =>
-    api.post<{ ok: true }>(`/chat/sessions/${sessionId}/permissions/${toolUseId}`, { decision }),
+  decidePermission: (sessionId: string, toolUseId: string, decision: "approve" | "deny", responseText?: string) =>
+    api.post<{ ok: true }>(`/chat/sessions/${sessionId}/permissions/${toolUseId}`, { decision, responseText }),
   listModels: () => api.get<{ models: AvailableModel[] }>("/chat/models"),
   uploadAttachment: async (sessionId: string, file: File): Promise<ChatAttachmentSummary> => {
     const form = new FormData();

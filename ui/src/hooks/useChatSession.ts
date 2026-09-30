@@ -15,6 +15,7 @@ import {
   type SessionStreamState,
 } from "../lib/clippy-stream-manager";
 import { mergeTranscript } from "../lib/clippy-transcript";
+import { parseInlineConsentReply } from "@paperclipai/shared";
 
 export type { ClippyTranscriptEntry } from "../lib/clippy-stream-manager";
 
@@ -97,6 +98,14 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     async (text: string, attachmentIds: string[] = [], opts: { force?: boolean } = {}) => {
       if (!sessionId) throw new Error("No active session");
       const current = clippyStreamManager.getSnapshot(sessionId);
+      if (!opts.force && current.streaming && current.pendingPermissions.length === 1 && attachmentIds.length === 0) {
+        const decision = parseInlineConsentReply(text);
+        if (decision) {
+          await chatApi.decidePermission(sessionId, current.pendingPermissions[0].toolUseId, decision, text);
+          await qc.invalidateQueries({ queryKey: ["clippy", "messages", sessionId] });
+          return;
+        }
+      }
       if (current.streaming && !opts.force) {
         throw new Error("A turn is already streaming");
       }

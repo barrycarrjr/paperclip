@@ -14,6 +14,7 @@ import type {
   PluginApiRouteAuthMode,
   PluginApiRouteCheckoutPolicy,
   PluginApiRouteMethod,
+  PermissionKey,
   PluginConnectorSurface,
   PluginDatabaseCoreReadTable,
   PluginDatabaseMigrationStatus,
@@ -82,6 +83,12 @@ export interface PluginWebhookDeclaration {
  * @see PLUGIN_SPEC.md §11 — Agent Tools
  */
 export interface PluginToolDeclaration {
+  /** Company permission checked by the host against the authenticated human. */
+  requiredUserPermission?: PermissionKey;
+  /** Require an inline human confirmation, even when ordinary chat prompts are bypassed. */
+  requiresUserConfirmation?: boolean;
+  /** Worker execution timeout in milliseconds (1–300 seconds); defaults to the host RPC timeout. */
+  executionTimeoutMs?: number;
   /** Tool name, unique within the plugin. Namespaced by plugin ID at runtime. */
   name: string;
   /** Human-readable name shown to agents and in the UI. */
@@ -344,6 +351,8 @@ export interface PluginApiRouteDeclaration {
   capability: "api.routes.register";
   /** Optional checkout policy enforced by the host before worker dispatch. */
   checkoutPolicy?: PluginApiRouteCheckoutPolicy;
+  /** Company permission checked before dispatching this user-facing route. */
+  requiredUserPermission?: PermissionKey;
   /** How the host resolves company access for this route. */
   companyResolution?: PluginApiRouteCompanyResolution;
 }

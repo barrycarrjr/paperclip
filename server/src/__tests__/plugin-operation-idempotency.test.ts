@@ -396,21 +396,28 @@ describeWithDatabase("plugin operation repeat protection", () => {
       companyId = await seedCompany();
       let release: (() => void) | null = null;
       const gate = new Promise<void>((resolve) => { release = resolve; });
+      let signalStarted!: () => void;
+      const started = new Promise<void>((resolve) => { signalStarted = resolve; });
       const dispatcher = dispatcherFor({
         writes: true,
-        onCall: async () => { await gate; return { content: "sent" }; },
+        onCall: async () => { signalStarted(); await gate; return { content: "sent" }; },
       });
 
       const inFlight = dispatcher.executeTool("acme.mail:send", { to: "a@b.c" }, runContext(companyId));
+      // A database pool may schedule simultaneous claims in either order.
+      // This scenario specifically tests a second call after the first starts.
+      await started;
       const second = await dispatcher.executeTool("acme.mail:send", { to: "a@b.c" }, runContext(companyId));
 
       // Refused, not queued: there is no result to replay yet, and waiting
       // would turn one slow call into two.
-      expect(second.result.failure?.code).toBe("unavailable");
-      expect(second.result.error).toContain("already running");
-
-      release?.();
-      await inFlight;
+      try {
+        expect(second.result.failure?.code).toBe("unavailable");
+        expect(second.result.error).toContain("already running");
+      } finally {
+        release?.();
+        await inFlight;
+      }
     });
 
     it("runs writing operations unprotected when no store is configured", async () => {

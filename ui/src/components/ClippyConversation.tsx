@@ -75,17 +75,14 @@ export function ClippyConversation({ sessionId, onOpenSessionList }: Props) {
         key={sessionId}
         sessionId={sessionId}
         permissionMode={session?.permissionMode ?? "ask"}
+        awaitingPermission={pendingPermissions.length === 1}
         effort={session?.effort ?? "auto"}
         // The session's own model. Until the session loads there is none to
         // show, and naming a guessed model here would put a stale id on screen.
         model={session?.model ?? ""}
         streaming={streaming}
-        onSend={(text, attachmentIds) => {
-          void send(text, attachmentIds);
-        }}
-        onStopAndSend={(text, attachmentIds) => {
-          void abortAndSend(text, attachmentIds);
-        }}
+        onSend={send}
+        onStopAndSend={abortAndSend}
         onAbort={abort}
         onPatch={(patch) => {
           void patchSession(patch);

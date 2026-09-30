@@ -11,6 +11,8 @@ import {
 import { badRequest, forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { attachmentTooLargeMessage, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
+import { registerChatToolInteractions } from "../services/chat-tool-interactions.js";
+import { parseInlineConsentReply } from "@paperclipai/shared";
 
 function requireBoardActor(req: Request): ChatActor {
   if (req.actor.type !== "board") {
@@ -58,6 +60,7 @@ const sendMessageSchema = z.object({
 
 const permissionDecisionSchema = z.object({
   decision: z.enum(["approve", "deny"]),
+  responseText: z.string().max(500).optional(),
 });
 
 function writeSseEvent(res: Response, event: StreamEvent | { type: "ping" }) {
@@ -132,6 +135,9 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     const actor = requireBoardActor(req);
     const parsed = sendMessageSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.message);
+    const ownedSessionId = req.params.id as string;
+    await svc.getSession(actor, ownedSessionId);
+    const unregisterInteractions = registerChatToolInteractions(ownedSessionId, (event) => writeSseEvent(res, event));
 
     res.status(200);
     res.set({
@@ -168,6 +174,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
 
     let abortFn: (() => void) | null = null;
     const handleClose = () => {
+      unregisterInteractions();
       clearInterval(heartbeat);
       if (!turnFinished) {
         logger.warn(
@@ -213,6 +220,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
         /* socket closed */
       }
     } finally {
+      unregisterInteractions();
       clearInterval(heartbeat);
       try {
         res.end();
@@ -286,11 +294,15 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     const actor = requireBoardActor(req);
     const parsed = permissionDecisionSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.message);
+    if (parsed.data.responseText !== undefined && parseInlineConsentReply(parsed.data.responseText) !== parsed.data.decision) {
+      throw badRequest("Reply yes or no to the pending action, or use its buttons");
+    }
     await svc.resolvePermission(
       actor,
       req.params.id as string,
       req.params.toolUseId as string,
       parsed.data.decision,
+      parsed.data.responseText,
     );
     res.json({ ok: true });
   });

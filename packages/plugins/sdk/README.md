@@ -2,6 +2,8 @@
 
 Official TypeScript SDK for Paperclip plugin authors.
 
+Tools can declare `executionTimeoutMs` (integer, 1,000–300,000 milliseconds) for bounded worker calls that exceed the normal RPC timeout. It is manifest metadata, never an agent-supplied parameter. The host enforces a five-minute ceiling; tools without it retain the host default. A timeout does not cancel or reverse a remote action, so mutating tools still need durable attempt records and outcome reconciliation.
+
 - **Worker SDK:** `@paperclipai/plugin-sdk` — `definePlugin`, context, lifecycle
 - **UI SDK:** `@paperclipai/plugin-sdk/ui` — React hooks and slot props
 - **Testing:** `@paperclipai/plugin-sdk/testing` — in-memory host harness
@@ -1041,3 +1043,25 @@ const server = await startPluginDevServer({ rootDir: process.cwd() });
 Dev server endpoints:
 - `GET /__paperclip__/health` returns `{ ok, rootDir, uiDir }`
 - `GET /__paperclip__/events` streams `reload` SSE events on UI build changes
+
+## Human permissions and inline consent
+
+Tool declarations may set `requiredUserPermission` to a shared permission key and
+`requiresUserConfirmation: true` for actions that need a person's response inside
+Clippy. The host checks current company membership/grants before dispatch, asks
+through the active conversation, and checks the grant again after confirmation.
+Native and MCP Clippy calls use the same broker. Without a live human conversation,
+a confirmation-required tool does not execute. General chat permission bypass does
+not override this flag.
+
+The worker receives host-issued `ToolRunContext.userPermission` and
+`userConfirmed`; never read these from tool parameters. Tools requiring a human
+should also require `userId` and `chatSessionId` and bind durable delegated work to
+that person, company and conversation. Scheduled agents do not inherit a user's
+grant. Plugins using these fields should refuse to operate with an older host
+that cannot supply them.
+
+Scoped API routes may also declare `requiredUserPermission`. The host requires a
+board actor, checks the company grant, and forwards `actor.grantedPermission` to
+the handler. This grant is authorization, not confirmation of a particular action;
+the plugin still owns its review and execution state machine.

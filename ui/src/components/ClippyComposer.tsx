@@ -24,6 +24,7 @@ import {
   DEFAULT_MAX_ATTACHMENT_BYTES,
   formatByteSize as formatBytes,
   tooLargeMessage,
+  parseInlineConsentReply,
 } from "@paperclipai/shared";
 
 /**
@@ -64,8 +65,9 @@ interface Props {
   effort: EffortLevel;
   model: string;
   streaming: boolean;
-  onSend: (text: string, attachmentIds: string[]) => void;
-  onStopAndSend?: (text: string, attachmentIds: string[]) => void;
+  awaitingPermission?: boolean;
+  onSend: (text: string, attachmentIds: string[]) => void | Promise<void>;
+  onStopAndSend?: (text: string, attachmentIds: string[]) => void | Promise<void>;
   onAbort: () => void;
   onPatch: (patch: {
     permissionMode?: PermissionMode;
@@ -192,12 +194,14 @@ export function ClippyComposer({
   effort,
   model,
   streaming,
+  awaitingPermission = false,
   onSend,
   onStopAndSend,
   onAbort,
   onPatch,
 }: Props) {
   const [text, setText] = useState("");
+  const [consentError, setConsentError] = useState<string | null>(null);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [dropping, setDropping] = useState(false);
   const dropDepth = useRef(0);
@@ -303,19 +307,25 @@ export function ClippyComposer({
     });
   };
 
-  const submit = (opts: { force?: boolean } = {}) => {
+  const submit = async (opts: { force?: boolean } = {}) => {
     const trimmed = text.trim();
     const ready = uploads.filter((u) => u.status === "done" && u.attachment);
     if (!trimmed && ready.length === 0) return;
-    if (!opts.force && streaming) return;
+    if (awaitingPermission && !opts.force && (!parseInlineConsentReply(trimmed) || ready.length > 0)) {
+      setConsentError("Reply yes or no to the action above, or use its buttons. Stop the current action to give different instructions.");
+      return;
+    }
+    setConsentError(null);
+    if (!opts.force && streaming && !awaitingPermission) return;
     if (uploads.some((u) => u.status === "uploading")) return;
     const ids = ready.map((u) => u.attachment!.id);
     setText("");
     setUploads([]);
-    if (opts.force && onStopAndSend) {
-      onStopAndSend(trimmed, ids);
-    } else {
-      onSend(trimmed, ids);
+    try {
+      if (opts.force && onStopAndSend) await onStopAndSend(trimmed, ids);
+      else await onSend(trimmed, ids);
+    } catch (error) {
+      setConsentError(error instanceof Error ? error.message : "Your message could not be sent. Please try again.");
     }
   };
 
@@ -380,8 +390,8 @@ export function ClippyComposer({
   const anyUploading = uploads.some((u) => u.status === "uploading");
   const hasContent = !!text.trim() || uploads.filter((u) => u.status === "done").length > 0;
   const sendDisabled =
-    streaming || anyUploading || !hasContent;
-  const canStopAndSend = streaming && hasContent && !anyUploading && !!onStopAndSend;
+    (streaming && !awaitingPermission) || anyUploading || !hasContent;
+  const canStopAndSend = streaming && !awaitingPermission && hasContent && !anyUploading && !!onStopAndSend;
 
   return (
     <div
@@ -497,7 +507,7 @@ export function ClippyComposer({
                 <Button size="sm" onClick={() => submit({ force: true })}>
                   <Send className="mr-1 h-3 w-3" /> Stop & Send
                 </Button>
-              ) : !streaming && (
+              ) : (!streaming || awaitingPermission) && (
                 <Button size="sm" onClick={() => submit()} disabled={sendDisabled}>
                   <Send className="mr-1 h-3 w-3" /> Send
                 </Button>
@@ -505,6 +515,7 @@ export function ClippyComposer({
             </div>
           </div>
         </div>
+        {consentError && <p role="alert" className="mt-2 text-xs text-destructive">{consentError}</p>}
         {models.length === 0 && (
           <div className="mt-2 text-[11px] text-muted-foreground">
             No LLM provider configured. Set <code>ANTHROPIC_API_KEY</code>,{" "}

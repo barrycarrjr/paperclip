@@ -9,6 +9,14 @@ import {
 } from "./clippy-tool-labels";
 
 describe("describeChatTool", () => {
+  it("shows the exact destination and reviewed support message for send consent",() => {
+    const p = describeChatTool("customer-support__support_send_message",{ destination: { to: "support@example.com",subject: "Reviewed incident" },body: "Please investigate this incident." });
+    expect(p.label).toBe("Send the reviewed support message");
+    expect(p.sentence).toContain("support@example.com");
+    expect(p.sentence).toContain("Reviewed incident");
+    expect(p.sentence).toContain("Please investigate this incident.");
+    expect(p.sentence).toContain("repair delegation does not approve");
+  });
   it("labels built-in tools in plain words", () => {
     const p = describeChatTool("create_issue", { title: "Fix the printer" });
     expect(p.label).toBe("Create an issue");

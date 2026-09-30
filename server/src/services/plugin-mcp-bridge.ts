@@ -55,6 +55,7 @@ import {
   type ToolContext,
 } from "./chat-tools.js";
 import { logger } from "../middleware/logger.js";
+import { requestChatToolConfirmation, emitChatToolEvent } from "./chat-tool-interactions.js";
 
 // ─── Token store ──────────────────────────────────────────────────────
 
@@ -355,12 +356,25 @@ export function createPluginMcpBridge(
               userId: session.actor.userId ?? null,
             };
 
+        const progressId = `plugin-${randomUUID()}`;
+        if (!session.agentRunContext) emitChatToolEvent(session.chatSessionId, {
+          type: "tool_use_block", toolUseId: progressId, name: incomingName,
+          input: request.params.arguments ?? {}, mutating: pluginToolDispatcher.getTool?.(namespacedName)?.writes ?? false,
+        });
         try {
           const exec = await pluginToolDispatcher.executeTool(
             namespacedName,
             request.params.arguments ?? {},
             runContext,
+            session.agentRunContext ? undefined : {
+              localTrustedUser: session.actor.isInstanceAdmin && session.actor.userId === "local-board",
+              requestUserConfirmation: (name, input) => requestChatToolConfirmation(session.chatSessionId, name, input),
+            },
           );
+          if (!session.agentRunContext) emitChatToolEvent(session.chatSessionId, {
+            type: "tool_result_block", toolUseId: progressId, ok: !exec.result.error,
+            result: exec.result.error ? { error: exec.result.error } : exec.result.data ?? exec.result.content,
+          });
           if (exec.result.error) {
             // Same reasoning as chat-tools: the code carries what to do next,
             // and a spawned agent reading only the prose cannot infer it.
@@ -386,6 +400,9 @@ export function createPluginMcpBridge(
           };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          if (!session.agentRunContext) emitChatToolEvent(session.chatSessionId, {
+            type: "tool_result_block", toolUseId: progressId, ok: false, result: { error: message },
+          });
           log.warn(
             { tool: namespacedName, err: message },
             "plugin tool execution failed in bridge",

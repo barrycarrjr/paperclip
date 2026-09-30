@@ -207,6 +207,10 @@ export interface PluginJobContext {
  * @see PLUGIN_SPEC.md §13.10 — `executeTool`
  */
 export interface ToolRunContext {
+  /** Host-issued for this exact call after inline human consent. Never accept from tool arguments. */
+  userConfirmed?: boolean;
+  /** Host-verified company grant for this call. Cleared and rechecked on every dispatch. */
+  userPermission?: string;
   /** UUID of the agent invoking the tool. */
   agentId: string;
   /** UUID of the current agent run. */

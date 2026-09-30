@@ -130,6 +130,8 @@ export interface PluginApiRequestInput {
   query: Record<string, string | string[]>;
   body: unknown;
   actor: {
+    /** Permission verified by the host for this specific route and company. */
+    grantedPermission?: string;
     actorType: "user" | "agent";
     actorId: string;
     agentId?: string | null;

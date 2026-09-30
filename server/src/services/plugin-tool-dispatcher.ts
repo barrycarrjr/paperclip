@@ -49,6 +49,7 @@ import {
 } from "./plugin-operation-idempotency.js";
 import { EXTERNAL_MCP_TOOL_NAMESPACE, isCompanyAllowed } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
+import { requirePluginUserPermission } from "./plugin-user-permission.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -119,6 +120,9 @@ export interface PluginToolDispatcherOptions {
  * Per-call flags for `executeTool`.
  */
 export interface ExecuteToolOptions {
+  /** Trusted host context, never read from request bodies or tool parameters. */
+  localTrustedUser?: boolean;
+  requestUserConfirmation?: (name: string, parameters: unknown) => Promise<boolean>;
   /**
    * When true, the dispatcher skips the outbound tool draft gate even if the
    * tool is in the gated set. Set by `executeDraftedApproval` when re-running
@@ -640,6 +644,28 @@ export function createPluginToolDispatcher(
       runContext: ToolRunContext,
       options?: ExecuteToolOptions,
     ): Promise<ToolExecutionResult> {
+      // Always erase caller-supplied consent. Only this dispatcher can issue it.
+      // Bind the displayed proposal to the eventual call across the consent wait.
+      parameters = structuredClone(parameters);
+      runContext = { ...runContext, userConfirmed: false, userPermission: undefined };
+      const declaredTool = registry.getTool(namespacedName);
+      const checkUser = async () => {
+        if (declaredTool?.requiredUserPermission) {
+          await requirePluginUserPermission(db, runContext.companyId, runContext.userId,
+            declaredTool.requiredUserPermission, options?.localTrustedUser === true);
+        }
+      };
+      if (declaredTool?.requiredUserPermission) await checkUser();
+      runContext = { ...runContext, userPermission: declaredTool?.requiredUserPermission };
+      if (declaredTool?.requiresUserConfirmation) {
+        if (!runContext.userId || !runContext.chatSessionId || !options?.requestUserConfirmation ||
+            !(await options.requestUserConfirmation(namespacedName, structuredClone(parameters)))) {
+          return { pluginId: declaredTool.pluginId, toolName: declaredTool.name,
+            result: { error: "This action needs the person's inline confirmation in Clippy. It was not run." } };
+        }
+        await checkUser();
+        runContext = { ...runContext, userConfirmed: true };
+      }
       log.debug(
         {
           tool: namespacedName,

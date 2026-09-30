@@ -15,6 +15,7 @@ import {
   PLUGIN_API_ROUTE_AUTH_MODES,
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_API_ROUTE_METHODS,
+  PERMISSION_KEYS,
   PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_OPERATION_AUDIENCES,
 } from "../constants.js";
@@ -103,6 +104,9 @@ export type PluginWebhookDeclarationInput = z.infer<typeof pluginWebhookDeclarat
  * @see PLUGIN_SPEC.md §11 — Agent Tools
  */
 export const pluginToolDeclarationSchema = z.object({
+  requiredUserPermission: z.enum(PERMISSION_KEYS).optional(),
+  requiresUserConfirmation: z.boolean().optional(),
+  executionTimeoutMs: z.number().int().min(1_000).max(300_000).optional(),
   name: z.string().min(1),
   displayName: z.string().min(1),
   description: z.string().min(1),
@@ -458,6 +462,7 @@ export const pluginApiRouteDeclarationSchema = z.object({
   auth: z.enum(PLUGIN_API_ROUTE_AUTH_MODES),
   capability: z.literal("api.routes.register"),
   checkoutPolicy: z.enum(PLUGIN_API_ROUTE_CHECKOUT_POLICIES).optional(),
+  requiredUserPermission: z.enum(PERMISSION_KEYS).optional(),
   companyResolution: z.discriminatedUnion("from", [
     z.object({ from: z.literal("body"), key: z.string().min(1) }),
     z.object({ from: z.literal("query"), key: z.string().min(1) }),

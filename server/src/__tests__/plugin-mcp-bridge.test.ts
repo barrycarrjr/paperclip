@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Db } from "@paperclipai/db";
+import { registerChatToolInteractions } from "../services/chat-tool-interactions.js";
+import { chatPermissions } from "../services/chat-permissions.js";
 import { createPluginMcpBridge } from "../services/plugin-mcp-bridge.js";
 import type {
   AgentToolDescriptor,
@@ -47,8 +49,12 @@ function createDispatcherStub(): PluginToolDispatcher {
     async listToolsForAgent(): Promise<AgentToolDescriptor[]> {
       return [descriptor];
     },
-    async executeTool(namespacedName: string) {
+    async executeTool(namespacedName: string, _params: unknown, run: { userId?: string | null }, options?: { requestUserConfirmation?: (name: string, input: unknown) => Promise<boolean> }) {
       if (namespacedName === "demo:ping") {
+        if (options?.requestUserConfirmation && run.userId === "u1") {
+          const confirmed = await options.requestUserConfirmation(namespacedName, { target: "pc.example.local" });
+          if (confirmed) return { result: { content: "confirmed pong" } };
+        }
         return { result: { content: "pong" } };
       }
       return { result: { error: `Unknown plugin tool: ${namespacedName}` } };
@@ -163,5 +169,21 @@ describe("plugin MCP bridge — built-in chat tools", () => {
       return Array.isArray(res.content) ? res.content[0]?.text ?? "" : "";
     });
     expect(text).toBe("pong");
+  });
+
+  it("adapter MCP tools share the live inline consent prompt and report their result", async () => {
+    const types: string[] = [];
+    const cleanup = registerChatToolInteractions("sess-1", (event) => {
+      types.push(event.type);
+      if (event.type === "permission_required") {
+        expect(event.input).toEqual({ target: "pc.example.local" });
+        chatPermissions.resolve("sess-1", event.toolUseId, "approve");
+      }
+    });
+    try {
+      const result = await withClient(client => client.callTool({ name: "demo__ping", arguments: {} }));
+      expect(result.content).toEqual([{ type: "text", text: "confirmed pong" }]);
+      expect(types).toEqual(["tool_use_block", "tool_use_block", "permission_required", "tool_result_block", "tool_result_block"]);
+    } finally { cleanup(); }
   });
 });

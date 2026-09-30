@@ -39,6 +39,9 @@ const permissionLabels: Record<PermissionKey, string> = {
   "joins:approve": "Approve join requests",
   "environments:manage": "Manage environments",
   "reminders:create_for_board": "Set reminders for the person who granted it",
+  "support:diagnose": "Investigate computers through Support Desk",
+  "support:repair": "Authorize and run support repairs",
+  "support:respond": "Approve support replies and vendor escalations",
 };
 
 /** Grants a person can hold. Agent-only grants are managed on the agent's own page. */
