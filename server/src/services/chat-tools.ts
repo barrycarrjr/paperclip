@@ -369,17 +369,14 @@ const createIssueTool: ChatToolDefinition<{
       throw forbidden("No company context: pass companyId or select a company first");
     }
     await assertCompanyAccess(ctx, target);
-    const created = await ctx.db
-      .insert(issues)
-      .values({
-        companyId: target,
-        title,
-        description: description ?? null,
-        createdByUserId: ctx.actor.userId,
-        originKind: "chat",
-      })
-      .returning()
-      .then((rows) => rows[0]);
+    const attribution = attributionFor(ctx);
+    const created = await issueService(ctx.db).create(target, {
+      title,
+      description: description ?? null,
+      originKind: "chat",
+      createdByUserId: attribution.actorUserId ?? null,
+      createdByAgentId: attribution.actorAgentId ?? null,
+    });
     return { issue: summarizeIssue(created) };
   },
 };

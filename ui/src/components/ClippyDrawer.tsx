@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { useCompany, useCompanyOptional } from "../context/CompanyContext";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
@@ -118,6 +119,8 @@ export function ClippyDrawer() {
   // first render after a company change (see hooks/useRouteCompany.ts).
   const activeCompanyId = useActiveCompanyId();
   const activeCompanyIdRef = useRef<string | null>(activeCompanyId);
+  const companyContext = useCompanyOptional?.() ?? (typeof useCompany === "function" ? useCompany() : null);
+  const companies = companyContext?.companies ?? [];
   activeCompanyIdRef.current = activeCompanyId;
   const qc = useQueryClient();
 
@@ -403,19 +406,31 @@ export function ClippyDrawer() {
                   {sessions.length === 0 && (
                     <div className="px-2 py-1.5 text-xs text-muted-foreground">No chats yet.</div>
                   )}
-                  {sessions.slice(0, 12).map((s) => (
-                    <DropdownMenuItem
-                      key={s.id}
-                      onSelect={() => {
-                        reconcileGateRef.current = { ...reconcileGateRef.current, skip: true };
-                        setActiveSessionId(s.id);
-                      }}
-                      className={cn("flex flex-col items-start gap-0", s.id === activeSessionId && "bg-accent")}
-                    >
-                      <span className="w-full truncate text-sm">{s.title}</span>
-                      <span className="text-[10px] text-muted-foreground">{s.model}</span>
-                    </DropdownMenuItem>
-                  ))}
+                  {sessions.slice(0, 12).map((s) => {
+                    const sessionCompany = s.companyId
+                      ? companies.find((c) => c.id === s.companyId) ?? null
+                      : null;
+                    return (
+                      <DropdownMenuItem
+                        key={s.id}
+                        onSelect={() => {
+                          reconcileGateRef.current = { ...reconcileGateRef.current, skip: true };
+                          setActiveSessionId(s.id);
+                        }}
+                        className={cn("flex flex-col items-start gap-0.5", s.id === activeSessionId && "bg-accent")}
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="truncate text-sm">{s.title}</span>
+                          {sessionCompany ? (
+                            <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-muted text-muted-foreground font-normal">
+                              {sessionCompany.name}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{s.model}</span>
+                      </DropdownMenuItem>
+                    );
+                  })}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     disabled={!activeSessionId}
@@ -481,7 +496,10 @@ export function ClippyDrawer() {
             </div>
           </div>
           <div className="min-h-0 flex-1">
-            <ClippyConversation sessionId={activeSessionId} />
+            <ClippyConversation
+              sessionId={activeSessionId}
+              onNewSessionForCurrentCompany={() => createMutation.mutate(activeCompanyId)}
+            />
           </div>
         </SheetContent>
       </Sheet>

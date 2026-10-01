@@ -299,6 +299,11 @@ export function Clippy() {
                       key={s.id}
                       session={s}
                       active={s.id === activeId}
+                      companyName={
+                        filters.groupBy !== "company" && s.companyId
+                          ? companyNameById.get(s.companyId)
+                          : null
+                      }
                       onClick={() => {
                         setActiveId(s.id);
                         // Picking a chat on a phone should show it, not leave
@@ -322,6 +327,7 @@ export function Clippy() {
         <ClippyConversation
           sessionId={activeId}
           onOpenSessionList={() => setSessionListOpen(true)}
+          onNewSessionForCurrentCompany={() => createMutation.mutate()}
         />
       </main>
     </div>
@@ -532,6 +538,7 @@ function FilterSubmenu<T extends string>({
 function SessionRailItem({
   session,
   active,
+  companyName,
   onClick,
   onDelete,
   onRename,
@@ -539,6 +546,7 @@ function SessionRailItem({
 }: {
   session: ChatSession;
   active: boolean;
+  companyName?: string | null;
   onClick: () => void;
   onDelete: () => void;
   onRename: (title: string) => void;
@@ -607,9 +615,15 @@ function SessionRailItem({
             title={`${session.title} — double-click to rename`}
           >
             <div className="truncate font-medium">{session.title}</div>
-            <div className="truncate text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 truncate text-[10px] text-muted-foreground">
+              {companyName ? (
+                <>
+                  <span className="truncate font-medium text-foreground/80">{companyName}</span>
+                  <span>·</span>
+                </>
+              ) : null}
               {isArchived ? "Archived · " : ""}
-              {session.model}
+              <span>{session.model}</span>
             </div>
           </button>
         )}

@@ -5,20 +5,45 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClippyConversation } from "./ClippyConversation";
 
+const mockChatSession = {
+  session: {
+    id: "s1",
+    title: "why am I having so much trouble with mme-261",
+    permissionMode: "ask",
+    effort: "auto",
+    model: "claude-opus-5",
+    companyId: null as string | null,
+  },
+  transcript: [],
+  streaming: false,
+  pendingPermissions: [],
+  liveToolCalls: [],
+  lastEventAt: null,
+  send: vi.fn(),
+  abortAndSend: vi.fn(),
+  decidePermission: vi.fn(),
+  patchSession: vi.fn(),
+  abort: vi.fn(),
+};
+
 vi.mock("../hooks/useChatSession", () => ({
-  useChatSession: () => ({
-    session: { id: "s1", title: "why am I having so much trouble with mme-261", permissionMode: "ask", effort: "auto", model: "claude-opus-5" },
-    transcript: [],
-    streaming: false,
-    pendingPermissions: [],
-    liveToolCalls: [],
-    lastEventAt: null,
-    send: vi.fn(),
-    abortAndSend: vi.fn(),
-    decidePermission: vi.fn(),
-    patchSession: vi.fn(),
-    abort: vi.fn(),
-  }),
+  useChatSession: () => mockChatSession,
+}));
+
+const mockCompanyContext = {
+  companies: [
+    { id: "c1", name: "HQ", issuePrefix: "HQ", brandColor: "#ff0000" },
+    { id: "c2", name: "Industry Bureau", issuePrefix: "IND", brandColor: "#00ff00" },
+  ],
+  selectedCompanyId: "c1",
+};
+
+vi.mock("../context/CompanyContext", () => ({
+  useCompanyOptional: () => mockCompanyContext,
+}));
+
+vi.mock("@/lib/router", () => ({
+  useParams: () => ({ companyPrefix: "HQ" }),
 }));
 
 vi.mock("./ClippyMessageList", () => ({ ClippyMessageList: () => <div data-testid="messages" /> }));
@@ -44,6 +69,7 @@ function listButton(): HTMLElement | undefined {
 
 describe("ClippyConversation", () => {
   beforeEach(() => {
+    mockChatSession.session.companyId = null;
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -54,8 +80,6 @@ describe("ClippyConversation", () => {
     container.remove();
   });
 
-  // On a phone the chat list is hidden so the conversation gets the whole
-  // screen, which leaves no way back to it without this.
   it("offers a way back to the chat list, on small screens only", async () => {
     const onOpenSessionList = vi.fn();
     await render({ sessionId: "s1", onOpenSessionList });
@@ -94,5 +118,33 @@ describe("ClippyConversation", () => {
       candidate.textContent?.includes("Show chats"),
     );
     expect(button?.className).toContain("md:hidden");
+  });
+
+  it("displays the company badge matching the chat's pinned company", async () => {
+    mockChatSession.session.companyId = "c2";
+    await render({ sessionId: "s1" });
+
+    const badge = container.querySelector('[data-testid="session-company-badge"]');
+    expect(badge).toBeDefined();
+    expect(badge?.textContent).toContain("Industry Bureau");
+  });
+
+  it("displays a mismatch banner when viewing a different company route", async () => {
+    mockChatSession.session.companyId = "c2"; // Industry Bureau while route is HQ (c1)
+    const onNewSession = vi.fn();
+    await render({ sessionId: "s1", onNewSessionForCurrentCompany: onNewSession });
+
+    const banner = container.querySelector('[data-testid="company-mismatch-banner"]');
+    expect(banner).toBeDefined();
+    expect(banner?.textContent).toContain("This chat is attached to Industry Bureau, but you are viewing HQ.");
+
+    const newChatBtn = [...banner!.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("New chat in HQ"),
+    );
+    expect(newChatBtn).toBeDefined();
+    act(() => {
+      newChatBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onNewSession).toHaveBeenCalledTimes(1);
   });
 });
