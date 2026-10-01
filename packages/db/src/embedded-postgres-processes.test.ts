@@ -47,6 +47,12 @@ function worker(pid: number, kind: string, parentPid = 19624): OsProcess {
   };
 }
 
+/** A lister that answers with each list in turn, then keeps repeating the last. */
+function listSequence(...lists: OsProcess[][]): ProcessTools["list"] {
+  let call = 0;
+  return vi.fn(async () => lists[Math.min(call++, lists.length - 1)]!);
+}
+
 function tools(overrides: Partial<ProcessTools> = {}): ProcessTools {
   return {
     list: vi.fn(async () => []),
@@ -235,7 +241,7 @@ describe("parsePosixProcessList", () => {
 });
 
 describe("stopEmbeddedPostgresCompletely", () => {
-  it("lists the family before stopping, not after", async () => {
+  it("lists the family before stopping", async () => {
     // Once the postmaster dies its children are orphans with nothing tying them
     // to this cluster, so the order here is the whole point.
     const order: string[] = [];
@@ -252,12 +258,15 @@ describe("stopEmbeddedPostgresCompletely", () => {
         order.push("stop");
       },
     });
-    expect(order).toEqual(["list", "stop"]);
+    expect(order.slice(0, 2)).toEqual(["list", "stop"]);
   });
 
   it("ends the worker that outlived the stop", async () => {
     const t = tools({
-      list: async () => [postmaster(), worker(51128, "io_worker"), worker(63832, "io_worker")],
+      list: listSequence(
+        [postmaster(), worker(51128, "io_worker"), worker(63832, "io_worker")],
+        [worker(63832, "io_worker")],
+      ),
       isAlive: (pid) => pid === 63832,
     });
     const result = await stopEmbeddedPostgresCompletely({
@@ -271,7 +280,7 @@ describe("stopEmbeddedPostgresCompletely", () => {
   });
 
   it("kills nothing when the stop did its job", async () => {
-    const t = tools({ list: async () => [postmaster(), worker(51128, "io_worker")] });
+    const t = tools({ list: listSequence([postmaster(), worker(51128, "io_worker")], []) });
     const result = await stopEmbeddedPostgresCompletely({
       dataDir: DATA_DIR,
       tools: t,
@@ -279,6 +288,102 @@ describe("stopEmbeddedPostgresCompletely", () => {
     });
     expect(result.killedPids).toEqual([]);
     expect(t.kill).not.toHaveBeenCalled();
+  });
+
+  it("finds a worker the first listing missed, by its parent", async () => {
+    // What hung an update on 2026-09-30: the listing taken before the stop came
+    // back without the cluster, an io_worker outlived the stop, and it kept the
+    // migration script from exiting. The postmaster's pid still identifies it.
+    const log = vi.fn();
+    const otherCluster = worker(901, "io_worker", 900);
+    const t = tools({ list: listSequence([], [worker(63832, "io_worker"), otherCluster]) });
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      postmasterPid: 19624,
+      tools: t,
+      stop: async () => {},
+      log,
+    });
+    expect(result.killedPids).toEqual([63832]);
+    expect(t.kill).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      "Found no running processes for the embedded PostgreSQL before stopping; will check again after",
+      expect.objectContaining({ postmasterPid: 19624 }),
+    );
+  });
+
+  it("finds a worker started after the first listing", async () => {
+    // Postgres keeps starting workers (autovacuum, new backends) while it runs.
+    const t = tools({
+      list: listSequence([postmaster(), worker(51128, "io_worker")], [worker(70001, "autovacuum worker")]),
+    });
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      postmasterPid: null,
+      tools: t,
+      stop: async () => {},
+    });
+    expect(result.killedPids).toEqual([70001]);
+  });
+
+  it("takes the postmaster's pid from postmaster.pid when not told it", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "paperclip-pmpid-"));
+    writeFileSync(join(dataDir, "postmaster.pid"), `19624\n${dataDir}\n1727700000\n54329\n`);
+    const t = tools({ list: listSequence([], [worker(63832, "io_worker")]) });
+    const result = await stopEmbeddedPostgresCompletely({ dataDir, tools: t, stop: async () => {} });
+    expect(result.killedPids).toEqual([63832]);
+  });
+
+  it("does not look again when it has nothing to tie leftovers to", async () => {
+    // With no postmaster pid and an empty first listing, any postgres found
+    // afterwards could belong to someone else.
+    const t = tools({ list: listSequence([], [worker(63832, "io_worker")]) });
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      postmasterPid: null,
+      tools: t,
+      stop: async () => {},
+    });
+    expect(result.killedPids).toEqual([]);
+    expect(t.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves another cluster alone when it has reused the old postmaster's pid", async () => {
+    // Windows hands a dead process's pid out again. A cluster that starts while
+    // this one is stopping can draw it, and must not be taken for ours.
+    const other = postmaster({
+      commandLine: `${BIN} -D C:\\Users\\dev\\.paperclip\\instances\\verify\\db -p 54330`,
+    });
+    const t = tools({
+      list: listSequence([], [other, worker(51128, "io_worker")]),
+      isAlive: (pid) => pid === 19624,
+    });
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      postmasterPid: 19624,
+      tools: t,
+      stop: async () => {},
+    });
+    expect(result.killedPids).toEqual([]);
+    expect(t.kill).not.toHaveBeenCalled();
+  });
+
+  it("after a stuck stop, also ends workers started since the first listing", async () => {
+    const t = tools({
+      list: listSequence(
+        [postmaster(), worker(51128, "io_worker")],
+        [postmaster(), worker(51128, "io_worker"), worker(70001, "autovacuum worker")],
+      ),
+      isAlive: () => true,
+    });
+    const result = await stopEmbeddedPostgresCompletely({
+      dataDir: DATA_DIR,
+      postmasterPid: 19624,
+      tools: t,
+      stop: async () => await new Promise<void>(() => {}),
+      stopTimeoutMs: 5,
+    });
+    expect(result.killedPids).toEqual([19624, 51128, 70001]);
   });
 
   it("still stops the database when the machine will not list processes", async () => {

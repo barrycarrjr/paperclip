@@ -1,5 +1,5 @@
 import { inspectMigrations } from "./client.js";
-import { resolveMigrationConnection } from "./migration-runtime.js";
+import { exitMigrationScript, resolveMigrationConnection } from "./migration-runtime.js";
 
 const jsonMode = process.argv.includes("--json");
 
@@ -54,8 +54,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  const err = toError(error, "Migration status check failed");
-  process.stderr.write(`${err.stack ?? err.message}\n`);
-  process.exit(1);
-});
+main().then(
+  () => exitMigrationScript(0),
+  (error) => {
+    const err = toError(error, "Migration status check failed");
+    process.stderr.write(`${err.stack ?? err.message}\n`);
+    process.exit(1);
+  },
+);

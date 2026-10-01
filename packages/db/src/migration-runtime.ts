@@ -195,6 +195,21 @@ async function ensureEmbeddedPostgresConnection(
   };
 }
 
+/**
+ * End a one-shot migration script once its work is done.
+ *
+ * Node waits for every open handle before exiting, and the embedded postgres
+ * child's output pipes are among them. A postgres worker that outlives the
+ * stop keeps those pipes open, so the script would sit there finished but never
+ * exit, and the update script calling it would hang. Normally the process exits
+ * on its own straight away; the timer only fires when something is still
+ * holding it open, and gives pending output time to flush first.
+ */
+export function exitMigrationScript(exitCode: number): void {
+  process.exitCode = exitCode;
+  setTimeout(() => process.exit(exitCode), 1_000).unref();
+}
+
 export async function resolveMigrationConnection(): Promise<MigrationConnection> {
   const target = resolveDatabaseTarget();
   if (target.mode === "postgres") {

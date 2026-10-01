@@ -38,7 +38,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 
 /** One running process, in the only detail this module needs. */
 export interface OsProcess {
@@ -291,10 +292,36 @@ type LogFn = (message: string, detail?: Record<string, unknown>) => void;
 const noopLog: LogFn = () => {};
 
 /**
+ * The postmaster's pid as postgres itself recorded it, or null.
+ *
+ * Postgres writes this file at startup and a force kill leaves it in place, so
+ * it still names the postmaster while the cluster is being stopped.
+ */
+export function readPostmasterPidFile(dataDir: string): number | null {
+  try {
+    const pid = Number(readFileSync(path.resolve(dataDir, "postmaster.pid"), "utf8").split("\n")[0]?.trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Stop the embedded database and make sure it stayed stopped.
  *
  * The family is listed BEFORE the stop, because once the postmaster dies its
  * children are orphans and there is nothing left tying them to this cluster.
+ *
+ * It is listed again AFTER the stop as well. The first listing can miss a
+ * worker: it can come back empty when PowerShell is slow to answer (a busy
+ * machine straight after a build), and postgres keeps starting workers after
+ * it was taken. On 2026-09-30 a missed io_worker outlived the stop of an
+ * update's migration step. It held the output pipes of the process that ran
+ * the migration, so that process never exited and the update hung on
+ * "No pending migrations" until the worker was ended by hand. Workers carry no
+ * data directory, but they do carry their parent's pid, and the postmaster's
+ * pid is known from the snapshot or from postmaster.pid, so the second listing
+ * can still tell which leftovers are ours.
  */
 export async function stopEmbeddedPostgresCompletely(input: {
   dataDir: string;
@@ -304,17 +331,27 @@ export async function stopEmbeddedPostgresCompletely(input: {
    * Once elapsed, the snapshotted process family is force-ended below.
    */
   stopTimeoutMs?: number;
+  /** Defaults to the pid in the data directory's postmaster.pid. */
+  postmasterPid?: number | null;
   tools?: ProcessTools;
   log?: LogFn;
 }): Promise<{ killedPids: number[] }> {
   const tools = input.tools ?? systemProcessTools;
   const log = input.log ?? noopLog;
+  const postmasterPid =
+    input.postmasterPid === undefined ? readPostmasterPidFile(input.dataDir) : input.postmasterPid;
 
   let family: number[] = [];
   try {
     family = postgresFamilyForDataDir(await tools.list(), input.dataDir);
   } catch (err) {
     log("Could not list postgres processes before stopping; continuing", { err });
+  }
+  if (family.length === 0) {
+    log("Found no running processes for the embedded PostgreSQL before stopping; will check again after", {
+      dataDir: input.dataDir,
+      postmasterPid,
+    });
   }
 
   const stopPromise = Promise.resolve().then(input.stop);
@@ -343,6 +380,33 @@ export async function stopEmbeddedPostgresCompletely(input: {
   }
 
   const survivors = family.filter((pid) => tools.isAlive(pid));
+
+  const parents = new Set(family);
+  if (postmasterPid !== null) parents.add(postmasterPid);
+  if (parents.size > 0) {
+    try {
+      // Windows reuses a dead process's pid, so a pid alone does not prove a
+      // process is ours. A postmaster must still name this data directory, and
+      // a worker's parent must be that postmaster or gone. Otherwise another
+      // cluster that started meanwhile and drew one of these pids would be hit.
+      const ours = (await tools.list()).filter(isEmbeddedPostgresProcess);
+      const ourPostmasters = new Set(
+        ours
+          .filter((proc) => parents.has(proc.pid) && commandLineUsesDataDir(proc.commandLine, input.dataDir))
+          .map((proc) => proc.pid),
+      );
+      for (const proc of ours) {
+        if (survivors.includes(proc.pid)) continue;
+        const isOurPostmaster = ourPostmasters.has(proc.pid);
+        const isOurWorker =
+          parents.has(proc.parentPid) &&
+          (ourPostmasters.has(proc.parentPid) || !tools.isAlive(proc.parentPid));
+        if (isOurPostmaster || isOurWorker) survivors.push(proc.pid);
+      }
+    } catch (err) {
+      log("Could not list postgres processes after stopping; continuing", { err });
+    }
+  }
   if (survivors.length === 0) return { killedPids: [] };
 
   log("Embedded PostgreSQL left processes running after stopping; ending them", {

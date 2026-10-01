@@ -1,5 +1,5 @@
 import { applyPendingMigrations, inspectMigrations } from "./client.js";
-import { resolveMigrationConnection } from "./migration-runtime.js";
+import { exitMigrationScript, resolveMigrationConnection } from "./migration-runtime.js";
 
 async function main(): Promise<void> {
   const resolved = await resolveMigrationConnection();
@@ -26,4 +26,10 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+try {
+  await main();
+  exitMigrationScript(0);
+} catch (error) {
+  console.error(error);
+  exitMigrationScript(1);
+}
