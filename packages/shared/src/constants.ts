@@ -1080,17 +1080,30 @@ export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
 export const PERMISSION_KEYS = [
   "agents:create",
+  "agents:configure",
+  "agents:suggest-changes",
+  "skills:create",
+  "skills:suggest-changes",
   "environments:manage",
+  "tools:admin",
+  "tools:manage_connections",
+  "tools:manage_profiles",
+  "tools:view_audit",
+  "audit:view_agent_actions",
+  "tools:use",
+  "tools:manage_runtime",
+  "inbox:manage",
   "users:invite",
   "users:manage_permissions",
   "tasks:assign",
   "tasks:assign_scope",
   "tasks:manage_active_checkouts",
+  "pipelines:write",
   "joins:approve",
   "reminders:create_for_board",
   "support:diagnose",
   "support:repair",
-  "support:respond",
+  "support:respond"
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 

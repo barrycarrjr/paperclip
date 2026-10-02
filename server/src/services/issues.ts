@@ -12,6 +12,7 @@ import {
   documents,
   goals,
   heartbeatRuns,
+  routineRuns,
   executionWorkspaces,
   issueApprovals,
   issueAttachments,
@@ -405,6 +406,84 @@ function participatedByAgentCondition(companyId: string, agentId: string) {
       )
     )
   `;
+}
+
+
+
+async function resolveResponsibleUserIdForIssueCreate(
+  reader: any,
+  companyId: string,
+  input: {
+    explicitResponsibleUserId?: string | null;
+    createdByUserId?: string | null;
+    parentId?: string | null;
+    originKind?: string | null;
+    originRunId?: string | null;
+    actorRunId?: string | null;
+    actorResponsibleUserId?: string | null;
+    trustExplicitResponsibleUserId?: boolean;
+  },
+) {
+  const explicitResponsibleUserId = readStringFromRecord(
+    input as unknown as Record<string, unknown>,
+    "explicitResponsibleUserId",
+  );
+  if (
+    explicitResponsibleUserId &&
+    input.trustExplicitResponsibleUserId === true
+  )
+    return explicitResponsibleUserId;
+
+  if (input.originKind === "routine_execution" && input.originRunId) {
+    const routineRun = await reader
+      .select({ responsibleUserId: routineRuns.responsibleUserId })
+      .from(routineRuns)
+      .where(
+        and(
+          eq(routineRuns.companyId, companyId),
+          eq(routineRuns.id, input.originRunId),
+        ),
+      )
+      .then((rows: any[]) => rows[0] ?? null);
+    if (routineRun?.responsibleUserId) return routineRun.responsibleUserId;
+  }
+
+  const actorResponsibleUserId = readStringFromRecord(
+    input as unknown as Record<string, unknown>,
+    "actorResponsibleUserId",
+  );
+  if (actorResponsibleUserId) return actorResponsibleUserId;
+
+  if (input.actorRunId) {
+    const actorRun = await reader
+      .select({ responsibleUserId: heartbeatRuns.responsibleUserId })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.id, input.actorRunId),
+        ),
+      )
+      .then((rows: any[]) => rows[0] ?? null);
+    if (actorRun?.responsibleUserId) return actorRun.responsibleUserId;
+  }
+
+  if (input.parentId) {
+    const parent = await reader
+      .select({
+        responsibleUserId: issues.responsibleUserId,
+        createdByUserId: issues.createdByUserId,
+      })
+      .from(issues)
+      .where(
+        and(eq(issues.companyId, companyId), eq(issues.id, input.parentId)),
+      )
+      .then((rows: any[]) => rows[0] ?? null);
+    if (parent?.responsibleUserId) return parent.responsibleUserId;
+    if (parent?.createdByUserId) return parent.createdByUserId;
+  }
+
+  return input.createdByUserId ?? null;
 }
 
 function myLastCommentAtExpr(companyId: string, userId: string) {
@@ -1301,6 +1380,9 @@ const issueListSelect = {
   startDate: issues.startDate,
   dueDate: issues.dueDate,
   sortOrder: issues.sortOrder,
+  responsibleUserId: issues.responsibleUserId,
+  originIdentityContextId: issues.originIdentityContextId,
+  continuationIdentityContextId: issues.continuationIdentityContextId,
   createdAt: issues.createdAt,
   updatedAt: issues.updatedAt,
 };
@@ -2719,8 +2801,25 @@ export function issueService(db: Db) {
         const issueNumber = company.issueCounter;
         const identifier = `${company.issuePrefix}-${issueNumber}`;
 
+        const responsibleUserId = await resolveResponsibleUserIdForIssueCreate(
+          tx,
+          companyId,
+          {
+            explicitResponsibleUserId: (issueData as any).responsibleUserId ?? null,
+            createdByUserId: issueData.createdByUserId ?? null,
+            parentId: issueData.parentId ?? null,
+            originKind: issueData.originKind ?? "manual",
+            originRunId: issueData.originRunId ?? null,
+            actorRunId: (data as any).actorRunId ?? null,
+            actorResponsibleUserId: (data as any).actorResponsibleUserId ?? null,
+            trustExplicitResponsibleUserId:
+              (data as any).trustExplicitResponsibleUserId === true,
+          },
+        );
+
         const values = {
           ...issueData,
+          responsibleUserId,
           originKind: issueData.originKind ?? "manual",
           goalId: resolveIssueGoalId({
             projectId: issueData.projectId,

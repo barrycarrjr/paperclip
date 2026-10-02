@@ -210,9 +210,18 @@ export type {
 } from "./secrets.js";
 export type {
   Routine,
+  RoutineEnvConfig,
+  RoutineManagedByPlugin,
+  RoutineDescriptionDocument,
   RoutineVariable,
   RoutineVariableDefaultValue,
+  RoutineRevisionSnapshotRoutineV1,
+  RoutineRevisionSnapshotTriggerV1,
+  RoutineRevisionSnapshotV1,
+  RoutineRevisionSnapshot,
+  RoutineRevision,
   RoutineTrigger,
+  RoutineWebhookDelivery,
   RoutineRun,
   RoutineTriggerSecretMaterial,
   RoutineDetail,

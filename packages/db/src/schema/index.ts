@@ -35,7 +35,8 @@ export { pluginOperationCalls } from "./plugin_operation_calls.js";
 export { issues } from "./issues.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";
 export { issueRelations } from "./issue_relations.js";
-export { routines, routineTriggers, routineRuns } from "./routines.js";
+export { folders } from "./folders.js";
+export { routines, routineTriggers, routineRuns, routineRevisions, routineWebhookTestReceipts } from "./routines.js";
 export { calendarEvents, calendarEventDeliveries } from "./calendar-events.js";
 export {
   routineTemplates,
@@ -71,6 +72,7 @@ export { approvalComments } from "./approval_comments.js";
 export { activityLog } from "./activity_log.js";
 export { companySecrets } from "./company_secrets.js";
 export { companySecretVersions } from "./company_secret_versions.js";
+export { secretAccessEvents } from "./secret_access_events.js";
 export { companySkills } from "./company_skills.js";
 export { plugins } from "./plugins.js";
 export { pluginConfig } from "./plugin_config.js";
@@ -116,6 +118,7 @@ export { toolActionDeliveries } from "./tool_action_deliveries.js";
 export { adapterAuthSessions } from "./adapter_auth_sessions.js";
 export { runIdentityContexts } from "./run_identity_contexts.js";
 export { userSecretDefinitions } from "./user_secret_definitions.js";
+export { userSecretDeclarations } from "./user_secret_declarations.js";
 export { companySecretBindings } from "./company_secret_bindings.js";
 export { companySecretProviderConfigs } from "./company_secret_provider_configs.js";
 export { companySecretProposals } from "./company_secret_proposals.js";

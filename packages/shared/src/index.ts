@@ -540,9 +540,18 @@ export type {
   CompanySecretAgentReference,
   SecretProviderDescriptor,
   Routine,
+  RoutineEnvConfig,
+  RoutineManagedByPlugin,
+  RoutineDescriptionDocument,
   RoutineVariable,
   RoutineVariableDefaultValue,
+  RoutineRevisionSnapshotRoutineV1,
+  RoutineRevisionSnapshotTriggerV1,
+  RoutineRevisionSnapshotV1,
+  RoutineRevisionSnapshot,
+  RoutineRevision,
   RoutineTrigger,
+  RoutineWebhookDelivery,
   RoutineRun,
   RoutineTriggerSecretMaterial,
   RoutineDetail,
@@ -1374,7 +1383,18 @@ export {
 } from "./validators/pipeline.js";
 
 
-export type RoutineEnvConfig = any;
+export * from "./issue-attribution.js";
+export * from "./responsible-user-denial.js";
+export {
+  agentApiKeyScopeSchema,
+  normalizeAgentApiKeyScope,
+  standardAgentKeyScopeSchema,
+  taskBridgeAgentKeyScopeSchema,
+  skillTestAgentKeyScopeSchema,
+  type AgentApiKeyScope,
+  type TaskBridgeAgentKeyScope,
+  type SkillTestAgentKeyScope,
+} from "./validators/agent.js";
 export const LOW_TRUST_REVIEW_PRESET = "low_trust_review" as const;
 export const LOW_TRUST_REVIEW_PRESET_VERSION = 1 as const;
 export type IssueWorkMode = any;

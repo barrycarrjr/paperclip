@@ -290,6 +290,7 @@ export function secretService(db: Db) {
           .insert(companySecrets)
           .values({
             companyId,
+            key: input.name,
             name: input.name,
             provider: input.provider,
             externalRef: prepared.externalRef,
