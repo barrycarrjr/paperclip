@@ -1339,5 +1339,48 @@ export function issueThreadInteractionService(db: Db) {
       await touchIssue(db, issue.id);
       return hydrateInteraction(updated);
     },
+    expirePendingInteractionsForTerminalIssue: async (
+      issue: { id: string; companyId: string; status: string },
+      actor: InteractionActor = {},
+    ) => {
+      if (issue.status !== "done" && issue.status !== "cancelled") return [];
+      const rows = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(
+          and(
+            eq(issueThreadInteractions.companyId, issue.companyId),
+            eq(issueThreadInteractions.issueId, issue.id),
+            eq(issueThreadInteractions.status, "pending"),
+          ),
+        );
+      if (rows.length === 0) return [];
+
+      const now = new Date();
+      const expired: IssueThreadInteraction[] = [];
+      for (const row of rows) {
+        const [resolved] = await db
+          .update(issueThreadInteractions)
+          .set({
+            status: "expired",
+            result: { version: 1, outcome: "issue_closed", reason: null },
+            resolvedByAgentId: actor.agentId ?? null,
+            resolvedByUserId: actor.userId ?? null,
+            resolvedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(issueThreadInteractions.id, row.id),
+              eq(issueThreadInteractions.status, "pending"),
+            ),
+          )
+          .returning();
+        if (resolved) {
+          expired.push(hydrateInteraction(resolved));
+        }
+      }
+      return expired;
+    },
   };
 }

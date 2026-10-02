@@ -1,3 +1,4 @@
+import type { EnvBinding } from "./secrets.js";
 import type { IssueOriginKind, RoutineVariableType } from "../constants.js";
 
 export interface RoutineProjectSummary {
@@ -24,6 +25,8 @@ export interface RoutineIssueSummary {
   priority: string;
   updatedAt: Date;
 }
+
+export type RoutineEnvConfig = Record<string, EnvBinding>;
 
 export type RoutineVariableDefaultValue = string | number | boolean | null;
 

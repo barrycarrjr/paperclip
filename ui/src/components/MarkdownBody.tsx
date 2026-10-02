@@ -21,6 +21,7 @@ interface MarkdownBodyProps {
   style?: React.CSSProperties;
   softBreaks?: boolean;
   linkIssueReferences?: boolean;
+  linkCaseReferences?: boolean;
   /** Optional resolver for relative image paths (e.g. within export packages) */
   resolveImageSrc?: (src: string) => string | null;
   /** Called when a user clicks an inline image */

@@ -1,9 +1,10 @@
+import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { issueExecutionDecisions } from "@paperclipai/db";
+import { issueExecutionDecisions, pipelineCaseIssueLinks, pipelineCases, pipelines, pipelineStages } from "@paperclipai/db";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -392,6 +393,47 @@ function buildExecutionStageWakeup(input: {
   }
 
   return null;
+}
+
+
+async function listIssueLinkedCases(db: Db, companyId: string, issueId: string) {
+  const rows = await db
+    .select({
+      link: pipelineCaseIssueLinks,
+      case: pipelineCases,
+      pipeline: pipelines,
+      stage: pipelineStages,
+    })
+    .from(pipelineCaseIssueLinks)
+    .innerJoin(pipelineCases, eq(pipelineCaseIssueLinks.caseId, pipelineCases.id))
+    .innerJoin(pipelines, eq(pipelineCases.pipelineId, pipelines.id))
+    .innerJoin(pipelineStages, eq(pipelineCases.stageId, pipelineStages.id))
+    .where(
+      and(
+        eq(pipelineCaseIssueLinks.companyId, companyId),
+        eq(pipelineCaseIssueLinks.issueId, issueId),
+        eq(pipelineCases.companyId, companyId),
+        eq(pipelines.companyId, companyId),
+      ),
+    );
+  return rows.map((row) => ({
+    id: row.case.id,
+    caseKey: row.case.caseKey,
+    title: row.case.title,
+    status: row.case.terminalKind ?? "open",
+    role: row.link.role,
+    pipeline: {
+      id: row.pipeline.id,
+      key: row.pipeline.key,
+      name: row.pipeline.name,
+    },
+    stage: {
+      id: row.stage.id,
+      key: row.stage.key,
+      name: row.stage.name,
+      kind: row.stage.kind,
+    },
+  }));
 }
 
 export function issueRoutes(
@@ -1452,7 +1494,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const [{ project, goal }, ancestors, mentionedProjectIds, documentPayload, relations, blockerAttention, referenceSummary] = await Promise.all([
+    const [{ project, goal }, ancestors, mentionedProjectIds, documentPayload, relations, blockerAttention, referenceSummary, linkedCases] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
       svc.findMentionedProjectIds(issue.id, { includeCommentBodies: false }),
@@ -1460,6 +1502,7 @@ export function issueRoutes(
       svc.getRelationSummaries(issue.id),
       svc.listBlockerAttention(issue.companyId, [issue]).then((map) => map.get(issue.id) ?? null),
       issueReferencesSvc.listIssueReferenceSummary(issue.id),
+      listIssueLinkedCases(db, issue.companyId, issue.id),
     ]);
     const mentionedProjects = mentionedProjectIds.length > 0
       ? await projectsSvc.listByIds(issue.companyId, mentionedProjectIds)
@@ -1483,6 +1526,7 @@ export function issueRoutes(
       mentionedProjects,
       currentExecutionWorkspace,
       workProducts,
+      linkedCases,
     });
   });
 

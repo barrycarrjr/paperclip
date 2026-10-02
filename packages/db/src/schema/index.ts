@@ -120,3 +120,22 @@ export { companySecretBindings } from "./company_secret_bindings.js";
 export { companySecretProviderConfigs } from "./company_secret_provider_configs.js";
 export { companySecretProposals } from "./company_secret_proposals.js";
 export { connectionIntentDeliveries } from "./connection_intent_deliveries.js";
+
+export { pipelines, pipelineStages, pipelineTransitions } from "./pipelines.js";
+export {
+  cases,
+  caseAttachments,
+  caseDocuments,
+  caseEvents,
+  caseIssueLinks,
+  caseLabels,
+} from "./cases.js";
+export {
+  pipelineCases,
+  pipelineCaseIssueLinks,
+  pipelineCaseBlockers,
+  pipelineDocuments,
+  pipelineCaseDocuments,
+  pipelineAutomationExecutions,
+} from "./pipeline_cases.js";
+export { pipelineCaseEvents } from "./pipeline_case_events.js";

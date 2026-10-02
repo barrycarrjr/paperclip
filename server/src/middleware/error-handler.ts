@@ -45,8 +45,12 @@ export function errorHandler(
         err,
       );
     }
+    const details = err.details && typeof err.details === "object" && !Array.isArray(err.details)
+      ? (err.details as Record<string, unknown>)
+      : null;
     res.status(err.status).json({
       error: err.message,
+      ...(typeof details?.code === "string" ? { code: details.code } : {}),
       ...(err.details ? { details: err.details } : {}),
     });
     return;

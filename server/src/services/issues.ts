@@ -2903,6 +2903,13 @@ export function issueService(db: Db) {
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!updated) return null;
+        if (existing.status !== updated.status && (updated.status === "done" || updated.status === "cancelled")) {
+          const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+          await issueThreadInteractionService(tx).expirePendingInteractionsForTerminalIssue(updated, {
+            agentId: actorAgentId ?? null,
+            userId: actorUserId ?? null,
+          });
+        }
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
         }
@@ -3847,4 +3854,18 @@ export function issueService(db: Db) {
       }));
     },
   };
+}
+
+export type IssuePostCommitAction = {
+  type: "cancel_native_question_run";
+  runId: string;
+  issueId: string;
+  issueStatus: string;
+};
+
+export async function executeIssuePostCommitActions(
+  db: Db,
+  actions: readonly IssuePostCommitAction[],
+) {
+  // no-op in fork
 }

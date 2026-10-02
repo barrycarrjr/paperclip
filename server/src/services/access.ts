@@ -11,6 +11,7 @@ import {
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict, forbidden } from "../errors.js";
 import { personalCompanyOwner } from "./personal-companies.js";
+import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -26,6 +27,7 @@ type MemberArchiveInput = {
 };
 
 export function accessService(db: Db) {
+  const authorization = authorizationService(db);
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
     if (!userId) return false;
     const row = await db
@@ -131,6 +133,15 @@ export function accessService(db: Db) {
     if (!userId) return false;
     if (await isInstanceAdmin(userId)) return true;
     return hasPermission(companyId, "user", userId, permissionKey);
+  }
+
+  async function decide(input: {
+    actor: AuthorizationActor;
+    action: Parameters<typeof authorization.decide>[0]["action"];
+    resource: AuthorizationResource;
+    scope?: Record<string, unknown> | null;
+  }) {
+    return authorization.decide(input);
   }
 
   async function listMembers(companyId: string) {
@@ -830,6 +841,7 @@ export function accessService(db: Db) {
   }
 
   return {
+    decide,
     isInstanceAdmin,
     isPortfolioRootAgent,
     isPortfolioRootUserAdmin,

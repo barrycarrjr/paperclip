@@ -114,3 +114,12 @@ export function buildMarkdownMentionOptions(args: {
 
   return options;
 }
+
+export function isAgentTaskTarget(
+  agent: Pick<Agent, "status">,
+): boolean {
+  return (
+    agent.status !== "terminated" &&
+    agent.status !== "pending_approval"
+  );
+}

@@ -104,3 +104,12 @@ export function toCompanyRelativePath(path: string): string {
 
   return `${pathname}${search}${hash}`;
 }
+
+export function caseHref(
+  companyPrefix: string | null | undefined,
+  ...segments: string[]
+): string {
+  const suffix = ["cases", ...segments].filter(Boolean).join("/");
+  if (!companyPrefix) return `/${suffix}`;
+  return `/${normalizeCompanyPrefix(companyPrefix)}/${suffix}`;
+}

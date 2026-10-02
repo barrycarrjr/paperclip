@@ -6,6 +6,7 @@ import { useCompany } from "@/context/CompanyContext";
 import { IssueLinkQuicklook } from "@/components/IssueLinkQuicklook";
 import {
   applyCompanyPrefix,
+  caseHref,
   extractCompanyPrefixFromPath,
   normalizeCompanyPrefix,
 } from "@/lib/company-routes";
@@ -64,6 +65,14 @@ function useActiveCompanyPrefix(): string | null {
   if (pathPrefix) return pathPrefix;
 
   return selectedCompany ? normalizeCompanyPrefix(selectedCompany.issuePrefix) : null;
+}
+
+export function useCaseHref(): (...segments: string[]) => string {
+  const companyPrefix = useActiveCompanyPrefix();
+  return React.useCallback(
+    (...segments: string[]) => caseHref(companyPrefix, ...segments),
+    [companyPrefix],
+  );
 }
 
 export * from "react-router-dom";

@@ -1303,3 +1303,86 @@ export type {
   IssueCommentMetadata,
   IssueCommentPresentation,
 } from "./types/issue.js";
+
+export {
+  computePipelineHealth,
+  groupWarningsByStage,
+  isPipelineTerminalStageKind,
+  type PipelineHealthAgentRef,
+  type PipelineHealthFailedAutomationInput,
+  type PipelineHealthInput,
+  type PipelineHealthPipelineRef,
+  type PipelineHealthReport,
+  type PipelineHealthStageInput,
+  type PipelineHealthStageRef,
+  type PipelineHealthWarning,
+  type PipelineHealthWarningCode,
+} from "./pipeline-health.js";
+
+export {
+  caseTypeMatchesPipeline,
+  deriveCaseType,
+  type CaseTypePipelineRef,
+} from "./pipeline-case-type.js";
+
+export type {
+  PipelineAutomationRetryBlocker,
+  PipelineAutomationRetryCleanupOptions,
+  PipelineAutomationRetryEffectCounts,
+  PipelineAutomationRetryPlan,
+  PipelineAutomationRetryRequest,
+  PipelineAutomationRetryRoutineRef,
+  PipelineAutomationRetryScope,
+  PipelineAutomationRetryStageRef,
+  PipelineCaseAttachmentOutputItem,
+  PipelineCaseConversationSource,
+  PipelineCaseConversationSourceKind,
+  PipelineCaseConversationSourceLinkRole,
+  PipelineCaseConversationSourceReason,
+  PipelineCaseDocumentOutputItem,
+  PipelineCaseDocumentPayload,
+  PipelineCaseDocumentRevision,
+  PipelineCaseLiveness,
+  PipelineCaseLivenessState,
+  PipelineCaseOutputContextSummary,
+  PipelineCaseOutputContextSummaryItem,
+  PipelineCaseOutputItem,
+  PipelineCaseOutputItemBase,
+  PipelineCaseOutputKind,
+  PipelineCaseOutputSource,
+  PipelineCaseOutputSourceRole,
+  PipelineCaseOutputsResponse,
+  PipelineCaseWorkProductOutputItem,
+  PipelineStageAutomation,
+} from "./types/pipeline.js";
+
+export {
+  PIPELINE_CASE_BODY_DOCUMENT_KEY,
+  PIPELINE_AUTOMATION_DEFAULT_TITLE_TEMPLATE,
+} from "./constants.js";
+
+export {
+  pipelineAutomationRetryCleanupOptionsSchema,
+  pipelineAutomationRetryRequestSchema,
+  pipelineAutomationRetryScopeSchema,
+  pipelineStageAutomationSchema,
+  pipelineStageApproverSchema,
+  pipelineStageConfigSchema,
+  pipelineStageKindSchema,
+  pipelineStageOnEnterSchema,
+  pipelineStageVariableSchema,
+} from "./validators/pipeline.js";
+
+
+export type RoutineEnvConfig = any;
+export const LOW_TRUST_REVIEW_PRESET = "low_trust_review" as const;
+export const LOW_TRUST_REVIEW_PRESET_VERSION = 1 as const;
+export type IssueWorkMode = any;
+export type RequestCheckboxConfirmationInteraction = any;
+
+export * from "./types/feedback.js";
+export {
+  type AcceptedPlanDecompositionSummary,
+  type IssueQueuedCommentQueue,
+  type IssueQueuedCommentQueueState,
+} from "./types/issue.js";

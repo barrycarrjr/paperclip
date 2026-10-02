@@ -80,6 +80,7 @@ export interface InstanceGeneralSettings {
    */
   emailHandoffReplyApproval: EmailHandoffReplyApproval;
   selfNotify: SelfNotifySettings;
+  feedbackDataSharingPreference?: "prompt" | "allowed" | "denied" | string;
 }
 
 /**
@@ -109,6 +110,10 @@ export interface InstanceExperimentalSettings {
   autoRestartDevServerWhenIdle: boolean;
   enableIssueGraphLivenessAutoRecovery: boolean;
   issueGraphLivenessAutoRecoveryLookbackHours: number;
+  enablePipelines?: boolean;
+  enableCases?: boolean;
+  enableManagedSandboxOnly?: boolean;
+  enableClassicTaskInterface?: boolean;
 }
 
 export interface InstanceAgentDefaults {
