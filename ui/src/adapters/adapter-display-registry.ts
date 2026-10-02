@@ -100,6 +100,26 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Local Cursor agent",
     icon: MousePointer2,
   },
+  cursor_cloud: {
+    label: "Cursor Cloud",
+    description: "Managed remote Cursor agent",
+    icon: MousePointer2,
+  },
+  grok_local: {
+    label: "Grok Build",
+    description: "Local Grok Build agent",
+    icon: Bot,
+  },
+  kimi_local: {
+    label: "Kimi Code",
+    description: "Kimi Code CLI harness",
+    icon: Bot,
+  },
+  hermes_gateway: {
+    label: "Hermes Gateway",
+    description: "Remote Hermes API server",
+    icon: HermesIcon,
+  },
   openclaw_gateway: {
     label: "OpenClaw Gateway",
     description: "Invoke OpenClaw via gateway protocol",

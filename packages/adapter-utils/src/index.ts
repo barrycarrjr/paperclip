@@ -1,4 +1,5 @@
 export type {
+  AdapterRuntimeCommandSpec,
   AdapterAgent,
   AdapterRuntime,
   UsageSummary,
@@ -57,3 +58,4 @@ export {
   redactTranscriptEntryPaths,
 } from "./log-redaction.js";
 export { inferOpenAiCompatibleBiller } from "./billing.js";
+export { buildSandboxNpmInstallCommand } from "./sandbox-install-command.js";
