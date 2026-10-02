@@ -1,3 +1,4 @@
+import { createContext, useContext, type ReactNode } from "react";
 import { NavLink, useNavigate } from "@/lib/router";
 import { applyCompanyPrefix } from "@/lib/company-routes";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
@@ -8,7 +9,23 @@ import { useSidebarPeek } from "../context/SidebarPeekContext";
 import { SidebarInfoButton } from "./SidebarInfoButton";
 import type { LucideIcon } from "lucide-react";
 
+
+const SidebarNavExpandedContext = createContext(false);
+
+export function SidebarNavExpandedProvider({ children }: { children: ReactNode }) {
+  return (
+    <SidebarNavExpandedContext.Provider value={true}>
+      {children}
+    </SidebarNavExpandedContext.Provider>
+  );
+}
+
+export function useSidebarNavExpanded() {
+  return useContext(SidebarNavExpandedContext);
+}
+
 interface SidebarNavItemProps {
+  active?: boolean;
   to: string;
   label: string;
   icon: LucideIcon;
@@ -49,6 +66,7 @@ export function SidebarNavItem({
   liveCount,
   info,
   alsoActive = false,
+  active,
 }: SidebarNavItemProps) {
   const { isMobile, setSidebarOpen } = useSidebar();
   const peek = useSidebarPeek();
@@ -171,7 +189,7 @@ export function SidebarNavItem({
       className={({ isActive }) =>
         cn(
           "relative flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
-          isActive || alsoActive
+          (active !== undefined ? active : (isActive || alsoActive))
             ? "bg-accent text-foreground before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:bg-foreground before:content-['']"
             : "text-foreground/75 hover:bg-accent/50 hover:text-foreground",
           info && "pr-8",

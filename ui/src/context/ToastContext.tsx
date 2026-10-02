@@ -242,6 +242,14 @@ export function useToastState() {
   return context;
 }
 
+export function useOptionalToastActions() {
+  return useContext(ToastActionsContext);
+}
+
+export function useOptionalToastState() {
+  return useContext(ToastStateContext);
+}
+
 export function useToastActions() {
   const context = useContext(ToastActionsContext);
   if (!context) {

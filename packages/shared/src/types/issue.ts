@@ -80,6 +80,9 @@ export interface IssueDocumentSummary {
   updatedByUserId: string | null;
   createdAt: Date;
   updatedAt: Date;
+  lockedAt?: Date | string | null;
+  lockedByAgentId?: string | null;
+  lockedByUserId?: string | null;
 }
 
 export interface IssueDocument extends IssueDocumentSummary {
@@ -492,4 +495,6 @@ export interface IssueAttachment {
   createdAt: Date;
   updatedAt: Date;
   contentPath: string;
+  openPath?: string;
+  downloadPath?: string;
 }

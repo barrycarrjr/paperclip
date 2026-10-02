@@ -6,6 +6,8 @@ import type {
   AgentInstructionsBundle,
   AgentInstructionsFileDetail,
   AgentSkillSnapshot,
+  AgentSkillAssignmentMode,
+  AgentDesiredSkillEntry,
   AdapterEnvironmentTestResult,
   AgentKeyCreated,
   AgentRuntimeState,
@@ -197,8 +199,17 @@ export const agentsApi = {
   listKeys: (id: string, companyId?: string) => api.get<AgentKey[]>(agentPath(id, companyId, "/keys")),
   skills: (id: string, companyId?: string) =>
     api.get<AgentSkillSnapshot>(agentPath(id, companyId, "/skills")),
-  syncSkills: (id: string, desiredSkills: string[], companyId?: string) =>
-    api.post<AgentSkillSnapshot>(agentPath(id, companyId, "/skills/sync"), { desiredSkills }),
+  syncSkills: (
+    id: string,
+    desiredSkills: Array<string | AgentDesiredSkillEntry>,
+    modeOrCompanyId?: AgentSkillAssignmentMode | string,
+    companyId?: string,
+  ) => {
+    const isMode = modeOrCompanyId === "replace" || modeOrCompanyId === "add" || modeOrCompanyId === "remove";
+    const mode: AgentSkillAssignmentMode = isMode ? (modeOrCompanyId as AgentSkillAssignmentMode) : "replace";
+    const targetCompanyId = isMode ? companyId : modeOrCompanyId;
+    return api.post<AgentSkillSnapshot>(agentPath(id, targetCompanyId, "/skills/sync"), { desiredSkills, mode });
+  },
   createKey: (id: string, name: string, companyId?: string) =>
     api.post<AgentKeyCreated>(agentPath(id, companyId, "/keys"), { name }),
   revokeKey: (agentId: string, keyId: string, companyId?: string) =>

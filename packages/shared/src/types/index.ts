@@ -57,6 +57,8 @@ export type {
   AgentSkillOrigin,
   AgentSkillEntry,
   AgentSkillSnapshot,
+  AgentSkillAssignmentMode,
+  AgentDesiredSkillEntry,
   AgentSkillSyncRequest,
 } from "./adapter-skills.js";
 export type {

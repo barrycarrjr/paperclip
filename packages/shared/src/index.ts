@@ -314,6 +314,8 @@ export type {
   AgentSkillOrigin,
   AgentSkillEntry,
   AgentSkillSnapshot,
+  AgentSkillAssignmentMode,
+  AgentDesiredSkillEntry,
   AgentSkillSyncRequest,
   InstanceAgentDefaults,
   InstanceExperimentalSettings,
@@ -1229,3 +1231,32 @@ export type {
   SavedModelState,
 } from "./model-lifecycle.js";
 export { parseInlineConsentReply } from "./chat-consent.js";
+
+export * from "./types/folder.js";
+export * from "./validators/folder.js";
+export * from "./types/company-skill.js";
+export * from "./validators/company-skill.js";
+export type { CatalogSkillListQuery, CompanySkillListQuery, CompanySkillTestRunListQuery } from "./types/company-skill.js";
+export * from "./types/skill-source.js";
+export * from "./validators/skill-source.js";
+export * from "./validators/skill-policy.js";
+export * from "./github-skill-repository.js";
+export {
+  ROUTINE_MENTION_SCHEME,
+  PIPELINE_MENTION_SCHEME,
+  buildRoutineMentionHref,
+  buildPipelineMentionHref,
+  parseRoutineMentionHref,
+  parsePipelineMentionHref,
+  extractRoutineMentionIds,
+  extractPipelineMentions,
+  type ParsedRoutineMention,
+  type ParsedPipelineMention,
+} from "./project-mentions.js";
+export * from "./validators/work-product.js";
+export * from "./frontmatter.js";
+export { isPlainRecord as isFrontmatterPlainRecord } from "./frontmatter.js";
+
+export * from "./markdown-work-products.js";
+
+export type { AttachmentArtifactWorkProductMetadata } from "./types/work-product.js";
