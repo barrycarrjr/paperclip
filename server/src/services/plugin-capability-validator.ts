@@ -134,6 +134,10 @@ const UI_SLOT_CAPABILITIES: Record<PluginUiSlotType, PluginCapability> = {
   commentAnnotation: "ui.commentAnnotation.register",
   commentContextMenuItem: "ui.action.register",
   settingsPage: "instance.settings.register",
+  companySettingsPage: "instance.settings.register",
+  routeSidebar: "ui.sidebar.register",
+  appShellOverlay: "ui.action.register",
+  organizationSwitcher: "ui.sidebar.register",
 };
 
 /**

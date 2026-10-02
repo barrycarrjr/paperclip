@@ -83,11 +83,14 @@ export function buildIssueThreadInteractionSummary(
     return "Requested confirmation";
   }
 
-  const count = interaction.payload.questions.length;
-  if (interaction.status === "answered") {
-    return count === 1 ? "Answered 1 question" : `Answered ${count} questions`;
+  if (interaction.kind === "ask_user_questions") {
+    const count = interaction.payload.questions.length;
+    if (interaction.status === "answered") {
+      return count === 1 ? "Answered 1 question" : `Answered ${count} questions`;
+    }
+    return count === 1 ? "Asked 1 question" : `Asked ${count} questions`;
   }
-  return count === 1 ? "Asked 1 question" : `Asked ${count} questions`;
+  return "Interaction";
 }
 
 export function buildSuggestedTaskTree(

@@ -83,3 +83,40 @@ export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export { chatSessions, chatMessages, chatAttachments } from "./chat_sessions.js";
 export { externalMcpServers } from "./external_mcp_servers.js";
+
+export { aiConnectionDefaults } from "./ai_connection_defaults.js";
+export {
+  toolApplications,
+  toolConnections,
+  connectionGrants,
+  connectionGrantMembers,
+  connectionGrantDelegations,
+  toolConnectionInstalls,
+  toolOauthStates,
+  toolCatalogEntries,
+  toolProfiles,
+  toolProfileEntries,
+  toolProfileBindings,
+  toolMcpGateways,
+  toolMcpGatewayTokens,
+  toolPolicies,
+  toolRuntimeSlots,
+  toolRuntimeMetricCounters,
+  toolStdioCommandTemplates,
+  toolGatewaySessions,
+  connectionTokenIssuances,
+  toolInvocations,
+  toolActionRequests,
+  toolCallEvents,
+  toolRateLimitCounters,
+  toolGatewayRateLimitCounters,
+  toolAccessAuditEvents,
+} from "./tool_access.js";
+export { toolActionDeliveries } from "./tool_action_deliveries.js";
+export { adapterAuthSessions } from "./adapter_auth_sessions.js";
+export { runIdentityContexts } from "./run_identity_contexts.js";
+export { userSecretDefinitions } from "./user_secret_definitions.js";
+export { companySecretBindings } from "./company_secret_bindings.js";
+export { companySecretProviderConfigs } from "./company_secret_provider_configs.js";
+export { companySecretProposals } from "./company_secret_proposals.js";
+export { connectionIntentDeliveries } from "./connection_intent_deliveries.js";

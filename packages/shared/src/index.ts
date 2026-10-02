@@ -1260,3 +1260,46 @@ export { isPlainRecord as isFrontmatterPlainRecord } from "./frontmatter.js";
 export * from "./markdown-work-products.js";
 
 export type { AttachmentArtifactWorkProductMetadata } from "./types/work-product.js";
+
+export {
+  connectionIntentPayloadSchema,
+  connectionIntentResultSchema,
+} from "./validators/issue.js";
+export * from "./validators/connection-intent.js";
+
+export * from "./types/tool-access.js";
+export * from "./validators/tool-access.js";
+export * from "./ai-connections.js";
+
+export type { ProjectRepository, ProjectRepositoryOptions, ProjectBudgetSummary, ProjectManagedByPlugin } from "./types/project.js";
+export * from "./oauth-endpoint-url.js";
+export * from "./railway-connection.js";
+export * from "./retired-composio.js";
+export * from "./slack-tools.js";
+export * from "./github-connectors.js";
+export * from "./google-workspace-connectors.js";
+export * from "./browser-use.js";
+export * from "./types/chat-channels.js";
+export * from "./types/chat-github.js";
+export * from "./validators/chat-channels.js";
+export * from "./validators/chat-github.js";
+export * from "./validators/secret.js";
+export * from "./types/secrets.js";
+export * from "./mcp-remote-headers.js";
+export type {
+  SourceTrustMetadata,
+} from "./trust-policy.js";
+export type {
+  AdapterAuthSessionInternalStatus,
+} from "./types/agent.js";
+export type {
+  IssueCommentAuthorType,
+  IssueThreadInteractionCanonicalResolverPolicy,
+  IssueThreadInteractionEffectiveResolverPolicySource,
+  IssueThreadInteractionResolverPolicyProvenance,
+} from "./constants.js";
+export type {
+  IssueCommentDerivedAuthorSource,
+  IssueCommentMetadata,
+  IssueCommentPresentation,
+} from "./types/issue.js";

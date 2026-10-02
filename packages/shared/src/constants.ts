@@ -1,15 +1,7 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
-/**
- * What sort of company this is.
- *
- * `personal` is the one that behaves differently: it belongs to a single user,
- * cannot be shared with anyone, and cannot be deleted — only paused. HQ is not
- * a kind; it is the `isPortfolioRoot` flag, which carries its own singleton
- * guarantee in the database.
- */
-export const COMPANY_KINDS = ["standard", "personal"] as const;
+export const COMPANY_KINDS = ["hq", "personal", "general", "standard"] as const;
 export type CompanyKind = (typeof COMPANY_KINDS)[number];
 
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
@@ -41,6 +33,15 @@ export const AGENT_ADAPTER_TYPES = [
   "claude_local",
   "codex_local",
   "cursor_cloud",
+  "grok_local",
+  "kimi_local",
+  "hermes",
+  "hermes_gateway",
+  "hermes_local",
+  "aider_local",
+  "ollama_local",
+  "paperclip_runner",
+  "cursor_cloud",
   "gemini_local",
   "grok_local",
   "hermes_gateway",
@@ -50,8 +51,6 @@ export const AGENT_ADAPTER_TYPES = [
   "pi_local",
   "cursor",
   "openclaw_gateway",
-  "aider_local",
-  "ollama_local",
 ] as const;
 export type AgentAdapterType = (typeof AGENT_ADAPTER_TYPES)[number] | (string & {});
 
@@ -88,8 +87,23 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   assistant: "Assistant",
 };
 
-export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 5;
+export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
+
+// Config keys owned by Paperclip/company state rather than one concrete adapter.
+// `paperclipSkillSync` is persisted in adapterConfig but must survive adapter swaps.
+export const ADAPTER_AGNOSTIC_KEYS = [
+  "env",
+  "promptTemplate",
+  "instructionsFilePath",
+  "cwd",
+  "timeoutSec",
+  "graceSec",
+  "bootstrapPromptTemplate",
+  "paperclipSkillSync",
+] as const;
+export type AdapterAgnosticKey = (typeof ADAPTER_AGNOSTIC_KEYS)[number];
+
 export const AGENT_ICON_NAMES = [
   "bot",
   "cpu",
@@ -135,6 +149,56 @@ export const AGENT_ICON_NAMES = [
 ] as const;
 export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
 
+/**
+ * Curated Lucide icon set for projects (PAP-68 part 3).
+ *
+ * The first entry, `"folder"`, is the default for any project without an
+ * explicit icon. The remaining entries reuse much of the agent icon set plus a
+ * handful of folder/structure icons that read well at small tile sizes.
+ */
+export const PROJECT_ICON_NAMES = [
+  "folder",
+  "rocket",
+  "code",
+  "terminal",
+  "database",
+  "globe",
+  "package",
+  "boxes",
+  "box",
+  "layers",
+  "briefcase",
+  "compass",
+  "target",
+  "flame",
+  "zap",
+  "star",
+  "bug",
+  "wrench",
+  "hammer",
+  "lightbulb",
+  "sparkles",
+  "shield",
+  "lock",
+  "search",
+  "cog",
+  "brain",
+  "cpu",
+  "git-branch",
+  "file-code",
+  "puzzle",
+  "gem",
+  "atom",
+  "heart",
+  "mail",
+  "message-square",
+  "crown",
+  "radar",
+  "telescope",
+  "hexagon",
+] as const;
+export type ProjectIconName = (typeof PROJECT_ICON_NAMES)[number];
+
 export const ISSUE_STATUSES = [
   "backlog",
   "todo",
@@ -158,19 +222,131 @@ export const INBOX_MINE_ISSUE_STATUS_FILTER = INBOX_MINE_ISSUE_STATUSES.join(","
 
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
+export const ISSUE_REVIEW_POLICIES = ["anyone", "not_creator", "human_only"] as const;
+export type IssueReviewPolicy = (typeof ISSUE_REVIEW_POLICIES)[number];
+export const ISSUE_WORK_MODES = ["standard", "ask", "planning", "skill_test"] as const;
+export type IssueWorkMode = (typeof ISSUE_WORK_MODES)[number];
+export const ISSUE_HARNESS_KINDS = ["skill_test"] as const;
+export type IssueHarnessKind = (typeof ISSUE_HARNESS_KINDS)[number];
+export const MAX_ISSUE_REQUEST_DEPTH = 1024;
+
+export const SUMMARY_SLOT_SCOPE_KINDS = [
+  "project",
+  "workspaces_overview",
+  "project_workspace",
+  "execution_workspace",
+] as const;
+export type SummarySlotScopeKind = (typeof SUMMARY_SLOT_SCOPE_KINDS)[number];
+export const SUMMARY_SLOT_KEYS = ["header"] as const;
+export type SummarySlotKey = (typeof SUMMARY_SLOT_KEYS)[number];
+export const SUMMARY_SLOT_STATUSES = ["idle", "generating", "failed"] as const;
+export type SummarySlotStatus = (typeof SUMMARY_SLOT_STATUSES)[number];
+
+export const ISSUE_COMMENT_AUTHOR_TYPES = ["user", "agent", "system"] as const;
+export type IssueCommentAuthorType = (typeof ISSUE_COMMENT_AUTHOR_TYPES)[number];
+
+export const ISSUE_COMMENT_PRESENTATION_KINDS = ["message", "system_notice"] as const;
+export type IssueCommentPresentationKind = (typeof ISSUE_COMMENT_PRESENTATION_KINDS)[number];
+
+export const ISSUE_COMMENT_PRESENTATION_TONES = ["neutral", "info", "success", "warning", "danger"] as const;
+export type IssueCommentPresentationTone = (typeof ISSUE_COMMENT_PRESENTATION_TONES)[number];
+
+export const ISSUE_COMMENT_PRESENTATION_DENSITIES = ["compact"] as const;
+export type IssueCommentPresentationDensity = (typeof ISSUE_COMMENT_PRESENTATION_DENSITIES)[number];
+
+export const ISSUE_COMMENT_METADATA_ROW_TYPES = [
+  "text",
+  "code",
+  "key_value",
+  "issue_link",
+  "agent_link",
+  "run_link",
+] as const;
+export type IssueCommentMetadataRowType = (typeof ISSUE_COMMENT_METADATA_ROW_TYPES)[number];
+
+export function clampIssueRequestDepth(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.min(MAX_ISSUE_REQUEST_DEPTH, Math.max(0, Math.floor(value)));
+}
 
 export const ISSUE_THREAD_INTERACTION_KINDS = [
   "suggest_tasks",
   "ask_user_questions",
   "request_confirmation",
+  "request_checkbox_confirmation",
+  "request_item_verdicts",
+  "connection_intent",
 ] as const;
 export type IssueThreadInteractionKind = (typeof ISSUE_THREAD_INTERACTION_KINDS)[number];
+
+export const ISSUE_THREAD_INTERACTION_CANONICAL_RESOLVER_POLICIES = [
+  "anyone",
+  "not_creator",
+  "human_only",
+] as const;
+export type IssueThreadInteractionCanonicalResolverPolicy =
+  (typeof ISSUE_THREAD_INTERACTION_CANONICAL_RESOLVER_POLICIES)[number];
+
+export const ISSUE_THREAD_INTERACTION_LEGACY_RESOLVER_POLICY_ALIASES = [
+  "board_or_agents",
+  "board_only",
+] as const;
+export type IssueThreadInteractionLegacyResolverPolicyAlias =
+  (typeof ISSUE_THREAD_INTERACTION_LEGACY_RESOLVER_POLICY_ALIASES)[number];
+
+/**
+ * Accepted resolver-policy input values. New product surfaces should use the
+ * canonical values; the two board-prefixed values remain write-compatible
+ * aliases for one migration window.
+ */
+export const ISSUE_THREAD_INTERACTION_RESOLVER_POLICIES = [
+  ...ISSUE_THREAD_INTERACTION_CANONICAL_RESOLVER_POLICIES,
+  ...ISSUE_THREAD_INTERACTION_LEGACY_RESOLVER_POLICY_ALIASES,
+] as const;
+export type IssueThreadInteractionResolverPolicy =
+  (typeof ISSUE_THREAD_INTERACTION_RESOLVER_POLICIES)[number];
+
+export const ISSUE_THREAD_INTERACTION_RESOLVER_POLICY_PROVENANCES = [
+  "explicit",
+  "inherited",
+  "legacy_inherited_restriction",
+] as const;
+export type IssueThreadInteractionResolverPolicyProvenance =
+  (typeof ISSUE_THREAD_INTERACTION_RESOLVER_POLICY_PROVENANCES)[number];
+
+export const ISSUE_THREAD_INTERACTION_EFFECTIVE_RESOLVER_POLICY_SOURCES = [
+  "requested",
+  "company_cap",
+  "governed_action",
+] as const;
+export type IssueThreadInteractionEffectiveResolverPolicySource =
+  (typeof ISSUE_THREAD_INTERACTION_EFFECTIVE_RESOLVER_POLICY_SOURCES)[number];
+
+export function normalizeIssueThreadInteractionResolverPolicy(
+  policy: IssueThreadInteractionResolverPolicy,
+): IssueThreadInteractionCanonicalResolverPolicy {
+  if (policy === "board_or_agents") return "anyone";
+  if (policy === "board_only") return "human_only";
+  return policy;
+}
+
+export function legacyIssueThreadInteractionResolverPolicyAlias(
+  policy: IssueThreadInteractionCanonicalResolverPolicy,
+): IssueThreadInteractionLegacyResolverPolicyAlias | null {
+  if (policy === "anyone") return "board_or_agents";
+  if (policy === "human_only") return "board_only";
+  return null;
+}
+
+export const REQUEST_CHECKBOX_CONFIRMATION_OPTION_LIMIT = 200;
+export const REQUEST_ITEM_VERDICTS_ITEM_LIMIT = REQUEST_CHECKBOX_CONFIRMATION_OPTION_LIMIT;
 
 export const ISSUE_THREAD_INTERACTION_STATUSES = [
   "pending",
   "accepted",
   "rejected",
   "answered",
+  "cancelled",
   "expired",
   "failed",
 ] as const;
@@ -184,10 +360,81 @@ export const ISSUE_THREAD_INTERACTION_CONTINUATION_POLICIES = [
 export type IssueThreadInteractionContinuationPolicy =
   (typeof ISSUE_THREAD_INTERACTION_CONTINUATION_POLICIES)[number];
 
-export const ISSUE_ORIGIN_KINDS = ["manual", "routine_execution", "stale_active_run_evaluation"] as const;
+export const TASK_WATCHDOG_PRODUCT_BUG_ORIGIN_KIND = "task_watchdog_product_bug";
+
+// Marks the single onboarding "first task" so surfaces can special-case it
+// (e.g. suppress the seeded-description bubble and rely on a seeded greeting).
+export const ONBOARDING_FIRST_TASK_ORIGIN_KIND = "onboarding_first_task";
+
+export const ISSUE_ORIGIN_KINDS = [
+  "manual",
+  "routine_execution",
+  "stale_active_run_evaluation",
+  "harness_liveness_escalation",
+  // Historical origin only; automatic productivity reviews have been retired.
+  "issue_productivity_review",
+  "stranded_issue_recovery",
+  "task_watchdog",
+  TASK_WATCHDOG_PRODUCT_BUG_ORIGIN_KIND,
+  ONBOARDING_FIRST_TASK_ORIGIN_KIND,
+  "chat_channel",
+] as const;
 export type BuiltInIssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 export type PluginIssueOriginKind = `plugin:${string}`;
 export type IssueOriginKind = BuiltInIssueOriginKind | PluginIssueOriginKind;
+export const ISSUE_WATCHDOG_DISCOVERY_KINDS = ["product_bug", "platform_bug"] as const;
+export type IssueWatchdogDiscoveryKind = (typeof ISSUE_WATCHDOG_DISCOVERY_KINDS)[number];
+export const ISSUE_SURFACE_VISIBILITIES = ["default", "plugin_operation"] as const;
+export type IssueSurfaceVisibility = (typeof ISSUE_SURFACE_VISIBILITIES)[number];
+
+export const ISSUE_RECOVERY_ACTION_KINDS = [
+  "missing_disposition",
+  "deliberate_wait_without_target",
+  "stranded_assigned_issue",
+  "workspace_validation",
+  "configuration_validation",
+  "active_run_watchdog",
+  "issue_graph_liveness",
+] as const;
+export type IssueRecoveryActionKind = (typeof ISSUE_RECOVERY_ACTION_KINDS)[number];
+
+export const ISSUE_DISPOSITION_REPAIR_RETRY_REASON = "issue_disposition_repair";
+
+export const ISSUE_RECOVERY_ACTION_STATUSES = [
+  "active",
+  "escalated",
+  "resolved",
+  "cancelled",
+] as const;
+export type IssueRecoveryActionStatus = (typeof ISSUE_RECOVERY_ACTION_STATUSES)[number];
+
+export const ISSUE_RECOVERY_ACTION_OWNER_TYPES = [
+  "agent",
+  "user",
+  "board",
+  "system",
+] as const;
+export type IssueRecoveryActionOwnerType = (typeof ISSUE_RECOVERY_ACTION_OWNER_TYPES)[number];
+
+export const ISSUE_RECOVERY_ACTION_OUTCOMES = [
+  "restored",
+  "handed_back",
+  "owner_completed",
+  "delegated",
+  "false_positive",
+  "blocked",
+  "escalated",
+  "cancelled",
+] as const;
+export type IssueRecoveryActionOutcome = (typeof ISSUE_RECOVERY_ACTION_OUTCOMES)[number];
+
+export function pluginOperationIssueOriginKind(pluginKey: string): PluginIssueOriginKind {
+  return `plugin:${pluginKey}:operation`;
+}
+
+export function isPluginOperationIssueOriginKind(originKind: string | null | undefined): boolean {
+  return typeof originKind === "string" && /^plugin:[^:]+:operation(?::|$)/.test(originKind);
+}
 
 export const ISSUE_RELATION_TYPES = ["blocks"] as const;
 export type IssueRelationType = (typeof ISSUE_RELATION_TYPES)[number];
@@ -202,7 +449,12 @@ export const ISSUE_TREE_HOLD_RELEASE_POLICY_STRATEGIES = ["manual", "after_activ
 export type IssueTreeHoldReleasePolicyStrategy = (typeof ISSUE_TREE_HOLD_RELEASE_POLICY_STRATEGIES)[number];
 
 export const ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY = "continuation-summary" as const;
-export const SYSTEM_ISSUE_DOCUMENT_KEYS = [ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY] as const;
+export const PIPELINE_CASE_BODY_DOCUMENT_KEY = "pipeline-case-body" as const;
+export const PIPELINE_AUTOMATION_DEFAULT_TITLE_TEMPLATE = "{{pipeline_name}} / {{stage_name}}: {{case_title}}" as const;
+export const SYSTEM_ISSUE_DOCUMENT_KEYS = [
+  ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
+  PIPELINE_CASE_BODY_DOCUMENT_KEY,
+] as const;
 export type SystemIssueDocumentKey = (typeof SYSTEM_ISSUE_DOCUMENT_KEYS)[number];
 
 const SYSTEM_ISSUE_DOCUMENT_KEY_SET = new Set<string>(SYSTEM_ISSUE_DOCUMENT_KEYS);
@@ -213,14 +465,109 @@ export function isSystemIssueDocumentKey(key: string): key is SystemIssueDocumen
 export const ISSUE_REFERENCE_SOURCE_KINDS = ["title", "description", "comment", "document"] as const;
 export type IssueReferenceSourceKind = (typeof ISSUE_REFERENCE_SOURCE_KINDS)[number];
 
+export const DOCUMENT_ANNOTATION_THREAD_STATUSES = ["open", "resolved"] as const;
+export type DocumentAnnotationThreadStatus = (typeof DOCUMENT_ANNOTATION_THREAD_STATUSES)[number];
+
+export const DOCUMENT_ANNOTATION_ANCHOR_STATES = ["active", "stale", "orphaned"] as const;
+export type DocumentAnnotationAnchorState = (typeof DOCUMENT_ANNOTATION_ANCHOR_STATES)[number];
+
+export const DOCUMENT_ANNOTATION_ANCHOR_CONFIDENCES = [
+  "exact",
+  "duplicate",
+  "fuzzy",
+  "ambiguous",
+  "missing",
+] as const;
+export type DocumentAnnotationAnchorConfidence =
+  (typeof DOCUMENT_ANNOTATION_ANCHOR_CONFIDENCES)[number];
+
+export const EXTERNAL_OBJECT_STATUS_CATEGORIES = [
+  "unknown",
+  "open",
+  "waiting",
+  "running",
+  "succeeded",
+  "failed",
+  "blocked",
+  "closed",
+  "archived",
+  "auth_required",
+  "unreachable",
+] as const;
+export type ExternalObjectStatusCategory = (typeof EXTERNAL_OBJECT_STATUS_CATEGORIES)[number];
+
+export const EXTERNAL_OBJECT_STATUS_TONES = [
+  "neutral",
+  "info",
+  "success",
+  "warning",
+  "danger",
+  "muted",
+] as const;
+export type ExternalObjectStatusTone = (typeof EXTERNAL_OBJECT_STATUS_TONES)[number];
+
+export const EXTERNAL_OBJECT_LIVENESS_STATES = [
+  "unknown",
+  "fresh",
+  "stale",
+  "auth_required",
+  "unreachable",
+] as const;
+export type ExternalObjectLivenessState = (typeof EXTERNAL_OBJECT_LIVENESS_STATES)[number];
+
+export const EXTERNAL_OBJECT_MENTION_SOURCE_KINDS = [
+  "title",
+  "description",
+  "comment",
+  "document",
+  "property",
+  "plugin",
+] as const;
+export type ExternalObjectMentionSourceKind = (typeof EXTERNAL_OBJECT_MENTION_SOURCE_KINDS)[number];
+
+export const EXTERNAL_OBJECT_MENTION_CONFIDENCES = ["exact", "likely", "possible"] as const;
+export type ExternalObjectMentionConfidence = (typeof EXTERNAL_OBJECT_MENTION_CONFIDENCES)[number];
+
 export const ISSUE_EXECUTION_POLICY_MODES = ["normal", "auto"] as const;
 export type IssueExecutionPolicyMode = (typeof ISSUE_EXECUTION_POLICY_MODES)[number];
 
 export const ISSUE_EXECUTION_STAGE_TYPES = ["review", "approval"] as const;
 export type IssueExecutionStageType = (typeof ISSUE_EXECUTION_STAGE_TYPES)[number];
 
+export const ISSUE_MONITOR_SCHEDULED_BY = ["assignee", "board"] as const;
+export type IssueMonitorScheduledBy = (typeof ISSUE_MONITOR_SCHEDULED_BY)[number];
+
+export const ISSUE_EXECUTION_MONITOR_KINDS = ["external_service"] as const;
+export type IssueExecutionMonitorKind = (typeof ISSUE_EXECUTION_MONITOR_KINDS)[number];
+
+export const PROVIDER_QUOTA_MONITOR_SERVICE_NAME = "AI provider quota";
+
+export const ISSUE_EXECUTION_MONITOR_RECOVERY_POLICIES = [
+  "wake_owner",
+  "create_recovery_issue",
+  "escalate_to_board",
+] as const;
+export type IssueExecutionMonitorRecoveryPolicy =
+  (typeof ISSUE_EXECUTION_MONITOR_RECOVERY_POLICIES)[number];
+
 export const ISSUE_EXECUTION_STATE_STATUSES = ["idle", "pending", "changes_requested", "completed"] as const;
 export type IssueExecutionStateStatus = (typeof ISSUE_EXECUTION_STATE_STATUSES)[number];
+
+export const ISSUE_EXECUTION_MONITOR_STATE_STATUSES = ["scheduled", "triggered", "cleared"] as const;
+export type IssueExecutionMonitorStateStatus = (typeof ISSUE_EXECUTION_MONITOR_STATE_STATUSES)[number];
+
+export const ISSUE_EXECUTION_MONITOR_CLEAR_REASONS = [
+  "manual",
+  "triggered",
+  "done",
+  "cancelled",
+  "invalid_status",
+  "invalid_assignee",
+  "dispatch_skipped",
+  "timeout_exceeded",
+  "max_attempts_exhausted",
+] as const;
+export type IssueExecutionMonitorClearReason = (typeof ISSUE_EXECUTION_MONITOR_CLEAR_REASONS)[number];
 
 export const ISSUE_EXECUTION_DECISION_OUTCOMES = ["approved", "changes_requested"] as const;
 export type IssueExecutionDecisionOutcome = (typeof ISSUE_EXECUTION_DECISION_OUTCOMES)[number];
@@ -246,7 +593,7 @@ export type EnvironmentDriver = (typeof ENVIRONMENT_DRIVERS)[number];
 export const ENVIRONMENT_STATUSES = ["active", "archived"] as const;
 export type EnvironmentStatus = (typeof ENVIRONMENT_STATUSES)[number];
 
-export const ENVIRONMENT_LEASE_STATUSES = ["active", "released", "expired", "failed", "retained"] as const;
+export const ENVIRONMENT_LEASE_STATUSES = ["active", "released", "expired", "failed", "retained", "pending_cleanup"] as const;
 export type EnvironmentLeaseStatus = (typeof ENVIRONMENT_LEASE_STATUSES)[number];
 
 export const ENVIRONMENT_LEASE_POLICIES = [
@@ -260,6 +607,42 @@ export type EnvironmentLeasePolicy = (typeof ENVIRONMENT_LEASE_POLICIES)[number]
 export const ENVIRONMENT_LEASE_CLEANUP_STATUSES = ["pending", "success", "failed"] as const;
 export type EnvironmentLeaseCleanupStatus = (typeof ENVIRONMENT_LEASE_CLEANUP_STATUSES)[number];
 
+export const ENVIRONMENT_CUSTOM_IMAGE_TEMPLATE_KINDS = [
+  "snapshot",
+  "image",
+  "provider_template",
+  "unknown",
+] as const;
+export type EnvironmentCustomImageTemplateKind = (typeof ENVIRONMENT_CUSTOM_IMAGE_TEMPLATE_KINDS)[number];
+
+export const ENVIRONMENT_CUSTOM_IMAGE_TEMPLATE_STATUSES = [
+  "active",
+  "superseded",
+  "revoked",
+  "failed",
+] as const;
+export type EnvironmentCustomImageTemplateStatus = (typeof ENVIRONMENT_CUSTOM_IMAGE_TEMPLATE_STATUSES)[number];
+
+export const ENVIRONMENT_CUSTOM_IMAGE_SETUP_SESSION_STATUSES = [
+  "starting",
+  "waiting_for_user",
+  "capturing",
+  "promoted",
+  "cancelled",
+  "timed_out",
+  "failed",
+] as const;
+export type EnvironmentCustomImageSetupSessionStatus =
+  (typeof ENVIRONMENT_CUSTOM_IMAGE_SETUP_SESSION_STATUSES)[number];
+
+export const ENVIRONMENT_CUSTOM_IMAGE_SETUP_CONNECTION_TYPES = [
+  "ssh",
+  "browser_terminal",
+  "unknown",
+] as const;
+export type EnvironmentCustomImageSetupConnectionType =
+  (typeof ENVIRONMENT_CUSTOM_IMAGE_SETUP_CONNECTION_TYPES)[number];
+
 export const ROUTINE_STATUSES = ["active", "paused", "archived"] as const;
 export type RoutineStatus = (typeof ROUTINE_STATUSES)[number];
 
@@ -269,13 +652,19 @@ export type RoutineConcurrencyPolicy = (typeof ROUTINE_CONCURRENCY_POLICIES)[num
 export const ROUTINE_CATCH_UP_POLICIES = ["skip_missed", "enqueue_missed_with_cap"] as const;
 export type RoutineCatchUpPolicy = (typeof ROUTINE_CATCH_UP_POLICIES)[number];
 
+export const ROUTINE_ACTIVITY_GATE_POLICIES = ["always", "require_external_activity"] as const;
+export type RoutineActivityGatePolicy = (typeof ROUTINE_ACTIVITY_GATE_POLICIES)[number];
+
+export const ROUTINE_ACTIVITY_GATE_SCOPES = ["company", "project"] as const;
+export type RoutineActivityGateScope = (typeof ROUTINE_ACTIVITY_GATE_SCOPES)[number];
+
 export const ROUTINE_TRIGGER_KINDS = ["schedule", "webhook", "api"] as const;
 export type RoutineTriggerKind = (typeof ROUTINE_TRIGGER_KINDS)[number];
 
-export const ROUTINE_TRIGGER_SIGNING_MODES = ["bearer", "hmac_sha256", "github_hmac", "none"] as const;
+export const ROUTINE_TRIGGER_SIGNING_MODES = ["bearer", "app_webhook", "hmac_sha256", "github_hmac", "fireflies_hmac", "none"] as const;
 export type RoutineTriggerSigningMode = (typeof ROUTINE_TRIGGER_SIGNING_MODES)[number];
 
-export const ROUTINE_VARIABLE_TYPES = ["text", "textarea", "number", "boolean", "select"] as const;
+export const ROUTINE_VARIABLE_TYPES = ["text", "textarea", "number", "boolean", "select", "date"] as const;
 export type RoutineVariableType = (typeof ROUTINE_VARIABLE_TYPES)[number];
 
 export const ROUTINE_RUN_STATUSES = [
@@ -292,20 +681,18 @@ export const ROUTINE_RUN_SOURCES = ["schedule", "manual", "api", "webhook"] as c
 export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
 
 export const CALENDAR_EVENT_KINDS = ["reminder", "appointment", "deadline"] as const;
-
 export const CALENDAR_EVENT_STATUSES = ["active", "paused", "completed", "cancelled"] as const;
-
 export const CALENDAR_CHANNELS = ["desktop", "slack"] as const;
-
 export const CALENDAR_DELIVERY_CHANNELS = ["desktop", "slack", "in_app"] as const;
-
 export const CALENDAR_SCHEDULE_KINDS = ["once", "interval", "cron"] as const;
-
 export const CALENDAR_INTERVAL_UNITS = ["day", "week", "month", "year"] as const;
-
 export const CALENDAR_SOURCES = ["paperclip", "routine", "google", "outlook"] as const;
 
-export const PAUSE_REASONS = ["manual", "budget", "system"] as const;
+
+// "import" marks agents parked by a company import (safety default) so the UI
+// can explain the pause and offer a scoped bulk-resume; "system" remains the
+// reason for platform-managed pauses (plugins, built-ins).
+export const PAUSE_REASONS = ["manual", "budget", "system", "company_archived", "import"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 export const PROJECT_COLORS = [
@@ -330,15 +717,7 @@ export const APPROVAL_TYPES = [
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
-/**
- * Tool names (in `<pluginKey>:<toolName>` form) that the trust-loop gate
- * intercepts: the agent's call is captured as a pending approval instead of
- * being executed immediately. The user reviews + approves to actually send.
- *
- * Matches the receipt-feed framing: outcomes the user wants to see *before*
- * they leave the system. Read-only siblings (search/get/list/find) are
- * deliberately excluded — only mutating outbound calls are gated.
- */
+
 export const OUTBOUND_TOOL_DRAFT_GATE = [
   "email-tools:email_send",
   "email-tools:email_reply",
@@ -348,12 +727,6 @@ export const OUTBOUND_TOOL_DRAFT_GATE = [
   "slack-tools:slack_send_channel",
   "phone-tools:phone_call_make",
   "3cx-tools:pbx_click_to_call",
-  // Public posts. Until 2026-09-06 this list held only messaging tools, so
-  // every tool below could publish to the open internet with no hold at all
-  // while an email to one person waited for approval. A public post is
-  // harder to take back than a message, not easier. None of these can ever
-  // be self-addressed, so none belongs in OUTBOUND_SELF_RECIPIENT_RULES; they
-  // are always held. Tested by server/src/__tests__/public-post-gate.test.ts.
   "gbp-reviews:gbp_reply_to_review",
   "social-poster:post_to_facebook",
   "social-poster:post_to_instagram",
@@ -374,27 +747,10 @@ export type SelfRecipientKind = "slack" | "email" | "phone";
 
 export interface SelfRecipientRule {
   kind: SelfRecipientKind;
-  /** Call parameters that carry recipient addresses (string or string[]). */
   recipientParams: string[];
-  /**
-   * Whether omitting every recipient parameter means "deliver to the
-   * operator". True only for slack_send_dm, whose plugin contract defaults
-   * the recipient to the workspace's defaultDmTarget — defined in the
-   * slack-tools config as the operator's own Slack user ID.
-   */
   omittedRecipientIsSelf: boolean;
 }
 
-/**
- * How to find the recipient of each gated outbound tool, for the
- * self-notification bypass: when every recipient of a gated call is the
- * operator themselves (per InstanceGeneralSettings.selfNotify), the call is
- * a notification, not an outward message, and skips the approval queue.
- *
- * Tools absent from this map (channel posts, help-desk replies, email
- * replies whose recipient is implicit in the thread, click-to-call) can
- * never be verified as self-addressed and always stay gated.
- */
 export const OUTBOUND_SELF_RECIPIENT_RULES: Partial<
   Record<OutboundToolDraftGate, SelfRecipientRule>
 > = {
@@ -432,6 +788,115 @@ export const SECRET_PROVIDERS = [
 ] as const;
 export type SecretProvider = (typeof SECRET_PROVIDERS)[number];
 
+export const SECRET_PROVIDER_CONFIG_STATUSES = [
+  "ready",
+  "warning",
+  "coming_soon",
+  "disabled",
+] as const;
+export type SecretProviderConfigStatus = (typeof SECRET_PROVIDER_CONFIG_STATUSES)[number];
+
+export const SECRET_PROVIDER_CONFIG_HEALTH_STATUSES = [
+  "ready",
+  "warning",
+  "error",
+  "coming_soon",
+  "disabled",
+] as const;
+export type SecretProviderConfigHealthStatus =
+  (typeof SECRET_PROVIDER_CONFIG_HEALTH_STATUSES)[number];
+
+export const SECRET_STATUSES = ["active", "disabled", "archived", "deleted"] as const;
+export type SecretStatus = (typeof SECRET_STATUSES)[number];
+
+export const SECRET_SCOPES = ["company", "user"] as const;
+export type SecretScope = (typeof SECRET_SCOPES)[number];
+
+export const SECRET_MANAGED_MODES = ["paperclip_managed", "external_reference"] as const;
+export type SecretManagedMode = (typeof SECRET_MANAGED_MODES)[number];
+
+export const SECRET_VERSION_STATUSES = [
+  "current",
+  "previous",
+  "disabled",
+  "destroyed",
+  "failed",
+] as const;
+export type SecretVersionStatus = (typeof SECRET_VERSION_STATUSES)[number];
+
+export const SECRET_BINDING_TARGET_TYPES = [
+  "agent",
+  "project",
+  "environment",
+  "routine",
+  "plugin",
+  "issue",
+  "run",
+  "tool_connection",
+  "system",
+] as const;
+export type SecretBindingTargetType = (typeof SECRET_BINDING_TARGET_TYPES)[number];
+
+export const SECRET_ACCESS_OUTCOMES = [
+  "success",
+  "failure",
+  "missing",
+  "inactive",
+  "not_allowed",
+  "optional_omitted",
+  "provider_error",
+] as const;
+export type SecretAccessOutcome = (typeof SECRET_ACCESS_OUTCOMES)[number];
+
+export const SECRET_PROJECTION_CLASSES = ["unclassified", "class_3_static_lease"] as const;
+export type SecretProjectionClass = (typeof SECRET_PROJECTION_CLASSES)[number];
+
+export const CLASS3_STATIC_LEASE_ALLOWLIST = [
+  {
+    key: "slack.bot_token",
+    label: "Slack bot token",
+    targetType: "agent",
+    configPath: "env.SLACK_BOT_TOKEN",
+    envKey: "SLACK_BOT_TOKEN",
+  },
+  {
+    key: "slack.bot_token",
+    label: "Slack bot token",
+    targetType: "routine",
+    configPath: "env.SLACK_BOT_TOKEN",
+    envKey: "SLACK_BOT_TOKEN",
+  },
+  {
+    key: "slack.bot_token",
+    label: "Slack bot token governance connection",
+    targetType: "tool_connection",
+    configPath: "credentials.bot_token",
+    envKey: "SLACK_BOT_TOKEN",
+  },
+  {
+    key: "discord.bot_token",
+    label: "Discord bot token",
+    targetType: "agent",
+    configPath: "env.DISCORD_BOT_TOKEN",
+    envKey: "DISCORD_BOT_TOKEN",
+  },
+  {
+    key: "discord.bot_token",
+    label: "Discord bot token",
+    targetType: "routine",
+    configPath: "env.DISCORD_BOT_TOKEN",
+    envKey: "DISCORD_BOT_TOKEN",
+  },
+  {
+    key: "discord.bot_token",
+    label: "Discord bot token governance connection",
+    targetType: "tool_connection",
+    configPath: "credentials.bot_token",
+    envKey: "DISCORD_BOT_TOKEN",
+  },
+] as const;
+export type Class3StaticLeaseAllowlistKey = (typeof CLASS3_STATIC_LEASE_ALLOWLIST)[number]["key"];
+
 export const STORAGE_PROVIDERS = ["local_disk", "s3"] as const;
 export type StorageProvider = (typeof STORAGE_PROVIDERS)[number];
 
@@ -444,6 +909,9 @@ export const BILLING_TYPES = [
   "unknown",
 ] as const;
 export type BillingType = (typeof BILLING_TYPES)[number];
+
+export const COST_STATUSES = ["reported", "unpriced"] as const;
+export type CostStatus = (typeof COST_STATUSES)[number];
 
 export const FINANCE_EVENT_KINDS = [
   "inference_charge",
@@ -530,6 +998,7 @@ export const HEARTBEAT_RUN_STATUSES = [
   "scheduled_retry",
   "running",
   "succeeded",
+  "interrupted",
   "failed",
   "cancelled",
   "timed_out",
@@ -550,10 +1019,13 @@ export type RunLivenessState = (typeof RUN_LIVENESS_STATES)[number];
 export const LIVE_EVENT_TYPES = [
   "heartbeat.run.queued",
   "heartbeat.run.status",
+  "heartbeat.run.progress",
   "heartbeat.run.event",
   "heartbeat.run.log",
+  "agent.session.goal.changed",
   "agent.status",
   "activity.logged",
+  "external_object.updated",
   "plugin.ui.updated",
   "plugin.worker.crashed",
   "plugin.worker.restarted",
@@ -622,13 +1094,243 @@ export const PERMISSION_KEYS = [
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
-/**
- * Grants that only mean something for an agent. A person can already create
- * their own reminders, so `reminders:create_for_board` (an agent may create
- * reminders owned by the person who granted it) is hidden from the human
- * member editor rather than shown as a checkbox that does nothing.
- */
 export const AGENT_ONLY_PERMISSION_KEYS = ["reminders:create_for_board"] as const satisfies readonly PermissionKey[];
+
+export const TOOL_APPLICATION_TYPES = ["rest_api", "mcp_http", "mcp_stdio", "paperclip_plugin", "a2a", "chat"] as const;
+export type ToolApplicationType = (typeof TOOL_APPLICATION_TYPES)[number];
+
+export const TOOL_APPLICATION_STATUSES = ["draft", "active", "disabled", "archived"] as const;
+export type ToolApplicationStatus = (typeof TOOL_APPLICATION_STATUSES)[number];
+
+export const TOOL_CONNECTION_KINDS = ["managed"] as const;
+export type ToolConnectionKind = (typeof TOOL_CONNECTION_KINDS)[number];
+
+export const TOOL_CONNECTION_HEALTH_STATUSES = [
+  "unknown",
+  "healthy",
+  "degraded",
+  "failed",
+  "unchecked",
+  "ok",
+  "error",
+  "missing_secret",
+] as const;
+export type ToolConnectionHealthStatus = (typeof TOOL_CONNECTION_HEALTH_STATUSES)[number];
+
+/**
+ * Health states that mean an app needs the user's attention (a bad/missing key
+ * or a degraded connection). Single source of truth shared by the needs-
+ * attention aggregation and the prosumer Apps surfaces so their counts agree.
+ */
+export const TOOL_CONNECTION_ATTENTION_HEALTH_STATUSES: readonly ToolConnectionHealthStatus[] = [
+  "degraded",
+  "failed",
+  "error",
+  "missing_secret",
+];
+
+export function isToolConnectionAttentionHealth(status: ToolConnectionHealthStatus): boolean {
+  return TOOL_CONNECTION_ATTENTION_HEALTH_STATUSES.includes(status);
+}
+
+export const TOOL_CATALOG_ENTRY_KINDS = ["tool", "resource", "prompt"] as const;
+export type ToolCatalogEntryKind = (typeof TOOL_CATALOG_ENTRY_KINDS)[number];
+
+export const TOOL_CATALOG_ENTRY_STATUSES = ["active", "disabled", "quarantined", "removed"] as const;
+export type ToolCatalogEntryStatus = (typeof TOOL_CATALOG_ENTRY_STATUSES)[number];
+
+export const TOOL_RISK_LEVELS = ["low", "medium", "high", "critical", "read", "write", "destructive"] as const;
+export type ToolRiskLevel = (typeof TOOL_RISK_LEVELS)[number];
+
+export const TOOL_PROFILE_STATUSES = ["draft", "active", "disabled", "archived"] as const;
+export type ToolProfileStatus = (typeof TOOL_PROFILE_STATUSES)[number];
+
+export const TOOL_PROFILE_DEFAULT_ACTIONS = ["deny", "allow"] as const;
+export type ToolProfileDefaultAction = (typeof TOOL_PROFILE_DEFAULT_ACTIONS)[number];
+
+export const TOOL_PROFILE_ENTRY_SELECTOR_TYPES = [
+  "application",
+  "connection",
+  "catalog_entry",
+  "tool_name",
+  "risk_level",
+] as const;
+export type ToolProfileEntrySelectorType = (typeof TOOL_PROFILE_ENTRY_SELECTOR_TYPES)[number];
+
+export const TOOL_PROFILE_ENTRY_EFFECTS = ["include", "exclude"] as const;
+export type ToolProfileEntryEffect = (typeof TOOL_PROFILE_ENTRY_EFFECTS)[number];
+
+export const TOOL_PROFILE_BINDING_TARGET_TYPES = ["company", "agent", "project", "routine", "issue", "gateway"] as const;
+export type ToolProfileBindingTargetType = (typeof TOOL_PROFILE_BINDING_TARGET_TYPES)[number];
+
+export const TOOL_MCP_GATEWAY_STATUSES = ["draft", "active", "disabled", "archived"] as const;
+export type ToolMcpGatewayStatus = (typeof TOOL_MCP_GATEWAY_STATUSES)[number];
+
+export const TOOL_MCP_GATEWAY_DEFAULT_PROFILE_MODES = [
+  "gateway_only",
+  "inherit_context_then_gateway",
+  "gateway_then_context",
+] as const;
+export type ToolMcpGatewayDefaultProfileMode = (typeof TOOL_MCP_GATEWAY_DEFAULT_PROFILE_MODES)[number];
+
+export const TOOL_MCP_GATEWAY_CONTEXT_SCOPE_TYPES = [
+  "none",
+  "company",
+  "project",
+  "routine",
+  "issue",
+  "agent",
+] as const;
+export type ToolMcpGatewayContextScopeType = (typeof TOOL_MCP_GATEWAY_CONTEXT_SCOPE_TYPES)[number];
+
+export const TOOL_MCP_GATEWAY_TOKEN_SUBJECT_TYPES = ["gateway_client", "heartbeat_run", "board_user", "agent"] as const;
+export type ToolMcpGatewayTokenSubjectType = (typeof TOOL_MCP_GATEWAY_TOKEN_SUBJECT_TYPES)[number];
+
+export const TOOL_MCP_GATEWAY_TOKEN_ACTIONS = [
+  "tools/list",
+  "tools/call",
+  "resources/list",
+  "resources/read",
+  "prompts/list",
+  "prompts/get",
+] as const;
+export type ToolMcpGatewayTokenAction = (typeof TOOL_MCP_GATEWAY_TOKEN_ACTIONS)[number];
+
+export const CONNECTION_TOKEN_ISSUANCE_PATHS = ["exchange", "oauth_access", "static"] as const;
+export type ConnectionTokenIssuancePath = (typeof CONNECTION_TOKEN_ISSUANCE_PATHS)[number];
+
+export const CONNECTION_TOKEN_ISSUANCE_OUTCOMES = [
+  "success",
+  "denied",
+  "rate_limited",
+  "use_env_lease",
+  "upstream_error",
+  "failure",
+] as const;
+export type ConnectionTokenIssuanceOutcome = (typeof CONNECTION_TOKEN_ISSUANCE_OUTCOMES)[number];
+
+export const TOOL_POLICY_TYPES = [
+  "allow",
+  "block",
+  "require_approval",
+  "trust_rule",
+  "rate_limit",
+] as const;
+export type ToolPolicyType = (typeof TOOL_POLICY_TYPES)[number];
+
+export const TOOL_POLICY_DECISIONS = ["allow", "deny", "require_approval", "rate_limited", "defer_runtime"] as const;
+export type ToolPolicyDecision = (typeof TOOL_POLICY_DECISIONS)[number];
+
+export const TOOL_INVOCATION_STATUSES = [
+  "pending",
+  "authorized",
+  "denied",
+  "awaiting_approval",
+  "executing",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "rate_limited",
+] as const;
+export type ToolInvocationStatus = (typeof TOOL_INVOCATION_STATUSES)[number];
+
+export const TOOL_INVOCATION_APPROVAL_STATES = [
+  "not_required",
+  "required",
+  "pending",
+  "approved",
+  "rejected",
+  "expired",
+] as const;
+export type ToolInvocationApprovalState = (typeof TOOL_INVOCATION_APPROVAL_STATES)[number];
+
+export const TOOL_ACTION_REQUEST_STATUSES = [
+  "pending",
+  "approved",
+  "executing",
+  "rejected",
+  "expired",
+  "cancelled",
+  "executed",
+  "failed",
+] as const;
+export type ToolActionRequestStatus = (typeof TOOL_ACTION_REQUEST_STATUSES)[number];
+
+export const TOOL_AUDIT_EVENT_TYPES = [
+  "discovery",
+  "policy_decision",
+  "invocation_created",
+  "call_started",
+  "call_completed",
+  "call_failed",
+  "call_denied",
+  "approval_requested",
+  "approval_resolved",
+  "session_revoked",
+  "trust_rule_created",
+  "trust_rule_revoked",
+  "trust_rule_used",
+  "runtime_started",
+  "runtime_stopped",
+  "rate_limited",
+] as const;
+export type ToolAuditEventType = (typeof TOOL_AUDIT_EVENT_TYPES)[number];
+
+export const TOOL_AUDIT_OUTCOMES = ["pending", "success", "failure", "denied", "timeout", "cancelled"] as const;
+export type ToolAuditOutcome = (typeof TOOL_AUDIT_OUTCOMES)[number];
+
+/**
+ * Connection-level lifecycle events surfaced on the per-app Activity tab
+ * alongside tool-call events (PAP-11284). These are derived from the
+ * company activity log rows scoped to a single tool connection.
+ */
+export const TOOL_CONNECTION_LIFECYCLE_EVENT_TYPES = [
+  "app_connected",
+  "app_paused",
+  "app_resumed",
+  "allowlist_changed",
+  "reconnected",
+  "disconnected",
+  "actions_quarantined",
+] as const;
+export type ToolConnectionLifecycleEventType = (typeof TOOL_CONNECTION_LIFECYCLE_EVENT_TYPES)[number];
+
+export const TOOL_RUNTIME_KINDS = ["remote_session", "local_stdio"] as const;
+export type ToolRuntimeKind = (typeof TOOL_RUNTIME_KINDS)[number];
+
+export const TOOL_RUNTIME_SLOT_STATUSES = ["starting", "running", "idle", "stopped", "failed", "disabled", "error"] as const;
+export type ToolRuntimeSlotStatus = (typeof TOOL_RUNTIME_SLOT_STATUSES)[number];
+
+export const TOOL_RATE_LIMIT_WINDOW_KINDS = ["minute", "hour", "day", "month"] as const;
+export type ToolRateLimitWindowKind = (typeof TOOL_RATE_LIMIT_WINDOW_KINDS)[number];
+
+export const TOOL_ACCESS_ACTIVITY_ACTIONS = [
+  "tool_application.created",
+  "tool_application.updated",
+  "tool_application.archived",
+  "tool_connection.created",
+  "tool_connection.updated",
+  "tool_connection.tested",
+  "tool_connection.catalog_refreshed",
+  "tool_profile.created",
+  "tool_profile.updated",
+  "tool_profile.duplicated",
+  "tool_profile.deleted",
+  "tool_profile.new_tools_reviewed",
+  "tool_profile.bound",
+  "tool_profile.unbound",
+  "tool_policy.created",
+  "tool_policy.updated",
+  "tool_policy.disabled",
+  "tool_trust_rule.created",
+  "tool_trust_rule.revoked",
+  "tool_runtime_slot.started",
+  "tool_runtime_slot.stopped",
+  "tool_action_request.created",
+  "tool_action_request.resolved",
+] as const;
+export type ToolAccessActivityAction = (typeof TOOL_ACCESS_ACTIVITY_ACTIONS)[number];
 
 // ---------------------------------------------------------------------------
 // Plugin System — see doc/plugins/PLUGIN_SPEC.md for the full specification
@@ -693,10 +1395,19 @@ export const PLUGIN_CAPABILITIES = [
   "companies.read",
   "projects.read",
   "project.workspaces.read",
+  "execution.workspaces.read",
   "issues.read",
   "issue.relations.read",
   "issue.subtree.read",
   "issue.comments.read",
+  // Read pending issue-thread interactions (decision cards) on an issue.
+  "issue.interactions.read",
+  // Read issue attachment metadata and, via the capability-scoped host
+  // bridge, attachment content bytes (bytes-only, company-scoped, audit-logged).
+  "issue.attachments.read",
+  // Read company approvals (list + get). The host redacts approval payloads to
+  // match the web app's own approval read surface.
+  "approvals.read",
   "issue.documents.read",
   "agents.read",
   "goals.read",
@@ -705,6 +1416,11 @@ export const PLUGIN_CAPABILITIES = [
   "activity.read",
   "costs.read",
   "issues.orchestration.read",
+  "access.members.read",
+  "access.invites.read",
+  "authorization.grants.read",
+  "authorization.policies.read",
+  "authorization.audit.read",
   "database.namespace.read",
   // Data Write
   "issues.create",
@@ -713,11 +1429,30 @@ export const PLUGIN_CAPABILITIES = [
   "issues.checkout",
   "issues.wakeup",
   "issue.comments.create",
+  "issue.comments.create_human_attributed",
   "issue.interactions.create",
+  // Respond to (accept/reject) an issue-thread interaction on behalf of a
+  // paired board user. Impersonation surface: the host independently
+  // re-verifies the actor is an active human member of the company at apply
+  // time (never trusts plugin-supplied identity), matching the web app's
+  // board-only interaction resolve route.
+  "issue.interactions.respond",
+  // Decide (approve/reject) a company approval on behalf of a paired board
+  // user. Same apply-time active-human-member re-verification as above; the
+  // web app's approval decision routes are board-only.
+  "approvals.respond",
   "issue.documents.write",
+  "projects.managed",
+  "routines.managed",
+  "skills.managed",
   "agents.pause",
   "agents.resume",
   "agents.invoke",
+  "agents.managed",
+  "access.members.write",
+  "access.invites.write",
+  "authorization.grants.write",
+  "authorization.policies.write",
   "agent.sessions.create",
   "agent.sessions.list",
   "agent.sessions.send",
@@ -727,6 +1462,10 @@ export const PLUGIN_CAPABILITIES = [
   "telemetry.track",
   "database.namespace.migrate",
   "database.namespace.write",
+  "external.objects.detect",
+  "external.objects.read",
+  "external.objects.write",
+  "external.objects.refresh",
   // Plugin State
   "plugin.state.read",
   "plugin.state.write",
@@ -738,21 +1477,11 @@ export const PLUGIN_CAPABILITIES = [
   "api.routes.register",
   "http.outbound",
   "secrets.read-ref",
+  "environment.drivers.register",
   "secrets.store",
   "ai.complete",
-  "environment.drivers.register",
-  /**
-   * Ask the host to produce a full instance snapshot (the whole database).
-   *
-   * The most powerful capability in this list — grant it only to a plugin
-   * whose entire job is backup or migration. It exists because the backup
-   * plugin previously tried to reach the host's own HTTP API, which cannot
-   * work by design: that endpoint requires instance-admin rights a worker
-   * has no way to hold, and plugin outbound HTTP blocks loopback addresses
-   * precisely so a plugin cannot attack its own host. Rather than making a
-   * hole in either of those, the host hands the snapshot over directly.
-   */
   "system.snapshot.read",
+  "local.folders",
   // Agent Tools
   "agent.tools.register",
   // UI
@@ -766,58 +1495,10 @@ export const PLUGIN_CAPABILITIES = [
 ] as const;
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 
-/**
- * Board surfaces that can show whether a plugin's outside account is hooked up
- * for a company. A plugin names one of these in a `connectors` entry and the
- * matching page grows a status control, so a new connector (Apple Calendar,
- * say) appears without the board learning anything about that plugin.
- */
+
 export const PLUGIN_CONNECTOR_SURFACES = ["calendar"] as const;
 export type PluginConnectorSurface = (typeof PLUGIN_CONNECTOR_SURFACES)[number];
 
-/**
- * Who is allowed to run a plugin operation.
- *
- * An operation is one thing a plugin can do, declared once and reachable on
- * both lanes: an agent calls it as a namespaced tool, a person triggers it
- * from the plugin's own screen. The audience says which of those two lanes
- * the host publishes it on.
- *
- * - `both` (default) — agents and people
- * - `agents` — agents only; the UI bridge refuses it
- * - `users` — people only; it never appears in any agent's tool list
- *
- * The operator can narrow this further per install, but never widen it: a
- * manifest that says `users` cannot be turned into an agent tool by config.
- *
- * @see PLUGIN_SPEC.md §11.5 — Operations
- */
-/**
- * Why a plugin operation or tool failed, in terms a caller can act on.
- *
- * Before this list existed, a failure came back as `error: string` and nothing
- * more, so an agent could not tell "try again in a minute" from "the login to
- * Help Scout expired and a person has to reconnect it". Both read as prose, so
- * agents retried what could never succeed and gave up on what would have.
- *
- * Codes, and what a caller should do:
- *
- * - `invalid_input` — the parameters were wrong. Fix them and call again;
- *   the same input will never work.
- * - `not_found` — the thing named does not exist. Do not retry blind.
- * - `not_authorized` — this caller may not do this. A person may be able to
- *   grant it; the caller cannot fix it alone.
- * - `needs_reconnect` — the outside account's credentials are expired or
- *   revoked. Nothing retries past this: a person must reconnect the account.
- * - `unavailable` — the outside system is down, busy, or rate-limiting. Safe
- *   to retry later, ideally after `retryAfterMs`.
- * - `timeout` — it took too long. May well succeed on retry, but if the
- *   operation writes something, only retry with the same idempotency key.
- * - `failed` — it went wrong for a reason none of the above covers, and
- *   retrying is not expected to help.
- *
- * @see PLUGIN_SPEC.md §11.6 — Operation failures
- */
 export const PLUGIN_OPERATION_ERROR_CODES = [
   "invalid_input",
   "not_found",
@@ -889,88 +1570,42 @@ export const PLUGIN_UI_SLOT_TYPES = [
   "taskDetailView",
   "dashboardWidget",
   "sidebar",
+  "routeSidebar",
   "sidebarPanel",
   "projectSidebarItem",
   "globalToolbarButton",
+  "appShellOverlay",
+  "organizationSwitcher",
   "toolbarButton",
   "contextMenuItem",
   "commentAnnotation",
   "commentContextMenuItem",
   "settingsPage",
+  "companySettingsPage",
 ] as const;
 export type PluginUiSlotType = (typeof PLUGIN_UI_SLOT_TYPES)[number];
+
+export const WORKSPACE_OVERVIEW_DEFAULT_LIMIT = 50;
+export const WORKSPACE_OVERVIEW_MAX_LIMIT = 100;
+export const WORKSPACE_OVERVIEW_LINKED_ISSUE_LIMIT = 4;
 
 /**
  * Reserved company-scoped route segments that plugin page routes may not claim.
  *
- * These map to first-class host pages under `/:companyPrefix/...`. This is
- * the single source of truth for "what is a real host route root under a
- * company prefix" — `ui/src/lib/company-routes.ts`'s `BOARD_ROUTE_ROOTS`
- * builds directly from this list rather than keeping its own copy.
- *
- * Keep this in exact sync with every top-level path segment registered
- * inside `boardRoutes()` in `ui/src/App.tsx`. Before this list was unified
- * (2026-09-02), it and the UI's separate copy had already drifted in both
- * directions — this one was missing "settings"/"plugins"/"assistants" (real
- * routes a plugin could have silently collided with), and the UI's copy was
- * separately missing "onboarding"/"assistants" (which broke prefix-stripping
- * for those pages, the same bug class as B01 in
- * docs/plans/2026-09-02-ux-control-center-preservation.md). A plugin's own
- * dynamically-installed `routePath` values can never be listed here at
- * compile time — those are handled separately via a runtime registry on the
- * client (`ui/src/lib/plugin-route-registry.ts`), populated from the same
- * `listUiContributions()` data this validator itself checks incoming
- * manifests against.
- *
- * Code-review pass, same day: found two more gaps against a fresh diff of
- * boardRoutes() against this list. "instance" was missing — App.tsx also
- * registers "instance/settings/adapters" *inside* boardRoutes() (in addition
- * to the real, actually-linked, unprefixed "/instance/settings/..." route
- * outside it), so it's real, if likely redundant with the unprefixed one
- * (nothing in ui/src links to the company-prefixed form; worth a look in
- * P4). "usage" is not a current boardRoutes() entry at all — it was a real
- * page once, later folded into "/costs", and the pre-unification UI-only
- * list had kept it long after the route itself was gone. It's kept here
- * anyway: an old bookmark to "/IND/usage" would otherwise reproduce this
- * project's whole double-prefix bug class the first time useCompanyPageMemory
- * saved it un-stripped, even though the destination 404s regardless of
- * prefix depth. Keeping a dead name recognized costs nothing and forecloses
- * that failure mode; dropping it doesn't buy anything back.
- *
- * Increasing this list is not purely additive to plugin authors: it's also
- * what server/src/services/plugin-loader.ts's manifest validator checks a
- * plugin's routePath against on every install/reinstall/upgrade (not on a
- * plain server restart, which reads the already-validated manifest back from
- * the database). A plugin whose routePath happens to match a name newly
- * added here will fail that check going forward, even though its own
- * manifest hasn't changed. No currently-installed plugin collides with
- * anything added in this pass (checked 2026-09-02), but this is a real
- * behavior change for third-party or future plugins, not a no-op.
+ * These map to first-class host pages under `/:companyPrefix/...`.
  */
 export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "brief",
-  "dashboard",
-  "onboarding",
-  "companies",
-  "company",
-  "settings",
-  "plugins",
-  "skills",
-  "org",
-  // The Team page's front door (added 2026-09-07). It opens on what each
-  // agent is doing right now; the roster, org chart and assistants keep the
-  // addresses they already had. Reserved here like every other core segment
-  // so a plugin cannot claim the name and so the UI's own prefixing knows
-  // "/team" is a page rather than a company code.
   "team",
   "clippy",
-  "agents",
   "assistants",
-  "projects",
-  "workspaces",
-  "execution-workspaces",
-  "instance",
-  "usage",
+  "calendar",
+  "memories",
+  "work",
+  "work-queues",
+  "email",
+  "receipts",
+  "everything",
   "portfolio-brief",
   "portfolio-receipts",
   "portfolio-issues",
@@ -983,31 +1618,43 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "portfolio-costs",
   "portfolio-dashboard",
   "portfolio-email",
+  "dashboard",
+  "onboarding",
+  "companies",
+  "company",
+  "settings",
+  "plugins",
+  "org",
+  "agents",
+  "projects",
   "issues",
-  "routines",
-  "calendar",
   "goals",
-  "memories",
-  // The Work page's front door (added 2026-09-07). It holds no content of its
-  // own: it sends you to the Tasks tab, which is still /issues. Reserved here
-  // for the same reason every other core segment is, so a plugin cannot claim
-  // the name and so the UI's own prefixing knows "/work" is a page rather than
-  // a company code.
-  "work",
-  "work-queues",
   "approvals",
   "costs",
   "activity",
-  "email",
-  "receipts",
   "inbox",
-  "u",
+  "workspaces",
   "design-guide",
-  "everything",
   "tests",
 ] as const;
 export type PluginReservedCompanyRouteSegment =
   (typeof PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS)[number];
+
+/**
+ * Reserved route segments under `/:companyPrefix/company/settings/...` that
+ * plugin company settings pages may not claim.
+ */
+export const PLUGIN_RESERVED_COMPANY_SETTINGS_ROUTE_SEGMENTS = [
+  "general",
+  "environments",
+  "access",
+  "members",
+  "invites",
+  "secrets",
+  "instance",
+] as const;
+export type PluginReservedCompanySettingsRouteSegment =
+  (typeof PLUGIN_RESERVED_COMPANY_SETTINGS_ROUTE_SEGMENTS)[number];
 
 /**
  * Launcher placement zones describe where a plugin-owned launcher can appear
@@ -1084,6 +1731,8 @@ export const PLUGIN_UI_SLOT_ENTITY_TYPES = [
   "goal",
   "run",
   "comment",
+  "execution_workspace",
+  "project_workspace",
 ] as const;
 export type PluginUiSlotEntityType = (typeof PLUGIN_UI_SLOT_ENTITY_TYPES)[number];
 
@@ -1167,6 +1816,7 @@ export const PLUGIN_EVENT_TYPES = [
   "agent.created",
   "agent.updated",
   "agent.status_changed",
+  "agent.error_cleared",
   "agent.run.started",
   "agent.run.finished",
   "agent.run.failed",
@@ -1190,6 +1840,7 @@ export type PluginEventType = (typeof PLUGIN_EVENT_TYPES)[number];
 export const PLUGIN_BRIDGE_ERROR_CODES = [
   "WORKER_UNAVAILABLE",
   "CAPABILITY_DENIED",
+  "INVOCATION_SCOPE_DENIED",
   "WORKER_ERROR",
   "TIMEOUT",
   "UNKNOWN",

@@ -1311,13 +1311,13 @@ export function IssueThreadInteractionCard({
             interaction={interaction}
             onSubmitInteractionAnswers={onSubmitInteractionAnswers}
           />
-        ) : (
+        ) : interaction.kind === "request_confirmation" ? (
           <RequestConfirmationCard
             interaction={interaction}
             onAcceptInteraction={onAcceptInteraction}
             onRejectInteraction={onRejectInteraction}
           />
-        )}
+        ) : null}
       </div>
 
       {resolvedByLabel ? (

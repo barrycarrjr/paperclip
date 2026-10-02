@@ -373,3 +373,6 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+
+export * from "./connection-intent.js";
+export * from "./tool-access.js";
