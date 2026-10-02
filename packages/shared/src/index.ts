@@ -1406,3 +1406,13 @@ export {
   type IssueQueuedCommentQueue,
   type IssueQueuedCommentQueueState,
 } from "./types/issue.js";
+
+export * from "./connection-intent-guidance.js";
+
+export type { ExecutionContinuationEnvelope } from "./types/execution-continuation.js";
+export type { ExecutionProjection, ExecutionReconciliation, ExecutionBlocker } from "./types/execution-projection.js";
+export { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from "./types/execution-projection.js";
+export type { NativeFinalizationResult, NativeFinalizationResultV1 } from "./types/native-finalization.js";
+export { nativeFinalizationResultSchema, type NativeFinalizationResultInput } from "./validators/native-finalization.js";
+export { WORKSPACE_RESTORE_FAILURE_CODES, hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, isNativeWorkspaceExportRepairCause } from "./workspace-restore.js";
+
