@@ -155,5 +155,9 @@ The fork's removed analytics and default external feedback export remain removed
 - Initial macOS/Ubuntu CI runs exposed a contract generator entry point that
   silently skipped Windows validation. Its file-URL check and fork MCP mappings
   are repaired, with a direct CLI regression test; reruns remain pending.
-- The existing PR policy job fails Docker manifest coverage for fork adapters
-  and runner packages. Actual Mac installation has not been verified.
+- Docker dependency-stage manifest coverage includes the fork adapters, runner,
+  and eval-kernel. `node scripts/check-docker-deps-stage.mjs` and an actual
+  `docker build --target deps` passed. The image resolves its copied manifests
+  into an image-local lockfile before the frozen installation; repository
+  lockfile updates remain CI-managed. Verification covers the dependency stage.
+- Actual Mac installation has not been verified.
