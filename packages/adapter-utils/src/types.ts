@@ -135,6 +135,13 @@ export interface AdapterInvocationMeta {
   context?: Record<string, unknown>;
 }
 
+export interface AdapterRuntimeCommandSpec {
+  command: string;
+  args?: string[];
+  installCommand?: string | null;
+  detectCommand?: string | null;
+}
+
 export interface AdapterExecutionContext {
   runId: string;
   agent: AdapterAgent;
@@ -142,6 +149,7 @@ export interface AdapterExecutionContext {
   config: Record<string, unknown>;
   context: Record<string, unknown>;
   executionTarget?: AdapterExecutionTarget | null;
+  runtimeCommandSpec?: AdapterRuntimeCommandSpec | null;
   /**
    * Legacy remote transport view. Prefer `executionTarget`, which is the
    * provider-neutral contract produced by core runtime code.
@@ -152,6 +160,7 @@ export interface AdapterExecutionContext {
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onMeta?: (meta: AdapterInvocationMeta) => Promise<void>;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
+  onEvent?: (event: { eventType: string; stream: "stdout" | "stderr"; message?: string; payload?: unknown }) => Promise<void>;
   authToken?: string;
 }
 
@@ -259,6 +268,8 @@ export interface AdapterEnvironmentTestContext {
   companyId: string;
   adapterType: string;
   config: Record<string, unknown>;
+  executionTarget?: AdapterExecutionTarget | null;
+  environmentName?: string | null;
   deployment?: {
     mode?: "local_trusted" | "authenticated";
     exposure?: "private" | "public";
@@ -370,6 +381,7 @@ export interface AdapterAuthResult {
 }
 
 export interface ServerAdapterModule {
+  getRuntimeCommandSpec?: (config: Record<string, unknown>) => AdapterRuntimeCommandSpec | null;
   type: string;
   /**
    * Short one-line description shown on the Adapters settings page so users

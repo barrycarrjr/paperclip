@@ -1,3 +1,64 @@
+
+export const connectionIntentPhaseSchema = z.enum([
+  "requested",
+  "authorizing",
+  "needs_retry",
+]);
+const connectionIntentBrandAssetSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    if (/^\/brands\/apps\/[a-z0-9][a-z0-9._-]*\.(?:svg|png)$/i.test(value))
+      return true;
+    try {
+      return new URL(value).protocol === "https:";
+    } catch {
+      return false;
+    }
+  }, "Connection intent brand assets must be HTTPS URLs or local app brand paths");
+
+export const connectionIntentPayloadSchema = z
+  .object({
+    upstreamService: z.object({ slug: z.string().min(1).max(120), name: z.string().min(1).max(160), selectionInteractionId: z.string().uuid().optional() }).strict().optional(),
+    purpose: z.enum(["ai", "channel"]).optional(),
+    version: z.literal(1),
+    serviceSlug: z.string().trim().min(1).max(120),
+    serviceName: z.string().trim().min(1).max(160),
+    serviceLogoUrl: connectionIntentBrandAssetSchema.nullable().optional(),
+    serviceDarkLogoUrl: connectionIntentBrandAssetSchema.nullable().optional(),
+    requestingAgentId: z.string().uuid(),
+    requestingAgentName: z.string().trim().min(1).max(160),
+    phase: connectionIntentPhaseSchema,
+  })
+  .strict();
+
+export const connectionIntentResultSchema = z
+  .object({
+    version: z.literal(1),
+    instruction: z.string().max(4000).optional(),
+    outcome: z.enum(["connected", "declined", "superseded", "expired"]),
+    connectionId: z.string().uuid().nullable().optional(),
+    reason: z.string().trim().max(4000).nullable().optional(),
+    supersededByInteractionId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.outcome === "connected" && !value.connectionId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["connectionId"],
+        message: "Connected intents require a connection id",
+      });
+    }
+    if (value.outcome === "superseded" && !value.supersededByInteractionId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["supersededByInteractionId"],
+        message: "Superseded intents require the replacement interaction id",
+      });
+    }
+  });
+
 import { z } from "zod";
 import {
   ISSUE_EXECUTION_DECISION_OUTCOMES,
@@ -399,7 +460,17 @@ export const requestConfirmationPayloadSchema = z.object({
 
 export const requestConfirmationResultSchema = z.object({
   version: z.literal(1),
-  outcome: z.enum(["accepted", "rejected", "superseded_by_comment", "stale_target"]),
+  outcome: z.enum([
+    "accepted",
+    "rejected",
+    "superseded_by_comment",
+    "superseded_by_newer_request",
+    "stale_target",
+    "skipped",
+    "withdrawn",
+    "issue_closed",
+    "addressee_deleted",
+  ]),
   reason: z.string().trim().max(4000).nullable().optional(),
   commentId: z.string().uuid().nullable().optional(),
   staleTarget: requestConfirmationTargetSchema.nullable().optional(),

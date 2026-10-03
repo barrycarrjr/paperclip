@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DollarSign, ArrowUpDown, AlertOctagon } from "lucide-react";
+import { DollarSign, ArrowUpDown, AlertOctagon, Layers, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { BudgetIncident, BudgetOverview, Company } from "@paperclipai/shared";
 import { costsApi } from "../api/costs";
 import { budgetsApi } from "../api/budgets";
@@ -30,6 +30,57 @@ function utilizationColor(pct: number) {
 }
 
 type SortKey = "spend" | "budget" | "utilization" | "name";
+
+function PortfolioCostsEmptyHero() {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <DollarSign className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Track Portfolio Spend & Budgets</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Monitor LLM inference costs, tool subscriptions, and budget utilization across all companies in your portfolio with real-time incident guardrails.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <DollarSign className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Inference Spend</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Track token usage and expenses across OpenAI, Anthropic, Gemini, and local model providers.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Budget Envelopes</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Set company-specific monthly spending caps and track utilization percentages at a glance.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ShieldAlert className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Incident Guardrails</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Automatically pause runaway agent loops when budgets are exceeded until human review.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function PortfolioCosts() {
   const { setSelectedCompanyId } = useCompany();

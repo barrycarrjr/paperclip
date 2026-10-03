@@ -1,3 +1,4 @@
+export { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./adapter-auth-check-code.js";
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
 export {
   ATTENTION_KINDS,
@@ -313,6 +314,8 @@ export type {
   AgentSkillOrigin,
   AgentSkillEntry,
   AgentSkillSnapshot,
+  AgentSkillAssignmentMode,
+  AgentDesiredSkillEntry,
   AgentSkillSyncRequest,
   InstanceAgentDefaults,
   InstanceExperimentalSettings,
@@ -537,9 +540,18 @@ export type {
   CompanySecretAgentReference,
   SecretProviderDescriptor,
   Routine,
+  RoutineEnvConfig,
+  RoutineManagedByPlugin,
+  RoutineDescriptionDocument,
   RoutineVariable,
   RoutineVariableDefaultValue,
+  RoutineRevisionSnapshotRoutineV1,
+  RoutineRevisionSnapshotTriggerV1,
+  RoutineRevisionSnapshotV1,
+  RoutineRevisionSnapshot,
+  RoutineRevision,
   RoutineTrigger,
+  RoutineWebhookDelivery,
   RoutineRun,
   RoutineTriggerSecretMaterial,
   RoutineDetail,
@@ -1151,6 +1163,13 @@ export {
   storageLocalDiskConfigSchema,
   storageS3ConfigSchema,
   secretsLocalEncryptedConfigSchema,
+  telemetryConfigSchema,
+  updatesConfigSchema,
+  mergePaperclipConfig,
+  findPaperclipConfigKeyWarnings,
+  type ConfigKeyWarning,
+  type TelemetryConfig,
+  type UpdatesConfig,
   type PaperclipConfig,
   type LlmConfig,
   type DatabaseBackupConfig,
@@ -1221,3 +1240,179 @@ export type {
   SavedModelState,
 } from "./model-lifecycle.js";
 export { parseInlineConsentReply } from "./chat-consent.js";
+
+export * from "./types/folder.js";
+export * from "./validators/folder.js";
+export * from "./types/company-skill.js";
+export * from "./validators/company-skill.js";
+export type { CatalogSkillListQuery, CompanySkillListQuery, CompanySkillTestRunListQuery } from "./types/company-skill.js";
+export * from "./types/skill-source.js";
+export * from "./validators/skill-source.js";
+export * from "./validators/skill-policy.js";
+export * from "./github-skill-repository.js";
+export {
+  ROUTINE_MENTION_SCHEME,
+  PIPELINE_MENTION_SCHEME,
+  buildRoutineMentionHref,
+  buildPipelineMentionHref,
+  parseRoutineMentionHref,
+  parsePipelineMentionHref,
+  extractRoutineMentionIds,
+  extractPipelineMentions,
+  type ParsedRoutineMention,
+  type ParsedPipelineMention,
+} from "./project-mentions.js";
+export * from "./validators/work-product.js";
+export * from "./frontmatter.js";
+export { isPlainRecord as isFrontmatterPlainRecord } from "./frontmatter.js";
+
+export * from "./markdown-work-products.js";
+
+export type { AttachmentArtifactWorkProductMetadata } from "./types/work-product.js";
+
+export {
+  connectionIntentPayloadSchema,
+  connectionIntentResultSchema,
+} from "./validators/issue.js";
+export * from "./validators/connection-intent.js";
+
+export * from "./types/tool-access.js";
+export * from "./validators/tool-access.js";
+export * from "./ai-connections.js";
+
+export type { ProjectRepository, ProjectRepositoryOptions, ProjectBudgetSummary, ProjectManagedByPlugin } from "./types/project.js";
+export * from "./oauth-endpoint-url.js";
+export * from "./railway-connection.js";
+export * from "./retired-composio.js";
+export * from "./slack-tools.js";
+export * from "./github-connectors.js";
+export * from "./google-workspace-connectors.js";
+export * from "./browser-use.js";
+export * from "./types/chat-channels.js";
+export * from "./types/chat-github.js";
+export * from "./validators/chat-channels.js";
+export * from "./validators/chat-github.js";
+export * from "./validators/secret.js";
+export * from "./types/secrets.js";
+export * from "./mcp-remote-headers.js";
+export type {
+  SourceTrustMetadata,
+} from "./trust-policy.js";
+export type {
+  AdapterAuthSessionInternalStatus,
+} from "./types/agent.js";
+export type {
+  IssueCommentAuthorType,
+  IssueThreadInteractionCanonicalResolverPolicy,
+  IssueThreadInteractionEffectiveResolverPolicySource,
+  IssueThreadInteractionResolverPolicyProvenance,
+} from "./constants.js";
+export type {
+  IssueCommentDerivedAuthorSource,
+  IssueCommentMetadata,
+  IssueCommentPresentation,
+} from "./types/issue.js";
+
+export {
+  computePipelineHealth,
+  groupWarningsByStage,
+  isPipelineTerminalStageKind,
+  type PipelineHealthAgentRef,
+  type PipelineHealthFailedAutomationInput,
+  type PipelineHealthInput,
+  type PipelineHealthPipelineRef,
+  type PipelineHealthReport,
+  type PipelineHealthStageInput,
+  type PipelineHealthStageRef,
+  type PipelineHealthWarning,
+  type PipelineHealthWarningCode,
+} from "./pipeline-health.js";
+
+export {
+  caseTypeMatchesPipeline,
+  deriveCaseType,
+  type CaseTypePipelineRef,
+} from "./pipeline-case-type.js";
+
+export type {
+  PipelineAutomationRetryBlocker,
+  PipelineAutomationRetryCleanupOptions,
+  PipelineAutomationRetryEffectCounts,
+  PipelineAutomationRetryPlan,
+  PipelineAutomationRetryRequest,
+  PipelineAutomationRetryRoutineRef,
+  PipelineAutomationRetryScope,
+  PipelineAutomationRetryStageRef,
+  PipelineCaseAttachmentOutputItem,
+  PipelineCaseConversationSource,
+  PipelineCaseConversationSourceKind,
+  PipelineCaseConversationSourceLinkRole,
+  PipelineCaseConversationSourceReason,
+  PipelineCaseDocumentOutputItem,
+  PipelineCaseDocumentPayload,
+  PipelineCaseDocumentRevision,
+  PipelineCaseLiveness,
+  PipelineCaseLivenessState,
+  PipelineCaseOutputContextSummary,
+  PipelineCaseOutputContextSummaryItem,
+  PipelineCaseOutputItem,
+  PipelineCaseOutputItemBase,
+  PipelineCaseOutputKind,
+  PipelineCaseOutputSource,
+  PipelineCaseOutputSourceRole,
+  PipelineCaseOutputsResponse,
+  PipelineCaseWorkProductOutputItem,
+  PipelineStageAutomation,
+} from "./types/pipeline.js";
+
+export {
+  PIPELINE_CASE_BODY_DOCUMENT_KEY,
+  PIPELINE_AUTOMATION_DEFAULT_TITLE_TEMPLATE,
+} from "./constants.js";
+
+export {
+  pipelineAutomationRetryCleanupOptionsSchema,
+  pipelineAutomationRetryRequestSchema,
+  pipelineAutomationRetryScopeSchema,
+  pipelineStageAutomationSchema,
+  pipelineStageApproverSchema,
+  pipelineStageConfigSchema,
+  pipelineStageKindSchema,
+  pipelineStageOnEnterSchema,
+  pipelineStageVariableSchema,
+} from "./validators/pipeline.js";
+
+
+export * from "./issue-attribution.js";
+export * from "./responsible-user-denial.js";
+export {
+  agentApiKeyScopeSchema,
+  normalizeAgentApiKeyScope,
+  standardAgentKeyScopeSchema,
+  taskBridgeAgentKeyScopeSchema,
+  skillTestAgentKeyScopeSchema,
+  type AgentApiKeyScope,
+  type TaskBridgeAgentKeyScope,
+  type SkillTestAgentKeyScope,
+} from "./validators/agent.js";
+export const LOW_TRUST_REVIEW_PRESET = "low_trust_review" as const;
+export const LOW_TRUST_REVIEW_PRESET_VERSION = 1 as const;
+export type IssueWorkMode = any;
+export type RequestCheckboxConfirmationInteraction = any;
+
+export * from "./types/feedback.js";
+export {
+  type AcceptedPlanDecompositionSummary,
+  type IssueQueuedCommentQueue,
+  type IssueQueuedCommentQueueState,
+} from "./types/issue.js";
+
+export * from "./connection-intent-guidance.js";
+
+export type { ExecutionContinuationEnvelope } from "./types/execution-continuation.js";
+export type { ExecutionProjection, ExecutionReconciliation, ExecutionBlocker } from "./types/execution-projection.js";
+export { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from "./types/execution-projection.js";
+export type { NativeFinalizationResult, NativeFinalizationResultV1 } from "./types/native-finalization.js";
+export { nativeFinalizationResultSchema, type NativeFinalizationResultInput } from "./validators/native-finalization.js";
+export { WORKSPACE_RESTORE_FAILURE_CODES, hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, isNativeWorkspaceExportRepairCause } from "./workspace-restore.js";
+

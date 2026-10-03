@@ -32,10 +32,20 @@ export default defineConfig(({ mode }) => ({
         }
       : undefined,
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-      lexical: path.resolve(__dirname, "./node_modules/lexical/Lexical.mjs"),
-    },
+    alias: [
+      {
+        find: "@",
+        replacement: path.resolve(__dirname, "./src"),
+      },
+      {
+        find: "lexical",
+        replacement: path.resolve(__dirname, "./node_modules/lexical/Lexical.mjs"),
+      },
+      {
+        find: /^vscode-jsonrpc\/(.*)/,
+        replacement: path.resolve(__dirname, "../node_modules/.pnpm/vscode-jsonrpc@8.2.0/node_modules/vscode-jsonrpc") + "/$1",
+      },
+    ],
   },
   server: {
     port: 5173,

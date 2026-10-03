@@ -1272,13 +1272,13 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         assertReadableOriginFilter(params.originKind);
-        return applyWindow((await issues.list(companyId, params as any)) as Issue[], params);
+        return applyWindow((await issues.list(companyId, params as any)) as unknown as Issue[], params);
       },
       async get(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         const issue = await issues.getById(params.issueId);
-        return (inCompany(issue, companyId) ? issue : null) as Issue | null;
+        return (inCompany(issue, companyId) ? issue : null) as unknown as Issue | null;
       },
       async create(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -1292,7 +1292,7 @@ export function buildHostServices(
           originRunId: params.originRunId ?? actorRunId ?? null,
           createdByAgentId: actorAgentId ?? null,
           createdByUserId: actorUserId ?? null,
-        })) as Issue;
+        })) as unknown as Issue;
         await logPluginActivity({
           companyId,
           action: "issue.created",
@@ -1328,7 +1328,7 @@ export function buildHostServices(
           ...(patch as any),
           actorAgentId,
           actorUserId,
-        })) as Issue;
+        })) as unknown as Issue;
         await logPluginActivity({
           companyId,
           action: "issue.updated",
@@ -1453,7 +1453,7 @@ export function buildHostServices(
             .from(issuesTable)
             .where(and(eq(issuesTable.companyId, companyId), inArray(issuesTable.id, issueIds)))
           : [];
-        const issuesById = new Map(issueRows.map((issue) => [issue.id, issue as Issue]));
+        const issuesById = new Map(issueRows.map((issue) => [issue.id, issue as unknown as Issue]));
         const outputIssues = issueIds
           .map((issueId) => issuesById.get(issueId))
           .filter((issue): issue is Issue => Boolean(issue));
@@ -1472,7 +1472,7 @@ export function buildHostServices(
                 const docs = await documents.listIssueDocuments(issueId);
                 const summaries: IssueDocumentSummary[] = docs.map((document) => {
                   const { body: _body, ...summary } = document as typeof document & { body?: string };
-                  return { ...summary, format: "markdown" as const };
+                  return { ...summary, format: "markdown" as const, lockedAt: null, lockedByAgentId: null, lockedByUserId: null };
                 });
                 return [
                   issueId,

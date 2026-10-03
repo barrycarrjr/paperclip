@@ -219,3 +219,14 @@ export function handleCommandError(error: unknown): never {
   console.error(pc.red(message));
   process.exit(1);
 }
+
+export function apiPath(strings: TemplateStringsArray, ...values: Array<string | number | boolean | null | undefined>): string {
+  let path = strings[0] ?? "";
+  values.forEach((value, index) => {
+    if (value === null || value === undefined || String(value).trim() === "") {
+      throw new Error("Cannot build API path with an empty path segment.");
+    }
+    path += `${encodeURIComponent(String(value))}${strings[index + 1] ?? ""}`;
+  });
+  return path;
+}

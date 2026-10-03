@@ -31,6 +31,10 @@ import { queryKeys } from "@/lib/queryKeys";
 
 const permissionLabels: Record<PermissionKey, string> = {
   "agents:create": "Create agents",
+  "agents:configure": "Configure agents",
+  "agents:suggest-changes": "Suggest agent changes",
+  "skills:create": "Create skills",
+  "skills:suggest-changes": "Suggest skill changes",
   "users:invite": "Invite humans and agents",
   "users:manage_permissions": "Manage members and grants",
   "tasks:assign": "Assign tasks",
@@ -42,6 +46,15 @@ const permissionLabels: Record<PermissionKey, string> = {
   "support:diagnose": "Investigate computers through Support Desk",
   "support:repair": "Authorize and run support repairs",
   "support:respond": "Approve support replies and vendor escalations",
+  "tools:admin": "Administer tools",
+  "tools:manage_connections": "Manage tool connections",
+  "tools:manage_profiles": "Manage tool profiles",
+  "tools:view_audit": "View tool audit logs",
+  "audit:view_agent_actions": "View agent audit actions",
+  "tools:use": "Use tools",
+  "tools:manage_runtime": "Manage tool runtimes",
+  "inbox:manage": "Manage user inbox",
+  "pipelines:write": "Manage pipelines",
 };
 
 /** Grants a person can hold. Agent-only grants are managed on the agent's own page. */

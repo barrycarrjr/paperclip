@@ -44,8 +44,8 @@ function statusLabel(status: string): string {
 }
 
 function compareBySortOrder(a: Issue, b: Issue): number {
-  const ao = Number.isFinite(a.sortOrder) ? a.sortOrder : 0;
-  const bo = Number.isFinite(b.sortOrder) ? b.sortOrder : 0;
+  const ao = typeof a.sortOrder === "number" && Number.isFinite(a.sortOrder) ? a.sortOrder : 0;
+  const bo = typeof b.sortOrder === "number" && Number.isFinite(b.sortOrder) ? b.sortOrder : 0;
   if (ao !== bo) return ao - bo;
   return a.id.localeCompare(b.id);
 }

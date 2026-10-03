@@ -35,7 +35,8 @@ export { pluginOperationCalls } from "./plugin_operation_calls.js";
 export { issues } from "./issues.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";
 export { issueRelations } from "./issue_relations.js";
-export { routines, routineTriggers, routineRuns } from "./routines.js";
+export { folders } from "./folders.js";
+export { routines, routineTriggers, routineRuns, routineRevisions, routineWebhookTestReceipts } from "./routines.js";
 export { calendarEvents, calendarEventDeliveries } from "./calendar-events.js";
 export {
   routineTemplates,
@@ -71,6 +72,7 @@ export { approvalComments } from "./approval_comments.js";
 export { activityLog } from "./activity_log.js";
 export { companySecrets } from "./company_secrets.js";
 export { companySecretVersions } from "./company_secret_versions.js";
+export { secretAccessEvents } from "./secret_access_events.js";
 export { companySkills } from "./company_skills.js";
 export { plugins } from "./plugins.js";
 export { pluginConfig } from "./plugin_config.js";
@@ -83,3 +85,60 @@ export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export { chatSessions, chatMessages, chatAttachments } from "./chat_sessions.js";
 export { externalMcpServers } from "./external_mcp_servers.js";
+
+export { aiConnectionDefaults } from "./ai_connection_defaults.js";
+export {
+  toolApplications,
+  toolConnections,
+  connectionGrants,
+  connectionGrantMembers,
+  connectionGrantDelegations,
+  toolConnectionInstalls,
+  toolOauthStates,
+  toolCatalogEntries,
+  toolProfiles,
+  toolProfileEntries,
+  toolProfileBindings,
+  toolMcpGateways,
+  toolMcpGatewayTokens,
+  toolPolicies,
+  toolRuntimeSlots,
+  toolRuntimeMetricCounters,
+  toolStdioCommandTemplates,
+  toolGatewaySessions,
+  connectionTokenIssuances,
+  toolInvocations,
+  toolActionRequests,
+  toolCallEvents,
+  toolRateLimitCounters,
+  toolGatewayRateLimitCounters,
+  toolAccessAuditEvents,
+} from "./tool_access.js";
+export { toolActionDeliveries } from "./tool_action_deliveries.js";
+export { adapterAuthSessions } from "./adapter_auth_sessions.js";
+export { runIdentityContexts } from "./run_identity_contexts.js";
+export { userSecretDefinitions } from "./user_secret_definitions.js";
+export { userSecretDeclarations } from "./user_secret_declarations.js";
+export { companySecretBindings } from "./company_secret_bindings.js";
+export { companySecretProviderConfigs } from "./company_secret_provider_configs.js";
+export { companySecretProposals } from "./company_secret_proposals.js";
+export { connectionIntentDeliveries } from "./connection_intent_deliveries.js";
+
+export { pipelines, pipelineStages, pipelineTransitions } from "./pipelines.js";
+export {
+  cases,
+  caseAttachments,
+  caseDocuments,
+  caseEvents,
+  caseIssueLinks,
+  caseLabels,
+} from "./cases.js";
+export {
+  pipelineCases,
+  pipelineCaseIssueLinks,
+  pipelineCaseBlockers,
+  pipelineDocuments,
+  pipelineCaseDocuments,
+  pipelineAutomationExecutions,
+} from "./pipeline_cases.js";
+export { pipelineCaseEvents } from "./pipeline_case_events.js";

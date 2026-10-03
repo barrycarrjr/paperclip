@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Inbox, Plus, X } from "lucide-react";
+import { Bot, ExternalLink, Inbox, Plus, ShieldCheck, X } from "lucide-react";
 import type { WorkQueue, WorkQueueItem, WorkQueueItemStatus } from "@paperclipai/shared";
 import { WORK_QUEUE_ITEM_STATUSES } from "@paperclipai/shared";
 import { workQueuesApi } from "@/api/work-queues";
@@ -60,6 +60,62 @@ function tryParseJson(text: string): { ok: true; value: Record<string, unknown> 
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Invalid JSON" };
   }
+}
+
+function WorkQueuesEmptyHero({ onCreateQueue }: { onCreateQueue: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Inbox className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Stream Inbound Work to Your Agents</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Intake queues provide dedicated streams for incoming external events—such as customer support tickets, GitHub webhooks, alert notifications, or inbound leads—that agents claim and process one by one.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ExternalLink className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Webhook Ingestion</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Push JSON payloads directly from webhooks with automatic deduplication by external ID.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bot className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Atomic Claiming</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Multiple agents can poll the queue without race conditions; database locks guarantee single delivery.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ShieldCheck className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Resilient Retries</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Items follow a strict lifecycle (pending → claimed → completed) and failures stay visible for inspection.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onCreateQueue} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Create your first queue
+      </Button>
+    </div>
+  );
 }
 
 export function WorkQueues() {

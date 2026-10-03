@@ -172,3 +172,12 @@ export function getActorInfo(req: Request) {
     runId: req.actor.runId ?? null,
   };
 }
+
+export function hasCompanyAccess(req: Request, companyId: string, mode: AccessMode = "read"): boolean {
+  try {
+    assertCompanyAccess(req, companyId, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}

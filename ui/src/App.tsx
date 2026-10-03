@@ -39,6 +39,7 @@ import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanySecrets } from "./pages/CompanySecrets";
 import { CompanySkills } from "./pages/CompanySkills";
+import { SkillStudio } from "./pages/SkillStudio";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
@@ -87,6 +88,12 @@ import { PortfolioCosts } from "./pages/PortfolioCosts";
 import { PortfolioBrief } from "./pages/PortfolioBrief";
 import { PortfolioReceipts } from "./pages/PortfolioReceipts";
 import { PortfolioEmail } from "./pages/PortfolioEmail";
+import { Pipelines, PipelineItemDetail } from "./pages/Pipelines";
+import { PipelineSettings } from "./pages/PipelineSettings";
+import { Cases } from "./pages/Cases";
+import { CaseDetail } from "./pages/CaseDetail";
+import { PipelinesExperimentalGate } from "./components/PipelinesExperimentalGate";
+import { CasesExperimentalGate } from "./components/CasesExperimentalGate";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
@@ -124,6 +131,9 @@ export function boardRoutes() {
       <Route path="company/settings/secrets" element={<CompanySecrets />} />
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
+      <Route path="skills/studio" element={<SkillStudio />} />
+      <Route path="skills/studio/new" element={<SkillStudio />} />
+      <Route path="skills/studio/:skillId" element={<SkillStudio />} />
       <Route path="skills/*" element={<CompanySkills />} />
       <Route path="settings" element={<LegacySettingsRedirect />} />
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
@@ -173,6 +183,62 @@ export function boardRoutes() {
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
+      <Route
+        path="pipelines"
+        element={
+          <PipelinesExperimentalGate>
+            <Pipelines />
+          </PipelinesExperimentalGate>
+        }
+      />
+      <Route
+        path="pipelines/:pipelineId"
+        element={
+          <PipelinesExperimentalGate>
+            <Pipelines />
+          </PipelinesExperimentalGate>
+        }
+      />
+      <Route
+        path="pipelines/:pipelineId/add"
+        element={
+          <PipelinesExperimentalGate>
+            <Pipelines />
+          </PipelinesExperimentalGate>
+        }
+      />
+      <Route
+        path="pipelines/:pipelineId/settings"
+        element={
+          <PipelinesExperimentalGate>
+            <PipelineSettings />
+          </PipelinesExperimentalGate>
+        }
+      />
+      <Route
+        path="pipelines/:pipelineId/items/:caseId"
+        element={
+          <PipelinesExperimentalGate>
+            <PipelineItemDetail />
+          </PipelinesExperimentalGate>
+        }
+      />
+      <Route
+        path="cases"
+        element={
+          <CasesExperimentalGate>
+            <Cases />
+          </CasesExperimentalGate>
+        }
+      />
+      <Route
+        path="cases/:caseIdentifier"
+        element={
+          <CasesExperimentalGate>
+            <CaseDetail />
+          </CasesExperimentalGate>
+        }
+      />
       {/* The all company pages. They are mounted under HQ's own address
           prefix, so any company's prefix matches them; the shell around them
           says so plainly when the company in the address is not HQ, instead
@@ -460,6 +526,10 @@ export function App() {
           <Route path="projects/:projectId/workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="workspaces" element={<UnprefixedBoardRedirect />} />
+          <Route path="pipelines" element={<UnprefixedBoardRedirect />} />
+          <Route path="pipelines/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="cases" element={<UnprefixedBoardRedirect />} />
+          <Route path="cases/*" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<UnprefixedBoardRedirect />} />

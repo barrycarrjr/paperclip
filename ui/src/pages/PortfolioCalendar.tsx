@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Bell, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock, Layers, Plus } from "lucide-react";
 import type { CalendarEvent, CalendarOccurrence, Company } from "@paperclipai/shared";
 import { calendarApi } from "../api/calendar";
 import { useCompany } from "../context/CompanyContext";
@@ -112,6 +112,62 @@ function CompanyBadge({ company }: { company: Company | undefined }) {
       />
       <span className="max-w-24 truncate">{company.name}</span>
     </span>
+  );
+}
+
+function PortfolioCalendarEmptyHero({ onNewReminder }: { onNewReminder: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <CalendarDays className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Synchronized Portfolio Calendar</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Keep scheduled deadlines, routine firings, and time-based reminders synchronized across every company and agent in your portfolio.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bell className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Cross-Company Reminders</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Schedule alerts and reminders that trigger directly into agent inboxes across subsidiaries.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Clock className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Routine Timelines</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Visualize upcoming recurring automation executions on an integrated monthly grid.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">External Connectors</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Sync milestones with Google Calendar, Outlook, or external webhooks seamlessly.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onNewReminder} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Create your first reminder
+      </Button>
+    </div>
   );
 }
 

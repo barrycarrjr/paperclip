@@ -2,13 +2,15 @@ const BASE = "/api";
 
 export class ApiError extends Error {
   status: number;
-  body: unknown;
+  data: unknown;
+  body: any;
 
-  constructor(message: string, status: number, body: unknown) {
+  constructor(message: string, status: number, data?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
-    this.body = body;
+    this.data = data;
+    this.body = data;
   }
 }
 
@@ -72,4 +74,6 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  deleteWithBody: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "DELETE", body: JSON.stringify(body) }),
 };

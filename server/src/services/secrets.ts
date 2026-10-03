@@ -31,7 +31,8 @@ function isSensitiveEnvKey(key: string) {
 
 function canonicalizeBinding(binding: EnvBinding): CanonicalEnvBinding {
   if (typeof binding === "string") {
-    return { type: "plain", value: binding };
+    return {
+    type: "plain", value: binding };
   }
   if (binding.type === "plain") {
     return { type: "plain", value: String(binding.value) };
@@ -289,6 +290,7 @@ export function secretService(db: Db) {
           .insert(companySecrets)
           .values({
             companyId,
+            key: input.name,
             name: input.name,
             provider: input.provider,
             externalRef: prepared.externalRef,
@@ -418,6 +420,7 @@ export function secretService(db: Db) {
       return normalized;
     },
 
+    syncEnvBindingsForTarget: async (...args: any[]) => {},
     resolveEnvBindings: async (companyId: string, envValue: unknown): Promise<{ env: Record<string, string>; secretKeys: Set<string> }> => {
       const record = asRecord(envValue);
       if (!record) return { env: {} as Record<string, string>, secretKeys: new Set<string>() };

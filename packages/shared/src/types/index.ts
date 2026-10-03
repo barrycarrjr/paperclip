@@ -57,6 +57,8 @@ export type {
   AgentSkillOrigin,
   AgentSkillEntry,
   AgentSkillSnapshot,
+  AgentSkillAssignmentMode,
+  AgentDesiredSkillEntry,
   AgentSkillSyncRequest,
 } from "./adapter-skills.js";
 export type {
@@ -208,9 +210,18 @@ export type {
 } from "./secrets.js";
 export type {
   Routine,
+  RoutineEnvConfig,
+  RoutineManagedByPlugin,
+  RoutineDescriptionDocument,
   RoutineVariable,
   RoutineVariableDefaultValue,
+  RoutineRevisionSnapshotRoutineV1,
+  RoutineRevisionSnapshotTriggerV1,
+  RoutineRevisionSnapshotV1,
+  RoutineRevisionSnapshot,
+  RoutineRevision,
   RoutineTrigger,
+  RoutineWebhookDelivery,
   RoutineRun,
   RoutineTriggerSecretMaterial,
   RoutineDetail,
@@ -371,3 +382,6 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+
+export * from "./connection-intent.js";
+export * from "./tool-access.js";

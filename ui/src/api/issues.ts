@@ -1,4 +1,8 @@
 import type {
+  AcceptedPlanDecompositionSummary,
+  FeedbackTargetType,
+  FeedbackVote,
+  IssueQueuedCommentQueue,
   AskUserQuestionsAnswer,
   Approval,
   Company,
@@ -274,10 +278,37 @@ export const issuesApi = {
     ),
   createInteraction: (id: string, data: Record<string, unknown>) =>
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions`, data),
+  cancelInteraction: (id: string, interactionId: string, reason?: string) =>
+    api.post<IssueThreadInteraction>(`/issues/${id}/interactions/${interactionId}/cancel`, reason ? { reason } : {}),
+  listFeedbackVotes: (id: string) =>
+    api.get<FeedbackVote[]>(`/issues/${id}/feedback-votes`),
+  upsertFeedbackVote: (
+    id: string,
+    data: {
+      targetType: FeedbackTargetType;
+      targetId: string;
+      vote: "up" | "down";
+      reason?: string;
+      allowSharing?: boolean;
+    },
+  ) => api.post<FeedbackVote>(`/issues/${id}/feedback-votes`, data),
+  deleteComment: (id: string, commentId: string) =>
+    api.delete<IssueComment>(`/issues/${id}/comments/${commentId}`),
+  interruptLatestQueuedComments: async (id: string, _expectedTargetRunId: string | null): Promise<any> => {
+    return api.post<any>(`/issues/${id}/queued-comments/interrupt`, {});
+  },
+  listAcceptedPlanDecompositions: (id: string) =>
+    api.get<AcceptedPlanDecompositionSummary[]>(`/issues/${id}/accepted-plan-decompositions`),
+  lockDocument: (id: string, key: string) =>
+    api.post<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}/lock`, {}),
+  unlockDocument: (id: string, key: string) =>
+    api.post<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}/unlock`, {}),
+  ensureWorkProductReviewDocument: (id: string, workProductId: string) =>
+    api.post<IssueDocument>(`/issues/${id}/work-products/${workProductId}/review-document`, {}),
   acceptInteraction: (
     id: string,
     interactionId: string,
-    data?: { selectedClientKeys?: string[] },
+    data?: { selectedClientKeys?: string[]; selectedOptionIds?: string[]; rememberAction?: boolean },
   ) =>
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions/${interactionId}/accept`, data ?? {}),
   rejectInteraction: (id: string, interactionId: string, reason?: string) =>

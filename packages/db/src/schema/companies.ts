@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index } from "drizzle-orm/pg-core";
 
 export const companies = pgTable(
   "companies",
@@ -19,6 +19,7 @@ export const companies = pgTable(
       .default(false),
     brandColor: text("brand_color"),
     isPortfolioRoot: boolean("is_portfolio_root").notNull().default(false),
+    defaultResponsibleUserId: text("default_responsible_user_id"),
     /**
      * `standard` — an ordinary company people share.
      * `personal`  — belongs to exactly one user; see `ownerUserId`.
@@ -42,10 +43,11 @@ export const companies = pgTable(
     portfolioRootSingletonUq: uniqueIndex("companies_portfolio_root_singleton_uq")
       .on(table.isPortfolioRoot)
       .where(sql`${table.isPortfolioRoot} = true`),
-    // One personal company per person, enforced in the database so a retried
-    // provision cannot leave someone with two.
     personalOwnerUq: uniqueIndex("companies_personal_owner_uq")
       .on(table.ownerUserId)
       .where(sql`${table.kind} = 'personal'`),
+    defaultResponsibleUserIdx: index("companies_default_responsible_user_idx").on(
+      table.defaultResponsibleUserId,
+    ),
   }),
 );

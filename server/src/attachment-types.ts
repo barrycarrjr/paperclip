@@ -117,3 +117,5 @@ export function attachmentTooLargeMessage(actualBytes?: number): string {
     `Compress it or trim it down and try again.`
   );
 }
+
+export const formatAttachmentSize = formatByteSize;

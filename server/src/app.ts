@@ -58,6 +58,8 @@ import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { externalMcpServerRoutes } from "./routes/external-mcp-servers.js";
+import { pipelineRoutes } from "./routes/pipelines.js";
+import { caseRoutes } from "./routes/cases.js";
 import { createExternalMcpServerManager } from "./services/external-mcp-server-manager.js";
 import { createExternalMcpToolSource } from "./services/external-mcp-tool-source.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
@@ -261,6 +263,8 @@ export async function createApp(
     getToolDispatcher: () => toolDispatcherRef.current,
   }));
   api.use(issueTreeControlRoutes(db));
+  api.use(pipelineRoutes(db));
+  api.use(caseRoutes(db, opts.storageService));
   api.use(routineRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(
     starterCatalogRoutes(db, {
