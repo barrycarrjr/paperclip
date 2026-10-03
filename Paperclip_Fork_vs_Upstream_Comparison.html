@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Paperclip: Architectural Comparison & Strategic Analysis</title>
+<style>
+  @page {
+    size: letter;
+    margin: 14mm 14mm 16mm 14mm;
+    @bottom-right {
+      content: counter(page);
+    }
+  }
+  
+  * {
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #1e293b;
+    line-height: 1.55;
+    font-size: 13px;
+    background-color: #ffffff;
+    margin: 0;
+    padding: 0;
+  }
+
+  .header {
+    border-bottom: 2px solid #0f172a;
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  
+  .header-left h1 {
+    font-size: 24px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0 0 4px 0;
+    letter-spacing: -0.5px;
+  }
+  
+  .header-left .subtitle {
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 500;
+  }
+  
+  .header-meta {
+    text-align: right;
+    font-size: 11px;
+    color: #475569;
+  }
+  
+  .badge-meta {
+    display: inline-block;
+    background: #e2e8f0;
+    color: #334155;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+
+  h2 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-top: 24px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  h3 {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 14px;
+    margin-bottom: 6px;
+  }
+
+  p {
+    margin: 0 0 10px 0;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  
+  .stat-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  
+  .stat-value {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  
+  .stat-label {
+    font-size: 10.5px;
+    color: #64748b;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .column-box {
+    border-radius: 6px;
+    padding: 12px 14px;
+    border: 1px solid;
+  }
+
+  .box-fork {
+    background-color: #f0fdf4;
+    border-color: #bbf7d0;
+  }
+
+  .box-fork h3 {
+    color: #166534;
+    margin-top: 0;
+    font-size: 14px;
+  }
+
+  .box-upstream {
+    background-color: #eff6ff;
+    border-color: #bfdbfe;
+  }
+
+  .box-upstream h3 {
+    color: #1e40af;
+    margin-top: 0;
+    font-size: 14px;
+  }
+
+  .feature-list {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .feature-list li {
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+
+  .feature-list li strong {
+    color: #0f172a;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 18px 0;
+    font-size: 12px;
+  }
+
+  th, td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  th {
+    background-color: #f1f5f9;
+    color: #334155;
+    font-weight: 700;
+    border-top: 1px solid #cbd5e1;
+    border-bottom: 2px solid #cbd5e1;
+  }
+
+  tr:nth-child(even) td {
+    background-color: #f8fafc;
+  }
+
+  .badge-fork {
+    background-color: #dcfce7;
+    color: #15803d;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 10.5px;
+    display: inline-block;
+  }
+
+  .badge-upstream {
+    background-color: #dbeafe;
+    color: #1d4ed8;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 10.5px;
+    display: inline-block;
+  }
+
+  .section-break {
+    page-break-before: always;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .callout {
+    border-left: 4px solid #2563eb;
+    background-color: #f8fafc;
+    padding: 10px 14px;
+    margin: 12px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 12px;
+  }
+
+  .callout-warning {
+    border-left-color: #eab308;
+    background-color: #fefce8;
+  }
+
+  .code-tag {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px;
+    background: #e2e8f0;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #0f172a;
+  }
+
+  .footer-note {
+    margin-top: 24px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 8px;
+    font-size: 10.5px;
+    color: #94a3b8;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>Paperclip: Architectural Comparison</h1>
+    <div class="subtitle">Forked Repository vs. Official Upstream (Master Branch)</div>
+  </div>
+  <div class="header-meta">
+    <div><strong>Date:</strong> October 2026</div>
+    <div class="badge-meta">Baseline Divergence: 2,770 Commits Total</div>
+  </div>
+</div>
+
+<div class="stat-grid avoid-break">
+  <div class="stat-card">
+    <div class="stat-value" style="color: #15803d;">+379</div>
+    <div class="stat-label">Fork Ahead Commits</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color: #1d4ed8;">+2,391</div>
+    <div class="stat-label">Upstream Ahead Commits</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color: #0f172a;">1,286</div>
+    <div class="stat-label">Total Files Diverged</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color: #b45309;">0072</div>
+    <div class="stat-label">Common Schema Base</div>
+  </div>
+</div>
+
+<div class="avoid-break">
+  <h2>1. Executive Summary & Strategic Positioning</h2>
+  <p>
+    The repositories diverged on <strong>April 27, 2026</strong> at commit <span class="code-tag">d0bdbe11a</span>. Since then, the fork and upstream have developed under two distinct product visions:
+  </p>
+</div>
+
+<div class="side-by-side avoid-break">
+  <div class="column-box box-fork">
+    <h3>The User Fork: "The Executive Desktop Cockpit"</h3>
+    <p><strong>Primary Goal:</strong> Personal operating cockpit for an executive/founder managing multiple ventures from a local Windows workstation.</p>
+    <ul class="feature-list">
+      <li><strong>Native Desktop Runtime:</strong> Custom Rust system tray app, desktop toast notifications, and process-tree guards.</li>
+      <li><strong>HQ Portfolio Operations:</strong> Cross-company directives, unified executive brief, aggregate receipts, and private personal spaces.</li>
+      <li><strong>Unified Communications:</strong> 3-pane email client (IMAP + Help Scout), auto-triage, AI drafting, and task creation.</li>
+      <li><strong>Clippy Assistant &amp; Trust Loop:</strong> In-app drawer with interactive permission cards &amp; outbound mutating tool gates.</li>
+      <li><strong>Cost Optimization:</strong> Switchboard multi-account rotation and local models (Ollama, Aider).</li>
+    </ul>
+  </div>
+
+  <div class="column-box box-upstream">
+    <h3>Official Upstream: "The Enterprise Agent Cloud"</h3>
+    <p><strong>Primary Goal:</strong> Scalable, multi-tenant enterprise agent execution platform for distributed teams and cloud infrastructure.</p>
+    <ul class="feature-list">
+      <li><strong>Decoupled Runner Daemon:</strong> Standalone <span class="code-tag">paperclip-runner</span> for remote worker nodes and Docker/Daytona sandboxes.</li>
+      <li><strong>Enterprise Governance:</strong> MCP Tool Gateway proxy, fine-grained OAuth grants, and low-trust agent isolation.</li>
+      <li><strong>Pipelines &amp; Cases:</strong> Multi-stage DAG blocker state machines and collaborative incident desk.</li>
+      <li><strong>Skill Studio:</strong> In-browser IDE for authoring skills with evaluation kernels and automated testing.</li>
+      <li><strong>Multi-User IAM:</strong> Responsible-user commit attribution, user-specific secrets, and 30+ language translations.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="avoid-break">
+  <h2>2. Deep-Dive: What Your Fork Has Built</h2>
+  <p>Your fork implements several major milestones that upstream currently lists on its public roadmap as <em>unstarted (⚪)</em> or <em>experimental (🟡)</em>:</p>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 25%;">Subsystem</th>
+        <th style="width: 38%;">Implementation &amp; Capabilities</th>
+        <th style="width: 37%;">Key Repository Artifacts</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Native Windows Launcher</strong></td>
+        <td>Custom Rust executable (<span class="code-tag">paperclip.exe</span>) running in Windows system tray. Manages Windows named mutex single-instance locks, loopback health polling, blank UI self-healing, clean recursive process tree termination (killing tsx/postgres wrapper chains), and native toast notifications.</td>
+        <td><span class="code-tag">tools/paperclip-launcher/src/main.rs</span><br/><span class="code-tag">tools/paperclip-launcher/Cargo.toml</span><br/><span class="code-tag">rebuild-paperclip.bat</span></td>
+      </tr>
+      <tr>
+        <td><strong>HQ Portfolio Directives</strong></td>
+        <td>Root portfolio company model allowing multi-company governance. Includes one-tap directive broadcasting across companies, Portfolio Brief, Portfolio Issues, Portfolio Costs, and aggregated "Everything" console.</td>
+        <td><span class="code-tag">ui/src/pages/PortfolioDirectives.tsx</span><br/><span class="code-tag">ui/src/pages/PortfolioBrief.tsx</span><br/><span class="code-tag">server/src/services/portfolio-directive.ts</span></td>
+      </tr>
+      <tr>
+        <td><strong>Integrated 3-Pane Email &amp; Help Scout</strong></td>
+        <td>Full mail client supporting standard IMAP and Help Scout mailboxes. Features auto-triage rules saved in DB, group-by-sender, bulk triage, steerable AI drafting popouts, and one-click "Convert to issue / hand off to agent".</td>
+        <td><span class="code-tag">ui/src/pages/Email.tsx</span> (3,666 lines)<br/><span class="code-tag">ui/src/pages/HelpScoutEmailView.tsx</span><br/><span class="code-tag">server/src/services/email-service.ts</span></td>
+      </tr>
+      <tr>
+        <td><strong>Clippy Assistant &amp; Trust Gate</strong></td>
+        <td>Persistent desktop assistant drawer. Features the "Trust Loop" mutating tool gate where destructive agent tool calls are held in draft state until approved via plain-language permission cards. Supports image/text turns and live page context injection.</td>
+        <td><span class="code-tag">ui/src/pages/Clippy.tsx</span><br/><span class="code-tag">ui/src/components/ClippyDrawer.tsx</span><br/><span class="code-tag">server/src/services/tool-draft-gate.ts</span></td>
+      </tr>
+      <tr>
+        <td><strong>Switchboard Multi-Account Router</strong></td>
+        <td>Automatic vendor account lane rotation and token management. Detects rate limits or exhausted quotas on Claude/OpenAI accounts and automatically fails over to standby credentials. Includes live provider model availability discovery.</td>
+        <td><span class="code-tag">server/src/services/switchboard.ts</span><br/><span class="code-tag">server/src/services/active-account.ts</span><br/><span class="code-tag">ui/src/components/ModelPicker.tsx</span></td>
+      </tr>
+      <tr>
+        <td><strong>Calendar &amp; Reminders</strong></td>
+        <td>Native calendar scheduling scheduled routines and recurring reminders (daily, weekly, yearly) with desktop toast delivery.</td>
+        <td><span class="code-tag">ui/src/pages/Calendar.tsx</span><br/><span class="code-tag">server/src/services/calendar.ts</span></td>
+      </tr>
+      <tr>
+        <td><strong>Ahead-of-Roadmap Systems</strong></td>
+        <td>Memories system (<span class="code-tag">0081_memories.sql</span>) and Work Queues (<span class="code-tag">0082_work_queues.sql</span>), plus local adapters for Ollama and Aider.</td>
+        <td><span class="code-tag">ui/src/pages/Memories.tsx</span><br/><span class="code-tag">ui/src/pages/WorkQueues.tsx</span><br/><span class="code-tag">packages/adapters/aider-local</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section-break"></div>
+
+<div class="avoid-break">
+  <h2>3. Deep-Dive: What Upstream Has Built</h2>
+  <p>Upstream's 2,391 commits delivered major distributed cloud architectures and enterprise controls:</p>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 25%;">Subsystem</th>
+        <th style="width: 38%;">Implementation &amp; Capabilities</th>
+        <th style="width: 37%;">Key Repository Artifacts</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Decoupled Runner Daemon</strong></td>
+        <td>Task execution is extracted into a standalone package (<span class="code-tag">paperclip-runner</span>). Enables running agents inside Docker containers, Daytona cloud sandbox leases, and Kubernetes pods with 256 MiB journal streaming.</td>
+        <td><span class="code-tag">packages/paperclip-runner</span><br/><span class="code-tag">.env.runner-e2e.example</span><br/><span class="code-tag">0220_execution_workspace_runtime_leases.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Governed MCP Tool Gateway</strong></td>
+        <td>Server-authoritative proxy for Model Context Protocol servers. Enforces per-action policies (Allowed, Ask first, Off) with short-lived session OAuth tokens and audit logging across Asana, Sheets, Railway, and Notion.</td>
+        <td><span class="code-tag">ui/src/pages/apps/gateways</span><br/><span class="code-tag">0151_tool_gateway_sessions.sql</span><br/><span class="code-tag">0159_named_mcp_gateways.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Pipelines &amp; Case Incident Desk</strong></td>
+        <td>Multi-stage DAG state machines with automatic transitions, blocker dependencies, and upstream drift tracking. Cases desk provides a collaborative environment for incident investigations and customer issue triage.</td>
+        <td><span class="code-tag">ui/src/pages/Pipelines.tsx</span><br/><span class="code-tag">ui/src/pages/Cases.tsx</span><br/><span class="code-tag">0113_pipeline_foundation.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Skill Studio &amp; Evals</strong></td>
+        <td>In-browser IDE for authoring agent skills. Includes evaluation kernels (<span class="code-tag">paperclip-eval-kernel</span>), regression testing against saved test fixtures, version history rollback, and a shared Skills Store catalog.</td>
+        <td><span class="code-tag">ui/src/pages/SkillStudio.tsx</span><br/><span class="code-tag">packages/paperclip-eval-kernel</span><br/><span class="code-tag">0099_skills_store_foundation.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Enterprise IAM &amp; Attribution</strong></td>
+        <td>Multi-user identity management where git commits and external connections are attributed to the specific human instructing the work ("Responsible User"). Includes user-specific encrypted secrets and low-trust directory sandboxing.</td>
+        <td><span class="code-tag">0128_user_specific_secrets.sql</span><br/><span class="code-tag">0129_agent_api_key_responsible_user.sql</span><br/><span class="code-tag">0097_low_trust_source_trust.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Git Worktrees &amp; Concurrency</strong></td>
+        <td>First-class support for git worktrees, enabling multiple agents to develop and test concurrently on isolated branches within the same repository without lock collisions.</td>
+        <td><span class="code-tag">packages/server/src/services/worktrees</span><br/><span class="code-tag">0220_execution_workspace_runtime_leases.sql</span></td>
+      </tr>
+      <tr>
+        <td><strong>Global Internationalization</strong></td>
+        <td>Full i18n translation coverage supporting 30+ languages, PWA controls, and browser-use cloud preview integrations.</td>
+        <td><span class="code-tag">ui/src/i18n/locales/*.json</span><br/><span class="code-tag">0290_browser_use_cloud.sql</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="avoid-break">
+  <h2>4. Database Schema Divergence Analysis</h2>
+  <div class="callout callout-warning">
+    <strong>Critical Architectural Note:</strong> Both codebases branched after migration <span class="code-tag">0072_large_sandman.sql</span>.
+  </div>
+  <p>
+    Because migration sequence numbers were assigned independently on both branches:
+  </p>
+  <ul>
+    <li><strong>Fork:</strong> Created migrations <span class="code-tag">0073_plugin_local_source_path.sql</span> through <span class="code-tag">0100_backfill_missing_issue_identifiers.sql</span>.</li>
+    <li><strong>Upstream:</strong> Created migrations <span class="code-tag">0073_shiny_salo.sql</span> through <span class="code-tag">0294_chilly_marvel_apes.sql</span> (over 220 new migrations).</li>
+  </ul>
+  <p>
+    <strong>Impact:</strong> A standard <span class="code-tag">git merge</span> or <span class="code-tag">git rebase</span> will cause severe, irreconcilable database schema collisions and unresolvable migration sequence state. Any feature integration must be done modularly.
+  </p>
+</div>
+
+<div class="avoid-break">
+  <h2>5. "Which One Is Better?" Decision Matrix</h2>
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 30%;">User Profile &amp; Operating Model</th>
+        <th style="width: 15%; text-align: center;">Winner</th>
+        <th style="width: 55%;">Rationale</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Solo Founder / Executive Operator</strong></td>
+        <td style="text-align: center;"><span class="badge-fork">Your Fork</span></td>
+        <td>Your fork provides a complete operational desktop environment (HQ portfolio overview, integrated email/Help Scout client, Clippy trust gate, desktop toast reminders). Upstream lacks desktop and communications infrastructure.</td>
+      </tr>
+      <tr>
+        <td><strong>Windows Workstation Daily Driver</strong></td>
+        <td style="text-align: center;"><span class="badge-fork">Your Fork</span></td>
+        <td>Upstream has no desktop executable. Your Rust system tray app, process tree cleanup, and restart/update scripts make running on Windows seamless and crash-resilient.</td>
+      </tr>
+      <tr>
+        <td><strong>Cost Minimization &amp; Local LLMs</strong></td>
+        <td style="text-align: center;"><span class="badge-fork">Your Fork</span></td>
+        <td>Switchboard enables rotating multiple accounts automatically when rate-limited. Local Ollama and Aider adapters eliminate reliance on cloud API spend.</td>
+      </tr>
+      <tr>
+        <td><strong>Multi-Human Team / Organization</strong></td>
+        <td style="text-align: center;"><span class="badge-upstream">Upstream</span></td>
+        <td>Upstream offers enterprise RBAC, "Responsible User" commit attribution, per-user private secrets, and decision desk tracking.</td>
+      </tr>
+      <tr>
+        <td><strong>High-Scale Concurrent Agent Fleet</strong></td>
+        <td style="text-align: center;"><span class="badge-upstream">Upstream</span></td>
+        <td>Upstream's separated runner daemon, Daytona sandbox leases, and Git worktrees allow 10+ agents to develop code concurrently without workspace collisions.</td>
+      </tr>
+      <tr>
+        <td><strong>Strict Security &amp; Compliance Audit</strong></td>
+        <td style="text-align: center;"><span class="badge-upstream">Upstream</span></td>
+        <td>Upstream provides formal MCP Tool Gateways, low-trust agent isolation, OAuth revocation, and evaluation verification suites.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="avoid-break">
+  <h2>6. Strategic Recommendations &amp; Action Plan</h2>
+  <div class="callout">
+    <strong>Recommended Strategy:</strong> Treat your fork as a specialized executive distribution. Do not attempt a full git merge.
+  </div>
+  
+  <ol>
+    <li><strong>Keep Your Fork as Primary:</strong> Continue running your fork for your day-to-day operations. Its native desktop integration, email triage, and Clippy assistant cannot be replaced by upstream today.</li>
+    <li><strong>Cherry-Pick High-Value Upstream Adapters:</strong> If you want new agent harnesses (such as <span class="code-tag">grok-local</span>, <span class="code-tag">kimi-local</span>, or <span class="code-tag">cursor-cloud</span>), cleanly cherry-pick or copy the adapter packages from <span class="code-tag">packages/adapters</span> into your fork without touching the server core.</li>
+    <li><strong>Package Key Superpowers as Plugins:</strong> Upstream's official plugin system is now mature. Consider extracting Switchboard and Calendar into standalone Paperclip plugins that can run on any version.</li>
+    <li><strong>Monitor Upstream Runner Maturity:</strong> If you scale to remote cloud servers or require Daytona sandbox pools, consider deploying an upstream instance as a headless runner worker while keeping your executive cockpit intact.</li>
+  </ol>
+</div>
+
+<div class="footer-note avoid-break">
+  <div>Paperclip Technical Evaluation Report &bull; Compiled from Git Tree ef8fc2118 vs 6c1a75da4</div>
+  <div>Confidential &bull; Prepared for Workspace Review</div>
+</div>
+
+</body>
+</html>
