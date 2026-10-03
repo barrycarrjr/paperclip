@@ -45,6 +45,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
 
 function normalizeExperimentalSettings(raw: unknown): InstanceExperimentalSettings {
   const parsed = instanceExperimentalSettingsSchema.safeParse(raw ?? {});
+  const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   if (parsed.success) {
     return {
       enableEnvironments: parsed.data.enableEnvironments ?? false,
@@ -54,8 +55,14 @@ function normalizeExperimentalSettings(raw: unknown): InstanceExperimentalSettin
       issueGraphLivenessAutoRecoveryLookbackHours:
         parsed.data.issueGraphLivenessAutoRecoveryLookbackHours ??
         DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
-      enablePipelines: parsed.data.enablePipelines ?? true,
-      enableCases: parsed.data.enableCases ?? true,
+      enablePipelines:
+        rawObj && "enablePipelines" in rawObj
+          ? Boolean(parsed.data.enablePipelines)
+          : (parsed.data.enablePipelines ?? true),
+      enableCases:
+        rawObj && "enableCases" in rawObj
+          ? Boolean(parsed.data.enableCases)
+          : (parsed.data.enableCases ?? true),
     };
   }
   return {

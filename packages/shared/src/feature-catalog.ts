@@ -141,16 +141,16 @@ export const INSTANCE_FEATURE_CATALOG: Record<InstanceFeatureKey, FeatureCatalog
     title: "Pipelines",
     description: "Enable pipeline definitions and pipeline-driven case production surfaces.",
     tier: "managed",
-    cloudDefault: false,
-    selfHostedDefault: false,
+    cloudDefault: true,
+    selfHostedDefault: true,
   },
   enableCases: {
     title: "Cases",
     description:
       "Durable work products that tasks create and iterate on. Adds the Cases tab and the agent case API.",
     tier: "managed",
-    cloudDefault: false,
-    selfHostedDefault: false,
+    cloudDefault: true,
+    selfHostedDefault: true,
   },
   enableAgentChat: {
     title: "Agent Chat",

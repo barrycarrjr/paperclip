@@ -174,6 +174,7 @@ describeEmbeddedPostgres("cases routes", () => {
   };
 
   it("gates every case route when enableCases is off", async () => {
+    await instanceSettingsService(db).updateExperimental({ enableCases: false });
     const company = await seedCompany("OFF");
     const [caseRow] = await db.insert(cases).values({
       companyId: company.id,
