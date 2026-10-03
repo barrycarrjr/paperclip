@@ -29,6 +29,7 @@ export { workspaceRuntimeServices } from "./workspace_runtime_services.js";
 export { projectGoals } from "./project_goals.js";
 export { goals } from "./goals.js";
 export { memories } from "./memories.js";
+export { memoryFolders } from "./memory_folders.js";
 export { workQueues, workQueueItems } from "./work_queues.js";
 export { issueEmailDelegations } from "./issue_email_delegations.js";
 export { pluginOperationCalls } from "./plugin_operation_calls.js";

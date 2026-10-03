@@ -7,6 +7,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { logActivity, memoryService } from "../services/index.js";
+import { scheduleMemoryFolderExport } from "../services/memory-folder-auto-export.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
 export function memoryRoutes(db: Db) {
@@ -53,6 +54,7 @@ export function memoryRoutes(db: Db) {
         entityId: memory.id,
         details: { name: memory.name, kind: memory.kind },
       });
+      scheduleMemoryFolderExport(db, companyId);
       res.status(201).json(memory);
     },
   );
@@ -81,6 +83,7 @@ export function memoryRoutes(db: Db) {
       entityId: memory.id,
       details: req.body,
     });
+    scheduleMemoryFolderExport(db, memory.companyId);
     res.json(memory);
   });
 
@@ -107,6 +110,7 @@ export function memoryRoutes(db: Db) {
       entityType: "memory",
       entityId: memory.id,
     });
+    scheduleMemoryFolderExport(db, memory.companyId);
     res.json(memory);
   });
 

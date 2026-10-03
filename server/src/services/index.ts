@@ -46,6 +46,7 @@ export { issueApprovalService } from "./issue-approvals.js";
 export { issueReferenceService } from "./issue-references.js";
 export { goalService } from "./goals.js";
 export { memoryService, type MemoryService, type MemoryListFilter, type MemoryActor } from "./memories.js";
+export { memoryFolderService, type MemoryFolderService } from "./memory-folder-sync.js";
 export {
   workQueueService,
   WorkQueueClaimRaceError,

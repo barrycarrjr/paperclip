@@ -36,6 +36,7 @@ import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
   adapterModelRefreshService,
   calendarService,
+  memoryFolderService,
   heartbeatService,
   instanceSettingsService,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -962,6 +963,7 @@ export async function startServer(): Promise<StartedServer> {
     const heartbeat = heartbeatService(db as any, { pluginWorkerManager });
     const routines = routineService(db as any, { pluginWorkerManager });
     const calendar = calendarService(db as any);
+    const memoryFolders = memoryFolderService(db as any);
     const modelRefresh = adapterModelRefreshService(db as any);
     // Adapter model lists are refreshed at most once per calendar day (UTC).
     // Tracks the last day we ran so the frequent scheduler tick fires it just once.
@@ -1035,6 +1037,17 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "calendar reminder tick failed");
+        });
+
+      void memoryFolders
+        .tickDue(new Date())
+        .then((r) => {
+          if (r.ran > 0) {
+            logger.info({ ...r }, "memory folder scheduled sync ran");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "memory folder scheduled sync failed");
         });
 
       // Refresh adapter model menus from each provider once per day, and pause

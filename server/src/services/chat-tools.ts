@@ -27,6 +27,7 @@ import { logger } from "../middleware/logger.js";
 import { calendarService } from "./calendar.js";
 import { issueService } from "./issues.js";
 import { memoryService } from "./memories.js";
+import { scheduleMemoryFolderExport } from "./memory-folder-auto-export.js";
 import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
@@ -1276,6 +1277,7 @@ const rememberTool: ChatToolDefinition<{
           actor,
         );
     if (!saved) throw notFound("Memory not found");
+    scheduleMemoryFolderExport(ctx.db, target);
     return {
       memory: summarizeMemory(saved),
       replaced: Boolean(existing),
@@ -1381,6 +1383,7 @@ const forgetMemoryTool: ChatToolDefinition<{ memoryId?: string; name?: string; c
       throw badRequest(`Memory ${memoryId ?? `"${name}"`} not found in this company`);
     }
     await svc.remove(existing.id);
+    scheduleMemoryFolderExport(ctx.db, target);
     return {
       memory: { id: existing.id, name: existing.name },
       message: `Forgot "${existing.name}".`,

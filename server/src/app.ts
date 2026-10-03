@@ -26,6 +26,7 @@ import { environmentRoutes } from "./routes/environments.js";
 import { executionWorkspaceRoutes } from "./routes/execution-workspaces.js";
 import { goalRoutes } from "./routes/goals.js";
 import { memoryRoutes } from "./routes/memories.js";
+import { memoryFolderRoutes } from "./routes/memory-folders.js";
 import { workQueueRoutes } from "./routes/work-queues.js";
 import { structuralFindingRoutes } from "./routes/structural-findings.js";
 import { approvalRoutes } from "./routes/approvals.js";
@@ -284,6 +285,7 @@ export async function createApp(
   api.use(executionWorkspaceRoutes(db));
   api.use(goalRoutes(db));
   api.use(memoryRoutes(db));
+  api.use(memoryFolderRoutes(db));
   api.use(workQueueRoutes(db));
   api.use(structuralFindingRoutes(db));
   api.use(approvalRoutes(db, {
