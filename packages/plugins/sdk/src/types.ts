@@ -384,6 +384,8 @@ export class OperationFailed extends Error {
  * @see PLUGIN_SPEC.md §21.3 `plugin_entities`
  */
 export interface PluginEntityUpsert {
+  /** Owning company; omit for instance-level mappings. */
+  companyId?: string | null;
   /** Plugin-defined entity type (e.g. `"linear-issue"`, `"github-pr"`). */
   entityType: string;
   /** Scope where this entity lives. */
@@ -406,6 +408,8 @@ export interface PluginEntityUpsert {
  * @see PLUGIN_SPEC.md §21.3 `plugin_entities`
  */
 export interface PluginEntityRecord {
+  /** Owning company; null identifies instance-level mappings. */
+  companyId: string | null;
   /** UUID primary key. */
   id: string;
   /** Plugin-defined entity type. */
@@ -432,6 +436,8 @@ export interface PluginEntityRecord {
  * Query parameters for `ctx.entities.list()`.
  */
 export interface PluginEntityQuery {
+  /** Tenant filter; null selects instance-scoped entities. */
+  companyId?: string | null;
   /** Filter by entity type. */
   entityType?: string;
   /** Filter by scope kind. */
@@ -1091,13 +1097,13 @@ export interface PluginOperationsClient {
  */
 export interface PluginLogger {
   /** Log an informational message. */
-  info(message: string, meta?: Record<string, unknown>): void;
+  info(message: string, meta?: Record<string, unknown>, companyId?: string | null): void;
   /** Log a warning. */
-  warn(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>, companyId?: string | null): void;
   /** Log an error. */
-  error(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>, companyId?: string | null): void;
   /** Log a debug message (may be suppressed in production). */
-  debug(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>, companyId?: string | null): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,7 +1125,7 @@ export interface PluginMetricsClient {
    * @param value - Numeric value
    * @param tags - Optional key-value tags for filtering
    */
-  write(name: string, value: number, tags?: Record<string, string>): Promise<void>;
+  write(name: string, value: number, tags?: Record<string, string>, companyId?: string | null): Promise<void>;
 }
 
 /**

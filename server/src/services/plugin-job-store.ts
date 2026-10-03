@@ -56,6 +56,8 @@ type JobDefinitionStatus = PluginJobRecord["status"];
  * Input for creating a job run record.
  */
 export interface CreateJobRunInput {
+  /** Owning company; omit for instance-level jobs. */
+  companyId?: string | null;
   /** FK to the plugin_jobs row. */
   jobId: string;
   /** FK to the plugins row. */
@@ -353,9 +355,10 @@ export function pluginJobStore(db: Db) {
     ): Promise<typeof pluginJobRuns.$inferSelect> {
       const rows = await db
         .insert(pluginJobRuns)
-        .values({
-          jobId: input.jobId,
-          pluginId: input.pluginId,
+          .values({
+            jobId: input.jobId,
+            pluginId: input.pluginId,
+            companyId: input.companyId ?? null,
           trigger: input.trigger,
           status: "queued",
         })

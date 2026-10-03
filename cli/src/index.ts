@@ -51,6 +51,7 @@ program
   .option("--bind <mode>", "Quickstart reachability preset (loopback, lan, tailnet)")
   .option("-y, --yes", "Accept quickstart defaults (trusted local loopback unless --bind is set) and start immediately", false)
   .option("--run", "Start Paperclip immediately after saving config", false)
+  .option("--setup-only", "Save configuration without starting the server (including with --yes)", false)
   .action(onboard);
 
 program

@@ -677,6 +677,10 @@ export interface PluginConfig {
  * Query filter for `ctx.entities.list`.
  */
 export interface PluginEntityQuery {
+  /** Tenant filter; null selects instance-scoped entities. */
+  companyId?: string | null;
+  scopeKind?: PluginStateScopeKind;
+  scopeId?: string;
   /** Optional filter by entity type (e.g. 'project', 'issue'). */
   entityType?: string;
   /** Optional filter by external system identifier. */
@@ -695,6 +699,8 @@ export interface PluginEntityQuery {
  * Domain type for an external entity mapping as persisted in the `plugin_entities` table.
  */
 export interface PluginEntityRecord {
+  /** Owning company; null identifies instance-level mappings. */
+  companyId: string | null;
   /** UUID primary key. */
   id: string;
   /** FK to `plugins.id`. */
@@ -755,6 +761,8 @@ export interface PluginJobRecord {
  * Domain type for a job execution history record.
  */
 export interface PluginJobRunRecord {
+  /** Owning company; null identifies an instance-level run. */
+  companyId: string | null;
   /** UUID primary key. */
   id: string;
   /** FK to `plugin_jobs.id`. */
@@ -787,6 +795,8 @@ export interface PluginJobRunRecord {
  * Domain type for an inbound webhook delivery record.
  */
 export interface PluginWebhookDeliveryRecord {
+  /** Owning company; null identifies an instance-level delivery. */
+  companyId: string | null;
   /** UUID primary key. */
   id: string;
   /** FK to `plugins.id`. */

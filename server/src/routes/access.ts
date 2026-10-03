@@ -51,8 +51,10 @@ import {
   conflict,
   notFound,
   unauthorized,
-  badRequest
+  badRequest,
+  tooManyRequests
 } from "../errors.js";
+import { createInviteRateLimiter, type InviteRateLimiter } from "../services/invite-rate-limit.js";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
 import {
@@ -85,8 +87,7 @@ function hashToken(token: string) {
 }
 
 const INVITE_TOKEN_PREFIX = "pcp_invite_";
-const INVITE_TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-const INVITE_TOKEN_SUFFIX_LENGTH = 8;
+const INVITE_TOKEN_ENTROPY_BYTES = 32;
 const INVITE_TOKEN_MAX_RETRIES = 5;
 
 // Per-IP rate limiter for the unauthenticated CLI-auth challenge endpoint.
@@ -98,10 +99,6 @@ const CLI_AUTH_CHALLENGE_HISTORY_TTL_MS = 5 * 60_000;
 const cliAuthChallengeHits = new Map<string, number[]>();
 
 function ipKeyForRequest(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0]!.trim() || req.ip || "unknown";
-  }
   return req.ip || (req.socket?.remoteAddress ?? "unknown");
 }
 
@@ -135,12 +132,8 @@ type MemberGrantPayload = {
   scope?: Record<string, unknown> | null;
 };
 
-function createInviteToken() {
-  const bytes = randomBytes(INVITE_TOKEN_SUFFIX_LENGTH);
-  let suffix = "";
-  for (let idx = 0; idx < INVITE_TOKEN_SUFFIX_LENGTH; idx += 1) {
-    suffix += INVITE_TOKEN_ALPHABET[bytes[idx]! % INVITE_TOKEN_ALPHABET.length];
-  }
+export function createInviteToken() {
+  const suffix = randomBytes(INVITE_TOKEN_ENTROPY_BYTES).toString("base64url");
   return `${INVITE_TOKEN_PREFIX}${suffix}`;
 }
 
@@ -2466,6 +2459,7 @@ export function accessRoutes(
     bindHost: string;
     allowedHostnames: string[];
     inviteResolutionNetwork?: Partial<InviteResolutionNetwork>;
+    inviteRateLimiter?: InviteRateLimiter;
   }
 ) {
   const router = Router();
@@ -2475,6 +2469,22 @@ export function accessRoutes(
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
+
+  const inviteRateLimiter = opts.inviteRateLimiter ?? createInviteRateLimiter();
+  router.use("/invites/:token", (req, res, next) => {
+    // Express ignores forwarded IP headers unless the operator trusts a proxy.
+    const result = inviteRateLimiter.consume(ipKeyForRequest(req));
+    res.setHeader("X-RateLimit-Limit", String(result.limit));
+    res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+    if (!result.allowed) {
+      res.setHeader("Retry-After", String(result.retryAfterSeconds));
+      next(tooManyRequests("Too many invite requests", {
+        retryAfterSeconds: result.retryAfterSeconds,
+      }));
+      return;
+    }
+    next();
+  });
 
   async function assertInstanceAdmin(req: Request) {
     if (req.actor.type !== "board") throw unauthorized();

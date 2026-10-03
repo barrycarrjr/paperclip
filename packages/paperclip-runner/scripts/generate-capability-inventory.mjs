@@ -2,7 +2,11 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   buildInventories,
+  buildMcpInventory,
+  buildSkillInventory,
+  decodeInventory,
   encodeInventory,
+  foldLegacyMcpAliases,
   renderContractModule,
   renderDocumentation,
   validateInventorySchema,
@@ -15,7 +19,8 @@ const evalCandidates = [
   resolve(repoRoot, "../paperclip-evals/paperclip-skill-optimization"),
   resolve(repoRoot, "../../../../paperclip-evals/paperclip-skill-optimization"),
 ];
-const evalRoot = process.env.PAPERCLIP_EVALS_ROOT
+const localSources = process.argv.includes("--local-sources");
+const evalRoot = localSources ? null : process.env.PAPERCLIP_EVALS_ROOT
   ?? (await (async () => {
     for (const candidate of evalCandidates) {
       if (await access(candidate).then(() => true, () => false)) return candidate;
@@ -30,7 +35,17 @@ const outputPaths = {
   documentation: resolve(packageRoot, "docs/capability-contract.md"),
 };
 
-const inventories = await buildInventories({ repoRoot, evalRoot });
+// A source-only refresh uses the checked-in, reviewed eval baseline. Updating
+// the external eval corpus remains an explicit operation with PAPERCLIP_EVALS_ROOT.
+const inventories = localSources ? await (async () => {
+  const legacyMcpAliases = await buildMcpInventory(repoRoot);
+  const baseline = decodeInventory(await readFile(outputPaths.evaluations, "utf8"));
+  return {
+    capabilities: foldLegacyMcpAliases(await buildSkillInventory(repoRoot), legacyMcpAliases, ""),
+    evaluations: foldLegacyMcpAliases(baseline, legacyMcpAliases),
+    legacyMcpAliases,
+  };
+})() : await buildInventories({ repoRoot, evalRoot });
 const inventorySchema = JSON.parse(await readFile(resolve(packageRoot, "spec/capability/inventory.schema.json"), "utf8"));
 const errors = [
   ...validateInventorySchema(inventories, inventorySchema),

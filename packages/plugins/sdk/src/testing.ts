@@ -57,6 +57,7 @@ export interface TestHarnessOptions {
 }
 
 export interface TestHarnessLogEntry {
+  companyId?: string | null;
   level: "info" | "warn" | "error" | "debug";
   message: string;
   meta?: Record<string, unknown>;
@@ -109,7 +110,7 @@ export interface TestHarness {
    * left on disk.
    */
   snapshots: string[];
-  metrics: Array<{ name: string; value: number; tags?: Record<string, string> }>;
+  metrics: Array<{ name: string; value: number; tags?: Record<string, string>; companyId?: string | null }>;
   telemetry: Array<{ eventName: string; dimensions?: Record<string, string | number | boolean> }>;
   dbQueries: Array<{ sql: string; params?: unknown[] }>;
   dbExecutes: Array<{ sql: string; params?: unknown[] }>;
@@ -662,17 +663,18 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     entities: {
       async upsert(input: PluginEntityUpsert) {
         const externalKey = input.externalId
-          ? `${input.entityType}|${input.scopeKind}|${input.scopeId ?? ""}|${input.externalId}`
+          ? JSON.stringify([input.companyId ?? null, input.entityType, input.externalId])
           : null;
         const existingId = externalKey ? entityExternalIndex.get(externalKey) : undefined;
         const existing = existingId ? entities.get(existingId) : undefined;
         const now = new Date().toISOString();
         const previousExternalKey = existing?.externalId
-          ? `${existing.entityType}|${existing.scopeKind}|${existing.scopeId ?? ""}|${existing.externalId}`
+          ? JSON.stringify([existing.companyId, existing.entityType, existing.externalId])
           : null;
         const record: PluginEntityRecord = existing
           ? {
             ...existing,
+            companyId: input.companyId ?? null,
             entityType: input.entityType,
             scopeKind: input.scopeKind,
             scopeId: input.scopeId ?? null,
@@ -684,6 +686,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           }
           : {
             id: randomUUID(),
+            companyId: input.companyId ?? null,
             entityType: input.entityType,
             scopeKind: input.scopeKind,
             scopeId: input.scopeId ?? null,
@@ -703,6 +706,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
       async list(query) {
         let out = [...entities.values()];
+        if (query.companyId !== undefined) out = out.filter((r) => r.companyId === query.companyId);
         if (query.entityType) out = out.filter((r) => r.entityType === query.entityType);
         if (query.scopeKind) out = out.filter((r) => r.scopeKind === query.scopeKind);
         if (query.scopeId) out = out.filter((r) => r.scopeId === query.scopeId);
@@ -1308,9 +1312,9 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
     },
     metrics: {
-      async write(name, value, tags) {
+      async write(name, value, tags, companyId) {
         requireCapability(manifest, capabilitySet, "metrics.write");
-        metrics.push({ name, value, tags });
+        metrics.push({ name, value, tags, ...(companyId !== undefined ? { companyId } : {}) });
       },
     },
     telemetry: {
@@ -1320,17 +1324,17 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
     },
     logger: {
-      info(message, meta) {
-        logs.push({ level: "info", message, meta });
+      info(message, meta, companyId) {
+        logs.push({ level: "info", message, meta, ...(companyId !== undefined ? { companyId } : {}) });
       },
-      warn(message, meta) {
-        logs.push({ level: "warn", message, meta });
+      warn(message, meta, companyId) {
+        logs.push({ level: "warn", message, meta, ...(companyId !== undefined ? { companyId } : {}) });
       },
-      error(message, meta) {
-        logs.push({ level: "error", message, meta });
+      error(message, meta, companyId) {
+        logs.push({ level: "error", message, meta, ...(companyId !== undefined ? { companyId } : {}) });
       },
-      debug(message, meta) {
-        logs.push({ level: "debug", message, meta });
+      debug(message, meta, companyId) {
+        logs.push({ level: "debug", message, meta, ...(companyId !== undefined ? { companyId } : {}) });
       },
     },
   };

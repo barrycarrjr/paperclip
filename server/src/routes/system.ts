@@ -23,21 +23,22 @@
  *   Fallback: re-exec the same node binary + argv that started us. Works on
  *   any platform but doesn't reattach to the launcher's console window.
  *
- * **Update** (Windows only for now) spawns `update-paperclip.bat` detached
- * in a new console window. The bat itself starts by killing the running
- * server via stop-paperclip.bat, then pulls/builds/migrates and chains into
- * launch-paperclip.bat — so we don't SIGTERM ourselves; the bat does it.
+ * **Update** spawns the installed maintenance launcher. Windows uses a
+ * console window; managed macOS/Linux installations use the Unix scripts and
+ * a maintenance log. The launcher stops, backs up, builds, migrates, and starts
+ * its installation — so we don't SIGTERM ourselves.
  *
  * All three routes require instance-admin authority — these are destructive
  * actions for everyone connected to this paperclip instance.
  */
 import { Router, type Request, type Response } from "express";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertInstanceAdmin } from "./authz.js";
 import { checkForRemoteUpdate } from "../services/check-for-updates.js";
+import { resolvePaperclipHomeDir } from "../home-paths.js";
 
 const SHUTDOWN_DELAY_MS = 250;
 const RESTART_TRAMPOLINE_DELAY_MS = 2000;
@@ -80,7 +81,7 @@ function findWindowsRestartLauncher(): { path: string; kind: "exe" | "bat" } | n
  */
 function readInstallRepoPath(): string | null {
   try {
-    const raw = readFileSync(path.join(os.homedir(), ".paperclip", "install.json"), "utf8");
+    const raw = readFileSync(path.join(resolvePaperclipHomeDir(), "install.json"), "utf8");
     // Strip a potential UTF-8 BOM (PowerShell's `Set-Content -Encoding UTF8`
     // writes one on Windows).
     const parsed = JSON.parse(raw.replace(/^﻿/, "")) as { repoPath?: string };
@@ -92,10 +93,11 @@ function readInstallRepoPath(): string | null {
 }
 
 function repoLauncherScriptPath(scriptName: string): string | null {
-  if (process.platform !== "win32") return null;
   const repoPath = readInstallRepoPath();
   if (!repoPath) return null;
-  const bat = path.join(repoPath, "scripts", "launchers", "windows", scriptName);
+  const platform = process.platform === "win32" ? "windows" : "unix";
+  const name = process.platform === "win32" ? scriptName : scriptName.replace(/\.bat$/, ".sh");
+  const bat = path.join(repoPath, "scripts", "launchers", platform, name);
   return existsSync(bat) ? bat : null;
 }
 
@@ -138,6 +140,12 @@ function spawnRestartTrampoline(): void {
       // is unambiguous regardless of where this server's cwd happened to be.
       cwd: os.homedir(),
     };
+  } else if (process.platform !== "win32" && process.env.PAPERCLIP_MANAGED_INSTALL === "1") {
+    const script = repoLauncherScriptPath("restart-paperclip.bat");
+    if (!script) throw new Error("The Unix restart launcher is missing; re-run the installer.");
+    spawnCmd = "/bin/bash";
+    spawnArgs = [script];
+    spawnOpts = { cwd: readInstallRepoPath()!, env: { ...process.env }, detached: true, stdio: "ignore" };
   } else {
     // Cross-platform fallback: re-exec the same node binary + flags + script
     // + args. On Windows, `stdio:"inherit"` from the console-less trampoline
@@ -250,10 +258,9 @@ export function systemRoutes() {
 
   /**
    * Shared launcher-spawning route handler for the update / rebuild actions.
-   * Both actions spawn a detached .bat in a new console window; the bat itself
-   * stops this server via stop-paperclip.bat — we don't SIGTERM ourselves.
+   * The detached maintenance launcher stops this installation itself.
    */
-  function handleLauncherSpawn(
+  async function handleLauncherSpawn(
     req: Request,
     res: Response,
     action: "update" | "rebuild",
@@ -262,11 +269,11 @@ export function systemRoutes() {
   ) {
     assertInstanceAdmin(req);
 
-    if (process.platform !== "win32") {
-      res.status(501).json({
+    if (process.platform !== "win32" && process.env.PAPERCLIP_MANAGED_INSTALL !== "1") {
+      res.status(409).json({
         ok: false,
         action,
-        error: `${action === "update" ? "Update" : "Rebuild"} from the UI is only supported on Windows. Run scripts/launchers/<platform>/${scriptName.replace(/\.bat$/, "")} equivalent from a shell.`,
+        error: "Start Paperclip with scripts/launchers/macos/launch-paperclip.command or scripts/launchers/unix/launch-paperclip.sh before using update or rebuild from the UI.",
       });
       return;
     }
@@ -276,19 +283,30 @@ export function systemRoutes() {
       res.status(500).json({
         ok: false,
         action,
-        error: `Could not locate ${scriptName}. Make sure ~/.paperclip/install.json points to a checkout that contains scripts/launchers/windows/${scriptName}.`,
+        error: `Could not locate the ${action} launcher. Re-run the installer to record this checkout in ~/.paperclip/install.json.`,
       });
       return;
     }
 
+    let logFd: number | undefined;
     try {
-      const child = spawn("cmd.exe", ["/c", "start", "", bat], {
+      const isWindows = process.platform === "win32";
+      if (!isWindows) {
+        const logDir = path.join(resolvePaperclipHomeDir(), "logs");
+        mkdirSync(logDir, { recursive: true });
+        logFd = openSync(path.join(logDir, "maintenance.log"), "a", 0o600);
+      }
+      const child = spawn(isWindows ? "cmd.exe" : "/bin/bash", isWindows ? ["/c", "start", "", bat] : [bat], {
         detached: true,
-        stdio: "ignore",
-        windowsHide: false,
+        stdio: isWindows ? "ignore" : ["ignore", logFd!, logFd!],
+        windowsHide: isWindows ? false : true,
         // Run from the user's home dir so the bat's `cd /d "%PAPERCLIP_SRC%"`
         // resolves predictably.
         cwd: os.homedir(),
+      });
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
       });
       child.unref();
     } catch (err) {
@@ -298,25 +316,26 @@ export function systemRoutes() {
         error: `Failed to start ${scriptName}: ${err instanceof Error ? err.message : String(err)}. Server is still running.`,
       });
       return;
+    } finally {
+      if (logFd !== undefined) closeSync(logFd);
     }
 
     res.json({
       ok: true,
       action,
-      message: successMessage,
+      message: process.platform === "win32" ? successMessage : `Paperclip is ${action === "update" ? "updating" : "rebuilding"}. Progress is recorded in ${path.join(resolvePaperclipHomeDir(), "logs", "maintenance.log")}; it will relaunch after the build and migration succeed.`,
     });
-    // No SIGTERM. The bat's first step calls stop-paperclip.bat which kills
-    // us by port — that's our exit signal.
+    // The maintenance launcher stops the managed installation.
   }
 
   /**
    * POST /api/system/update
    *
    * Run update-paperclip.bat: stop server, git pull origin/master, rebuild,
-   * migrate, relaunch. Windows-only.
+   * migrate, relaunch. Managed Unix installs use the equivalent shell script.
    */
-  router.post("/system/update", (req, res) => {
-    handleLauncherSpawn(
+  router.post("/system/update", async (req, res) => {
+    await handleLauncherSpawn(
       req,
       res,
       "update",
@@ -331,10 +350,10 @@ export function systemRoutes() {
    * Run rebuild-paperclip.bat: stop server, build from local working tree
    * (no git pull), migrate, relaunch. The local-dev counterpart to /update —
    * use this after editing source files to bake the changes into the running
-   * prod-style install. Windows-only.
+   * install. Managed Unix installs use the equivalent shell script.
    */
-  router.post("/system/rebuild", (req, res) => {
-    handleLauncherSpawn(
+  router.post("/system/rebuild", async (req, res) => {
+    await handleLauncherSpawn(
       req,
       res,
       "rebuild",

@@ -1,0 +1,48 @@
+name: macOS and Linux runtime
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Validate launchers
+        run: |
+          for script in scripts/launchers/unix/*.sh scripts/launchers/macos/*.command; do bash -n "$script"; done
+          node --test scripts/launchers/unix/install-metadata.test.mjs scripts/check-upstream-security.test.mjs
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build runtime including runner
+        run: pnpm build:runtime
+      - name: Smoke-test fresh install and stop
+        env:
+          PAPERCLIP_HOME: ${{ runner.temp }}/paperclip-smoke
+          PAPERCLIP_INSTANCE_ID: ci
+          PORT: 3199
+        run: |
+          bash scripts/launchers/unix/install-paperclip.sh
+          bash scripts/launchers/unix/launch-paperclip.sh > "$RUNNER_TEMP/paperclip-launch.log" 2>&1 &
+          trap 'bash scripts/launchers/unix/stop-paperclip.sh' EXIT
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:3199/api/health; then exit 0; fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/paperclip-launch.log"
+          exit 1

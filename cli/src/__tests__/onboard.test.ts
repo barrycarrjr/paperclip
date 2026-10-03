@@ -79,6 +79,7 @@ function createFreshConfigPath() {
 describe("onboard", () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    process.env.PAPERCLIP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-onboard-home-"));
     delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
     delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
     delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
@@ -86,6 +87,21 @@ describe("onboard", () => {
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("saves a fresh config and returns without starting the server with --setup-only", async () => {
+    const configPath = createFreshConfigPath();
+    await onboard({ config: configPath, yes: true, setupOnly: true, bind: "loopback" });
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as PaperclipConfig;
+    expect(config.server.deploymentMode).toBe("local_trusted");
+    expect(config.server.host).toBe("127.0.0.1");
+    expect(fs.existsSync(path.join(path.dirname(configPath), ".env"))).toBe(true);
+  });
+
+  it("preserves an existing config and returns without starting it with --setup-only", async () => {
+    const fixture = createExistingConfigFixture();
+    await onboard({ config: fixture.configPath, yes: true, setupOnly: true });
+    expect(fs.readFileSync(fixture.configPath, "utf8")).toBe(fixture.configText);
   });
 
   it("preserves an existing config when rerun without flags", async () => {
