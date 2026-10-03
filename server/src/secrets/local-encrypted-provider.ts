@@ -113,6 +113,35 @@ function asLocalEncryptedMaterial(value: StoredSecretVersionMaterial): LocalEncr
   throw badRequest("Invalid local_encrypted secret material");
 }
 
+/**
+ * Encrypt a string with the instance master key for storage in an ordinary
+ * text column. Output is `enc1:<base64 json>`; a value without that prefix is
+ * returned unchanged by `decryptTextAtRest`, so existing plaintext rows keep
+ * reading.
+ */
+const TEXT_AT_REST_PREFIX = "enc1:";
+
+export function encryptTextAtRest(value: string): string {
+  const material = encryptValue(loadOrCreateMasterKey(), value);
+  return `${TEXT_AT_REST_PREFIX}${Buffer.from(JSON.stringify(material), "utf8").toString("base64")}`;
+}
+
+export function isEncryptedTextAtRest(value: string): boolean {
+  return value.startsWith(TEXT_AT_REST_PREFIX);
+}
+
+export function decryptTextAtRest(value: string): string {
+  if (!isEncryptedTextAtRest(value)) return value;
+  const raw = Buffer.from(value.slice(TEXT_AT_REST_PREFIX.length), "base64").toString("utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw badRequest("Invalid encrypted text material");
+  }
+  return decryptValue(loadOrCreateMasterKey(), asLocalEncryptedMaterial(parsed as StoredSecretVersionMaterial));
+}
+
 export const localEncryptedProvider: SecretProviderModule = {
   id: "local_encrypted",
   descriptor: {

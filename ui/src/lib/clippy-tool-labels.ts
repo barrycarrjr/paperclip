@@ -64,6 +64,25 @@ const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = 
     label: "Cancel a reminder",
     sentence: () => "This cancels a reminder so it stops firing.",
   },
+  remember: {
+    label: "Remember something",
+    sentence: (input) => {
+      const name = asString(input.name);
+      return name
+        ? `This saves "${truncate(name, 80)}" to this company's memories. It is stored encrypted and shared with everyone who has access to the company.`
+        : "This saves a memory for this company. It is stored encrypted and shared with everyone who has access to the company.";
+    },
+  },
+  recall_memories: { label: "Look up memories" },
+  forget_memory: {
+    label: "Forget a memory",
+    sentence: (input) => {
+      const name = asString(input.name);
+      return name
+        ? `This permanently deletes the memory "${truncate(name, 80)}".`
+        : "This permanently deletes a stored memory.";
+    },
+  },
 };
 
 export function describeChatTool(name: string, input: unknown): ToolPresentation {

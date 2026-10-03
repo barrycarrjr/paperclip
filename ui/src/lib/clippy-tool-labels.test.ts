@@ -57,6 +57,26 @@ describe("describeChatTool", () => {
   });
 });
 
+describe("memory tools", () => {
+  it("names the memory being saved and says it is encrypted and shared", () => {
+    const p = describeChatTool("remember", { name: "Preferred courier", content: "DHL" });
+    expect(p.label).toBe("Remember something");
+    expect(p.sentence).toContain('"Preferred courier"');
+    expect(p.sentence).toContain("encrypted");
+    expect(p.sentence).toContain("shared");
+  });
+
+  it("treats recall as a read and forget as a permanent delete", () => {
+    expect(describeChatTool("recall_memories", {}).sentence).toBe(
+      "This looks up information. Nothing is changed.",
+    );
+    const forget = describeChatTool("forget_memory", { name: "Preferred courier" });
+    expect(forget.label).toBe("Forget a memory");
+    expect(forget.sentence).toContain("permanently deletes");
+    expect(forget.sentence).toContain('"Preferred courier"');
+  });
+});
+
 describe("draftedApprovalId", () => {
   it("extracts the approval id from the draft-gate outcome object", () => {
     expect(draftedApprovalId({ drafted: true, approvalId: "ap-1" })).toBe("ap-1");

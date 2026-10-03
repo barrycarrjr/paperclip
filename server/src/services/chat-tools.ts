@@ -14,13 +14,19 @@ import {
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
+  MEMORY_CONTENT_MAX,
+  MEMORY_DESCRIPTION_MAX,
+  MEMORY_KINDS,
+  MEMORY_NAME_MAX,
   type CreateCalendarEvent,
+  type MemoryKind,
 } from "@paperclipai/shared";
 import { describeOperationFailure } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { calendarService } from "./calendar.js";
 import { issueService } from "./issues.js";
+import { memoryService } from "./memories.js";
 import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
@@ -1169,6 +1175,219 @@ const cancelReminderTool: ChatToolDefinition<{ reminderId: string }> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Memories: things the user tells Clippy to remember for a company. Stored in
+// the company's memories table; the content is encrypted at rest with the
+// instance secrets master key (see memoryService). Company-level only, so
+// they are shared by everyone with access to the company and are never tied
+// to one agent.
+// ---------------------------------------------------------------------------
+
+function summarizeMemory(row: {
+  id: string;
+  companyId: string;
+  kind: string;
+  name: string;
+  description: string | null;
+  content: string;
+  updatedAt: Date;
+}) {
+  return {
+    id: row.id,
+    companyId: row.companyId,
+    kind: row.kind,
+    name: row.name,
+    description: row.description,
+    content: row.content,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+const rememberTool: ChatToolDefinition<{
+  name: string;
+  content: string;
+  kind?: MemoryKind;
+  description?: string;
+  companyId?: string;
+}> = {
+  name: "remember",
+  description:
+    "Store something the user wants remembered for a company. The content is saved encrypted and is only readable by people with access to that company. Saving again with the same name replaces the earlier memory. Mutating — requires permission.",
+  mutating: true,
+  inputSchema: z.object({
+    name: z.string().trim().min(1).max(MEMORY_NAME_MAX),
+    content: z.string().trim().min(1).max(MEMORY_CONTENT_MAX),
+    kind: z.enum(MEMORY_KINDS).optional(),
+    description: z.string().trim().max(MEMORY_DESCRIPTION_MAX).optional(),
+    companyId: z.string().optional(),
+  }),
+  spec: {
+    name: "remember",
+    description:
+      "Store something the user asked you to remember, scoped to a company and encrypted at rest. Use when the user says things like 'remember that...', 'note that...', 'keep in mind...'. Saving with an existing name replaces that memory.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Short unique title for the memory, e.g. 'Preferred courier' or 'Office wifi password'. Reuse an existing name to update it.",
+        },
+        content: {
+          type: "string",
+          description: "The thing to remember, in the user's own words where possible.",
+        },
+        kind: {
+          type: "string",
+          enum: [...MEMORY_KINDS],
+          description:
+            "user = facts about the operator and how they work; feedback = corrections and preferences; project = ongoing work, deadlines, decisions; reference = where information lives elsewhere. Defaults to project.",
+        },
+        description: {
+          type: "string",
+          description: "Optional one-line summary used when listing memories.",
+        },
+        companyId: {
+          type: "string",
+          description: "Company to attach the memory to. Defaults to the current company.",
+        },
+      },
+      required: ["name", "content"],
+    },
+  },
+  async handler({ name, content, kind, description, companyId }, ctx) {
+    const target = companyId ?? ctx.defaultCompanyId;
+    if (!target) {
+      throw forbidden("No company context: select a company first");
+    }
+    await assertCompanyAccess(ctx, target);
+    const svc = memoryService(ctx.db);
+    const actor = { userId: ctx.actor.userId ?? "board", agentId: null };
+    const existing = await svc.getCompanyMemoryByName(target, name);
+    const saved = existing
+      ? await svc.update(existing.id, {
+          content,
+          ...(kind ? { kind } : {}),
+          ...(description !== undefined ? { description } : {}),
+        })
+      : await svc.create(
+          target,
+          { name, content, kind: kind ?? "project", description: description ?? null, agentId: null },
+          actor,
+        );
+    if (!saved) throw notFound("Memory not found");
+    return {
+      memory: summarizeMemory(saved),
+      replaced: Boolean(existing),
+      message: existing
+        ? `Updated the memory "${saved.name}". It is stored encrypted for this company.`
+        : `Remembered "${saved.name}". It is stored encrypted for this company.`,
+    };
+  },
+};
+
+const recallMemoriesTool: ChatToolDefinition<{
+  query?: string;
+  kind?: MemoryKind;
+  companyId?: string;
+}> = {
+  name: "recall_memories",
+  description:
+    "List what has been remembered for a company, optionally filtered by a search term or kind. Read-only.",
+  mutating: false,
+  inputSchema: z.object({
+    query: z.string().trim().min(1).max(200).optional(),
+    kind: z.enum(MEMORY_KINDS).optional(),
+    companyId: z.string().optional(),
+  }),
+  spec: {
+    name: "recall_memories",
+    description:
+      "Look up memories previously stored for a company. Call this before answering questions about things the user may have asked you to remember. Returns name, kind, description, content and when it was last updated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional search term matched against name, description and content.",
+        },
+        kind: {
+          type: "string",
+          enum: [...MEMORY_KINDS],
+          description: "Optional kind filter.",
+        },
+        companyId: {
+          type: "string",
+          description: "Company to search. Defaults to the current company.",
+        },
+      },
+    },
+  },
+  async handler({ query, kind, companyId }, ctx) {
+    const target = companyId ?? ctx.defaultCompanyId;
+    if (!target) {
+      throw forbidden("No company context: select a company first");
+    }
+    await assertCompanyAccess(ctx, target);
+    const rows = await memoryService(ctx.db).list(target, {
+      ...(query ? { q: query } : {}),
+      ...(kind ? { kind } : {}),
+      limit: 50,
+    });
+    return { memories: rows.map(summarizeMemory) };
+  },
+};
+
+const forgetMemoryTool: ChatToolDefinition<{ memoryId?: string; name?: string; companyId?: string }> = {
+  name: "forget_memory",
+  description:
+    "Delete a remembered item by id or exact name so it is no longer stored. Mutating — requires permission.",
+  mutating: true,
+  inputSchema: z
+    .object({
+      memoryId: z.string().trim().min(1).optional(),
+      name: z.string().trim().min(1).max(MEMORY_NAME_MAX).optional(),
+      companyId: z.string().optional(),
+    })
+    .refine((v) => Boolean(v.memoryId || v.name), {
+      message: "Provide memoryId or name",
+    }),
+  spec: {
+    name: "forget_memory",
+    description: "Delete a stored memory by id or exact name. Use recall_memories first if unsure which one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        memoryId: { type: "string", description: "The memory id to delete." },
+        name: { type: "string", description: "Exact name of the memory to delete, if no id is known." },
+        companyId: {
+          type: "string",
+          description: "Company the memory belongs to. Defaults to the current company.",
+        },
+      },
+    },
+  },
+  async handler({ memoryId, name, companyId }, ctx) {
+    const target = companyId ?? ctx.defaultCompanyId;
+    if (!target) {
+      throw forbidden("No company context: select a company first");
+    }
+    await assertCompanyAccess(ctx, target);
+    const svc = memoryService(ctx.db);
+    const existing = memoryId
+      ? await svc.getById(memoryId)
+      : await svc.getCompanyMemoryByName(target, name!);
+    if (!existing || existing.companyId !== target) {
+      throw badRequest(`Memory ${memoryId ?? `"${name}"`} not found in this company`);
+    }
+    await svc.remove(existing.id);
+    return {
+      memory: { id: existing.id, name: existing.name },
+      message: `Forgot "${existing.name}".`,
+    };
+  },
+};
+
 export const CHAT_TOOLS: ChatToolDefinition[] = [
   listCompaniesTool,
   getCompanyTool,
@@ -1185,6 +1404,9 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   createReminderTool,
   listRemindersTool,
   cancelReminderTool,
+  rememberTool,
+  recallMemoriesTool,
+  forgetMemoryTool,
 ] as ChatToolDefinition[];
 
 const TOOLS_BY_NAME: Record<string, ChatToolDefinition> = Object.fromEntries(
