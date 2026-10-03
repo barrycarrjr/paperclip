@@ -12,6 +12,46 @@ CREATE TABLE IF NOT EXISTS "folders" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "company_secret_provider_configs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"company_id" uuid NOT NULL,
+	"provider" text NOT NULL,
+	"display_name" text NOT NULL,
+	"status" text DEFAULT 'ready' NOT NULL,
+	"is_default" boolean DEFAULT false NOT NULL,
+	"config" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"health_status" text,
+	"health_checked_at" timestamp with time zone,
+	"health_message" text,
+	"health_details" jsonb,
+	"disabled_at" timestamp with time zone,
+	"created_by_agent_id" uuid,
+	"created_by_user_id" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "user_secret_definitions" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"company_id" uuid NOT NULL,
+	"key" text NOT NULL,
+	"name" text NOT NULL,
+	"description" text,
+	"status" text DEFAULT 'active' NOT NULL,
+	"provider" text DEFAULT 'local_encrypted' NOT NULL,
+	"managed_mode" text DEFAULT 'paperclip_managed' NOT NULL,
+	"provider_config_id" uuid,
+	"provider_metadata" jsonb,
+	"usage_guidance" text,
+	"created_by_agent_id" uuid,
+	"created_by_user_id" text,
+	"updated_by_agent_id" uuid,
+	"updated_by_user_id" text,
+	"deleted_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "user_secret_declarations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
@@ -123,6 +163,14 @@ ALTER TABLE "routine_runs" ADD COLUMN IF NOT EXISTS "responsible_user_id" text;
 ALTER TABLE "routine_runs" ADD COLUMN IF NOT EXISTS "routine_revision_id" uuid;
 --> statement-breakpoint
 ALTER TABLE "activity_log" ADD COLUMN IF NOT EXISTS "responsible_user_id" text;
+--> statement-breakpoint
+ALTER TABLE "company_secrets" ADD COLUMN IF NOT EXISTS "key" text;
+--> statement-breakpoint
+UPDATE "company_secrets"
+SET "key" = LOWER(REGEXP_REPLACE("name", '[^a-zA-Z0-9_]+', '_', 'g'))
+WHERE "key" IS NULL;
+--> statement-breakpoint
+ALTER TABLE "company_secrets" ALTER COLUMN "key" SET NOT NULL;
 --> statement-breakpoint
 ALTER TABLE "company_secrets" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'company' NOT NULL;
 --> statement-breakpoint
@@ -281,6 +329,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS "folders_company_kind_parent_slug_uq" ON "fold
 CREATE UNIQUE INDEX IF NOT EXISTS "folders_company_kind_system_key_uq" ON "folders" USING btree ("company_id", "kind", "system_key") WHERE ("system_key" IS NOT NULL);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "folders_company_kind_parent_position_idx" ON "folders" USING btree ("company_id", "kind", "parent_id", "position", "name");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "company_secret_provider_configs_company_idx" ON "company_secret_provider_configs" USING btree ("company_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "company_secret_provider_configs_company_provider_idx" ON "company_secret_provider_configs" USING btree ("company_id", "provider");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "company_secret_provider_configs_default_uq" ON "company_secret_provider_configs" USING btree ("company_id", "provider") WHERE ("is_default" = true);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_secret_definitions_company_status_idx" ON "user_secret_definitions" USING btree ("company_id", "status");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_secret_definitions_company_provider_idx" ON "user_secret_definitions" USING btree ("company_id", "provider");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_secret_definitions_provider_config_idx" ON "user_secret_definitions" USING btree ("provider_config_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "user_secret_definitions_company_key_uq" ON "user_secret_definitions" USING btree ("company_id", "key") WHERE ("deleted_at" IS NULL);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "user_secret_declarations_company_idx" ON "user_secret_declarations" USING btree ("company_id");
 --> statement-breakpoint
