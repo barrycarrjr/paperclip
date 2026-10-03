@@ -11,7 +11,7 @@ export function PipelinesExperimentalGate({ children }: { children: ReactNode })
   });
 
   if (!isFetched) return null;
-  if (experimentalSettings?.enablePipelines !== true) {
+  if (experimentalSettings?.enablePipelines === false) {
     return <Navigate to="/dashboard" replace />;
   }
   return <>{children}</>;

@@ -15,7 +15,7 @@ export function CasesExperimentalGate({ children }: { children: ReactNode }) {
   });
 
   if (!isFetched) return null;
-  if (experimentalSettings?.enableCases !== true) {
+  if (experimentalSettings?.enableCases === false) {
     return <Navigate to="/dashboard" replace />;
   }
   return <>{children}</>;
