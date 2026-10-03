@@ -100,7 +100,7 @@ has explicitly configured trusted proxies.
 
 `pnpm build:runtime` includes both the native runner and eval-kernel. Windows LF
 checkout rules, missing skill references, capability inventories, and a Windows
-file-URL import were repaired. Refresh source-derived inventories with:
+file-URL imports and the contract generator entry point were repaired. Refresh source-derived inventories with:
 
 ```bash
 pnpm --filter @paperclipai/paperclip-runner exec node scripts/generate-capability-inventory.mjs --local-sources
@@ -133,8 +133,10 @@ The fork's removed analytics and default external feedback export remain removed
 
 - `pnpm -r typecheck` and `pnpm build` passed, including the pinned Rust runner binary.
 - 108 targeted tests passed across the security, plugin SDK, update-check,
-  maintenance-route, and onboarding suites. Seven Node tests passed for Mac
-  app generation, capability inventory validation, and upstream review detection.
+  maintenance-route, and onboarding suites. Ten Node tests passed for Mac
+  app generation, capability inventory/contract validation, direct CLI execution,
+  and upstream review detection. One upstream guidance test is skipped because
+  its section is absent from the fork skill sources.
 - All new Bash/Finder launcher scripts passed Bash syntax validation.
 - A temporary installation on Windows booted on port 3199, returned a healthy
   API response, detected a duplicate launch, and stopped through the managed
@@ -150,5 +152,8 @@ The fork's removed analytics and default external feedback export remain removed
   preserving the memory table.
 - A fresh checkout needs `pnpm install --no-frozen-lockfile` because the fork
   owns lockfile updates in CI; the new Unix workflow follows this policy.
-- The macOS/Ubuntu workflow has not yet been verified on GitHub; no actual
-  Mac execution is claimed.
+- Initial macOS/Ubuntu CI runs exposed a contract generator entry point that
+  silently skipped Windows validation. Its file-URL check and fork MCP mappings
+  are repaired, with a direct CLI regression test; reruns remain pending.
+- The existing PR policy job fails Docker manifest coverage for fork adapters
+  and runner packages. Actual Mac installation has not been verified.
