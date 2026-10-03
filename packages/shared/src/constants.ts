@@ -1647,6 +1647,8 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "activity",
   "inbox",
   "workspaces",
+  "pipelines",
+  "cases",
   "design-guide",
   "tests",
 ] as const;
