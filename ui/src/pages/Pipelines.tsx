@@ -897,6 +897,62 @@ export function pipelineKeyFromName(name: string) {
   return slug || "pipeline";
 }
 
+function PipelinesEmptyHero({ onNewPipeline }: { onNewPipeline: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <GitBranch className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Orchestrate Work with Pipelines</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Pipelines give your agents and team a structured workflow to take projects from initial intake all the way to final delivery.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Multi-Stage Flow</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Break deliverables into sequential stages like Intake, Drafting, and Review.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <GitBranch className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Agent Automation</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Trigger agents to automatically run tasks, write drafts, and push updates.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Check className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Review Gates</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Enforce human reviews and approvals before moving high-impact work forward.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onNewPipeline} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Create your first pipeline
+      </Button>
+    </div>
+  );
+}
+
 function PipelinesIndex() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -956,8 +1012,13 @@ function PipelinesIndex() {
           <p className="text-xs font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Work</p>
           <h1 className="text-2xl font-semibold text-foreground">Pipelines</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {formatNumber(pipelines.length)} pipeline{pipelines.length === 1 ? "" : "s"}. Connected ones are grouped from upstream work into downstream work.
+            Structured multi-stage workflows that guide work items (cases) through automated agent execution, review gates, and completion.
           </p>
+          {pipelines.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatNumber(pipelines.length)} pipeline{pipelines.length === 1 ? "" : "s"}. Connected ones are grouped from upstream work into downstream work.
+            </p>
+          )}
         </div>
         <Button onClick={() => setNewPipelineOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
@@ -970,12 +1031,7 @@ function PipelinesIndex() {
       ) : null}
 
       {pipelines.length === 0 && !pipelinesQuery.error ? (
-        <EmptyState
-          icon={Hexagon}
-          message="No pipelines yet."
-          action="New pipeline"
-          onAction={() => setNewPipelineOpen(true)}
-        />
+        <PipelinesEmptyHero onNewPipeline={() => setNewPipelineOpen(true)} />
       ) : (
         <PipelinesIndexTable
           pipelines={pipelines}

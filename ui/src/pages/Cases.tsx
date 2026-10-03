@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpDown, Check, ChevronDown, Columns3, Filter, Layers, ListTree, Search, SearchX } from "lucide-react";
+import { ArrowUpDown, Check, ChevronDown, Columns3, Filter, GitBranch, Layers, ListTree, Search, SearchX } from "lucide-react";
 import { Link, useCaseHref, useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -712,28 +712,78 @@ function CaseSortPicker({
 
 /** Full-page onboarding hero shown when the company has zero cases (§6). */
 function CasesEmptyHero() {
+  const navigate = useNavigate();
+  const [showDevDetails, setShowDevDetails] = useState(false);
+
   return (
-    <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-16 text-center">
-      <Layers className="h-10 w-10 text-muted-foreground" />
-      <h2 className="text-lg font-semibold">No cases yet</h2>
-      <p className="text-sm text-muted-foreground">
-        Cases are durable work products — blog posts, tweet storms, docs pages — that tasks create and
-        iterate on. In v1 they&apos;re created by agents, not from the UI.
-      </p>
-      <div className="w-full space-y-2 rounded-lg border border-border bg-muted/50 p-4 text-left">
-        <p className="text-sm font-medium">To start creating cases, add this to a skill:</p>
-        <pre className="overflow-x-auto rounded bg-background/60 p-3 font-mono text-xs text-muted-foreground">
-{`"Create a case of type blog_post with fields
-{slug, target_audience, publish_url} and key <release>/<slug>."`}
-        </pre>
-        <p className="text-xs text-muted-foreground">
-          See the paperclip skill → <code className="font-mono">references/cases.md</code> for the API.
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Layers className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">What are Cases?</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Cases are durable work items and deliverables — such as articles, pull requests, incident investigations, documentation, or design assets — that evolve across multiple tasks and agent runs.
         </p>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Feature is gated by the <code className="font-mono">enableCases</code> experimental flag
-        (Settings → Experimental).
-      </p>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <GitBranch className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Pipeline Items</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            When you add items to a Pipeline, each item is tracked as a case progressing through stages.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Persistent Artifacts</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Cases preserve their outputs, documents, attachments, and event history over time.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ListTree className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Hierarchy & Rollups</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Organize cases into parent-child trees to roll up sub-tasks into high-level deliverables.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <Button onClick={() => navigate("/pipelines")}>
+          <GitBranch className="mr-2 h-4 w-4" />
+          Explore Pipelines
+        </Button>
+        <Button variant="outline" onClick={() => setShowDevDetails((v) => !v)}>
+          {showDevDetails ? "Hide Agent / Skill Setup" : "Agent / Skill Setup"}
+        </Button>
+      </div>
+
+      {showDevDetails && (
+        <div className="w-full space-y-2 rounded-lg border border-border bg-muted/50 p-4 text-left animate-in fade-in-50">
+          <p className="text-sm font-medium">To have agents create and update cases autonomously:</p>
+          <pre className="overflow-x-auto rounded bg-background/60 p-3 font-mono text-xs text-muted-foreground">
+{`"Create a case of type blog_post with fields
+{slug, target_audience, publish_url} and key <release>/<slug>."`}
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            Agents can create, advance, or query cases using their tools and the Paperclip Case API.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
