@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
+  FolderSync,
   Plus,
   Search,
   Trash2,
@@ -24,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/EmptyState";
+import { MemoryFolderDialog } from "@/components/MemoryFolderDialog";
 import { InfoPopoverButton } from "@/components/InfoPopoverButton";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -126,6 +128,7 @@ export function Memories() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [folderOpen, setFolderOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<Memory | null>(null);
 
@@ -239,10 +242,16 @@ export function Memories() {
             Durable notes — facts, preferences, decisions — that agents save and recall across runs.
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
-          New Memory
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setFolderOpen(true)}>
+            <FolderSync className="h-3.5 w-3.5 mr-1.5" />
+            Memory folder
+          </Button>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            New Memory
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -353,6 +362,12 @@ export function Memories() {
           </table>
         </div>
       )}
+
+      <MemoryFolderDialog
+        companyId={selectedCompanyId}
+        open={folderOpen}
+        onOpenChange={setFolderOpen}
+      />
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

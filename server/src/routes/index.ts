@@ -9,6 +9,7 @@ export { routineRoutes } from "./routines.js";
 export { starterCatalogRoutes } from "./starter-catalog.js";
 export { goalRoutes } from "./goals.js";
 export { memoryRoutes } from "./memories.js";
+export { memoryFolderRoutes } from "./memory-folders.js";
 export { workQueueRoutes } from "./work-queues.js";
 export { structuralFindingRoutes } from "./structural-findings.js";
 export { approvalRoutes } from "./approvals.js";

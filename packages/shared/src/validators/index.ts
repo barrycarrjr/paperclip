@@ -283,6 +283,11 @@ export {
   type UpdateMemory,
   type MemoryListQuery,
 } from "./memory.js";
+export {
+  MEMORY_FOLDER_SCHEDULES,
+  updateMemoryFolderSchema,
+  type UpdateMemoryFolder,
+} from "./memory-folder.js";
 
 export {
   WORK_QUEUE_ITEM_STATUSES,
