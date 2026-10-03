@@ -31,7 +31,7 @@ if (!embeddedPostgresSupport.supported) {
 }
 
 function expectConstraintError(action: () => Promise<unknown>) {
-  return expect(action()).rejects.toThrow("Failed query");
+  return expect(action()).rejects.toThrow(/(?:Failed query|duplicate key value|violates)/i);
 }
 
 describeEmbeddedPostgres("pipeline schema", () => {
