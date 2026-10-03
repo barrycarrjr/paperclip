@@ -12,7 +12,63 @@ import { InfoPopoverButton } from "../components/InfoPopoverButton";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { formatDate, projectUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
-import { Hexagon, Plus } from "lucide-react";
+import { Bot, Hexagon, Layers, Plus } from "lucide-react";
+
+function ProjectsEmptyHero({ onNewProject }: { onNewProject: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Hexagon className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Organize Work into Projects</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Projects bring together tasks, routines, and deliverables under a single initiative—giving your agents and team a cohesive home for related efforts.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Hexagon className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Dedicated Initiatives</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Group related code repositories, roadmaps, and bug fixes into distinct workspaces.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Visual Identification</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Custom project colors tag issues, routines, and activity feeds so you can scan progress instantly.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bot className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Focused Agent Context</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Equip agents with specific prompt instructions, tools, and repo boundaries per project.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onNewProject} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Create your first project
+      </Button>
+    </div>
+  );
+}
 
 export function Projects() {
   // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —

@@ -10,12 +10,70 @@ import { invalidateAttention } from "../lib/invalidate-attention";
 import { cn } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, CheckCircle2, History, Lock, Check } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { EmptyState } from "../components/EmptyState";
 
 type StatusFilter = "pending" | "all";
+
+function ApprovalsEmptyHero() {
+  const navigate = useNavigate();
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <ShieldCheck className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Safe Human-in-the-Loop Governance</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Approvals give you full control over your agent workforce. When an agent needs to perform critical operations—like spending budget, running terminal commands, or deploying code—it pauses and requests authorization here.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Lock className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Guarded Autonomy</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Agents run freely on routine tasks, pausing only when their actions exceed safe operational thresholds.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Check className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">One-Click Review</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Inspect the agent's explanation, proposed diffs, or API parameters and approve or reject with a click.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <History className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Full Audit Log</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Every approval decision and revision request is permanently recorded for compliance and debugging.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={() => navigate("/agents")}>
+        View Agent Workforce
+      </Button>
+    </div>
+  );
+}
 
 export function Approvals() {
   // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —

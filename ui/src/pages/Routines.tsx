@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "@/lib/router";
-import { Check, ChevronDown, ChevronRight, Layers, MoreHorizontal, Plus, Repeat } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Clock, Layers, MoreHorizontal, Plus, Repeat } from "lucide-react";
 import { routinesApi } from "../api/routines";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
@@ -287,6 +287,62 @@ function RoutineListRow({
         </DropdownMenu>
       </div>
     </Link>
+  );
+}
+
+function RoutinesEmptyHero({ onCreateRoutine }: { onCreateRoutine: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Repeat className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Automate Recurring Agent Workflows</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Automations (routines) trigger agents on a scheduled clock—such as hourly queue sweeps, daily standup summaries, continuous triage, or weekly maintenance audits.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Clock className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Scheduled Triggers</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Run on predefined hourly, daily, or weekly intervals, or configure fine-grained cron schedules.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bot className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Auditable Task Runs</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Each occurrence spawns a real, traceable execution issue assigned to an agent, capturing full outputs.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Concurrency Guards</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Choose whether to coalesce, skip, or stack runs when a previous run is still in progress.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onCreateRoutine} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Create your first routine
+      </Button>
+    </div>
   );
 }
 
