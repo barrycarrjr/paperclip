@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
 import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Heart, Pencil, Plus, Users } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Heart, Network, Pencil, Plus, ShieldCheck, Users } from "lucide-react";
 import type { Agent, AgentRole, AgentStatus, Company } from "@paperclipai/shared";
 import { AGENT_ROLES, AGENT_STATUSES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { agentsApi, type OrgNode } from "../api/agents";

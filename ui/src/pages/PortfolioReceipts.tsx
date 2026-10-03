@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { History, Sparkles } from "lucide-react";
+import { CheckCircle2, FileCheck, History, Layers, Sparkles } from "lucide-react";
 import type { ActivityEvent, Agent, Company } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
 import { agentsApi } from "../api/agents";
@@ -64,6 +64,57 @@ function dayHeaderLabel(d: Date): string {
     return `${key} · ${date}`;
   }
   return key;
+}
+
+function PortfolioReceiptsEmptyHero() {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Sparkles className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Verified Agent Outcomes & Deliverables</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Receipts transform raw agent execution logs into verifiable business deliverables—showing exactly what your autonomous workforce produced across all companies.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <FileCheck className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Tangible Outputs</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Track published drafts, resolved tickets, code commits, and approved requests without digging into logs.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Cross-Company Feed</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Roll up activity across every subsidiary into a clean, day-by-day feed filtered by outcome type.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <CheckCircle2 className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Traceable Attribution</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            See the exact agent responsible for each deliverable, with links to source tasks and context.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function PortfolioReceipts() {

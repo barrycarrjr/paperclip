@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Loader2, MoreHorizontal, Pause, Play, Plus, Repeat, Archive as ArchiveIcon, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Clock, Layers, Loader2, MoreHorizontal, Pause, Play, Plus, Repeat, Archive as ArchiveIcon, X } from "lucide-react";
 import type { Company, RoutineListItem } from "@paperclipai/shared";
 import { routinesApi } from "../api/routines";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
@@ -265,6 +265,57 @@ function CompanySection({
           {routines.length === 0 && <p className="px-3 py-2 text-sm text-muted-foreground">No routines match the current filters.</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+function PortfolioRoutinesEmptyHero() {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Repeat className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Global Automations Management</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Monitor and orchestrate all scheduled agent workflows across your company network. Keep background processes visible, synchronized, and controlled.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Clock className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Unified Schedules</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Track cron runs, hourly sweeps, and recurring daily tasks in every company from a single timeline.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Bulk Coordination</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Quickly pause, resume, trigger, or archive routines across multiple subsidiaries at once.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bot className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Execution Auditing</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Trace every automated fire directly to an assigned agent issue with inputs and outputs logged.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Loader2, Megaphone, Plus } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ListTree, Loader2, Megaphone, Plus, Sparkles } from "lucide-react";
 import type { Company, DirectivePreview } from "@paperclipai/shared";
 import { issuesApi, type PortfolioDirective } from "../api/issues";
 import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
@@ -373,6 +373,62 @@ function NewDirectiveDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PortfolioDirectivesEmptyHero({ onNewDirective }: { onNewDirective: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Megaphone className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Broadcast Strategic Directives</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Directives let you broadcast high-level executive commands from HQ across your portfolio. Each company's CEO agent autonomously breaks down the command into delegated team tasks.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Executive Intent</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Express top-level mandates in natural language without having to micro-manage task assignments.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Bot className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">CEO Delegation</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            The directive lands with each subsidiary's CEO agent, which creates sub-issues for engineering, marketing, or ops.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ListTree className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Unified Rollup</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Watch overall completion progress across all companies in real time from a single progress bar.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={onNewDirective} size="lg" className="mt-2">
+        <Plus className="mr-2 h-4 w-4" />
+        Broadcast your first directive
+      </Button>
+    </div>
   );
 }
 

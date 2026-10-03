@@ -529,6 +529,57 @@ function BulkActionsBar({
   );
 }
 
+function PortfolioIssuesEmptyHero() {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <Globe2 className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Portfolio-Wide Work Tracking</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Triage, prioritize, and manage agent and human tasks across every operating company from a unified cross-company backlog.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Globe2 className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Unified Triage</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            View active work items grouped by company, status, and priority without switching projects.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Tag className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Bulk Coordination</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Batch-update status, assign cross-company tags, or leave comments across multiple tasks at once.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Check className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Agent Assignees</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Directly reassign tasks between specialized agents and inspect execution logs in real time.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PortfolioIssues() {
   // Both URL-derived, not useCompany()'s selection state (P4 sweep,
   // 2026-09-03) — same shape as Everything.tsx/PortfolioEmail.tsx. This page

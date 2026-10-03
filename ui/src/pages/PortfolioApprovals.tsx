@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ClipboardCheck } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, ClipboardCheck, Layers, Lock, ShieldCheck } from "lucide-react";
 import type { Approval, Company } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
 import { useActiveCompanyId, useIsActiveCompanyPortfolioRoot } from "../hooks/useRouteCompany";
@@ -124,6 +124,57 @@ function BulkActionsBar({ count, onApprove, onReject, onClear, isPending }: { co
       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onApprove} disabled={isPending}>Approve all</Button>
       <Button variant="outline" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={onReject} disabled={isPending}>Reject all</Button>
       <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={onClear}>✕ Deselect</Button>
+    </div>
+  );
+}
+
+function PortfolioApprovalsEmptyHero() {
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-12 text-center">
+      <div className="relative">
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-5">
+          <ClipboardCheck className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-xl font-semibold text-foreground">Cross-Company Governance Cockpit</h2>
+        <p className="max-w-lg text-sm text-muted-foreground leading-relaxed">
+          Portfolio Approvals gives executive operators centralized control over sensitive actions requested by agents across all operating companies in your portfolio.
+        </p>
+      </div>
+
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 text-left">
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Layers className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Unified Inbox</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Review pending budget expenditures, command runs, and deployments across all subsidiaries without switching contexts.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Lock className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Batch Operations</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Select and batch-approve routine requests across companies in seconds with bulk actions.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-card p-4 shadow-xs">
+          <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <ShieldCheck className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-medium text-foreground">Audit Compliance</h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
+            Maintain a transparent, immutable record of approvals, rejections, and reviewer rationales portfolio-wide.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
