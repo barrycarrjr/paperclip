@@ -6,8 +6,9 @@ discard_generated_lockfile
 [ "$(git branch --show-current)" = master ] || fail 'Automatic updates require the master branch.'
 git fetch origin master
 git merge-base --is-ancestor HEAD origin/master || fail 'This checkout is ahead of or diverged from origin/master. Resolve it before updating.'
-service stop
 backup_existing
+service stop
+cold_backup_if_needed
 git merge --ff-only origin/master
 pnpm install --no-frozen-lockfile
 pnpm build:runtime

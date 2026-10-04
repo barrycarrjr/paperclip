@@ -23,10 +23,56 @@ check_build_tools() {
 service() {
   pnpm --dir "$PAPERCLIP_SRC" --filter @paperclipai/server exec tsx ../scripts/installed-service.ts "$1"
 }
+# The embedded database runs inside the Paperclip server, so a live backup can
+# only connect while the server is up. Call this BEFORE `service stop`. When
+# the live backup cannot run (usually because the server is already stopped),
+# it records that a cold copy is needed; cold_backup_if_needed takes that copy
+# once the server is confirmed stopped.
+PAPERCLIP_COLD_BACKUP=0
 backup_existing() {
-  if [ -f "$PAPERCLIP_CONFIG" ]; then
-    pnpm --dir "$PAPERCLIP_SRC" paperclipai db:backup --config "$PAPERCLIP_CONFIG"
+  [ -f "$PAPERCLIP_CONFIG" ] || return 0
+  if pnpm --dir "$PAPERCLIP_SRC" paperclipai db:backup --config "$PAPERCLIP_CONFIG"; then
+    PAPERCLIP_COLD_BACKUP=0
+  else
+    printf 'Live backup did not run. A copy of the database directory will be taken once the server is stopped.\n' >&2
+    PAPERCLIP_COLD_BACKUP=1
   fi
+}
+# Prints the embedded data directory, then the backup directory, one per line.
+# Prints nothing when the instance uses an external PostgreSQL server.
+database_paths() {
+  node -e '
+    const fs = require("node:fs"), path = require("node:path");
+    const configPath = process.argv[1];
+    const db = (JSON.parse(fs.readFileSync(configPath, "utf8")).database) || {};
+    if (db.mode && db.mode !== "embedded-postgres") process.exit(0);
+    const instance = path.dirname(configPath);
+    console.log(db.embeddedPostgresDataDir || path.join(instance, "db"));
+    console.log((db.backup && db.backup.dir) || path.join(instance, "data", "backups"));
+  ' "$PAPERCLIP_CONFIG"
+}
+# Call this AFTER `service stop`. Copying the data directory is only safe while
+# PostgreSQL is not running, so a live postmaster stops the run instead.
+cold_backup_if_needed() {
+  [ "$PAPERCLIP_COLD_BACKUP" = 1 ] || return 0
+  local paths data_dir backup_dir pid dest
+  paths="$(database_paths)"
+  data_dir="$(printf '%s\n' "$paths" | sed -n 1p)"
+  backup_dir="$(printf '%s\n' "$paths" | sed -n 2p)"
+  [ -n "$data_dir" ] || fail 'The database backup failed and this instance uses an external PostgreSQL server. Fix the backup before continuing.'
+  [ -d "$data_dir" ] || fail "The database backup failed and no database directory was found at $data_dir. Fix the backup before continuing."
+  if [ -f "$data_dir/postmaster.pid" ]; then
+    pid="$(sed -n 1p "$data_dir/postmaster.pid")"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      fail "PostgreSQL is still running (pid $pid) but the live backup failed. Stop it or fix the backup before continuing."
+    fi
+  fi
+  dest="$backup_dir/cold-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$dest"
+  cp -R "$data_dir" "$dest/db"
+  rm -f "$dest/db/postmaster.pid"
+  PAPERCLIP_COLD_BACKUP=0
+  printf 'Cold backup saved: %s\n' "$dest"
 }
 configure_database() {
   if [ -f "$PAPERCLIP_CONFIG" ]; then
