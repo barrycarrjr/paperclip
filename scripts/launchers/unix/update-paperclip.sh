@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 check_build_tools
+discard_generated_lockfile
 [ -z "$(git status --porcelain)" ] || fail 'The checkout has local changes. Commit or move them before updating.'
 [ "$(git branch --show-current)" = master ] || fail 'Automatic updates require the master branch.'
 git fetch origin master

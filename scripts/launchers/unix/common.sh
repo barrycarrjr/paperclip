@@ -37,6 +37,15 @@ configure_database() {
     pnpm --dir "$PAPERCLIP_SRC" db:migrate
   fi
 }
+# CI owns pnpm-lock.yaml (doc/DEVELOPING.md), and the install step runs with
+# --no-frozen-lockfile, so pnpm rewrites the lockfile whenever a manifest is
+# ahead of the committed copy. That rewrite is generated state, not a local
+# edit: restore it so it cannot block an update or a fast-forward merge.
+discard_generated_lockfile() {
+  if [ -n "$(git status --porcelain -- pnpm-lock.yaml)" ]; then
+    git checkout -- pnpm-lock.yaml
+  fi
+}
 record_install() {
   node "$PAPERCLIP_SRC/scripts/launchers/unix/install-metadata.mjs" "$PAPERCLIP_SRC"
 }
