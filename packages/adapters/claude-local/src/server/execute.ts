@@ -573,6 +573,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
+  const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   // Plugin MCP bridge — when chat.ts has minted a token and built a URL,
   // write a temp .mcp.json so Claude Code dials in via Streamable HTTP and
   // sees Paperclip plugin tools (e.g. `3cx-tools__pbx_click_to_call`).
@@ -612,6 +613,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
+    memoriesNote,
     wakePrompt,
     sessionHandoffNote,
     taskContextNote,
@@ -620,6 +622,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const promptMetrics = {
     promptChars: prompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
+    memoriesPromptChars: memoriesNote.length,
     wakePromptChars: wakePrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
     taskContextChars: taskContextNote.length,
