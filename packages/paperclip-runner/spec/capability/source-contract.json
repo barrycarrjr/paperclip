@@ -9,13 +9,18 @@
     "skills/paperclip/references/company-skills.md",
     "skills/paperclip/references/issue-workspaces.md",
     "skills/paperclip/references/routines.md",
-    "skills/paperclip/references/workflows.md"
+    "skills/paperclip/references/workflows.md",
+    "skills/paperclip/references/email-handoffs.md"
   ],
   "toolMappings": {
+    "paperclipFindAgentsByCapability": ["optional_agent_tool","find_agents_by_capability"],
+    "paperclipListEmailHandoffs": ["optional_agent_tool","list_email_handoffs"],
+    "paperclipAcknowledgeEmailHandoff": ["optional_agent_tool","acknowledge_email_handoff"],
+    "paperclipResolveEmailHandoff": ["optional_agent_tool","resolve_email_handoff"],
+    "paperclipHandBackEmailHandoff": ["optional_agent_tool","hand_back_email_handoff"],
     "paperclipMe": ["control_plane_owned", "injected_actor_context"],
     "paperclipInboxLite": ["control_plane_owned", "runner_work_selection"],
     "paperclipListAgents": ["optional_agent_tool", "list_agents"],
-    "paperclipListSkills": ["optional_agent_tool", "list_company_skills"],
     "paperclipGetAgent": ["optional_agent_tool", "get_agent"],
     "paperclipListIssues": ["optional_agent_tool", "search_tasks"],
     "paperclipGetIssue": ["always_agent_tool", "get_task_context"],
@@ -46,7 +51,6 @@
     "paperclipSuggestTasks": ["always_agent_tool", "request_human_input"],
     "paperclipAskUserQuestions": ["always_agent_tool", "request_human_input"],
     "paperclipRequestConfirmation": ["always_agent_tool", "request_human_input"],
-    "paperclipRequestCheckboxConfirmation": ["always_agent_tool", "request_human_input"],
     "paperclipUpsertIssueDocument": ["always_agent_tool", "write_document"],
     "paperclipRestoreIssueDocumentRevision": ["optional_agent_tool", "restore_document_revision"],
     "paperclipLinkIssueApproval": ["optional_agent_tool", "link_approval"],

@@ -162,7 +162,8 @@
       ],
       "evidenceIds": [
         "eval:ap-mcp-expiry-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ap-mcp-gate-01",
@@ -200,7 +201,8 @@
       ],
       "evidenceIds": [
         "eval:ap-mcp-gate-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ap-mcp-pathmissing-01",
@@ -233,7 +235,8 @@
       ],
       "evidenceIds": [
         "eval:ap-mcp-pathmissing-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ar-no-done-without-upload-01",
@@ -264,7 +267,8 @@
       ],
       "evidenceIds": [
         "eval:ar-no-done-without-upload-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ar-upload-before-done-01",
@@ -300,7 +304,8 @@
       ],
       "evidenceIds": [
         "eval:ar-upload-before-done-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ar-workproduct-pr-01",
@@ -330,7 +335,8 @@
       ],
       "evidenceIds": [
         "eval:ar-workproduct-pr-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ar-workproduct-wsfile-01",
@@ -366,7 +372,8 @@
       ],
       "evidenceIds": [
         "eval:ar-workproduct-wsfile-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "bl-cancelled-not-resolved-01",
@@ -403,7 +410,8 @@
       ],
       "evidenceIds": [
         "eval:bl-cancelled-not-resolved-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "bl-clear-01",
@@ -434,7 +442,8 @@
       ],
       "evidenceIds": [
         "eval:bl-clear-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "bl-create-blocked-01",
@@ -465,7 +474,8 @@
       ],
       "evidenceIds": [
         "eval:bl-create-blocked-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "bl-firstclass-01",
@@ -501,7 +511,8 @@
       ],
       "evidenceIds": [
         "eval:bl-firstclass-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "bl-read-owners-01",
@@ -532,7 +543,8 @@
       ],
       "evidenceIds": [
         "eval:bl-read-owners-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "cm-mention-structured-01",
@@ -562,7 +574,8 @@
       ],
       "evidenceIds": [
         "eval:cm-mention-structured-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "cm-multiline-01",
@@ -631,7 +644,8 @@
       ],
       "evidenceIds": [
         "eval:cm-prefixed-url-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "cm-progress-nextaction-01",
@@ -666,7 +680,8 @@
       ],
       "evidenceIds": [
         "eval:cm-progress-nextaction-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "cm-runid-modify-01",
@@ -696,7 +711,8 @@
       ],
       "evidenceIds": [
         "eval:cm-runid-modify-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "cm-ticket-link-01",
@@ -726,7 +742,8 @@
       ],
       "evidenceIds": [
         "eval:cm-ticket-link-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "co-409-stop-01",
@@ -766,7 +783,8 @@
       ],
       "evidenceIds": [
         "eval:co-409-stop-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "co-409-stop-02",
@@ -806,7 +824,8 @@
       ],
       "evidenceIds": [
         "eval:co-409-stop-02"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "co-before-work-01",
@@ -838,7 +857,8 @@
       ],
       "evidenceIds": [
         "eval:co-before-work-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "co-body-contract-01",
@@ -910,7 +930,8 @@
       ],
       "evidenceIds": [
         "eval:co-no-status-patch-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "co-runid-header-01",
@@ -946,7 +967,8 @@
       ],
       "evidenceIds": [
         "eval:co-runid-header-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "dp-base-revision-01",
@@ -1060,7 +1082,8 @@
       ],
       "evidenceIds": [
         "eval:dp-plan-link-comment-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-blocked-dedup-01",
@@ -1098,7 +1121,8 @@
       ],
       "evidenceIds": [
         "eval:er-blocked-dedup-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-budget-critical-01",
@@ -1132,7 +1156,8 @@
       ],
       "evidenceIds": [
         "eval:er-budget-critical-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-close-retry-fault-01",
@@ -1163,7 +1188,8 @@
       ],
       "evidenceIds": [
         "eval:er-close-retry-fault-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-exec-not-participant-01",
@@ -1195,7 +1221,8 @@
       ],
       "evidenceIds": [
         "eval:er-exec-not-participant-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-exec-participant-01",
@@ -1228,7 +1255,8 @@
       ],
       "evidenceIds": [
         "eval:er-exec-participant-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-mention-handoff-01",
@@ -1265,7 +1293,8 @@
       ],
       "evidenceIds": [
         "eval:er-mention-handoff-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-mention-noassign-01",
@@ -1302,7 +1331,8 @@
       ],
       "evidenceIds": [
         "eval:er-mention-noassign-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-no-unassigned-01",
@@ -1341,7 +1371,8 @@
       ],
       "evidenceIds": [
         "eval:er-no-unassigned-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "er-release-01",
@@ -1488,7 +1519,8 @@
       ],
       "evidenceIds": [
         "eval:hb-pick-priority-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "hb-scoped-wake-01",
@@ -1519,7 +1551,8 @@
       ],
       "evidenceIds": [
         "eval:hb-scoped-wake-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "hb-wake-comment-01",
@@ -1595,12 +1628,9 @@
         "combined_multi_hop"
       ],
       "evidenceIds": [
-        "eval:ix-checkbox-01",
-        "mcp:paperclipRequestCheckboxConfirmation"
+        "eval:ix-checkbox-01"
       ],
-      "legacyMcpAliases": [
-        "mcp:paperclipRequestCheckboxConfirmation"
-      ]
+      "legacyMcpAliases": []
     },
     {
       "id": "ix-checkbox-result-01",
@@ -1635,7 +1665,8 @@
       ],
       "evidenceIds": [
         "eval:ix-checkbox-result-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ix-confirmation-plan-01",
@@ -1708,7 +1739,8 @@
       ],
       "evidenceIds": [
         "eval:ix-continuation-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ix-questions-01",
@@ -1777,7 +1809,8 @@
       ],
       "evidenceIds": [
         "eval:ix-stale-target-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ix-suggest-tasks-01",
@@ -1847,7 +1880,8 @@
       ],
       "evidenceIds": [
         "eval:ix-superseded-comment-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "ix-verdicts-01",
@@ -1883,7 +1917,8 @@
       ],
       "evidenceIds": [
         "eval:ix-verdicts-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "mh-blocked-handoff-01",
@@ -1920,7 +1955,8 @@
       ],
       "evidenceIds": [
         "eval:mh-blocked-handoff-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "mh-children-complete-01",
@@ -1957,7 +1993,8 @@
       ],
       "evidenceIds": [
         "eval:mh-children-complete-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "mh-plan-confirm-01",
@@ -1996,7 +2033,8 @@
       ],
       "evidenceIds": [
         "eval:mh-plan-confirm-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "mh-subtask-tree-01",
@@ -2033,7 +2071,8 @@
       ],
       "evidenceIds": [
         "eval:mh-subtask-tree-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-api-404-report-01",
@@ -2102,7 +2141,8 @@
       ],
       "evidenceIds": [
         "eval:rf-api-cancel-obsolete-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-api-mention-discipline-01",
@@ -2134,7 +2174,8 @@
       ],
       "evidenceIds": [
         "eval:rf-api-mention-discipline-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-api-mgr-heartbeat-01",
@@ -2173,11 +2214,13 @@
       "evidenceIds": [
         "eval:rf-api-mgr-heartbeat-01",
         "mcp:paperclipListAgents",
-        "mcp:paperclipGetAgent"
+        "mcp:paperclipGetAgent",
+        "mcp:paperclipFindAgentsByCapability"
       ],
       "legacyMcpAliases": [
         "mcp:paperclipListAgents",
-        "mcp:paperclipGetAgent"
+        "mcp:paperclipGetAgent",
+        "mcp:paperclipFindAgentsByCapability"
       ]
     },
     {
@@ -2211,7 +2254,8 @@
       ],
       "evidenceIds": [
         "eval:rf-api-review-changes-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-art-attachment-wp-01",
@@ -2248,7 +2292,8 @@
       ],
       "evidenceIds": [
         "eval:rf-art-attachment-wp-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-case-child-01",
@@ -2284,7 +2329,8 @@
       ],
       "evidenceIds": [
         "eval:rf-case-child-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-case-lifecycle-link-01",
@@ -2321,7 +2367,8 @@
       ],
       "evidenceIds": [
         "eval:rf-case-lifecycle-link-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-case-upsert-doc-01",
@@ -2358,7 +2405,8 @@
       ],
       "evidenceIds": [
         "eval:rf-case-upsert-doc-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-cskill-audit-01",
@@ -2395,12 +2443,9 @@
         "combined_multi_hop"
       ],
       "evidenceIds": [
-        "eval:rf-cskill-audit-01",
-        "mcp:paperclipListSkills"
+        "eval:rf-cskill-audit-01"
       ],
-      "legacyMcpAliases": [
-        "mcp:paperclipListSkills"
-      ]
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-cskill-install-attach-01",
@@ -2437,7 +2482,8 @@
       ],
       "evidenceIds": [
         "eval:rf-cskill-install-attach-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-cskill-self-sync-01",
@@ -2475,7 +2521,8 @@
       ],
       "evidenceIds": [
         "eval:rf-cskill-self-sync-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-iws-start-url-01",
@@ -2601,7 +2648,8 @@
       ],
       "evidenceIds": [
         "eval:rf-routine-create-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-routine-manual-run-01",
@@ -2639,7 +2687,8 @@
       ],
       "evidenceIds": [
         "eval:rf-routine-manual-run-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-routine-pause-01",
@@ -2677,7 +2726,8 @@
       ],
       "evidenceIds": [
         "eval:rf-routine-pause-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-routine-policy-01",
@@ -2714,7 +2764,8 @@
       ],
       "evidenceIds": [
         "eval:rf-routine-policy-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-routine-webhook-01",
@@ -2751,7 +2802,8 @@
       ],
       "evidenceIds": [
         "eval:rf-routine-webhook-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-wf-export-preview-01",
@@ -2790,7 +2842,8 @@
       ],
       "evidenceIds": [
         "eval:rf-wf-export-preview-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-wf-invite-01",
@@ -2827,7 +2880,8 @@
       ],
       "evidenceIds": [
         "eval:rf-wf-invite-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rf-wf-project-setup-01",
@@ -2902,7 +2956,8 @@
       ],
       "evidenceIds": [
         "eval:rs-dependency-blocked-wake-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rs-question-only-01",
@@ -2940,7 +2995,8 @@
       ],
       "evidenceIds": [
         "eval:rs-question-only-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "rs-secret-hygiene-01",
@@ -2972,7 +3028,8 @@
       ],
       "evidenceIds": [
         "eval:rs-secret-hygiene-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "se-get-issue-01",
@@ -3041,7 +3098,8 @@
       ],
       "evidenceIds": [
         "eval:se-q-comments-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "se-q-filters-01",
@@ -3112,7 +3170,8 @@
       ],
       "evidenceIds": [
         "eval:se-q-topic-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-backlog-park-01",
@@ -3144,7 +3203,8 @@
       ],
       "evidenceIds": [
         "eval:st-backlog-park-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-blocked-owner-01",
@@ -3179,7 +3239,8 @@
       ],
       "evidenceIds": [
         "eval:st-blocked-owner-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-crossteam-cancel-01",
@@ -3215,7 +3276,8 @@
       ],
       "evidenceIds": [
         "eval:st-crossteam-cancel-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-done-comment-01",
@@ -3292,7 +3354,8 @@
       ],
       "evidenceIds": [
         "eval:st-env-blocked-notdone-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-ephemeral-verify-01",
@@ -3328,7 +3391,8 @@
       ],
       "evidenceIds": [
         "eval:st-ephemeral-verify-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-handback-review-01",
@@ -3364,7 +3428,8 @@
       ],
       "evidenceIds": [
         "eval:st-handback-review-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "st-unverified-toolchain-01",
@@ -3402,7 +3467,8 @@
       ],
       "evidenceIds": [
         "eval:st-unverified-toolchain-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "su-crossteam-billing-01",
@@ -3433,7 +3499,8 @@
       ],
       "evidenceIds": [
         "eval:su-crossteam-billing-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "su-inherit-workspace-01",
@@ -3469,7 +3536,8 @@
       ],
       "evidenceIds": [
         "eval:su-inherit-workspace-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "su-no-poll-01",
@@ -3505,7 +3573,8 @@
       ],
       "evidenceIds": [
         "eval:su-no-poll-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "su-parent-goal-01",
@@ -3579,7 +3648,8 @@
       ],
       "evidenceIds": [
         "eval:wk-ask-mode-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-plan-accepted-01",
@@ -3619,7 +3689,8 @@
       ],
       "evidenceIds": [
         "eval:wk-plan-accepted-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-plan-annotation-01",
@@ -3658,7 +3729,8 @@
       ],
       "evidenceIds": [
         "eval:wk-plan-annotation-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-plan-directive-01",
@@ -3698,7 +3770,8 @@
       ],
       "evidenceIds": [
         "eval:wk-plan-directive-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-plan-directive-02",
@@ -3733,7 +3806,8 @@
       ],
       "evidenceIds": [
         "eval:wk-plan-directive-02"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-recovery-processlost-01",
@@ -3772,7 +3846,8 @@
       ],
       "evidenceIds": [
         "eval:wk-recovery-processlost-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-resume-delta-01",
@@ -3805,7 +3880,8 @@
       ],
       "evidenceIds": [
         "eval:wk-resume-delta-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     },
     {
       "id": "wk-skilltest-mode-01",
@@ -3845,7 +3921,8 @@
       ],
       "evidenceIds": [
         "eval:wk-skilltest-mode-01"
-      ]
+      ],
+      "legacyMcpAliases": []
     }
   ]
 }

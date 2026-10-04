@@ -1,7 +1,8 @@
-import { asc, eq, ne, sql, and } from "drizzle-orm";
+import { asc, eq, isNull, ne, sql, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   plugins,
+  agents, companies, goals, heartbeatRuns, issues, projects, projectWorkspaces,
   pluginConfig,
   pluginEntities,
   pluginJobs,
@@ -26,7 +27,7 @@ import type {
   PluginJobRunTrigger,
   PluginWebhookDeliveryStatus,
 } from "@paperclipai/shared";
-import { conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +61,26 @@ function isPluginKeyConflict(error: unknown): boolean {
  * @see PLUGIN_SPEC.md §21.3 — Required Tables
  */
 export function pluginRegistryService(db: Db) {
+  async function entityCompanyId(input: { companyId?: string | null; scopeKind?: string; scopeId?: string | null }) {
+    let scopedCompanyId: string | null = null;
+    if (input.scopeKind === "company" && input.scopeId) {
+      const [owner] = await db.select({ id: companies.id }).from(companies).where(eq(companies.id, input.scopeId));
+      if (!owner) throw notFound("Entity company scope not found");
+      scopedCompanyId = owner.id;
+    } else if (input.scopeId) {
+      const tables = { agent: agents, goal: goals, issue: issues, project: projects, project_workspace: projectWorkspaces, run: heartbeatRuns };
+      const table = tables[input.scopeKind as keyof typeof tables];
+      if (table) {
+        const [owner] = await db.select({ companyId: table.companyId }).from(table).where(eq(table.id, input.scopeId));
+        if (!owner) throw notFound("Entity scope not found");
+        scopedCompanyId = owner.companyId;
+      }
+    }
+    if (scopedCompanyId && input.companyId !== undefined && input.companyId !== scopedCompanyId) {
+      throw badRequest("Entity company does not match its scope");
+    }
+    return scopedCompanyId ?? input.companyId ?? null;
+  }
   // -----------------------------------------------------------------------
   // Internal helpers
   // -----------------------------------------------------------------------
@@ -428,8 +449,14 @@ export function pluginRegistryService(db: Db) {
      * @param query - Optional filters (type, externalId) and pagination (limit, offset).
      * @returns A list of matching `PluginEntityRecord` objects.
      */
-    listEntities: (pluginId: string, query?: PluginEntityQuery) => {
+    listEntities: async (pluginId: string, query?: PluginEntityQuery) => {
       const conditions = [eq(pluginEntities.pluginId, pluginId)];
+      if (query && (query.companyId !== undefined || (query.scopeKind && query.scopeId))) {
+        const companyId = await entityCompanyId(query);
+        conditions.push(companyId === null ? isNull(pluginEntities.companyId) : eq(pluginEntities.companyId, companyId));
+      }
+      if (query?.scopeKind) conditions.push(eq(pluginEntities.scopeKind, query.scopeKind));
+      if (query?.scopeId) conditions.push(eq(pluginEntities.scopeId, query.scopeId));
       if (query?.entityType) conditions.push(eq(pluginEntities.entityType, query.entityType));
       if (query?.externalId) conditions.push(eq(pluginEntities.externalId, query.externalId));
 
@@ -445,27 +472,41 @@ export function pluginRegistryService(db: Db) {
     /**
      * Look up a plugin-owned entity mapping by its external identifier.
      *
+     * Scope matches `plugin_entities_external_idx` (NULLS NOT DISTINCT):
+     * pass the owning `companyId` (or `null` for instance-scope) to retrieve
+     * the row that belongs to that tenant. Two companies can share the same
+     * `(pluginId, entityType, externalId)` tuple — omitting `companyId` would
+     * return the first matched row regardless of tenant, which is unsafe.
+     *
      * @param pluginId - The UUID of the plugin.
      * @param entityType - The type of entity (e.g., 'project', 'issue').
      * @param externalId - The identifier in the external system.
+     * @param companyId - Tenant scope; `null` for instance-scope entities.
      * @returns The matching `PluginEntityRecord` or null.
      */
     getEntityByExternalId: (
       pluginId: string,
       entityType: string,
       externalId: string,
-    ) =>
-      db
+      companyId: string | null,
+    ) => {
+      const companyIdPredicate =
+        companyId == null
+          ? isNull(pluginEntities.companyId)
+          : eq(pluginEntities.companyId, companyId);
+      return db
         .select()
         .from(pluginEntities)
         .where(
           and(
+            companyIdPredicate,
             eq(pluginEntities.pluginId, pluginId),
             eq(pluginEntities.entityType, entityType),
             eq(pluginEntities.externalId, externalId),
           ),
         )
-        .then((rows) => rows[0] ?? null),
+        .then((rows) => rows[0] ?? null);
+    },
 
     /**
      * Create or update a persistent mapping between a Paperclip object and an
@@ -479,13 +520,23 @@ export function pluginRegistryService(db: Db) {
       pluginId: string,
       input: Omit<typeof pluginEntities.$inferInsert, "id" | "pluginId" | "createdAt" | "updatedAt">,
     ) => {
+      input = { ...input, companyId: await entityCompanyId(input) };
       // Drizzle doesn't support pg-specific onConflictDoUpdate easily in the insert() call
       // with complex where clauses, so we do it manually.
-      const existing = await db
+      // Match the company and instance unique indexes. Two companies
+      // may share the same (pluginId, entityType, externalId) tuple, so the
+      // lookup MUST scope by companyId — `isNull` for instance-scope, `eq`
+      // otherwise — to avoid returning and overwriting another tenant's row.
+      const companyIdPredicate =
+        input.companyId == null
+          ? isNull(pluginEntities.companyId)
+          : eq(pluginEntities.companyId, input.companyId);
+      const existing = input.externalId == null ? null : await db
         .select()
         .from(pluginEntities)
         .where(
           and(
+            companyIdPredicate,
             eq(pluginEntities.pluginId, pluginId),
             eq(pluginEntities.entityType, input.entityType),
             eq(pluginEntities.externalId, input.externalId ?? ""),
@@ -605,21 +656,29 @@ export function pluginRegistryService(db: Db) {
     /**
      * Record the start of a specific job execution.
      *
+     * Pass the owning `companyId` so `plugin_job_runs.company_id` is populated
+     * and the row participates in the `ON DELETE CASCADE` from `companies`.
+     * `null` is the explicit instance-scope marker (cron jobs without a tenant);
+     * those rows survive company deletes but are still attributable.
+     *
      * @param pluginId - The UUID of the plugin.
      * @param jobId - The UUID of the parent job record.
      * @param trigger - What triggered this run (e.g., 'schedule', 'manual').
+     * @param companyId - Tenant scope; `null` for instance-scope runs.
      * @returns The newly created `PluginJobRunRecord` in 'pending' status.
      */
     createJobRun: async (
       pluginId: string,
       jobId: string,
       trigger: PluginJobRunTrigger,
+      companyId: string | null,
     ) => {
       return db
         .insert(pluginJobRuns)
         .values({
           pluginId,
           jobId,
+          companyId,
           trigger,
           status: "pending",
         })
@@ -658,14 +717,22 @@ export function pluginRegistryService(db: Db) {
     /**
      * Create a record for an incoming webhook delivery.
      *
+     * Pass the owning `companyId` so `plugin_webhook_deliveries.company_id` is
+     * populated and the row participates in the `ON DELETE CASCADE` from
+     * `companies`. `null` is the explicit instance-scope marker (public
+     * webhooks without a tenant); those rows survive company deletes but are
+     * still attributable.
+     *
      * @param pluginId - The UUID of the receiving plugin.
      * @param webhookKey - The endpoint key defined in the manifest.
+     * @param companyId - Tenant scope; `null` for instance-scope deliveries.
      * @param input - The payload, headers, and optional external ID.
      * @returns The newly created `PluginWebhookDeliveryRecord` in 'pending' status.
      */
     createWebhookDelivery: async (
       pluginId: string,
       webhookKey: string,
+      companyId: string | null,
       input: {
         externalId?: string;
         payload: Record<string, unknown>;
@@ -677,6 +744,7 @@ export function pluginRegistryService(db: Db) {
         .values({
           pluginId,
           webhookKey,
+          companyId,
           externalId: input.externalId,
           payload: input.payload,
           headers: input.headers ?? {},

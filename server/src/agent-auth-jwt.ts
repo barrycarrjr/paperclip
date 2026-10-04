@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { resolvePaperclipInstanceId } from "./home-paths.js";
 
 interface JwtHeader {
   alg: string;
@@ -20,6 +21,7 @@ export interface LocalAgentJwtClaims {
   exp: number;
   iss?: string;
   aud?: string;
+  instance_id?: string;
   jti?: string;
 }
 
@@ -45,7 +47,19 @@ function jwtConfig() {
     ttlSeconds: parseNumber(process.env.PAPERCLIP_AGENT_JWT_TTL_SECONDS, 60 * 60 * 48),
     issuer: process.env.PAPERCLIP_AGENT_JWT_ISSUER ?? "paperclip",
     audience: process.env.PAPERCLIP_AGENT_JWT_AUDIENCE ?? "paperclip-api",
+    instanceId: resolvePaperclipInstanceId(),
+    disableLegacyFallback: /^(1|true|yes|on)$/i.test(
+      process.env.PAPERCLIP_AGENT_JWT_DISABLE_LEGACY_FALLBACK?.trim() ?? "",
+    ),
   };
+}
+
+// Domain-separated keys keep company and worktree tokens isolated even when
+// provisioning copies the same master secret into multiple instances.
+function deriveCompanySigningKey(masterSecret: string, companyId: string, instanceId: string) {
+  return createHmac("sha256", masterSecret)
+    .update(`jwt:${instanceId}:${companyId}`)
+    .digest("hex");
 }
 
 function base64UrlEncode(value: string) {
@@ -96,6 +110,7 @@ export function createLocalAgentJwt(
     exp: now + config.ttlSeconds,
     iss: config.issuer,
     aud: config.audience,
+    instance_id: config.instanceId,
   };
   if (options.userId) claims.user_id = options.userId;
 
@@ -105,7 +120,8 @@ export function createLocalAgentJwt(
   };
 
   const signingInput = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claims))}`;
-  const signature = signPayload(config.secret, signingInput);
+  const signingKey = deriveCompanySigningKey(config.secret, companyId, config.instanceId);
+  const signature = signPayload(signingKey, signingInput);
 
   return `${signingInput}.${signature}`;
 }
@@ -122,12 +138,21 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
   const header = parseJson(base64UrlDecode(headerB64));
   if (!header || header.alg !== JWT_ALGORITHM) return null;
 
-  const signingInput = `${headerB64}.${claimsB64}`;
-  const expectedSig = signPayload(config.secret, signingInput);
-  if (!safeCompare(signature, expectedSig)) return null;
-
   const claims = parseJson(base64UrlDecode(claimsB64));
   if (!claims) return null;
+
+  const claimedCompanyId = typeof claims.company_id === "string" ? claims.company_id : null;
+  if (!claimedCompanyId) return null;
+  const signingInput = `${headerB64}.${claimsB64}`;
+  const signingKey = deriveCompanySigningKey(config.secret, claimedCompanyId, config.instanceId);
+  let signatureOk = safeCompare(signature, signPayload(signingKey, signingInput));
+  // Only pre-upgrade tokens lack an instance claim. Keep them working during
+  // rollout, then disable this fallback after the configured JWT TTL expires.
+  if (!signatureOk && !config.disableLegacyFallback && !Object.hasOwn(claims, "instance_id")) {
+    signatureOk = safeCompare(signature, signPayload(config.secret, signingInput));
+  }
+  if (!signatureOk) return null;
+  if (Object.hasOwn(claims, "instance_id") && claims.instance_id !== config.instanceId) return null;
 
   const sub = typeof claims.sub === "string" ? claims.sub : null;
   const companyId = typeof claims.company_id === "string" ? claims.company_id : null;
@@ -156,6 +181,7 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
     exp,
     iss: claims.iss,
     aud: claims.aud,
+    instance_id: typeof claims.instance_id === "string" ? claims.instance_id : undefined,
     jti: typeof claims.jti === "string" ? claims.jti : undefined,
   };
 }

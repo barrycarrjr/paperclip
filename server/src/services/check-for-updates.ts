@@ -59,11 +59,11 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { gitHubApiBase, ghFetch } from "./github-fetch.js";
 import { logger } from "../middleware/logger.js";
+import { resolvePaperclipHomeDir } from "../home-paths.js";
 
 const DEFAULT_BRANCH = "master";
 const REMOTE_FETCH_TTL_MS = 5 * 60 * 1000;
@@ -172,7 +172,7 @@ const compareCache = new Map<string, CompareCacheEntry>();
 
 function readInstallInfo(): InstallInfo | null {
   try {
-    const raw = readFileSync(join(homedir(), ".paperclip", "install.json"), "utf8");
+    const raw = readFileSync(join(resolvePaperclipHomeDir(), "install.json"), "utf8");
     // Strip a UTF-8 BOM the install scripts can leave behind on Windows.
     const cleaned = raw.replace(/^\ufeff/, "");
     const parsed = JSON.parse(cleaned) as {

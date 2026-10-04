@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -143,7 +143,7 @@ function renderHandoff() {
     "## Stable Inputs",
     "",
     "- `capabilities.yaml`: every current Paperclip skill and reference heading, including its source anchor, disposition, semantic operation, and mock-state expectation.",
-    "- `mcp-tool-map.yaml`: the complete 42-tool legacy MCP replacement map.",
+    "- `mcp-tool-map.yaml`: the complete source-registered legacy MCP replacement map.",
     "- `eval-traceability.yaml`: all 106 corpus cases in 16 groups, including fixtures, grants, operations, state projections, forbids, and browser evidence IDs.",
     "- `contract-schema.json`: required row fields and the closed disposition enum.",
     "",
@@ -185,7 +185,7 @@ async function buildContract() {
   for (const mappedToolName of Object.keys(contract.toolMappings)) {
     if (!discoveredToolNames.has(mappedToolName)) throw new Error(`MCP mapping has no registered source tool: ${mappedToolName}`);
   }
-  if (tools.length !== 42 || Object.keys(contract.toolMappings).length !== 42) throw new Error(`Expected 42 legacy MCP tools, found ${tools.length}`);
+  if (tools.length !== Object.keys(contract.toolMappings).length) throw new Error("Legacy MCP tool mappings do not match the registered source tools");
   if (evals.length !== 106 || new Set(evals.map((row) => row.group)).size !== 16) throw new Error(`Expected 106 eval cases in 16 groups, found ${evals.length}`);
 
   return {
@@ -208,7 +208,7 @@ export async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;

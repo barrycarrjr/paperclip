@@ -61,7 +61,7 @@ if exist "%DATA_DIR%\db" (
   call pnpm --dir "%PAPERCLIP_SRC%" db:migrate
 ) else (
   echo [3/4] paperclipai onboard --yes ^(fresh install^)
-  call pnpm --dir "%PAPERCLIP_SRC%" --filter paperclipai exec tsx src/index.ts onboard --yes
+  call pnpm --dir "%PAPERCLIP_SRC%" --filter paperclipai exec tsx src/index.ts onboard --yes --setup-only --bind loopback
 )
 if errorlevel 1 goto :install_failed
 

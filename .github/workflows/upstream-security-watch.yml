@@ -1,0 +1,22 @@
+name: Upstream security watch
+on:
+  schedule:
+    - cron: '17 12 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch upstream without merging
+        run: git fetch https://github.com/paperclipai/paperclip.git master:refs/remotes/upstream/master
+      - name: Report changes requiring review
+        run: node scripts/check-upstream-security.mjs

@@ -568,6 +568,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       entities: {
         async upsert(input) {
           return callHost("entities.upsert", {
+            companyId: input.companyId,
             entityType: input.entityType,
             scopeKind: input.scopeKind,
             scopeId: input.scopeId,
@@ -580,6 +581,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
 
         async list(query) {
           return callHost("entities.list", {
+            companyId: query.companyId,
             entityType: query.entityType,
             scopeKind: query.scopeKind,
             scopeId: query.scopeId,
@@ -1027,8 +1029,8 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       },
 
       metrics: {
-        async write(name: string, value: number, tags?: Record<string, string>): Promise<void> {
-          await callHost("metrics.write", { name, value, tags });
+        async write(name: string, value: number, tags?: Record<string, string>, companyId?: string | null): Promise<void> {
+          await callHost("metrics.write", { name, value, tags, companyId });
         },
       },
 
@@ -1042,17 +1044,17 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       },
 
       logger: {
-        info(message: string, meta?: Record<string, unknown>): void {
-          notifyHost("log", { level: "info", message, meta });
+        info(message: string, meta?: Record<string, unknown>, companyId?: string | null): void {
+          notifyHost("log", { level: "info", message, meta, companyId });
         },
-        warn(message: string, meta?: Record<string, unknown>): void {
-          notifyHost("log", { level: "warn", message, meta });
+        warn(message: string, meta?: Record<string, unknown>, companyId?: string | null): void {
+          notifyHost("log", { level: "warn", message, meta, companyId });
         },
-        error(message: string, meta?: Record<string, unknown>): void {
-          notifyHost("log", { level: "error", message, meta });
+        error(message: string, meta?: Record<string, unknown>, companyId?: string | null): void {
+          notifyHost("log", { level: "error", message, meta, companyId });
         },
-        debug(message: string, meta?: Record<string, unknown>): void {
-          notifyHost("log", { level: "debug", message, meta });
+        debug(message: string, meta?: Record<string, unknown>, companyId?: string | null): void {
+          notifyHost("log", { level: "debug", message, meta, companyId });
         },
       },
     };

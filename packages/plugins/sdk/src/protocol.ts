@@ -614,6 +614,7 @@ export interface WorkerToHostMethods {
   // Entities
   "entities.upsert": [
     params: {
+      companyId?: string | null;
       entityType: string;
       scopeKind: PluginStateScopeKind;
       scopeId?: string;
@@ -624,6 +625,7 @@ export interface WorkerToHostMethods {
     },
     result: {
       id: string;
+      companyId: string | null;
       entityType: string;
       scopeKind: PluginStateScopeKind;
       scopeId: string | null;
@@ -637,6 +639,7 @@ export interface WorkerToHostMethods {
   ];
   "entities.list": [
     params: {
+      companyId?: string | null;
       entityType?: string;
       scopeKind?: PluginStateScopeKind;
       scopeId?: string;
@@ -646,6 +649,7 @@ export interface WorkerToHostMethods {
     },
     result: Array<{
       id: string;
+      companyId: string | null;
       entityType: string;
       scopeKind: PluginStateScopeKind;
       scopeId: string | null;
@@ -695,7 +699,13 @@ export interface WorkerToHostMethods {
 
   // Metrics
   "metrics.write": [
-    params: { name: string; value: number; tags?: Record<string, string> },
+    params: {
+      name: string;
+      value: number;
+      tags?: Record<string, string>;
+      /** Owning tenant for `plugin_logs.company_id` (cascade-delete scope). `null`/omitted = instance-scope. */
+      companyId?: string | null;
+    },
     result: void,
   ];
 
@@ -759,7 +769,13 @@ export interface WorkerToHostMethods {
 
   // Logger
   "log": [
-    params: { level: "info" | "warn" | "error" | "debug"; message: string; meta?: Record<string, unknown> },
+    params: {
+      level: "info" | "warn" | "error" | "debug";
+      message: string;
+      meta?: Record<string, unknown>;
+      /** Owning tenant for `plugin_logs.company_id` (cascade-delete scope). `null`/omitted = instance-scope. */
+      companyId?: string | null;
+    },
     result: void,
   ];
 

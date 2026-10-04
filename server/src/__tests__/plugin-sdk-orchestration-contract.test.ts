@@ -57,6 +57,25 @@ function issue(input: Partial<Issue> & Pick<Issue, "id" | "companyId" | "title">
 }
 
 describe("plugin SDK orchestration contract", () => {
+  it("keeps matching external IDs separate in each company", async () => {
+    const harness = createTestHarness({ manifest: manifest([]) });
+    const companyA = randomUUID(), companyB = randomUUID();
+    const input = { entityType: "issue", externalId: "shared", scopeKind: "company" as const, data: {} };
+    const first = await harness.ctx.entities.upsert({ ...input, companyId: companyA, scopeId: companyA });
+    const second = await harness.ctx.entities.upsert({ ...input, companyId: companyB, scopeId: companyB });
+    expect(first.id).not.toBe(second.id);
+    expect(await harness.ctx.entities.list({ companyId: companyA })).toEqual([first]);
+    expect(await harness.ctx.entities.list({ companyId: null })).toEqual([]);
+  });
+
+  it("preserves company attribution in SDK logs and metrics", async () => {
+    const harness = createTestHarness({ manifest: manifest(["metrics.write"]) });
+    const companyId = randomUUID();
+    harness.ctx.logger.info("company log", undefined, companyId);
+    await harness.ctx.metrics.write("count", 3, undefined, companyId);
+    expect(harness.logs[0]).toMatchObject({ companyId, message: "company log" });
+    expect(harness.metrics[0]).toMatchObject({ companyId, name: "count", value: 3 });
+  });
   it("supports expanded issue create fields and relation helpers", async () => {
     const companyId = randomUUID();
     const blockerIssueId = randomUUID();

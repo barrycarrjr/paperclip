@@ -283,6 +283,10 @@ Paperclip is a full control plane, not a wrapper. Before you build any of this y
 
 Open source. Self-hosted. No Paperclip account required.
 
+This is the `barrycarrjr/paperclip` fork. For its macOS, Linux, and Windows
+installers, see [Fork installation and security ports](doc/FORK-INSTALL-AND-SECURITY.md).
+The `npx paperclipai` commands below install the published upstream package.
+
 ```bash
 npx paperclipai onboard --yes
 ```
@@ -300,7 +304,7 @@ If you already have Paperclip configured, rerunning `onboard` keeps the existing
 Or manually:
 
 ```bash
-git clone https://github.com/paperclipai/paperclip.git
+git clone https://github.com/barrycarrjr/paperclip.git
 cd paperclip
 pnpm install
 pnpm dev
@@ -308,7 +312,7 @@ pnpm dev
 
 This starts the API server at `http://localhost:3100`. An embedded PostgreSQL database is created automatically — no setup required.
 
-> **Requirements:** Node.js 20+, pnpm 9.15+
+> **Fork build requirements:** Node.js 24.11+, pnpm 9.15.4, Rust via rustup, and a C compiler/linker. The runtime build includes the native runner.
 
 <br/>
 
@@ -390,16 +394,9 @@ Find Plugins and more at [awesome-paperclip](https://github.com/gsxdsm/awesome-p
 
 ## Telemetry
 
-Paperclip collects anonymous usage telemetry to help us understand how the product is used and improve it. No personal information, issue content, prompts, file paths, or secrets are ever collected. Private repository references are hashed with a per-install salt before being sent.
-
-Telemetry is **enabled by default** and can be disabled with any of the following:
-
-| Method               | How                                                     |
-| -------------------- | ------------------------------------------------------- |
-| Environment variable | `PAPERCLIP_TELEMETRY_DISABLED=1`                        |
-| Standard convention  | `DO_NOT_TRACK=1`                                        |
-| CI environments      | Automatically disabled when `CI=true`                   |
-| Config file          | Set `telemetry.enabled: false` in your Paperclip config |
+This fork removes upstream analytics telemetry and the default external feedback
+export destination. Feedback export requires an operator-controlled destination
+in `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL`.
 
 ## Contributing
 
