@@ -56,10 +56,11 @@ function globToRegExp(pattern) {
 }
 
 function isWorkspacePackage(pkgDir, workspaceEntries) {
+  const normalized = pkgDir.replace(/\\/g, "/");
   let included = false;
 
   for (const entry of workspaceEntries) {
-    if (globToRegExp(entry.pattern).test(pkgDir)) {
+    if (globToRegExp(entry.pattern).test(normalized)) {
       included = !entry.negated;
     }
   }
@@ -91,8 +92,15 @@ function readPackageJson(pkgDir) {
 }
 
 function run(command, args, cwd) {
-  execFileSync(command, args, {
+  const resolvedCommand =
+    process.platform === "win32" && command === "pnpm" ? "pnpm.cmd" : command;
+  const isCmdOrBat =
+    process.platform === "win32" &&
+    (resolvedCommand.endsWith(".cmd") || resolvedCommand.endsWith(".bat"));
+
+  execFileSync(resolvedCommand, args, {
     cwd,
+    shell: isCmdOrBat,
     env: {
       ...process.env,
       CI: "true",
@@ -132,6 +140,11 @@ function main() {
       ];
 
     run("pnpm", installArgs, pkgDir);
+
+    const linkDevSdkScript = path.join(repoRoot, "scripts", "link-plugin-dev-sdk.mjs");
+    if (existsSync(linkDevSdkScript)) {
+      run(process.execPath, [linkDevSdkScript], pkgDir);
+    }
 
     if (pkgJson.scripts?.build) {
       run("pnpm", ["run", "build"], pkgDir);

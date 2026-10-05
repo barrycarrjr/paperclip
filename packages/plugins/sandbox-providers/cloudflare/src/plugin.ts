@@ -1,5 +1,6 @@
 import { definePlugin } from "@paperclipai/plugin-sdk";
 import type {
+  PluginContext,
   PluginLogger,
   PluginEnvironmentAcquireLeaseParams,
   PluginEnvironmentDestroyLeaseParams,
@@ -129,7 +130,7 @@ function logCloudflareExecChunk(
 let pluginLogger: PluginLogger | null = null;
 
 const plugin = definePlugin({
-  async setup(ctx) {
+  async setup(ctx: PluginContext) {
     pluginLogger = ctx.logger;
     ctx.logger.info("Cloudflare sandbox provider plugin ready");
   },
