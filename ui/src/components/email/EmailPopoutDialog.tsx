@@ -46,6 +46,7 @@ import { actionFailureText, inlineFailureText } from "./actionFailure";
 import { SendingIdentityLine } from "./SendingIdentityLine";
 import { describeSendingIdentity, findSelectedMailbox } from "./sendingIdentity";
 import { EmailStateIcons } from "./EmailStateIcons";
+import { EmailRecipientLines } from "./EmailRecipientLines";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -317,10 +318,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
             </DialogTitle>
             {message && (
               <>
-                <div className="truncate text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">{message.from}</span>
-                  {message.to.length > 0 && <span> to {message.to.join(", ")}</span>}
-                </div>
+                <EmailRecipientLines from={message.from} to={message.to} cc={message.cc} />
                 <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                   <span>
                     {new Date(message.date).toLocaleString()}

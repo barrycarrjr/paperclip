@@ -16,6 +16,7 @@ export function buildEmailPrintText(msg: ParsedEmailMessage): string {
   return [
     `From: ${msg.from}`,
     msg.to.length > 0 ? `To: ${msg.to.join(", ")}` : null,
+    msg.cc.length > 0 ? `Cc: ${msg.cc.join(", ")}` : null,
     `Date: ${new Date(msg.date).toLocaleString()}`,
     `Subject: ${msg.subject || "(no subject)"}`,
     "",

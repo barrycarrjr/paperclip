@@ -217,6 +217,7 @@ export function useEmailMessageActions(
         `Date: ${msg.date}`,
         `Subject: ${msg.subject}`,
         msg.to.length ? `To: ${msg.to.join(", ")}` : null,
+        msg.cc.length ? `Cc: ${msg.cc.join(", ")}` : null,
         "",
         msg.text || msg.markdown || "(no body)",
       ]

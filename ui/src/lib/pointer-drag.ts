@@ -1,6 +1,7 @@
 /**
  * Follows one pointer from a press on `handle` until it is let go, reporting
- * how far it has moved sideways since the press.
+ * how far it has moved since the press: sideways by default, or up and down
+ * with `axis: "y"` (the handle under a list that sits above the message).
  *
  * The pointer is captured, so the handle keeps receiving it wherever it goes.
  * Without that, a drag that crosses an iframe (the Email page draws the open
@@ -12,14 +13,15 @@
  */
 export function followPointerDrag(
   handle: HTMLElement,
-  press: { pointerId: number; clientX: number },
-  { onMove, onEnd }: { onMove: (deltaX: number) => void; onEnd: () => void },
+  press: { pointerId: number; clientX: number; clientY?: number },
+  { onMove, onEnd }: { onMove: (delta: number) => void; onEnd: () => void },
+  axis: "x" | "y" = "x",
 ): void {
   handle.setPointerCapture(press.pointerId);
-  const startX = press.clientX;
+  const start = axis === "x" ? press.clientX : (press.clientY ?? 0);
   let ended = false;
   const move = (ev: PointerEvent) => {
-    if (!ended) onMove(ev.clientX - startX);
+    if (!ended) onMove((axis === "x" ? ev.clientX : ev.clientY) - start);
   };
   const end = () => {
     if (ended) return;

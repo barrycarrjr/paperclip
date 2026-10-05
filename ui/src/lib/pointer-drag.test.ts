@@ -31,6 +31,15 @@ describe("followPointerDrag", () => {
     expect(onMove.mock.calls).toEqual([[30], [-40]]);
   });
 
+  it("reports up-and-down movement instead when asked, for a handle under a list", () => {
+    const { handle } = makeHandle();
+    const onMove = vi.fn();
+    followPointerDrag(handle, { pointerId: 1, clientX: 100, clientY: 400 }, { onMove, onEnd: vi.fn() }, "y");
+    handle.dispatchEvent(new MouseEvent("pointermove", { clientX: 900, clientY: 450 }));
+    handle.dispatchEvent(new MouseEvent("pointermove", { clientX: 0, clientY: 380 }));
+    expect(onMove.mock.calls).toEqual([[50], [-20]]);
+  });
+
   it.each(["pointerup", "pointercancel", "lostpointercapture"])(
     "ends once on %s and stops following the pointer",
     (endEvent) => {

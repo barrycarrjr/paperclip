@@ -111,6 +111,102 @@ export function startListPaneResize(
 }
 
 /**
+ * Where the open message sits, Outlook's Layout > Reading Pane choice:
+ * beside the list (the page's original layout), below it, or off. Off keeps
+ * the list at full width, and opening a message shows it in the list's place
+ * with a Back button, the way a phone does. A desktop window has room for all
+ * three; on a phone the setting does nothing, since only one part fits.
+ */
+export type ReadingPanePosition = "right" | "bottom" | "off";
+
+export const READING_PANE_POSITIONS: readonly ReadingPanePosition[] = ["right", "bottom", "off"];
+
+export const READING_PANE_LABEL: Record<ReadingPanePosition, string> = {
+  right: "Right",
+  bottom: "Bottom",
+  off: "Off",
+};
+
+/** A stored choice, or "right" (the original layout) for anything else. */
+export function parseReadingPanePosition(value: unknown): ReadingPanePosition {
+  return READING_PANE_POSITIONS.includes(value as ReadingPanePosition)
+    ? (value as ReadingPanePosition)
+    : "right";
+}
+
+/**
+ * The list's height, in pixels, while it sits above an open message. Dragged
+ * like the width beside one, with the same treatment of a stored value that
+ * has gone out of bounds.
+ */
+export const LIST_PANE_DEFAULT_HEIGHT = 300;
+export const LIST_PANE_MIN_HEIGHT = 120;
+export const LIST_PANE_MAX_HEIGHT = 900;
+
+/** The least height the message below the list keeps, however far the list is dragged. */
+export const MESSAGE_PANE_MIN_HEIGHT = 200;
+
+export function clampListPaneHeight(value: unknown): number {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(n)) return LIST_PANE_DEFAULT_HEIGHT;
+  return Math.min(LIST_PANE_MAX_HEIGHT, Math.max(LIST_PANE_MIN_HEIGHT, Math.round(n)));
+}
+
+/**
+ * The tallest the list may be above an open message, so a height saved in a
+ * tall window cannot push the message out of a shorter one. Set as a CSS
+ * max-height, and the same cap in pixels stops a drag, as with the width.
+ */
+export const LIST_PANE_MAX_HEIGHT_CSS = `calc(100% - ${MESSAGE_PANE_MIN_HEIGHT}px)`;
+
+export function listPaneMaxHeightPx(areaHeight: number): number {
+  return Math.max(0, Math.floor(widthOrZero(areaHeight) - MESSAGE_PANE_MIN_HEIGHT));
+}
+
+/** The list's height part way through a drag; see dragListPaneWidth. */
+export function dragListPaneHeight(startHeight: number, deltaY: number, maxShown: number): number {
+  const upper = Number.isFinite(maxShown) ? Math.min(LIST_PANE_MAX_HEIGHT, maxShown) : LIST_PANE_MAX_HEIGHT;
+  const lower = Math.min(LIST_PANE_MIN_HEIGHT, upper);
+  return Math.round(Math.min(upper, Math.max(lower, startHeight + deltaY)));
+}
+
+/**
+ * Resizes the list above an open message from a press on the handle between
+ * them. Works like startListPaneResize, up and down instead of sideways, and
+ * treats a click the same way: nothing changes and nothing is saved until the
+ * pointer has really moved.
+ */
+export function startListPaneHeightResize(
+  list: HTMLElement,
+  handle: HTMLElement,
+  press: { pointerId: number; clientX: number; clientY: number },
+  { onResize, onDone }: { onResize: (height: number) => void; onDone: (height: number) => void },
+): void {
+  const area = list.parentElement;
+  if (!area) return;
+  const startHeight = list.getBoundingClientRect().height;
+  const maxShown = listPaneMaxHeightPx(area.clientHeight);
+  let moved = false;
+  let lastHeight = startHeight;
+  followPointerDrag(
+    handle,
+    press,
+    {
+      onMove: (deltaY) => {
+        if (!moved && Math.abs(deltaY) < LIST_PANE_DRAG_THRESHOLD) return;
+        moved = true;
+        lastHeight = dragListPaneHeight(startHeight, deltaY, maxShown);
+        onResize(lastHeight);
+      },
+      onEnd: () => {
+        if (moved) onDone(lastHeight);
+      },
+    },
+    "y",
+  );
+}
+
+/**
  * Names the list the page is showing, for the list's scroll box to use as its
  * key. The list keeps its scroll position while it updates in place (new mail
  * arriving, another message opened beside it) and starts again at the top
@@ -160,23 +256,29 @@ export interface EmailPaneLayout {
   openMessage: boolean;
   /** A way back to the list from an open message, for when the list is gone. */
   backToListButton: boolean;
+  /** The list sits above the open message rather than beside it. */
+  listAboveMessage: boolean;
 }
 
 export function emailPaneLayout({
   isMobile,
   messageOpen,
+  readingPane = "right",
 }: {
   isMobile: boolean;
   messageOpen: boolean;
+  readingPane?: ReadingPanePosition;
 }): EmailPaneLayout {
   if (!isMobile) {
+    const off = readingPane === "off";
     return {
       mailboxColumn: true,
       mailboxDrawer: false,
       columnDragHandle: true,
-      messageList: true,
+      messageList: !(off && messageOpen),
       openMessage: messageOpen,
-      backToListButton: false,
+      backToListButton: off && messageOpen,
+      listAboveMessage: readingPane === "bottom" && messageOpen,
     };
   }
 
@@ -187,5 +289,6 @@ export function emailPaneLayout({
     messageList: !messageOpen,
     openMessage: messageOpen,
     backToListButton: messageOpen,
+    listAboveMessage: false,
   };
 }

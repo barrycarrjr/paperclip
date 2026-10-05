@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+  clampListPaneHeight,
   clampListPaneWidth,
+  dragListPaneHeight,
   dragListPaneWidth,
   emailListKey,
   emailPaneLayout,
+  LIST_PANE_DEFAULT_HEIGHT,
   LIST_PANE_DEFAULT_WIDTH,
+  LIST_PANE_MAX_HEIGHT,
+  LIST_PANE_MAX_HEIGHT_CSS,
   LIST_PANE_MAX_WIDTH,
+  LIST_PANE_MIN_HEIGHT,
   LIST_PANE_MIN_WIDTH,
+  listPaneMaxHeightPx,
   listPaneMaxWidthCss,
   listPaneMaxWidthPx,
+  MESSAGE_PANE_MIN_HEIGHT,
+  parseReadingPanePosition,
+  READING_PANE_POSITIONS,
 } from "./email-pane-layout";
 
 describe("the message list's width beside an open message", () => {
@@ -64,6 +74,47 @@ describe("the message list's width beside an open message", () => {
   });
 });
 
+describe("the reading pane choice", () => {
+  it("offers Outlook's three positions", () => {
+    expect(READING_PANE_POSITIONS).toEqual(["right", "bottom", "off"]);
+  });
+
+  it("reads a stored choice back, and anything else as the original layout", () => {
+    expect(parseReadingPanePosition("bottom")).toBe("bottom");
+    expect(parseReadingPanePosition("off")).toBe("off");
+    expect(parseReadingPanePosition("right")).toBe("right");
+    // Read back from localStorage, so it can be missing or junk.
+    expect(parseReadingPanePosition(null)).toBe("right");
+    expect(parseReadingPanePosition("left")).toBe("right");
+  });
+});
+
+describe("the message list's height above an open message", () => {
+  it("keeps a dragged height within bounds, and recovers from junk", () => {
+    expect(clampListPaneHeight(400)).toBe(400);
+    expect(clampListPaneHeight(10)).toBe(LIST_PANE_MIN_HEIGHT);
+    expect(clampListPaneHeight(5000)).toBe(LIST_PANE_MAX_HEIGHT);
+    expect(clampListPaneHeight("350")).toBe(350);
+    expect(clampListPaneHeight("tall")).toBe(LIST_PANE_DEFAULT_HEIGHT);
+    expect(clampListPaneHeight(null)).toBe(LIST_PANE_DEFAULT_HEIGHT);
+  });
+
+  it("always leaves the message room below the list", () => {
+    expect(listPaneMaxHeightPx(900)).toBe(900 - MESSAGE_PANE_MIN_HEIGHT);
+    expect(listPaneMaxHeightPx(100)).toBe(0);
+    expect(LIST_PANE_MAX_HEIGHT_CSS).toBe(`calc(100% - ${MESSAGE_PANE_MIN_HEIGHT}px)`);
+  });
+
+  it("stops a drag at the cap and at the bounds", () => {
+    expect(dragListPaneHeight(300, 50, 700)).toBe(350);
+    expect(dragListPaneHeight(300, 600, 700)).toBe(700);
+    expect(dragListPaneHeight(300, -400, 700)).toBe(LIST_PANE_MIN_HEIGHT);
+    // A window too short for the minimum: the cap wins, so the list cannot
+    // be dragged over the message.
+    expect(dragListPaneHeight(100, 50, 90)).toBe(90);
+  });
+});
+
 describe("which list the page is showing", () => {
   const inbox = {
     companyId: "company-a",
@@ -107,12 +158,11 @@ describe("which list the page is showing", () => {
   });
 });
 
-const cases = [
-  { isMobile: false, messageOpen: false },
-  { isMobile: false, messageOpen: true },
-  { isMobile: true, messageOpen: false },
-  { isMobile: true, messageOpen: true },
-];
+const cases = [false, true].flatMap((isMobile) =>
+  [false, true].flatMap((messageOpen) =>
+    READING_PANE_POSITIONS.map((readingPane) => ({ isMobile, messageOpen, readingPane })),
+  ),
+);
 
 describe("which parts of the Email page are on screen", () => {
   it("shows all three side by side on a desktop", () => {
@@ -123,7 +173,44 @@ describe("which parts of the Email page are on screen", () => {
       messageList: true,
       openMessage: true,
       backToListButton: false,
+      listAboveMessage: false,
     });
+  });
+
+  it("puts the list above an open message with the reading pane at the bottom", () => {
+    expect(emailPaneLayout({ isMobile: false, messageOpen: true, readingPane: "bottom" })).toMatchObject({
+      messageList: true,
+      openMessage: true,
+      listAboveMessage: true,
+      backToListButton: false,
+    });
+    // With nothing open the list simply has the whole width, as before.
+    expect(emailPaneLayout({ isMobile: false, messageOpen: false, readingPane: "bottom" })).toMatchObject({
+      messageList: true,
+      listAboveMessage: false,
+    });
+  });
+
+  it("opens a message in the list's place with the reading pane off", () => {
+    expect(emailPaneLayout({ isMobile: false, messageOpen: true, readingPane: "off" })).toMatchObject({
+      mailboxColumn: true,
+      messageList: false,
+      openMessage: true,
+      backToListButton: true,
+      listAboveMessage: false,
+    });
+    expect(emailPaneLayout({ isMobile: false, messageOpen: false, readingPane: "off" })).toMatchObject({
+      messageList: true,
+      openMessage: false,
+    });
+  });
+
+  it("ignores the reading pane choice on a phone, where one part fits at a time", () => {
+    for (const readingPane of READING_PANE_POSITIONS) {
+      expect(emailPaneLayout({ isMobile: true, messageOpen: true, readingPane })).toEqual(
+        emailPaneLayout({ isMobile: true, messageOpen: true }),
+      );
+    }
   });
 
   it("shows the list on a phone until a message is opened", () => {
@@ -145,6 +232,13 @@ describe("which parts of the Email page are on screen", () => {
     for (const messageOpen of [false, true]) {
       const panes = emailPaneLayout({ isMobile: true, messageOpen });
       expect(panes.messageList && panes.openMessage).toBe(false);
+    }
+  });
+
+  it("only stacks the list above a message when both are on screen", () => {
+    for (const input of cases) {
+      const panes = emailPaneLayout(input);
+      if (panes.listAboveMessage) expect(panes.messageList && panes.openMessage).toBe(true);
     }
   });
 

@@ -299,6 +299,24 @@ describe("useEmailMessageActions", () => {
     expect(body).toContain("---------- Forwarded message ----------");
     expect(body).toContain("From: sender@example.com");
     expect(body).toContain("The numbers are attached.");
+    // No Cc on the original, so no empty Cc line in the quote.
+    expect(body).not.toContain("Cc:");
+  });
+
+  it("names the original's Cc recipients in the forwarded quote", async () => {
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.forward.mutate({
+        msg: parsed({ cc: ['"Jordan A. Lee" <jordan@example.com>, Sam Rivera <sam@example.com>'] }),
+        to: "colleague@example.com",
+        note: "",
+      });
+    });
+    await settle();
+
+    const body = mockApi.sendNew.mock.calls[0][3] as string;
+    expect(body).toContain("To: me@example.com\nCc: \"Jordan A. Lee\" <jordan@example.com>, Sam Rivera <sam@example.com>");
   });
 
   it("adds the Fwd prefix when the subject does not have one", async () => {

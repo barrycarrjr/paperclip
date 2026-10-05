@@ -117,7 +117,13 @@ describe("buildEmailPrintText", () => {
     const out = buildEmailPrintText(parsed({ subject: "", to: [], text: "", markdown: "" }));
     expect(out).toContain("Subject: (no subject)");
     expect(out).not.toContain("To: ");
+    expect(out).not.toContain("Cc: ");
     expect(out).toContain("(no body)");
+  });
+
+  it("prints the Cc line under To when the message was copied to people", () => {
+    const out = buildEmailPrintText(parsed({ cc: ["Sam Rivera <sam@example.com>"] }));
+    expect(out).toContain("To: me@example.com\nCc: Sam Rivera <sam@example.com>\n");
   });
 });
 

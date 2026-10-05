@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import { LIST_PANE_MAX_WIDTH, startListPaneResize } from "./email-pane-layout";
+import {
+  LIST_PANE_MAX_WIDTH,
+  MESSAGE_PANE_MIN_HEIGHT,
+  startListPaneHeightResize,
+  startListPaneResize,
+} from "./email-pane-layout";
 
 /**
  * A list on screen at `listWidth` in a page `pageWidth` wide, and the handle
@@ -87,5 +92,56 @@ describe("dragging the list beside an open message", () => {
     drag.release();
     expect(drag.onDone).toHaveBeenCalledTimes(1);
     expect(drag.onDone).toHaveBeenCalledWith(320);
+  });
+});
+
+/** The same, for the list above an open message, which drags up and down. */
+function setUpStacked(listHeight: number, areaHeight: number) {
+  const area = document.createElement("div");
+  Object.defineProperty(area, "clientHeight", { value: areaHeight });
+  const list = document.createElement("div");
+  list.getBoundingClientRect = () => ({ height: listHeight }) as DOMRect;
+  area.appendChild(list);
+  const handle = document.createElement("div");
+  handle.setPointerCapture = vi.fn();
+  area.appendChild(handle);
+  const onResize = vi.fn();
+  const onDone = vi.fn();
+  startListPaneHeightResize(list, handle, { pointerId: 1, clientX: 0, clientY: 300 }, { onResize, onDone });
+  return {
+    moveTo(clientY: number) {
+      handle.dispatchEvent(new MouseEvent("pointermove", { clientY }));
+    },
+    release() {
+      handle.dispatchEvent(new MouseEvent("pointerup"));
+    },
+    onResize,
+    onDone,
+  };
+}
+
+describe("dragging the list above an open message", () => {
+  it("follows the pointer up and down and saves where it ended", () => {
+    const drag = setUpStacked(300, 900);
+    drag.moveTo(340);
+    drag.moveTo(360);
+    drag.release();
+    expect(drag.onResize).toHaveBeenLastCalledWith(360);
+    expect(drag.onDone).toHaveBeenCalledWith(360);
+  });
+
+  it("stops where the message below would get too short", () => {
+    const drag = setUpStacked(300, 900);
+    drag.moveTo(2000);
+    expect(drag.onResize).toHaveBeenLastCalledWith(900 - MESSAGE_PANE_MIN_HEIGHT);
+  });
+
+  it("treats a click with a wobble as a click, and saves nothing", () => {
+    const drag = setUpStacked(300, 900);
+    drag.moveTo(302);
+    drag.moveTo(299);
+    drag.release();
+    expect(drag.onResize).not.toHaveBeenCalled();
+    expect(drag.onDone).not.toHaveBeenCalled();
   });
 });

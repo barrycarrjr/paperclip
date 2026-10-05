@@ -32,6 +32,9 @@ import {
   ListChecks,
   ChevronLeft,
   MoreHorizontal,
+  PanelBottom,
+  PanelRight,
+  Square,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -43,6 +46,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -124,6 +130,7 @@ import {
 import { actionFailureText, inlineFailureText } from "../components/email/actionFailure";
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
+import { EmailRecipientLines } from "../components/email/EmailRecipientLines";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
 import { sendOutcomeText } from "../components/email/sendOutcome";
 import { DraftModelSelect } from "../components/DraftModelSelect";
@@ -135,11 +142,19 @@ import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import {
+  clampListPaneHeight,
   clampListPaneWidth,
   emailListKey,
   emailPaneLayout,
+  LIST_PANE_DEFAULT_HEIGHT,
   LIST_PANE_DEFAULT_WIDTH,
+  LIST_PANE_MAX_HEIGHT_CSS,
   listPaneMaxWidthCss,
+  parseReadingPanePosition,
+  READING_PANE_LABEL,
+  READING_PANE_POSITIONS,
+  type ReadingPanePosition,
+  startListPaneHeightResize,
   startListPaneResize,
 } from "../lib/email-pane-layout";
 import { followOpenRow, type ListRow, revealRowInList, sameListRow } from "../lib/reveal-in-list";
@@ -642,6 +657,44 @@ export function Email() {
     setListPaneWidth(LIST_PANE_DEFAULT_WIDTH);
     saveListPaneWidth(LIST_PANE_DEFAULT_WIDTH);
   };
+  // Where the open message sits: beside the list, below it, or in its place.
+  // Outlook's Layout > Reading Pane choice, remembered like the widths above.
+  // See ReadingPanePosition.
+  const [readingPane, setReadingPane] = useState<ReadingPanePosition>(() => {
+    try {
+      return parseReadingPanePosition(localStorage.getItem("email-readingPane"));
+    } catch {
+      return "right";
+    }
+  });
+  const chooseReadingPane = (position: ReadingPanePosition) => {
+    setReadingPane(position);
+    try { localStorage.setItem("email-readingPane", position); } catch {}
+  };
+  // Height of the message list while it sits above an open message.
+  const [listPaneHeight, setListPaneHeight] = useState(() => {
+    try {
+      return clampListPaneHeight(localStorage.getItem("email-listPaneHeight") ?? LIST_PANE_DEFAULT_HEIGHT);
+    } catch {
+      return LIST_PANE_DEFAULT_HEIGHT;
+    }
+  });
+  const saveListPaneHeight = (height: number) => {
+    try { localStorage.setItem("email-listPaneHeight", String(height)); } catch {}
+  };
+  const startListPaneHeightDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const list = listColumnRef.current;
+    if (e.button !== 0 || !list) return;
+    e.preventDefault();
+    startListPaneHeightResize(list, e.currentTarget, e, {
+      onResize: setListPaneHeight,
+      onDone: saveListPaneHeight,
+    });
+  };
+  const resetListPaneHeight = () => {
+    setListPaneHeight(LIST_PANE_DEFAULT_HEIGHT);
+    saveListPaneHeight(LIST_PANE_DEFAULT_HEIGHT);
+  };
   // Reply panel state. The textarea content lives inside DraftTextarea so
   // typing doesn't re-render this entire (huge) component on every keystroke.
   // The parent only tracks whether the body has content (for the Send-button
@@ -1037,6 +1090,7 @@ export function Email() {
       `Date: ${new Date(msg.date).toLocaleString()}`,
       `Subject: ${msg.subject}`,
       msg.to.length > 0 ? `To: ${msg.to.join(", ")}` : null,
+      msg.cc.length > 0 ? `Cc: ${msg.cc.join(", ")}` : null,
     ]
       .filter((l): l is string => l !== null)
       .join("\n");
@@ -1709,9 +1763,9 @@ export function Email() {
   };
 
   // Which of the three parts of the page are on screen at once. See
-  // email-pane-layout.ts: a desktop shows all three side by side, a phone
-  // shows one at a time.
-  const panes = emailPaneLayout({ isMobile, messageOpen: selectedUid !== null });
+  // email-pane-layout.ts: a desktop shows all three, arranged by the reading
+  // pane choice; a phone shows one at a time.
+  const panes = emailPaneLayout({ isMobile, messageOpen: selectedUid !== null, readingPane });
 
   // ── Shared: the mailbox and folder tree ───────────────────────────────────
 
@@ -1998,6 +2052,36 @@ export function Email() {
             <ListChecks className="mr-1 h-3.5 w-3.5" />
             Select
           </Button>
+        )}
+        {/* Outlook's Layout > Reading Pane choice. Not on a phone, where only
+            one part of the page fits and the choice would change nothing. */}
+        {!isMobile && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" title="Reading pane" aria-label="Reading pane">
+                {readingPane === "bottom" ? (
+                  <PanelBottom className="h-3.5 w-3.5" />
+                ) : readingPane === "off" ? (
+                  <Square className="h-3.5 w-3.5" />
+                ) : (
+                  <PanelRight className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel className="text-xs">Reading pane</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={readingPane}
+                onValueChange={(v) => chooseReadingPane(parseReadingPanePosition(v))}
+              >
+                {READING_PANE_POSITIONS.map((position) => (
+                  <DropdownMenuRadioItem key={position} value={position} className="text-xs">
+                    {READING_PANE_LABEL[position]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         <Button
           variant="ghost"
@@ -2813,6 +2897,17 @@ export function Email() {
     );
   }
 
+  // With the reading pane at the bottom, the list and the message stack in a
+  // column of their own beside the mailbox column. Side by side they stay
+  // straight in the page's row, which is what the list's width cap measures
+  // against (see listPaneMaxWidthCss).
+  const arrangeListAndMessage = (content: React.ReactNode) =>
+    panes.listAboveMessage ? (
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{content}</div>
+    ) : (
+      content
+    );
+
   return (
     // On a desktop this is a fixed-height row of columns that each scroll on
     // their own. On a phone it is a single column and the page itself is what
@@ -2827,11 +2922,13 @@ export function Email() {
       {panes.columnDragHandle && leftPaneDragHandle}
 
       {panes.openMessage ? (
-        // ── 3-pane view: narrow list + detail ──────────────────────────────
+        // ── 3-pane view: list + detail, arranged by the reading pane ───────
+        arrangeListAndMessage(
         <>
-          {/* Center: narrow list. A phone has room for one of these at a time,
-              so the open message takes the whole width and the list comes back
-              when you close it. */}
+          {/* Center: the list, narrow beside the message or full width above
+              it. A phone has room for one of these at a time, and so does
+              the reading pane set to Off: the open message takes the whole
+              width and the list comes back when you close it. */}
           {panes.messageList && (
           <>
           {/* No `group` here: row buttons reveal on their own row's hover
@@ -2839,32 +2936,49 @@ export function Email() {
               pointing anywhere at it light up every row at once. */}
           {/* Capped at half of what the mailbox column leaves, so a width
               saved on a wide screen cannot squeeze the message, or this
-              column's own drag handle, out of view on a narrower one. */}
+              column's own drag handle, out of view on a narrower one. Above
+              the message the cap is on height instead, for the same reason. */}
           <div
             ref={listColumnRef}
-            className="shrink-0 border-r border-border flex flex-col"
-            style={{ width: listPaneWidth, maxWidth: listPaneMaxWidthCss(mailboxColumnWidth) }}
+            className={cn(
+              "shrink-0 border-border flex flex-col",
+              panes.listAboveMessage ? "border-b" : "border-r",
+            )}
+            style={
+              panes.listAboveMessage
+                ? { height: listPaneHeight, maxHeight: LIST_PANE_MAX_HEIGHT_CSS }
+                : { width: listPaneWidth, maxWidth: listPaneMaxWidthCss(mailboxColumnWidth) }
+            }
           >
             {listHeader}
             {listViewTabs}
             {takeOverNoticeBar}
             {searchBar}
             {selectionBar}
-            {renderMessageListBody(true)}
+            {/* Full width above the message, so each row has room for all of
+                its buttons, as in the list with nothing open. */}
+            {renderMessageListBody(!panes.listAboveMessage)}
           </div>
-          {panes.columnDragHandle && (
+          {panes.columnDragHandle && (panes.listAboveMessage ? (
+            <div
+              className="h-1 shrink-0 cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+              onPointerDown={startListPaneHeightDrag}
+              onDoubleClick={resetListPaneHeight}
+              title="Drag to resize the list · double-click for the usual height"
+            />
+          ) : (
             <div
               className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
               onPointerDown={startListPaneDrag}
               onDoubleClick={resetListPaneWidth}
               title="Drag to resize the list · double-click for the usual width"
             />
-          )}
+          ))}
           </>
           )}
 
-          {/* Right: message detail */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          {/* The open message: right of the list, below it, or on its own. */}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
             {messageLoading ? (
               <div className={cn(FILLS_OR_KEEPS_HEIGHT_CLASS, "flex items-center justify-center")}>
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -3162,10 +3276,7 @@ export function Email() {
                 {/* Message header */}
                 <div className="shrink-0 px-4 py-3 border-b border-border space-y-0.5">
                   <div className="font-medium text-sm">{fullMessage.subject}</div>
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">{fullMessage.from}</span>
-                    {fullMessage.to.length > 0 && <span> → {fullMessage.to.join(", ")}</span>}
-                  </div>
+                  <EmailRecipientLines from={fullMessage.from} to={fullMessage.to} cc={fullMessage.cc} />
                   <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                     <span>{new Date(fullMessage.date).toLocaleString()}</span>
                     <EmailStateIcons
@@ -3370,7 +3481,8 @@ export function Email() {
               </>
             )}
           </div>
-        </>
+        </>,
+        )
       ) : (
         // ── 2-pane view: expanded list with per-row actions ─────────────────
         <div className="flex-1 min-w-0 flex flex-col">

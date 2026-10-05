@@ -127,6 +127,7 @@ import { MetricCard } from "@/components/MetricCard";
 import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { MailSearchBar } from "@/components/MailSearchBar";
 import { EmailStateIcons } from "@/components/email/EmailStateIcons";
+import { EmailRecipientLines } from "@/components/email/EmailRecipientLines";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "@/components/email/RowHoverToolbar";
 import { ModelLifecycleBadge } from "@/components/ModelLifecycleBadge";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -302,7 +303,7 @@ export function DesignGuide() {
                 "FilterBar", "InlineEditor", "DraftInstructionsField", "PageSkeleton", "Identity",
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
-                "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "RowHoverToolbar",
+                "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "EmailRecipientLines", "RowHoverToolbar",
                 "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
                 "AgentStatusBadge", "TeamWorkStateBadge", "AgentErrorNote",
               ].map((name) => (
@@ -1236,6 +1237,25 @@ export function DesignGuide() {
             <span>9/23/2026, 12:52:14 PM</span>
             <EmailStateIcons answered forwarded showLabels />
           </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  EMAIL RECIPIENT LINES                                        */}
+      {/* ============================================================ */}
+      <Section title="Email Recipient Lines">
+        <p className="text-sm text-muted-foreground">
+          The sender, To and Cc lines above an open email, laid out as Outlook lays them out.
+          Each recipient shows by name when the message carries one, separated by semicolons,
+          with the full address on hover. A row with nobody on it is left off.
+        </p>
+        <SubSection title="On an open message">
+          <EmailRecipientLines
+            className="max-w-md"
+            from="Alex Morgan <alex@example.com>"
+            to={["orders@example.com"]}
+            cc={['"Lee, Jordan" <jordan@example.com>, Sam Rivera <sam@example.com>']}
+          />
         </SubSection>
       </Section>
 
