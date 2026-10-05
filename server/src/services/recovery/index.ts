@@ -29,6 +29,7 @@ export type {
   IssueLivenessState,
 } from "./issue-graph-liveness.js";
 export {
+  DEFAULT_MAX_STRANDED_CONTINUATION_ATTEMPTS,
   recoveryService,
 } from "./service.js";
 export {
