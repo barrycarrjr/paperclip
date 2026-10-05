@@ -72,7 +72,7 @@ export {
   paperclipCalendarSource,
   type CalendarSource,
 } from "./calendar-sources.js";
-export { templateService } from "./templates.js";
+export { templateService, normalizeTemplateAdapterType } from "./templates.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";
