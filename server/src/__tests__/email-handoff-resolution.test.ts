@@ -264,6 +264,41 @@ describe("email handoff resolution", () => {
     ).rejects.toThrow("already resolved");
     expect(dispatcher.executeTool).not.toHaveBeenCalled();
   });
+
+  it("resolves the reply tool when delegation.pluginId is a plugin UUID", async () => {
+    const pluginUuid = "550e8400-e29b-41d4-a716-446655440000";
+    const uuidDelegation = {
+      ...delegation,
+      pluginId: pluginUuid,
+    };
+    mockTransition.mockResolvedValue(uuidDelegation);
+
+    const mockDb = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ pluginKey: "email-tools" }]),
+        }),
+      }),
+    };
+
+    const dispatcher = makeDispatcher();
+    const resolutionSvc = emailHandoffResolutionService({ db: mockDb as any, dispatcher });
+
+    const { reply } = await resolutionSvc.resolve({
+      companyId: "c1",
+      delegationId: "deleg-1",
+      replyBody: "All sorted via IMAP.",
+      actor: {},
+    });
+
+    expect(reply).toEqual({ replyState: "sent" });
+    expect(dispatcher.executeTool).toHaveBeenCalledWith(
+      "email-tools:email_reply",
+      expect.objectContaining({ body: "All sorted via IMAP." }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 });
 
 describe("replyToolForPlugin", () => {
@@ -271,6 +306,12 @@ describe("replyToolForPlugin", () => {
     expect(replyToolForPlugin("email-tools")).toBe("email-tools:email_reply");
     expect(replyToolForPlugin("help-scout")).toBe("help-scout:helpscout_send_reply");
     expect(replyToolForPlugin("something-else")).toBeNull();
+  });
+
+  it("resolves tool via optional pluginKeyMap when pluginId is a UUID", () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    expect(replyToolForPlugin(uuid, { [uuid]: "email-tools" })).toBe("email-tools:email_reply");
+    expect(replyToolForPlugin(uuid)).toBeNull();
   });
 
   it("names tools that are actually held by the outbound gate", async () => {

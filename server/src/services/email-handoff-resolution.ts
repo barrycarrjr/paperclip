@@ -22,7 +22,8 @@
  * the wake-failure fix one layer down.
  */
 
-import type { Db } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { plugins, type Db } from "@paperclipai/db";
 import {
   emailHandoffReplyNeedsApproval,
   parseEmailHandoffOriginId,
@@ -50,8 +51,12 @@ const REPLY_TOOL_BY_PLUGIN: Record<string, string> = {
   "help-scout": "help-scout:helpscout_send_reply",
 };
 
-export function replyToolForPlugin(pluginId: string): string | null {
-  return REPLY_TOOL_BY_PLUGIN[pluginId] ?? null;
+export function replyToolForPlugin(
+  pluginId: string,
+  pluginKeyMap?: Record<string, string>,
+): string | null {
+  const resolvedKey = pluginKeyMap?.[pluginId] ?? pluginId;
+  return REPLY_TOOL_BY_PLUGIN[resolvedKey] ?? null;
 }
 
 /**
@@ -109,6 +114,26 @@ export function emailHandoffResolutionService(deps: {
   const { db, dispatcher } = deps;
   const delegations = issueEmailDelegationService(db);
   const settings = instanceSettingsService(db);
+
+  async function resolvePluginKey(pluginIdOrKey: string): Promise<string> {
+    if (REPLY_TOOL_BY_PLUGIN[pluginIdOrKey]) {
+      return pluginIdOrKey;
+    }
+    if (db && typeof db.select === "function") {
+      try {
+        const rows = await db
+          .select({ pluginKey: plugins.pluginKey })
+          .from(plugins)
+          .where(eq(plugins.id, pluginIdOrKey));
+        if (rows[0]?.pluginKey) {
+          return rows[0].pluginKey;
+        }
+      } catch (err) {
+        log.warn({ err, pluginId: pluginIdOrKey }, "failed to resolve plugin key from plugin id");
+      }
+    }
+    return pluginIdOrKey;
+  }
 
   /**
    * Read the approval policy for these replies.
@@ -180,10 +205,11 @@ export function emailHandoffResolutionService(deps: {
       return { replyState: "none", reason: "No reply was written." };
     }
 
-    const toolName = replyToolForPlugin(delegation.pluginId);
+    const pluginKey = await resolvePluginKey(delegation.pluginId);
+    const toolName = replyToolForPlugin(pluginKey);
     if (!toolName) {
       log.warn(
-        { pluginId: delegation.pluginId, delegationId: delegation.id },
+        { pluginId: delegation.pluginId, pluginKey, delegationId: delegation.id },
         "no reply tool known for this plugin; resolved without replying",
       );
       return {
@@ -198,7 +224,7 @@ export function emailHandoffResolutionService(deps: {
     }
 
     const parameters = buildReplyParameters({
-      pluginId: delegation.pluginId,
+      pluginId: pluginKey,
       source,
       mailbox: delegation.mailbox,
       body,
