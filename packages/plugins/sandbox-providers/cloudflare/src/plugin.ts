@@ -56,7 +56,7 @@ function readIssueId(value: unknown): string | null {
 }
 
 function resolveWorkspaceIssueId(params: PluginEnvironmentRealizeWorkspaceParams): string | null {
-  const directIssueId = readIssueId(params.issueId);
+  const directIssueId = readIssueId((params as { issueId?: string }).issueId);
   if (directIssueId) return directIssueId;
 
   const request = params.workspace.metadata?.workspaceRealizationRequest;
@@ -167,7 +167,7 @@ const plugin = definePlugin({
           sessionId: config.sessionId,
           timeoutMs: config.timeoutMs,
         },
-        { environmentId: params.environmentId, issueId: params.issueId },
+        { environmentId: params.environmentId, issueId: (params as { issueId?: string }).issueId },
       );
       return result;
     } catch (error) {
@@ -191,7 +191,7 @@ const plugin = definePlugin({
       {
         environmentId: params.environmentId,
         runId: params.runId,
-        issueId: params.issueId,
+        issueId: (params as { issueId?: string }).issueId,
         reuseLease: config.reuseLease,
         keepAlive: config.keepAlive,
         sleepAfter: config.sleepAfter,
@@ -201,7 +201,7 @@ const plugin = definePlugin({
         sessionId: config.sessionId,
         timeoutMs: config.timeoutMs,
       },
-      { environmentId: params.environmentId, runId: params.runId, issueId: params.issueId },
+      { environmentId: params.environmentId, runId: params.runId, issueId: (params as { issueId?: string }).issueId },
     );
   },
 
@@ -224,7 +224,7 @@ const plugin = definePlugin({
           normalizeId: config.normalizeId,
           timeoutMs: config.timeoutMs,
         },
-        { environmentId: params.environmentId, issueId: params.issueId },
+        { environmentId: params.environmentId, issueId: (params as { issueId?: string }).issueId },
       );
     } catch (error) {
       if (isLostLeaseError(error)) {
@@ -251,7 +251,7 @@ const plugin = definePlugin({
         reuseLease: config.reuseLease,
         keepAlive: config.keepAlive,
       },
-      { environmentId: params.environmentId, issueId: params.issueId },
+      { environmentId: params.environmentId, issueId: (params as { issueId?: string }).issueId },
     );
   },
 
@@ -262,7 +262,7 @@ const plugin = definePlugin({
     const { client } = bridgeClientFor(params.config);
     await client.destroyLease(params.providerLeaseId, {
       environmentId: params.environmentId,
-      issueId: params.issueId,
+      issueId: (params as { issueId?: string }).issueId,
     });
   },
 
@@ -342,7 +342,7 @@ const plugin = definePlugin({
           sessionStrategy: session.sessionStrategy,
           sessionId: session.sessionId,
         },
-        { environmentId: params.environmentId, issueId: params.issueId },
+        { environmentId: params.environmentId, issueId: (params as { issueId?: string }).issueId },
         streamingOptions,
       );
     } catch (error) {
