@@ -71,7 +71,7 @@ export function modelLifecycleTags(model: ModelLifecycleFields, now = new Date()
     });
   }
   if (model.isDefault) {
-    tags.push({ kind: "default", label: "Used by default", title: "The model the provider uses when none is chosen" });
+    tags.push({ kind: "default", label: "Used by default", title: "The model used when none is chosen" });
   }
   if (status === "deprecated") {
     const short = formatModelShortDate(model.retiresAt, now);

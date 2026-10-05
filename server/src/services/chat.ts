@@ -22,9 +22,12 @@ import {
   listConfiguredProviders,
   pickBestDefaultModel,
   removeClippyWorkspace,
+  withOperatorDefaults,
   type CanonicalContentBlock,
   type CanonicalMessage,
 } from "./chat-providers.js";
+import { instanceSettingsService } from "./instance-settings.js";
+import type { InstanceAgentDefaults } from "@paperclipai/shared";
 import {
   attachmentDownloadUrl,
   chatAttachmentService,
@@ -321,6 +324,19 @@ export interface ChatServiceOptions {
 
 export function chatService(db: Db, options: ChatServiceOptions = {}) {
   const attachments = chatAttachmentService(db);
+  const instanceSettings = instanceSettingsService(db);
+
+  // The models chosen on the Agent Defaults page, which decide what a new
+  // chat starts on. A failed read falls back to the ranking alone rather than
+  // stopping a chat from opening.
+  async function readAgentDefaults(): Promise<InstanceAgentDefaults | null> {
+    try {
+      return await instanceSettings.getAgentDefaults();
+    } catch (err) {
+      logger.warn({ err }, "could not read agent defaults for the chat model");
+      return null;
+    }
+  }
   const pluginToolDispatcher = options.pluginToolDispatcher ?? null;
   const pluginMcpBridge = options.pluginMcpBridge ?? null;
 
@@ -401,7 +417,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     // so a fresh chat lands on something that actually works for this user
     // (e.g. claude_local Opus via Claude Pro auth) rather than a hardcoded
     // model that requires an API key they may not have set.
-    const initialModel = input.model ?? (await pickBestDefaultModel());
+    const initialModel = input.model ?? (await pickBestDefaultModel(await readAgentDefaults()));
     const created = await db
       .insert(chatSessions)
       .values({
@@ -906,7 +922,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
   }
 
   async function listModels() {
-    return listAvailableModels();
+    return withOperatorDefaults(await listAvailableModels(), await readAgentDefaults());
   }
 
   return {

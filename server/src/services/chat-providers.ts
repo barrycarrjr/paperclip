@@ -23,6 +23,8 @@ import {
 } from "./chat-model-lists.js";
 import { peekModelCatalog } from "./model-catalog.js";
 import { rankModelsForDefault } from "./model-lifecycle.js";
+import { operatorDefaultModel } from "./resolve-agent-model.js";
+import type { InstanceAgentDefaults } from "@paperclipai/shared";
 
 /**
  * Adapter types whose underlying CLI has multimodal Read support — i.e. it
@@ -1554,14 +1556,43 @@ function rankableEntry(entry: AvailableChatModel) {
  * only then routing. So a model released today is preferred today, and an
  * older model never wins just because its route is preferred.
  */
-export async function pickBestDefaultModel(): Promise<string> {
+export async function pickBestDefaultModel(agentDefaults?: InstanceAgentDefaults | null): Promise<string> {
   const explicit = process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.trim();
   if (explicit) {
     const p = getProviderForModel(explicit);
     if (p?.isConfigured()) return explicit;
   }
   const models = await listAvailableModels();
-  return bestOfAvailableModels(models) ?? bestKnownNativeModel("anthropic");
+  const best = bestOfAvailableModels(models);
+  if (!best) return bestKnownNativeModel("anthropic");
+  // The ranking picks the route (claude_local, codex_local...). When the
+  // operator chose a model for that adapter on the Agent Defaults page, a new
+  // chat starts on it, the same model an agent left on Default runs (see
+  // resolveAgentModelForRun). Before this, the ranking alone decided, and the
+  // Claude CLI's own default won over the operator's choice.
+  const route = decodeAdapterModel(best);
+  const chosen = route ? operatorDefaultModel(agentDefaults, route.adapterType) : null;
+  return route && chosen ? encodeAdapterModel(route.adapterType, chosen) : best;
+}
+
+/**
+ * The chat model list with each adapter's "used by default" mark moved to
+ * the model the operator chose for that adapter on the Agent Defaults page,
+ * since that is the model a new chat starts on (see pickBestDefaultModel).
+ * Adapters with no operator choice keep the provider's own mark.
+ */
+export function withOperatorDefaults(
+  models: AvailableChatModel[],
+  agentDefaults: InstanceAgentDefaults | null | undefined,
+): AvailableChatModel[] {
+  return models.map((entry) => {
+    const chosen = entry.source ? operatorDefaultModel(agentDefaults, entry.source) : null;
+    if (!chosen) return entry;
+    const isChosen = decodeAdapterModel(entry.model)?.modelId === chosen;
+    if (isChosen === Boolean(entry.isDefault)) return entry;
+    const { isDefault: _providerDefault, ...rest } = entry;
+    return isChosen ? { ...rest, isDefault: true } : rest;
+  });
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentModelForRun } from "../services/resolve-agent-model.ts";
+import { operatorDefaultModel, resolveAgentModelForRun } from "../services/resolve-agent-model.ts";
 
 const NO_DEFAULTS = { defaultModelByAdapterType: {} };
 
@@ -113,5 +113,16 @@ describe("resolveAgentModelForRun", () => {
       },
     });
     expect(resolved).toBe("claude-opus-4-7");
+  });
+});
+
+describe("operatorDefaultModel", () => {
+  it("reads the Agent Defaults choice for one adapter, trimmed", () => {
+    const defaults = { defaultModelByAdapterType: { claude_local: " claude-opus-5-5 ", codex_local: "" } };
+    expect(operatorDefaultModel(defaults, "claude_local")).toBe("claude-opus-5-5");
+    // Blank means "let the adapter CLI pick".
+    expect(operatorDefaultModel(defaults, "codex_local")).toBeNull();
+    expect(operatorDefaultModel(defaults, "gemini_local")).toBeNull();
+    expect(operatorDefaultModel(null, "claude_local")).toBeNull();
   });
 });

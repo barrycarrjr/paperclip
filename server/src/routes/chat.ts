@@ -3,7 +3,6 @@ import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { chatService, type ChatActor, type StreamEvent } from "../services/chat.js";
-import { listAvailableModels } from "../services/chat-providers.js";
 import {
   attachmentSummary,
   chatAttachmentService,
@@ -87,7 +86,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
 
   router.get("/chat/models", async (req, res) => {
     requireBoardActor(req);
-    res.json({ models: await listAvailableModels() });
+    res.json({ models: await svc.listModels() });
   });
 
   router.get("/chat/sessions", async (req, res) => {

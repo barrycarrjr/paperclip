@@ -27,6 +27,17 @@ export function resolveAgentModelForRun(input: {
   return "";
 }
 
+/**
+ * The model the operator chose for an adapter type on the Agent Defaults
+ * page, or null when they left it to the adapter CLI.
+ */
+export function operatorDefaultModel(
+  defaults: InstanceAgentDefaults | null | undefined,
+  adapterType: string,
+): string | null {
+  return readNonEmptyString(defaults?.defaultModelByAdapterType[adapterType]);
+}
+
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();

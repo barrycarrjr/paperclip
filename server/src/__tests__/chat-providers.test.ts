@@ -213,6 +213,71 @@ describe("pickBestDefaultModel", () => {
     expect(picked).toBe(mod.encodeAdapterModel("codex_local", "gpt-5"));
   });
 
+  /** Adapters whose model lists carry the provider's own default mark. */
+  async function loadWithAdapterModels(
+    adapterTypes: Array<{ type: string; models: Array<{ id: string; isDefault?: boolean }> }>,
+  ) {
+    vi.doMock("../adapters/registry.js", () => ({
+      findActiveServerAdapter: (t: string) => (adapterTypes.find((a) => a.type === t) ? { type: t } : null),
+      listEnabledServerAdapters: () => adapterTypes.map((a) => ({ type: a.type })),
+      listAdapterModels: async (t: string) =>
+        (adapterTypes.find((x) => x.type === t)?.models ?? []).map((m) => ({ ...m, label: m.id })),
+    }));
+    return import("../services/chat-providers.js");
+  }
+
+  const CLAUDE_CLI = {
+    type: "claude_local",
+    models: [
+      { id: "claude-opus-4-8", isDefault: true },
+      { id: "claude-opus-5-5" },
+      { id: "claude-sonnet-5-5" },
+    ],
+  };
+
+  it("starts a new chat on the model chosen on the Agent Defaults page, not the CLI's own default", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapterModels([CLAUDE_CLI]);
+    // The reported case: the CLI marks Opus 4.8 as its default, and that won.
+    expect(await mod.pickBestDefaultModel()).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-8"));
+    expect(
+      await mod.pickBestDefaultModel({ defaultModelByAdapterType: { claude_local: "claude-opus-5-5" } }),
+    ).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-5-5"));
+  });
+
+  it("only applies the operator's choice for the adapter the chat routes through", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapterModels([CLAUDE_CLI, { type: "codex_local", models: [{ id: "gpt-5" }] }]);
+    const picked = await mod.pickBestDefaultModel({ defaultModelByAdapterType: { codex_local: "gpt-5" } });
+    expect(picked).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-4-8"));
+  });
+
+  it("lets PAPERCLIP_CHAT_DEFAULT_MODEL, the chat-only setting, still win", async () => {
+    process.env.ANTHROPIC_API_KEY = "test";
+    process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = "claude-sonnet-4-6";
+    const picked = await pickBestDefaultModel({ defaultModelByAdapterType: { claude_local: "claude-opus-5-5" } });
+    expect(picked).toBe("claude-sonnet-4-6");
+  });
+
+  it("moves the picker's default mark to the operator's choice, adapter by adapter", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapterModels([
+      CLAUDE_CLI,
+      { type: "codex_local", models: [{ id: "gpt-5", isDefault: true }, { id: "gpt-6" }] },
+    ]);
+    const marked = mod
+      .withOperatorDefaults(await mod.listAvailableModels(), {
+        defaultModelByAdapterType: { claude_local: "claude-opus-5-5" },
+      })
+      .filter((m) => m.isDefault)
+      .map((m) => m.model);
+    expect(marked).toEqual([
+      mod.encodeAdapterModel("claude_local", "claude-opus-5-5"),
+      // No operator choice for Codex, so its own mark stays.
+      mod.encodeAdapterModel("codex_local", "gpt-5"),
+    ]);
+  });
+
   it("regression: a Claude model from any source still wins over llama via aider", async () => {
     process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
     const mod = await loadWithAdapters([
