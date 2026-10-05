@@ -15,8 +15,6 @@ import {
   cases,
   companies,
   createDb,
-  documentAnnotationComments,
-  documentAnnotationThreads,
   documents,
   documentRevisions,
   heartbeatRuns,
@@ -33,6 +31,7 @@ import { errorHandler } from "../middleware/error-handler.js";
 import { actorMiddleware } from "../middleware/auth.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { buildCasePatchUpdateValues, caseRoutes } from "../routes/cases.js";
+import { clearDocumentAnnotationsStore } from "../services/document-annotations.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import type { StorageService } from "../storage/types.js";
 
@@ -90,9 +89,8 @@ describeEmbeddedPostgres("cases routes", () => {
   }, 20_000);
 
   afterEach(async () => {
+    clearDocumentAnnotationsStore();
     await db.delete(activityLog);
-    await db.delete(documentAnnotationComments);
-    await db.delete(documentAnnotationThreads);
     await db.delete(caseAttachments);
     await db.delete(caseLabels);
     await db.delete(caseDocuments);
