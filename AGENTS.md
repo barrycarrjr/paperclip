@@ -182,6 +182,13 @@ This is a fork of [paperclipai/paperclip](https://github.com/paperclipai/papercl
 maintained at [barrycarrjr/paperclip](https://github.com/barrycarrjr/paperclip).
 Fork-only changes live in the 50+ commits ahead of upstream `master`.
 
+### Releases
+
+Fork releases are GitHub-only (no npm): a `releases/vYYYY.MDD.P.md` notes
+commit, a matching tag, and the Release workflow publishes the GitHub Release.
+Follow the run sheet at the top of [`doc/RELEASING.md`](doc/RELEASING.md); the
+upstream npm steps further down that file do not apply here.
+
 ### Local Dev (Windows / NTFS)
 
 - Fork runs on port 3100 by default. If 3100 is taken (e.g. another instance),

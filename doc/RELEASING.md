@@ -1,5 +1,21 @@
 # Releasing Paperclip
 
+## This fork (barrycarrjr/paperclip): run sheet
+
+Fork releases are GitHub-only. Nothing is published to npm. Everything below
+"Upstream" is upstream's npm process and does not apply to this fork.
+
+1. Push the code first: `git push origin master`. Users' Update button picks it up from master as soon as it is there.
+2. Pick the version: today's UTC date as `vYYYY.MDD.P`, with P the next free number. Check with `git ls-remote --tags origin 'vYYYY.MDD.*'`.
+3. Write `releases/vYYYY.MDD.P.md` in the same shape as the previous one.
+4. Commit only that file, with this subject: `docs(release): add vYYYY.MDD.P notes [skip ci]`.
+5. Push it: `git push origin master`. Keep this push separate from code pushes: `[skip ci]` skips the checks for the whole push.
+6. Tag that commit and push the tag: `git tag vYYYY.MDD.P`, then `git push origin vYYYY.MDD.P`.
+7. The Release workflow (`.github/workflows/release.yml`) starts when the tag is created: it typechecks and builds the tagged commit, then publishes the GitHub Release from the notes file. STOP if it fails, and read its log before retrying.
+8. To publish or update a release again: run the Release workflow from the Actions tab with the tag (`gh workflow run release.yml -R barrycarrjr/paperclip -f tag=vYYYY.MDD.P`), or run `./scripts/create-github-release.sh YYYY.MDD.P` locally. Both create the release, or update its notes if it exists.
+
+## Upstream
+
 Maintainer runbook for shipping Paperclip across npm, GitHub, and the website-facing changelog surface.
 
 The release model is now commit-driven:
