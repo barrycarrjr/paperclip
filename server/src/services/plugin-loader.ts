@@ -2089,20 +2089,35 @@ export function pluginLoader(
       }
 
       // ------------------------------------------------------------------
-      // 8. Register agent tools
+      // 8. Register agent tools & operations
       // ------------------------------------------------------------------
       const toolDeclarations = manifest.tools ?? [];
-      if (toolDeclarations.length > 0) {
+      const operationDeclarations = manifest.operations ?? [];
+      if (toolDeclarations.length > 0 || operationDeclarations.length > 0) {
         // Pass the DB UUID so the registry can route worker lookups correctly.
         // The worker manager keys workers by pluginId (DB UUID), but the
         // registry keys tools by manifest pluginKey ("email-tools" etc.) —
         // dispatch needs both.
-        toolDispatcher.registerPluginTools(pluginKey, manifest, pluginId);
-        registered.tools = toolDeclarations.length;
+        // Also pass the persisted operation policy so per-operation overrides
+        // (such as requiresApproval) are preserved across restarts and reloads.
+        toolDispatcher.registerPluginTools(
+          pluginKey,
+          manifest,
+          pluginId,
+          plugin.operationPolicyJson,
+        );
+        registered.tools = typeof toolDispatcher.toolCount === "function"
+          ? toolDispatcher.toolCount(pluginKey)
+          : toolDeclarations.length + operationDeclarations.length;
 
         log.info(
-          { pluginId, pluginKey, tools: toolDeclarations.length },
-          "plugin-loader: agent tools registered",
+          {
+            pluginId,
+            pluginKey,
+            tools: toolDeclarations.length,
+            operations: operationDeclarations.length,
+          },
+          "plugin-loader: agent tools and operations registered",
         );
       }
 
