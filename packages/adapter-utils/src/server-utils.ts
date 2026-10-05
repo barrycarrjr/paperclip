@@ -1159,13 +1159,13 @@ async function readSkillRequired(skillDir: string): Promise<boolean> {
   try {
     const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
     const normalized = content.replace(/\r\n/g, "\n");
-    if (!normalized.startsWith("---\n")) return false;
+    if (!normalized.startsWith("---\n")) return true;
     const closing = normalized.indexOf("\n---\n", 4);
-    if (closing < 0) return false;
+    if (closing < 0) return true;
     const frontmatter = normalized.slice(4, closing);
-    return /^\s*required\s*:\s*true\s*$/m.test(frontmatter);
+    return !/^\s*required\s*:\s*false\s*$/m.test(frontmatter);
   } catch {
-    return false;
+    return true;
   }
 }
 
