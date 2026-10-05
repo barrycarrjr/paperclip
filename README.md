@@ -106,7 +106,7 @@ Monthly budgets per agent. When they hit the limit, they stop. No runaway costs.
 One deployment, many companies. Complete data isolation. One control plane for your portfolio.
 </td>
 <td align="center">
-<h3>🎫 Ticket System</h3>
+<h3>🎟️ Ticket System</h3>
 Every conversation traced. Every decision explained. Full tool-call tracing and immutable audit log.
 </td>
 </tr>
@@ -371,18 +371,18 @@ See [doc/DEVELOPING.md](doc/DEVELOPING.md) for the full development guide.
 - ✅ Better Budgeting
 - ✅ Agent Reviews and Approvals
 - ✅ Multiple Human Users
+- ✅ Memory / Knowledge (Company & Agent Memories)
+- ✅ Work Queues (Repeatable Intake & Agent Dispatch)
+- ✅ CEO Chat (Clippy Assistant Drawer)
+- ✅ Desktop App (Windows Launcher & Tray)
 - ⚪ Cloud / Sandbox agents (e.g. Cursor / e2b agents)
 - ⚪ Artifacts & Work Products
-- ⚪ Memory / Knowledge
 - ⚪ Enforced Outcomes
 - ⚪ MAXIMIZER MODE
 - ⚪ Deep Planning
-- ⚪ Work Queues
 - ⚪ Self-Organization
 - ⚪ Automatic Organizational Learning
-- ⚪ CEO Chat
 - ⚪ Cloud deployments
-- ⚪ Desktop App
 
 This is the short roadmap preview. See the full roadmap in [ROADMAP.md](ROADMAP.md).
 

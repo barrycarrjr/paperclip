@@ -34,7 +34,7 @@ Agents need a practical way to discover, install, and use skills without every s
 
 ### ✅ Scheduled Routines
 
-Recurring work should be native. Routine tasks like reports, reviews, and other periodic work need first-class scheduling so the company keeps operating even when no human is manually kicking work off.
+Recurring work should be native. Routine tasks like reports, reviews, and other periodic work need first-class scheduling so the company keeps operating even when no human is manually kicking work off. Accompanied by a native cadence calendar view.
 
 ### ✅ Better Budgeting
 
@@ -48,6 +48,30 @@ Paperclip should support explicit review and approval stages as first-class work
 
 Paperclip needs a clearer path from solo operator to real human teams. That means shared board access, safer collaboration, and a better model for several humans supervising the same autonomous company.
 
+### ✅ Memory / Knowledge
+
+We want a stronger memory and knowledge surface for companies, agents, and projects. That includes durable memory, better recall of prior decisions and context, and a clearer path for knowledge-style capabilities without turning Paperclip into a generic chat app.
+
+*Shipped in fork:* Native company and agent memory repository with nested folder management, keyword indexing, and retrieval (`/memories`).
+
+### ✅ Work Queues
+
+Paperclip should support queue-style work streams for repeatable inputs like support, triage, review, and backlog intake. That would make it easier to route work continuously without turning every system into a one-off workflow.
+
+*Shipped in fork:* Native work queues engine with priority dispatch and item routing (`/work-queues`).
+
+### ✅ CEO Chat
+
+We want a lighter-weight way to talk to leadership agents, but those conversations should still resolve to real work objects like plans, issues, approvals, or decisions. This should improve interaction without changing the core task-and-comments model.
+
+*Shipped in fork:* Clippy assistant drawer with Trust Gate approval safeguards, converting conversations into actionable issues and plan updates.
+
+### ✅ Desktop App
+
+A desktop app can make Paperclip feel more accessible and persistent for day-to-day operators. The goal is easier access, better local ergonomics, and a smoother default experience for users who want the control plane always close at hand.
+
+*Shipped in fork:* Native Windows system tray launcher (`tools/paperclip-launcher` / `paperclip.exe`) with auto-start and instance lifecycle controls.
+
 ### ⚪ Cloud / Sandbox agents (e.g. Cursor / e2b agents)
 
 We want agents to run in more remote and sandboxed environments while preserving the same Paperclip control-plane model. This makes the system safer, more flexible, and more useful outside a single trusted local machine.
@@ -55,10 +79,6 @@ We want agents to run in more remote and sandboxed environments while preserving
 ### ⚪ Artifacts & Work Products
 
 Paperclip should make outputs first-class. That means generated artifacts, previews, deployable outputs, and the handoff from "agent did work" to "here is the result" should become more visible and easier to operate.
-
-### ⚪ Memory / Knowledge
-
-We want a stronger memory and knowledge surface for companies, agents, and projects. That includes durable memory, better recall of prior decisions and context, and a clearer path for knowledge-style capabilities without turning Paperclip into a generic chat app.
 
 ### ⚪ Enforced Outcomes
 
@@ -72,10 +92,6 @@ This is the direction for higher-autonomy execution: more aggressive delegation,
 
 Some work needs more than a task description before execution starts. Deeper planning means stronger issue documents, revisionable plans, and clearer review loops for strategy-heavy work before agents begin execution.
 
-### ⚪ Work Queues
-
-Paperclip should support queue-style work streams for repeatable inputs like support, triage, review, and backlog intake. That would make it easier to route work continuously without turning every system into a one-off workflow.
-
 ### ⚪ Self-Organization
 
 As companies grow, agents should be able to propose useful structural changes such as role adjustments, delegation changes, and new recurring routines. The goal is adaptive organizations that still stay within governance and approval boundaries.
@@ -84,14 +100,6 @@ As companies grow, agents should be able to propose useful structural changes su
 
 Paperclip should get better at turning completed work into reusable organizational knowledge. That includes capturing playbooks, recurring fixes, and decision patterns so future work starts from what the company has already learned.
 
-### ⚪ CEO Chat
-
-We want a lighter-weight way to talk to leadership agents, but those conversations should still resolve to real work objects like plans, issues, approvals, or decisions. This should improve interaction without changing the core task-and-comments model.
-
 ### ⚪ Cloud deployments
 
 Local-first remains important, but Paperclip also needs a cleaner shared deployment story. Teams should be able to run the same product in hosted or semi-hosted environments without changing the mental model.
-
-### ⚪ Desktop App
-
-A desktop app can make Paperclip feel more accessible and persistent for day-to-day operators. The goal is easier access, better local ergonomics, and a smoother default experience for users who want the control plane always close at hand.
