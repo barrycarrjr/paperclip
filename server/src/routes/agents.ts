@@ -2510,12 +2510,40 @@ export function agentRoutes(
         "spentMonthlyCents",
         "defaultEnvironmentId",
         "status",
+        "adapterType",
       ] as const;
       for (const field of FORBIDDEN_SELF_FIELDS) {
         if (hasOwn(req.body as object, field)) {
           throw forbidden(
             `Agents cannot self-modify '${field}'; ask a CEO or board member.`,
           );
+        }
+      }
+
+      if (hasOwn(req.body as object, "replaceAdapterConfig") && (req.body as Record<string, unknown>).replaceAdapterConfig === true) {
+        throw forbidden(
+          "Agents cannot self-modify adapterConfig using replaceAdapterConfig; ask a CEO or board member.",
+        );
+      }
+
+      if (hasOwn(req.body as object, "adapterConfig")) {
+        const incomingAdapterConfig = asRecord((req.body as Record<string, unknown>).adapterConfig) ?? {};
+        const FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS = [
+          "command",
+          "args",
+          "extraArgs",
+          "cwd",
+          "env",
+          "dangerouslySkipPermissions",
+          "secretBindings",
+          "secrets",
+        ] as const;
+        for (const key of FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS) {
+          if (hasOwn(incomingAdapterConfig, key)) {
+            throw forbidden(
+              `Agents cannot self-modify adapterConfig.${key}; ask a CEO or board member.`,
+            );
+          }
         }
       }
     }
