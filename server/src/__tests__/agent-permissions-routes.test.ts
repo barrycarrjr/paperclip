@@ -670,6 +670,69 @@ describe.sequential("agent permission routes", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   }, 15_000);
 
+  it.each([
+    ["command", { command: "malicious-binary" }],
+    ["args", { args: ["--malicious"] }],
+    ["extraArgs", { extraArgs: ["--dangerously-skip-permissions"] }],
+    ["cwd", { cwd: "/etc" }],
+    ["env", { env: { SECRET: "stolen" } }],
+    ["dangerouslySkipPermissions", { dangerouslySkipPermissions: true }],
+    ["secretBindings", { secretBindings: { API_KEY: "secret-uuid" } }],
+    ["secrets", { secrets: { API_KEY: "secret-uuid" } }],
+  ])("blocks agent-authenticated self-updates that modify adapterConfig.%s", async (field, adapterConfig) => {
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ adapterConfig }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain(`Agents cannot self-modify adapterConfig.${field}`);
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("blocks agent-authenticated self-updates that modify adapterType", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ adapterType: "claude_local" }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Agents cannot self-modify 'adapterType'");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("blocks agent-authenticated self-updates that use replaceAdapterConfig", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ replaceAdapterConfig: true, adapterConfig: { model: "claude-3-opus" } }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Agents cannot self-modify adapterConfig using replaceAdapterConfig");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
   it("blocks agent-authenticated instructions-path updates", async () => {
     const app = await createApp({
       type: "agent",
