@@ -154,6 +154,7 @@ export const updateAgentSchema = objectWithoutDefaults(
   .partial()
   .extend({
     permissions: z.never().optional(),
+    forbiddenWritePaths: z.never().optional(),
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),
