@@ -32,7 +32,7 @@ import type {
 } from "@paperclipai/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { pluginRegistryService } from "./plugin-registry.js";
-import { templateService } from "./templates.js";
+import { templateService, normalizeTemplateAdapterType } from "./templates.js";
 
 const DEFAULT_LIBRARY_REPO = "barrycarrjr/paperclip-extensions";
 const LIBRARY_CACHE_TTL_MS = 60_000;
@@ -264,7 +264,7 @@ export function templatesLibraryService(db: Db) {
         icon: typeof fm.icon === "string" ? fm.icon : null,
         // Use the markdown body as the agent's capabilities/system-prompt context.
         capabilities: entry.body && entry.body.length > 0 ? entry.body : (typeof fm.capabilities === "string" ? fm.capabilities : null),
-        adapterType: String(fm.adapterType ?? "process"),
+        adapterType: normalizeTemplateAdapterType(fm.adapterType as string | undefined),
         adapterConfig: (fm.adapterConfig as Record<string, unknown>) ?? {},
         runtimeConfig: (fm.runtimeConfig as Record<string, unknown>) ?? {},
         permissions: (fm.permissions as Record<string, unknown>) ?? {},

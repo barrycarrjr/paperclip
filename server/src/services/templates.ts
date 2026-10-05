@@ -36,6 +36,7 @@ import { agentService } from "./agents.js";
 import { companySkillService } from "./company-skills.js";
 import { routineService } from "./routines.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
 
 type Actor = { userId?: string | null };
 
@@ -50,6 +51,18 @@ function normalizeRoutineVariables(input: RoutineVariableInput[] | undefined): R
     required: v.required ?? true,
     options: v.options ?? [],
   }));
+}
+
+export function normalizeTemplateAdapterType(adapterType: string | null | undefined): string {
+  const normalized = (adapterType ?? "process").trim();
+  if (normalized === "claude-local") return "claude_local";
+  if (normalized.includes("-")) {
+    const underscored = normalized.replace(/-/g, "_");
+    if (BUILTIN_ADAPTER_TYPES.has(underscored)) {
+      return underscored;
+    }
+  }
+  return normalized || "process";
 }
 
 export function templateService(
@@ -392,7 +405,7 @@ export function templateService(
         title: input.title ?? null,
         icon: input.icon ?? null,
         capabilities: input.capabilities ?? null,
-        adapterType: input.adapterType,
+        adapterType: normalizeTemplateAdapterType(input.adapterType),
         adapterConfig: input.adapterConfig,
         runtimeConfig: input.runtimeConfig,
         permissions: input.permissions,
@@ -430,7 +443,7 @@ export function templateService(
         title: patch.title === undefined ? existing.title : patch.title,
         icon: patch.icon === undefined ? existing.icon : patch.icon,
         capabilities: patch.capabilities === undefined ? existing.capabilities : patch.capabilities,
-        adapterType: patch.adapterType ?? existing.adapterType,
+        adapterType: patch.adapterType !== undefined ? normalizeTemplateAdapterType(patch.adapterType) : existing.adapterType,
         adapterConfig: patch.adapterConfig ?? existing.adapterConfig,
         runtimeConfig: patch.runtimeConfig ?? existing.runtimeConfig,
         permissions: patch.permissions ?? existing.permissions,
@@ -732,7 +745,7 @@ export function templateService(
           title: template.title ?? null,
           icon: template.icon ?? null,
           capabilities: template.capabilities ?? null,
-          adapterType: template.adapterType,
+          adapterType: normalizeTemplateAdapterType(template.adapterType),
           adapterConfig: template.adapterConfig,
           runtimeConfig: template.runtimeConfig,
           permissions: template.permissions,
