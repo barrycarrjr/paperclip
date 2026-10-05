@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
-import { useCompany, useCompanyOptional } from "../context/CompanyContext";
+import { useCompany } from "../context/CompanyContext";
 import { chatApi, type ChatSession } from "../api/chat";
 import { ClippyConversation } from "./ClippyConversation";
 import { clippyStreamManager } from "../lib/clippy-stream-manager";
@@ -119,7 +119,12 @@ export function ClippyDrawer() {
   // first render after a company change (see hooks/useRouteCompany.ts).
   const activeCompanyId = useActiveCompanyId();
   const activeCompanyIdRef = useRef<string | null>(activeCompanyId);
-  const companyContext = useCompanyOptional?.() ?? (typeof useCompany === "function" ? useCompany() : null);
+  let companyContext: ReturnType<typeof useCompany> | null = null;
+  try {
+    companyContext = useCompany();
+  } catch {
+    companyContext = null;
+  }
   const companies = companyContext?.companies ?? [];
   activeCompanyIdRef.current = activeCompanyId;
   const qc = useQueryClient();
