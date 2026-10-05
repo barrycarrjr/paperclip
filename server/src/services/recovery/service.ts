@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
@@ -43,6 +43,9 @@ import {
   type IssueLivenessFinding,
 } from "./issue-graph-liveness.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
+import { readContinuationAttempt } from "./run-liveness-continuations.js";
+
+export const DEFAULT_MAX_STRANDED_CONTINUATION_ATTEMPTS = 2;
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
@@ -72,7 +75,7 @@ type RecoveryWakeup = (
 
 type LatestIssueRun = Pick<
   typeof heartbeatRuns.$inferSelect,
-  "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot"
+  "id" | "agentId" | "status" | "error" | "errorCode" | "continuationAttempt" | "contextSnapshot"
 > | null;
 
 type WatchdogDecisionActor =
@@ -291,7 +294,37 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0] ?? null);
   }
 
-  async function getLatestIssueRun(companyId: string, issueId: string): Promise<LatestIssueRun> {
+  async function getLatestIssueRun(
+    companyId: string,
+    issueId: string,
+    fallbackRunId?: string | null,
+  ): Promise<LatestIssueRun> {
+    const run = await db
+      .select({
+        id: heartbeatRuns.id,
+        agentId: heartbeatRuns.agentId,
+        status: heartbeatRuns.status,
+        error: heartbeatRuns.error,
+        errorCode: heartbeatRuns.errorCode,
+        continuationAttempt: heartbeatRuns.continuationAttempt,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          or(
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
+          ),
+        ),
+      )
+      .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    if (run || !fallbackRunId) return run;
+
     return db
       .select({
         id: heartbeatRuns.id,
@@ -299,16 +332,16 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         status: heartbeatRuns.status,
         error: heartbeatRuns.error,
         errorCode: heartbeatRuns.errorCode,
+        continuationAttempt: heartbeatRuns.continuationAttempt,
         contextSnapshot: heartbeatRuns.contextSnapshot,
       })
       .from(heartbeatRuns)
       .where(
         and(
           eq(heartbeatRuns.companyId, companyId),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          eq(heartbeatRuns.id, fallbackRunId),
         ),
       )
-      .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))
       .limit(1)
       .then((rows) => rows[0] ?? null);
   }
@@ -366,6 +399,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     retryReason: "assignment_recovery" | "issue_continuation_needed";
     source: string;
     retryOfRunId?: string | null;
+    continuationAttempt?: number;
   }) {
     const queued = await deps.enqueueWakeup(input.agentId, {
       source: "automation",
@@ -374,6 +408,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       payload: {
         issueId: input.issueId,
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
+        ...(typeof input.continuationAttempt === "number"
+          ? { strandedContinuationAttempt: input.continuationAttempt }
+          : {}),
       },
       requestedByActorType: "system",
       requestedByActorId: null,
@@ -384,6 +421,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         retryReason: input.retryReason,
         source: input.source,
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
+        ...(typeof input.continuationAttempt === "number"
+          ? {
+              strandedContinuationAttempt: input.continuationAttempt,
+            }
+          : {}),
       },
     });
 
@@ -1560,7 +1602,14 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return updated;
   }
 
-  async function reconcileStrandedAssignedIssues() {
+  async function reconcileStrandedAssignedIssues(opts?: {
+    maxContinuationAttempts?: number;
+  }) {
+    const maxContinuationAttempts =
+      typeof opts?.maxContinuationAttempts === "number" && opts.maxContinuationAttempts > 0
+        ? opts.maxContinuationAttempts
+        : DEFAULT_MAX_STRANDED_CONTINUATION_ATTEMPTS;
+
     const candidates = await db
       .select()
       .from(issues)
@@ -1605,7 +1654,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
-      const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+      const latestRun = await getLatestIssueRun(
+        issue.companyId,
+        issue.id,
+        issue.executionRunId ?? issue.checkoutRunId,
+      );
       if (isStrandedIssueRecoveryIssue(issue) && isUnsuccessfulTerminalIssueRun(latestRun)) {
         const updated = await escalateStrandedRecoveryIssueInPlace({
           issue,
@@ -1694,7 +1747,41 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         result.skipped += 1;
         continue;
       }
+
+      const latestContext = parseObject(latestRun?.contextSnapshot);
+      const latestRetryReason = readNonEmptyString(latestContext.retryReason);
+      const isContinuationRun = latestRetryReason === "issue_continuation_needed";
+      const currentAttempt = isContinuationRun
+        ? Math.max(
+            1,
+            readContinuationAttempt(
+              latestContext.strandedContinuationAttempt ??
+              latestContext.continuationAttempt,
+            ),
+          )
+        : 0;
+
       if (didAutomaticRecoveryFail(latestRun, "issue_continuation_needed")) {
+        const failureSummary = summarizeRunFailureForIssueComment(latestRun);
+        const updated = await escalateStrandedAssignedIssue({
+          issue,
+          previousStatus: "in_progress",
+          latestRun,
+          comment:
+            "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
+            `execution disappeared, but it still has no live execution path.${failureSummary ?? ""} ` +
+            "Moving it to `blocked` so it is visible for intervention.",
+        });
+        if (updated) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
+      if (isContinuationRun && currentAttempt >= maxContinuationAttempts) {
         const failureSummary = summarizeRunFailureForIssueComment(latestRun);
         const updated = await escalateStrandedAssignedIssue({
           issue,
@@ -1719,6 +1806,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
+      const nextAttempt = currentAttempt + 1;
       const queued = await enqueueStrandedIssueRecovery({
         issueId: issue.id,
         agentId,
@@ -1726,6 +1814,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         retryReason: "issue_continuation_needed",
         source: "issue.continuation_recovery",
         retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
+        continuationAttempt: nextAttempt,
       });
       if (queued) {
         result.continuationRequeued += 1;

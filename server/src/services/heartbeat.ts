@@ -4750,8 +4750,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
   }
 
-  async function reconcileStrandedAssignedIssues() {
-    return recovery.reconcileStrandedAssignedIssues();
+  async function reconcileStrandedAssignedIssues(opts?: {
+    maxContinuationAttempts?: number;
+  }) {
+    return recovery.reconcileStrandedAssignedIssues(opts);
   }
 
   function issueIdFromRunContext(contextSnapshot: unknown) {
