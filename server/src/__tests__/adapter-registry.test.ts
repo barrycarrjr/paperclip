@@ -59,6 +59,7 @@ import {
   requireServerAdapter,
   unregisterServerAdapter,
 } from "../adapters/index.js";
+import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
 import {
   resolveExternalAdapterRegistration,
   setOverridePaused,
@@ -416,6 +417,14 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.promptTemplate).toBeUndefined();
     // Auth token is still injected.
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
+  });
+
+  it("registers all built-in adapter types in the registry", () => {
+    for (const type of BUILTIN_ADAPTER_TYPES) {
+      const adapter = findServerAdapter(type);
+      expect(adapter, `Adapter for type ${type} should be registered`).not.toBeNull();
+      expect(adapter?.type).toBe(type);
+    }
   });
 });
 

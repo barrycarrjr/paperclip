@@ -996,6 +996,10 @@ function registerBuiltInAdapters() {
     geminiLocalAdapter,
     openclawGatewayAdapter,
     hermesLocalAdapter,
+    hermesGatewayAdapter,
+    cursorCloudAdapter,
+    grokLocalAdapter,
+    kimiLocalAdapter,
     processAdapter,
     httpAdapter,
   ]) {
