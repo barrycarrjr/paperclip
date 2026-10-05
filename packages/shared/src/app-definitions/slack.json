@@ -98,7 +98,7 @@
           "secret": true
         }
       ],
-      "guidanceMd": "Create and install one Slack App for this agent. Paperclip receives verified Events API requests and interactive callbacks, acknowledges with reactions, responds in direct messages, and starts one Paperclip task per new mentioned channel thread.",
+      "guidanceMd": "Create and install a Slack App for this agent in your Slack workspace.\n\n• Shared Server: Create one workspace app (e.g., \"Paperclip\") that team members share.\n• Separate Local Installations: If multiple team members are connecting separate local Paperclip instances to the same Slack workspace, create a distinct app per machine (e.g., \"Paperclip - Dev - <Name>\") with its own Request URL so events route to the correct computer.\n\nPaperclip receives verified Events API requests and interactive callbacks, acknowledges with reactions, responds in direct messages, and starts one Paperclip task per new mentioned channel thread.",
       "consoleLinks": {
         "register": "https://api.slack.com/apps",
         "docs": "https://api.slack.com/start/quickstart"
