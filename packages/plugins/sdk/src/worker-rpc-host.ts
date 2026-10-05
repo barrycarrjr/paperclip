@@ -86,9 +86,26 @@ import type {
   PluginEnvironmentResumeLeaseParams,
   PluginEnvironmentValidateConfigParams,
   PluginEnvironmentProbeParams,
+  PluginEnvironmentRunnerIngressEndpointParams,
+  PluginEnvironmentSyncInParams,
+  PluginEnvironmentSyncOutParams,
+  PluginEnvironmentStartInteractiveSetupParams,
+  PluginEnvironmentGetInteractiveSetupParams,
+  PluginEnvironmentCaptureTemplateParams,
+  PluginEnvironmentCancelInteractiveSetupParams,
+  PluginEnvironmentDeleteTemplateParams,
+  PluginLoginPtyOpenParams,
+  PluginLoginPtyInputParams,
+  PluginLoginPtyStopParams,
+  PluginLoginPtyCloseParams,
+  PluginDuplexChannelOpenParams,
+  PluginDuplexChannelWriteParams,
+  PluginDuplexChannelStopParams,
+  PluginDuplexChannelCloseParams,
   WorkerToHostMethodName,
   WorkerToHostMethods,
 } from "./protocol.js";
+import { NOOP_PLUGIN_TRACER } from "./types.js";
 import {
   JSONRPC_VERSION,
   JSONRPC_ERROR_CODES,
@@ -106,6 +123,7 @@ import {
   isJsonRpcErrorResponse,
   JsonRpcParseError,
   JsonRpcCallError,
+  encodeChannelBytes,
 } from "./protocol.js";
 
 // ---------------------------------------------------------------------------
@@ -1057,6 +1075,57 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           notifyHost("log", { level: "debug", message, meta, companyId });
         },
       },
+
+      execution: {
+        log(stream: "stdout" | "stderr", chunk: string): void {
+          if (typeof chunk !== "string" || chunk.length === 0) return;
+          notifyHost("execute.log", { stream, chunk });
+        },
+      },
+
+      loginPty: {
+        output(hostRouteId: string, workerSessionId: string, chunk: string): void {
+          if (typeof hostRouteId !== "string" || hostRouteId.length === 0) return;
+          if (typeof workerSessionId !== "string" || workerSessionId.length === 0) return;
+          if (typeof chunk !== "string" || chunk.length === 0) return;
+          notifyHost("loginPty.output", { hostRouteId, workerSessionId, chunk });
+        },
+        exit(hostRouteId: string, workerSessionId: string, exitCode: number | null): void {
+          if (typeof hostRouteId !== "string" || hostRouteId.length === 0) return;
+          if (typeof workerSessionId !== "string" || workerSessionId.length === 0) return;
+          notifyHost("loginPty.exit", { hostRouteId, workerSessionId, exitCode });
+        },
+      },
+
+      duplexChannel: {
+        data(hostRouteId: string, workerSessionId: string, chunk: Uint8Array): void {
+          if (typeof hostRouteId !== "string" || hostRouteId.length === 0) return;
+          if (typeof workerSessionId !== "string" || workerSessionId.length === 0) return;
+          if (!(chunk instanceof Uint8Array) || chunk.byteLength === 0) return;
+          notifyHost("duplexChannel.data", {
+            hostRouteId,
+            workerSessionId,
+            chunk: encodeChannelBytes(chunk),
+          });
+        },
+        exit(
+          hostRouteId: string,
+          workerSessionId: string,
+          exitCode: number | null,
+          transportClosed?: boolean,
+        ): void {
+          if (typeof hostRouteId !== "string" || hostRouteId.length === 0) return;
+          if (typeof workerSessionId !== "string" || workerSessionId.length === 0) return;
+          notifyHost("duplexChannel.exit", {
+            hostRouteId,
+            workerSessionId,
+            exitCode,
+            ...(transportClosed ? { transportClosed: true } : {}),
+          });
+        },
+      },
+
+      tracer: NOOP_PLUGIN_TRACER,
     };
   }
 
@@ -1156,6 +1225,54 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       case "environmentExecute":
         return handleEnvironmentExecute(params as PluginEnvironmentExecuteParams);
 
+      case "environmentRunnerIngressEndpoint":
+        return handleEnvironmentRunnerIngressEndpoint(params as PluginEnvironmentRunnerIngressEndpointParams);
+
+      case "environmentSyncIn":
+        return handleEnvironmentSyncIn(params as PluginEnvironmentSyncInParams);
+
+      case "environmentSyncOut":
+        return handleEnvironmentSyncOut(params as PluginEnvironmentSyncOutParams);
+
+      case "environmentStartInteractiveSetup":
+        return handleEnvironmentStartInteractiveSetup(params as PluginEnvironmentStartInteractiveSetupParams);
+
+      case "environmentGetInteractiveSetup":
+        return handleEnvironmentGetInteractiveSetup(params as PluginEnvironmentGetInteractiveSetupParams);
+
+      case "environmentCaptureTemplate":
+        return handleEnvironmentCaptureTemplate(params as PluginEnvironmentCaptureTemplateParams);
+
+      case "environmentCancelInteractiveSetup":
+        return handleEnvironmentCancelInteractiveSetup(params as PluginEnvironmentCancelInteractiveSetupParams);
+
+      case "environmentDeleteTemplate":
+        return handleEnvironmentDeleteTemplate(params as PluginEnvironmentDeleteTemplateParams);
+
+      case "loginPtyOpen":
+        return handleLoginPtyOpen(params as PluginLoginPtyOpenParams);
+
+      case "loginPtyInput":
+        return handleLoginPtyInput(params as PluginLoginPtyInputParams);
+
+      case "loginPtyStop":
+        return handleLoginPtyStop(params as PluginLoginPtyStopParams);
+
+      case "loginPtyClose":
+        return handleLoginPtyClose(params as PluginLoginPtyCloseParams);
+
+      case "duplexChannelOpen":
+        return handleDuplexChannelOpen(params as PluginDuplexChannelOpenParams);
+
+      case "duplexChannelWrite":
+        return handleDuplexChannelWrite(params as PluginDuplexChannelWriteParams);
+
+      case "duplexChannelStop":
+        return handleDuplexChannelStop(params as PluginDuplexChannelStopParams);
+
+      case "duplexChannelClose":
+        return handleDuplexChannelClose(params as PluginDuplexChannelCloseParams);
+
       default:
         throw Object.assign(
           new Error(`Unknown method: ${method}`),
@@ -1197,6 +1314,22 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     if (plugin.definition.onEnvironmentDestroyLease) supportedMethods.push("environmentDestroyLease");
     if (plugin.definition.onEnvironmentRealizeWorkspace) supportedMethods.push("environmentRealizeWorkspace");
     if (plugin.definition.onEnvironmentExecute) supportedMethods.push("environmentExecute");
+    if (plugin.definition.onEnvironmentRunnerIngressEndpoint) supportedMethods.push("environmentRunnerIngressEndpoint");
+    if (plugin.definition.onEnvironmentSyncIn) supportedMethods.push("environmentSyncIn");
+    if (plugin.definition.onEnvironmentSyncOut) supportedMethods.push("environmentSyncOut");
+    if (plugin.definition.onEnvironmentStartInteractiveSetup) supportedMethods.push("environmentStartInteractiveSetup");
+    if (plugin.definition.onEnvironmentGetInteractiveSetup) supportedMethods.push("environmentGetInteractiveSetup");
+    if (plugin.definition.onEnvironmentCaptureTemplate) supportedMethods.push("environmentCaptureTemplate");
+    if (plugin.definition.onEnvironmentCancelInteractiveSetup) supportedMethods.push("environmentCancelInteractiveSetup");
+    if (plugin.definition.onEnvironmentDeleteTemplate) supportedMethods.push("environmentDeleteTemplate");
+    if (plugin.definition.onLoginPtyOpen) supportedMethods.push("loginPtyOpen");
+    if (plugin.definition.onLoginPtyInput) supportedMethods.push("loginPtyInput");
+    if (plugin.definition.onLoginPtyStop) supportedMethods.push("loginPtyStop");
+    if (plugin.definition.onLoginPtyClose) supportedMethods.push("loginPtyClose");
+    if (plugin.definition.onDuplexChannelOpen) supportedMethods.push("duplexChannelOpen");
+    if (plugin.definition.onDuplexChannelWrite) supportedMethods.push("duplexChannelWrite");
+    if (plugin.definition.onDuplexChannelStop) supportedMethods.push("duplexChannelStop");
+    if (plugin.definition.onDuplexChannelClose) supportedMethods.push("duplexChannelClose");
 
     return { ok: true, supportedMethods };
   }
@@ -1491,6 +1624,120 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     }
     return plugin.definition.onEnvironmentExecute(params);
   }
+
+  async function handleEnvironmentRunnerIngressEndpoint(params: PluginEnvironmentRunnerIngressEndpointParams) {
+    if (!plugin.definition.onEnvironmentRunnerIngressEndpoint) {
+      throw methodNotImplemented("environmentRunnerIngressEndpoint");
+    }
+    return plugin.definition.onEnvironmentRunnerIngressEndpoint(params);
+  }
+
+  async function handleEnvironmentSyncIn(params: PluginEnvironmentSyncInParams) {
+    if (!plugin.definition.onEnvironmentSyncIn) {
+      throw methodNotImplemented("environmentSyncIn");
+    }
+    return plugin.definition.onEnvironmentSyncIn(params);
+  }
+
+  async function handleEnvironmentSyncOut(params: PluginEnvironmentSyncOutParams) {
+    if (!plugin.definition.onEnvironmentSyncOut) {
+      throw methodNotImplemented("environmentSyncOut");
+    }
+    return plugin.definition.onEnvironmentSyncOut(params);
+  }
+
+  async function handleEnvironmentStartInteractiveSetup(params: PluginEnvironmentStartInteractiveSetupParams) {
+    if (!plugin.definition.onEnvironmentStartInteractiveSetup) {
+      throw methodNotImplemented("environmentStartInteractiveSetup");
+    }
+    return plugin.definition.onEnvironmentStartInteractiveSetup(params);
+  }
+
+  async function handleEnvironmentGetInteractiveSetup(params: PluginEnvironmentGetInteractiveSetupParams) {
+    if (!plugin.definition.onEnvironmentGetInteractiveSetup) {
+      throw methodNotImplemented("environmentGetInteractiveSetup");
+    }
+    return plugin.definition.onEnvironmentGetInteractiveSetup(params);
+  }
+
+  async function handleEnvironmentCaptureTemplate(params: PluginEnvironmentCaptureTemplateParams) {
+    if (!plugin.definition.onEnvironmentCaptureTemplate) {
+      throw methodNotImplemented("environmentCaptureTemplate");
+    }
+    return plugin.definition.onEnvironmentCaptureTemplate(params);
+  }
+
+  async function handleEnvironmentCancelInteractiveSetup(params: PluginEnvironmentCancelInteractiveSetupParams) {
+    if (!plugin.definition.onEnvironmentCancelInteractiveSetup) {
+      throw methodNotImplemented("environmentCancelInteractiveSetup");
+    }
+    return plugin.definition.onEnvironmentCancelInteractiveSetup(params);
+  }
+
+  async function handleEnvironmentDeleteTemplate(params: PluginEnvironmentDeleteTemplateParams) {
+    if (!plugin.definition.onEnvironmentDeleteTemplate) {
+      throw methodNotImplemented("environmentDeleteTemplate");
+    }
+    return plugin.definition.onEnvironmentDeleteTemplate(params);
+  }
+
+  async function handleLoginPtyOpen(params: PluginLoginPtyOpenParams) {
+    if (!plugin.definition.onLoginPtyOpen) {
+      throw methodNotImplemented("loginPtyOpen");
+    }
+    return plugin.definition.onLoginPtyOpen(params);
+  }
+
+  async function handleLoginPtyInput(params: PluginLoginPtyInputParams) {
+    if (!plugin.definition.onLoginPtyInput) {
+      throw methodNotImplemented("loginPtyInput");
+    }
+    return plugin.definition.onLoginPtyInput(params);
+  }
+
+  async function handleLoginPtyStop(params: PluginLoginPtyStopParams) {
+    if (!plugin.definition.onLoginPtyStop) {
+      throw methodNotImplemented("loginPtyStop");
+    }
+    return plugin.definition.onLoginPtyStop(params);
+  }
+
+  async function handleLoginPtyClose(params: PluginLoginPtyCloseParams) {
+    if (!plugin.definition.onLoginPtyClose) {
+      throw methodNotImplemented("loginPtyClose");
+    }
+    return plugin.definition.onLoginPtyClose(params);
+  }
+
+  async function handleDuplexChannelOpen(params: PluginDuplexChannelOpenParams) {
+    if (!plugin.definition.onDuplexChannelOpen) {
+      throw methodNotImplemented("duplexChannelOpen");
+    }
+    return plugin.definition.onDuplexChannelOpen(params);
+  }
+
+  async function handleDuplexChannelWrite(params: PluginDuplexChannelWriteParams) {
+    if (!plugin.definition.onDuplexChannelWrite) {
+      throw methodNotImplemented("duplexChannelWrite");
+    }
+    return plugin.definition.onDuplexChannelWrite(params);
+  }
+
+  async function handleDuplexChannelStop(params: PluginDuplexChannelStopParams) {
+    if (!plugin.definition.onDuplexChannelStop) {
+      throw methodNotImplemented("duplexChannelStop");
+    }
+    return plugin.definition.onDuplexChannelStop(params);
+  }
+
+  async function handleDuplexChannelClose(params: PluginDuplexChannelCloseParams) {
+    if (!plugin.definition.onDuplexChannelClose) {
+      throw methodNotImplemented("duplexChannelClose");
+    }
+    return plugin.definition.onDuplexChannelClose(params);
+  }
+
+
 
   // -----------------------------------------------------------------------
   // Event filter helper

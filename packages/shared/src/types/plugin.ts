@@ -172,6 +172,19 @@ export interface PluginOperationDeclaration {
  *
  * Requires the `environment.drivers.register` capability.
  */
+
+export interface SandboxProviderCapabilities {
+  reusableLeases?: boolean;
+  nativeSyncIn?: boolean;
+  nativeSyncOut?: boolean;
+  persistentProcessSessions?: boolean;
+  independentControlCommands?: boolean;
+  incrementalSessionOutput?: boolean;
+  concurrentSyncOperations?: boolean;
+  duplexCommandStream?: boolean;
+  runnerWebSocketIngress?: boolean;
+}
+
 export interface PluginEnvironmentDriverDeclaration {
   /** Stable driver key, unique within the plugin. Namespaced by plugin ID at runtime. */
   driverKey: string;
@@ -189,6 +202,17 @@ export interface PluginEnvironmentDriverDeclaration {
   description?: string;
   /** JSON Schema describing the driver's provider-specific configuration. */
   configSchema: JsonSchema;
+  supportsReusableLeases?: boolean;
+  defaultAcquireTimeoutMs?: number;
+  sandboxCapabilities?: SandboxProviderCapabilities;
+  supportsInteractiveSetup?: boolean;
+  interactiveSetupConnectionTypes?: string[];
+  supportsTemplateCapture?: boolean;
+  templateRefKind?: "snapshot" | "image" | "provider_template" | "unknown" | (string & {});
+  templateConfigBinding?: unknown;
+  templateIdentityPaths?: string[];
+  supportsTemplateDelete?: boolean;
+  supportsLoginPty?: boolean;
 }
 
 /**

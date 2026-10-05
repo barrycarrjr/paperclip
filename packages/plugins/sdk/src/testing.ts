@@ -45,6 +45,7 @@ import type {
   PluginEnvironmentRealizeWorkspaceResult,
   PluginEnvironmentExecuteParams,
   PluginEnvironmentExecuteResult,
+  PluginEnvironmentTerminationReceipt,
 } from "./protocol.js";
 
 export interface TestHarnessOptions {
@@ -148,8 +149,8 @@ export interface EnvironmentTestHarnessOptions extends TestHarnessOptions {
     onProbe?: (params: PluginEnvironmentProbeParams) => Promise<PluginEnvironmentProbeResult>;
     onAcquireLease?: (params: PluginEnvironmentAcquireLeaseParams) => Promise<PluginEnvironmentLease>;
     onResumeLease?: (params: PluginEnvironmentResumeLeaseParams) => Promise<PluginEnvironmentLease>;
-    onReleaseLease?: (params: PluginEnvironmentReleaseLeaseParams) => Promise<void>;
-    onDestroyLease?: (params: PluginEnvironmentDestroyLeaseParams) => Promise<void>;
+    onReleaseLease?: (params: PluginEnvironmentReleaseLeaseParams) => Promise<PluginEnvironmentTerminationReceipt | void>;
+    onDestroyLease?: (params: PluginEnvironmentDestroyLeaseParams) => Promise<PluginEnvironmentTerminationReceipt | void>;
     onRealizeWorkspace?: (params: PluginEnvironmentRealizeWorkspaceParams) => Promise<PluginEnvironmentRealizeWorkspaceResult>;
     onExecute?: (params: PluginEnvironmentExecuteParams) => Promise<PluginEnvironmentExecuteResult>;
   };
@@ -168,9 +169,9 @@ export interface EnvironmentTestHarness extends TestHarness {
   /** Invoke the environment driver's resumeLease hook. */
   resumeLease(params: PluginEnvironmentResumeLeaseParams): Promise<PluginEnvironmentLease>;
   /** Invoke the environment driver's releaseLease hook. */
-  releaseLease(params: PluginEnvironmentReleaseLeaseParams): Promise<void>;
+  releaseLease(params: PluginEnvironmentReleaseLeaseParams): Promise<PluginEnvironmentTerminationReceipt | void>;
   /** Invoke the environment driver's destroyLease hook. */
-  destroyLease(params: PluginEnvironmentDestroyLeaseParams): Promise<void>;
+  destroyLease(params: PluginEnvironmentDestroyLeaseParams): Promise<PluginEnvironmentTerminationReceipt | void>;
   /** Invoke the environment driver's realizeWorkspace hook. */
   realizeWorkspace(params: PluginEnvironmentRealizeWorkspaceParams): Promise<PluginEnvironmentRealizeWorkspaceResult>;
   /** Invoke the environment driver's execute hook. */
@@ -1335,6 +1336,26 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
       debug(message, meta, companyId) {
         logs.push({ level: "debug", message, meta, ...(companyId !== undefined ? { companyId } : {}) });
+      },
+    },
+    execution: {
+      log(_stream, _chunk) {},
+    },
+    loginPty: {
+      output(_hostRouteId, _workerSessionId, _chunk) {},
+      exit(_hostRouteId, _workerSessionId, _exitCode) {},
+    },
+    duplexChannel: {
+      data(_hostRouteId, _workerSessionId, _chunk) {},
+      exit(_hostRouteId, _workerSessionId, _exitCode, _transportClosed) {},
+    },
+    tracer: {
+      startSpan() {
+        return {
+          setAttribute() {},
+          setStatus() {},
+          end() {},
+        };
       },
     },
   };
