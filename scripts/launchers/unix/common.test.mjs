@@ -148,3 +148,166 @@ test("every script backs up before it stops the server", { skip }, async () => {
     assert.ok(backup < stop && stop < cold, `${name}: backup, then stop, then cold copy`);
   }
 });
+
+// --- runs started from the Settings UI -----------------------------------------
+// The UI passes PAPERCLIP_MAINTENANCE_LOG: the run's output goes there, and it
+// is how the helpers know nobody is watching a terminal.
+
+async function stubMac(inst, { system = "Darwin", openExit = 0, fromUi = true } = {}) {
+  const { chmod } = await import("node:fs/promises");
+  const stubs = {
+    uname: `echo ${system}`,
+    open: `echo "open $*" >> "$STUB_LOG"; exit ${openExit}`,
+    osascript: `printf 'osascript' >> "$STUB_LOG"; printf ' [%s]' "$@" >> "$STUB_LOG"; echo >> "$STUB_LOG"`,
+    "failing-step": "exit 2",
+    cargo: "exit 0",
+    cc: "exit 0",
+  };
+  for (const [name, body] of Object.entries(stubs)) {
+    const stub = path.join(inst.bin, name);
+    await writeFile(stub, `#!/usr/bin/env bash\n${body}\n`);
+    await chmod(stub, 0o755);
+  }
+  // Keep every write inside the scratch directory, never the real ~/.paperclip.
+  const env = { PAPERCLIP_HOME: path.join(inst.root, "home with 'quote'") };
+  if (fromUi) env.PAPERCLIP_MAINTENANCE_LOG = path.join(inst.root, "logs", "maintenance.log");
+  return env;
+}
+
+const readLog = (inst) => readFile(inst.log, "utf8").catch(() => "");
+const alerts = async (inst) => (await readLog(inst)).split("\n").filter((line) => line.startsWith("osascript"));
+
+test("the run's output goes to the log the UI named", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  const result = run("echo hello-from-the-run", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /hello-from-the-run/);
+});
+
+test("on macOS the server reopens in Terminal with the old server's environment", { skip }, async () => {
+  const { readdir, stat } = await import("node:fs/promises");
+  const inst = await instance();
+  const env = await stubMac(inst);
+  const result = run("start_after_maintenance", inst, { ...env, SOME_TOKEN: "tok'en $x", TERM_SESSION_ID: "old-window" });
+  assert.equal(result.code, 0, result.stderr);
+  const log = await readLog(inst);
+  assert.doesNotMatch(log, /installed-service\.ts start/);
+  const script = log.match(/^open -a Terminal (.*)$/m)?.[1];
+  assert.ok(script, log);
+  // It can hold secrets, so only the owner may read it.
+  assert.equal((await stat(script)).mode & 0o777, 0o700);
+  const text = await readFile(script, "utf8");
+  assert.doesNotMatch(text, /TERM_SESSION_ID|PAPERCLIP_MAINTENANCE_LOG/);
+  assert.match(text, /exec \/bin\/bash .*scripts\/launchers\/unix\/launch-paperclip\.sh\n$/);
+  // Run it with exec replaced, to see what the new window would start with.
+  const seen = execFileSync("bash", ["-c", 'exec() { printf "%s\\n" "$PAPERCLIP_HOME" "$PAPERCLIP_CONFIG" "$SOME_TOKEN" "${PAPERCLIP_MAINTENANCE_LOG-unset}"; }; source "$1"', "bash", script], { encoding: "utf8" });
+  assert.equal(seen, `${env.PAPERCLIP_HOME}\n${inst.config}\ntok'en $x\nunset\n`);
+  // And it deletes itself, with its copy of the environment, as it starts.
+  assert.deepEqual(await readdir(path.join(env.PAPERCLIP_HOME, "launchers")), []);
+});
+
+test("a macOS run in a terminal starts the server in place", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { fromUi: false });
+  const result = run("start_after_maintenance", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  const log = await readLog(inst);
+  assert.match(log, /installed-service\.ts start/);
+  assert.doesNotMatch(log, /open -a Terminal/);
+});
+
+test("if Terminal cannot be opened the server still starts", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { openExit: 1 });
+  const result = run("start_after_maintenance", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(await readLog(inst), /installed-service\.ts start/);
+});
+
+test("Linux starts the server in place", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { system: "Linux" });
+  const result = run("start_after_maintenance", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  const log = await readLog(inst);
+  assert.match(log, /installed-service\.ts start/);
+  assert.doesNotMatch(log, /open -a Terminal/);
+});
+
+test("a failure before stopping says Paperclip is still running, and why", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  const result = run("watch_unattended_run update; fail 'Automatic updates require the master branch.'", inst, env);
+  assert.equal(result.code, 1);
+  const [alert] = await alerts(inst);
+  assert.match(alert, /\[Paperclip update failed\]/);
+  assert.match(alert, /Automatic updates require the master branch\. Paperclip is still running/);
+  assert.ok(alert.includes(env.PAPERCLIP_MAINTENANCE_LOG), alert);
+});
+
+test("a failure after stopping names the step and how to recover", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  const result = run("watch_unattended_run rebuild; service stop; failing-step --now", inst, env);
+  assert.equal(result.code, 2);
+  const [alert] = await alerts(inst);
+  assert.match(alert, /\[Paperclip rebuild failed\]/);
+  assert.match(alert, /This step failed: failing-step --now\. Paperclip is stopped\. Fix the problem, then run rebuild-paperclip\.command/);
+});
+
+test("a failed restart points at the app, because the old server has already exited", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  const result = run("watch_unattended_run restart; false", inst, env);
+  assert.equal(result.code, 1);
+  assert.match((await alerts(inst))[0] ?? "", /Open the Paperclip app to start it again/);
+});
+
+test("no alert for a run that succeeds, on Linux, or in a terminal", { skip }, async () => {
+  for (const [options, script] of [
+    [{}, "watch_unattended_run update; true"],
+    [{ system: "Linux" }, "watch_unattended_run update; false"],
+    [{ fromUi: false }, "watch_unattended_run update; false"],
+  ]) {
+    const inst = await instance();
+    run(script, inst, await stubMac(inst, options));
+    assert.deepEqual(await alerts(inst), [], JSON.stringify(options));
+  }
+});
+
+test("a server started in place that exits later is not reported as a failed run", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { openExit: 1 });
+  // The fallback start, whose server later exits with an error.
+  const result = run("watch_unattended_run update; start_after_maintenance", inst, { ...env, STUB_EXIT: "1" });
+  assert.equal(result.code, 1);
+  assert.deepEqual(await alerts(inst), []);
+});
+
+test("rebuild --check stops nothing and arms no alert", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  delete env.PAPERCLIP_MAINTENANCE_LOG;
+  const script = path.join(path.dirname(common), "rebuild-paperclip.sh");
+  execFileSync("bash", [script, "--check"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...env, PATH: `${inst.bin}:${process.env.PATH}`, PAPERCLIP_CONFIG: inst.config, STUB_LOG: inst.log },
+  });
+  assert.equal(await readLog(inst), "");
+});
+
+test("update, rebuild, and restart arm the alert first and relaunch through the helper", { skip }, async () => {
+  for (const name of ["restart", "update", "rebuild"]) {
+    const source = await readFile(path.join(path.dirname(common), `${name}-paperclip.sh`), "utf8");
+    const lines = source.trimEnd().split("\n").filter((line) => !line.startsWith("#"));
+    const arm = name === "restart" ? "watch_unattended_run restart" : `[ "\${1:-}" = --check ] || watch_unattended_run ${name}`;
+    assert.equal(lines[1], arm, `${name}: alert armed before anything can fail`);
+    assert.equal(lines.at(-1), "start_after_maintenance", `${name}: relaunch goes through the helper`);
+    assert.ok(!source.includes("\nservice start\n"), `${name}: no direct start left`);
+    if (name !== "restart") {
+      const check = source.indexOf('\n[ "${1:-}" != --check ] || exit 0\n');
+      assert.ok(check !== -1 && check < source.indexOf("\nbackup_existing\n"), `${name}: --check ends before anything changes`);
+    }
+  }
+});

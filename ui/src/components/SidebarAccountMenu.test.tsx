@@ -24,6 +24,7 @@ const mockSystemApi = vi.hoisted(() => ({
 }));
 const mockToggleTheme = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
+const mockPushToast = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
@@ -50,6 +51,14 @@ vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({
     theme: "dark",
     toggleTheme: mockToggleTheme,
+  }),
+}));
+
+vi.mock("../context/ToastContext", () => ({
+  useToastActions: () => ({
+    pushToast: mockPushToast,
+    dismissToast: vi.fn(),
+    clearToasts: vi.fn(),
   }),
 }));
 
@@ -298,12 +307,80 @@ describe("SidebarAccountMenu", () => {
     await flushReact();
 
     expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(String(confirmSpy.mock.calls[0]?.[0])).not.toMatch(/console window/i);
     expect(mockSystemApi.rebuild).toHaveBeenCalledOnce();
     expect(mockSystemApi.update).not.toHaveBeenCalled();
+    await flushReact();
+    expect(mockPushToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paperclip is rebuilding", tone: "info" }));
 
     confirmSpy.mockRestore();
     await act(async () => {
       root.unmount();
+    });
+  });
+
+  // Every action in the menu reports what the server said, not just Update.
+  describe("menu actions report a refusal", () => {
+    async function clickMenuAction(label: string) {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <SidebarAccountMenu
+                deploymentMode="authenticated"
+                instanceSettingsTarget="/instance/settings/general"
+                open={true}
+                onOpenChange={vi.fn()}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      const button = document.body.querySelector(`button[aria-label="${label}"]`);
+      expect(button).not.toBeNull();
+      await act(async () => {
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+      await flushReact();
+      // Don't unmount: Radix's popover portal throws NotFoundError under
+      // React 19 + jsdom. afterEach wipes document.body.
+      void root;
+    }
+
+    it.each([
+      ["Restart Paperclip", "restart", "Paperclip could not restart"],
+      ["Shut down Paperclip", "shutdown", "Paperclip could not shut down"],
+      ["Rebuild from local", "rebuild", "Paperclip could not start the rebuild"],
+      ["Update Paperclip", "update", "Paperclip could not start the update"],
+    ] as const)("%s", async (label, method, title) => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      mockSystemApi[method].mockRejectedValue(new Error("The launcher is missing."));
+
+      await clickMenuAction(label);
+
+      expect(mockSystemApi[method]).toHaveBeenCalledOnce();
+      expect(mockPushToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title, body: "The launcher is missing.", tone: "error" }),
+      );
+      confirmSpy.mockRestore();
+    });
+
+    it("the rebuild-from-local confirm does not promise a console window", async () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      await clickMenuAction("Rebuild from local");
+
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(String(confirmSpy.mock.calls[0]?.[0])).not.toMatch(/console window/i);
+      expect(mockSystemApi.rebuild).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
     });
   });
 
@@ -356,6 +433,86 @@ describe("SidebarAccountMenu", () => {
 
     await act(async () => {
       root.unmount();
+    });
+  });
+
+  // A refused update used to close the menu and say nothing, which looked like
+  // a dead button. The server's reason has to reach the screen.
+  describe("reporting what the server said", () => {
+    async function clickUpdatePill() {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <SidebarAccountMenu
+                deploymentMode="authenticated"
+                instanceSettingsTarget="/instance/settings/general"
+                updateAvailable={true}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      const updatePill = container.querySelector(
+        'button[aria-label^="Update available"]',
+      ) as HTMLButtonElement | null;
+      await act(async () => {
+        updatePill?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+      await flushReact();
+      return root;
+    }
+
+    it("shows the reason when the server refuses to update", async () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const reason = "Start Paperclip with scripts/launchers/macos/launch-paperclip.command before using update or rebuild from the UI.";
+      mockSystemApi.update.mockRejectedValue(new Error(reason));
+
+      const root = await clickUpdatePill();
+
+      expect(mockPushToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Paperclip could not start the update", body: reason, tone: "error" }),
+      );
+      confirmSpy.mockRestore();
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("shows where the update's progress is going once it starts", async () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const message = "Paperclip is updating. Progress is recorded in /home/me/.paperclip/logs/maintenance.log.";
+      mockSystemApi.update.mockResolvedValue({ ok: true, action: "update", message });
+
+      const root = await clickUpdatePill();
+
+      expect(mockPushToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Paperclip is updating", body: message, tone: "info" }),
+      );
+      confirmSpy.mockRestore();
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("does not promise a console window, which only Windows opens", async () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      const root = await clickUpdatePill();
+
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(String(confirmSpy.mock.calls[0]?.[0])).not.toMatch(/console window/i);
+      confirmSpy.mockRestore();
+      await act(async () => {
+        root.unmount();
+      });
     });
   });
 

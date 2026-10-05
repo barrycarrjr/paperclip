@@ -55,9 +55,11 @@ function AnimatedToast({
       <div className="flex items-start gap-3 px-3 py-2.5">
         <span className={cn("mt-1 h-2 w-2 shrink-0 rounded-full", toneDotClasses[toast.tone])} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold leading-5">{toast.title}</p>
+          {/* break-words: messages can carry a long file path or URL with no
+              spaces, which would otherwise run out of the card. */}
+          <p className="text-sm font-semibold leading-5 break-words">{toast.title}</p>
           {toast.body && (
-            <p className="mt-1 text-xs leading-4 opacity-70">
+            <p className="mt-1 text-xs leading-4 opacity-70 break-words">
               {toast.body}
             </p>
           )}

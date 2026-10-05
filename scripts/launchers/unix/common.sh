@@ -8,7 +8,18 @@ export PAPERCLIP_INSTANCE_ID="${PAPERCLIP_INSTANCE_ID:-default}"
 export PAPERCLIP_CONFIG="${PAPERCLIP_CONFIG:-$PAPERCLIP_HOME/instances/$PAPERCLIP_INSTANCE_ID/config.json}"
 cd "$PAPERCLIP_SRC"
 
-fail() { printf '%s\n' "$*" >&2; exit 1; }
+# The Settings UI tells a run it starts where to write its output, because
+# nobody is watching a terminal for it. That is also how the helpers below
+# know a run is unattended.
+if [ -n "${PAPERCLIP_MAINTENANCE_LOG:-}" ]; then
+  mkdir -p "$(dirname "$PAPERCLIP_MAINTENANCE_LOG")"
+  exec >>"$PAPERCLIP_MAINTENANCE_LOG" 2>&1
+fi
+unattended_run() { [ -n "${PAPERCLIP_MAINTENANCE_LOG:-}" ]; }
+
+# The last fail() message, so report_unattended_failure can show the reason.
+PAPERCLIP_FAILURE=''
+fail() { PAPERCLIP_FAILURE="$*"; printf '%s\n' "$*" >&2; exit 1; }
 check_runtime() {
   command -v node >/dev/null || fail 'Install Node.js 24.11 or newer first.'
   node -e 'const [major,minor]=process.versions.node.split(".").map(Number); if(major<24 || (major===24 && minor<11)) process.exit(1)' || fail 'Node.js 24.11 or newer is required by the runner.'
@@ -20,8 +31,81 @@ check_build_tools() {
   command -v cargo >/dev/null || fail 'Install Rust with rustup (https://rustup.rs); the runner pins its compiler version.'
   command -v cc >/dev/null || fail 'Install a C compiler: xcode-select --install on macOS, or build-essential on Debian/Ubuntu.'
 }
+# Set once a stop succeeds, so a failure report can say whether Paperclip is
+# still running.
+PAPERCLIP_SERVICE_STOPPED=0
 service() {
   pnpm --dir "$PAPERCLIP_SRC" --filter @paperclipai/server exec tsx ../scripts/installed-service.ts "$1"
+  if [ "$1" = stop ]; then PAPERCLIP_SERVICE_STOPPED=1; fi
+}
+# Start the server at the end of a restart, update, or rebuild. A run started
+# from the Settings UI has no terminal, so on macOS the server reopens in a
+# Terminal window, the way the Paperclip app starts it, where Ctrl-C stops it
+# again. A run in a terminal, and every run on Linux, starts it in place.
+start_after_maintenance() {
+  # The run itself has succeeded. A server started in place exits through this
+  # script too, possibly days later, and that is not a failure of this run.
+  trap - EXIT
+  if unattended_run && [ "$(uname -s)" = Darwin ]; then
+    if open_in_terminal; then return 0; fi
+    printf 'Could not open Terminal, so Paperclip is starting in the background instead.\n' >&2
+  fi
+  unset PAPERCLIP_MAINTENANCE_LOG
+  service start
+}
+# Any failure here returns non-zero, so the caller still starts the server.
+open_in_terminal() {
+  local dir
+  mkdir -p "$PAPERCLIP_HOME/launchers" &&
+    dir="$(mktemp -d "$PAPERCLIP_HOME/launchers/relaunch.XXXXXX")" &&
+    write_relaunch_script "$dir" &&
+    open -a Terminal "$dir/relaunch-paperclip.command"
+}
+# A one-shot script for Terminal that restores this run's environment, which is
+# the running server's (the Settings UI passes it down), then starts Paperclip.
+# A fresh login shell would drop whatever the old server had that the shell
+# does not set: a Claude token pasted on the Adapters page (kept only in the
+# server's environment off Windows), a PORT, a node picked with nvm. That
+# environment can hold secrets, so the directory is private (mktemp -d) and the
+# script deletes it as soon as it starts. The new window sets its own terminal
+# variables.
+write_relaunch_script() {
+  local dir="$1"
+  {
+    printf '#!/bin/bash\n'
+    printf 'rm -rf %q\n' "$dir"
+    export -p | grep -Ev '^declare -x (TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|TERM_SESSION_ID|SHLVL|PWD|OLDPWD|_|COLUMNS|LINES|PAPERCLIP_MAINTENANCE_LOG)(=|$)'
+    printf 'exec /bin/bash %q\n' "$PAPERCLIP_SRC/scripts/launchers/unix/launch-paperclip.sh"
+  } > "$dir/relaunch-paperclip.command" && chmod 700 "$dir/relaunch-paperclip.command"
+}
+# Arm the failure alert for an update, rebuild, or restart. Call it before
+# anything in the script can fail.
+watch_unattended_run() {
+  # In an EXIT trap, $BASH_COMMAND is the command that ended the run.
+  trap "report_unattended_failure \$? $1 \"\$BASH_COMMAND\"" EXIT
+}
+# A run started from the Settings UI has no terminal to show its errors in, and
+# the browser page goes dead once the server stops. On macOS, show a failure as
+# an alert instead of leaving it only in the maintenance log.
+report_unattended_failure() {
+  local code="$1" action="$2" step="$3" reason state
+  [ "$code" -ne 0 ] && unattended_run && [ "$(uname -s)" = Darwin ] || return 0
+  reason="${PAPERCLIP_FAILURE:-This step failed: $step.}"
+  # A UI restart only runs after the old server has already exited.
+  if [ "$action" = restart ]; then
+    state='Paperclip is stopped. Open the Paperclip app to start it again.'
+  elif [ "$PAPERCLIP_SERVICE_STOPPED" != 1 ]; then
+    state='Paperclip is still running the version it had before.'
+  else
+    state="Paperclip is stopped. Fix the problem, then run rebuild-paperclip.command in $PAPERCLIP_SRC/scripts/launchers/macos."
+  fi
+  osascript \
+    -e 'on run argv' \
+    -e 'display alert (item 1 of argv) message (item 2 of argv) as critical' \
+    -e 'end run' \
+    "Paperclip $action failed" \
+    "$reason $state Details are in $PAPERCLIP_MAINTENANCE_LOG." \
+    >/dev/null 2>&1 || true
 }
 # The embedded database runs inside the Paperclip server, so a live backup can
 # only connect while the server is up. Call this BEFORE `service stop`. When

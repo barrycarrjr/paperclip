@@ -52,11 +52,23 @@ The managed server starts from its config directory so a checkout's development
 Use `pnpm paperclipai configure` to change settings afterward.
 
 Updates require a clean `master` checkout and a fast-forward from `origin/master`.
-Update and rebuild stop the managed server, create a database backup, build,
-migrate, and relaunch only after success. A failure leaves the server stopped
-and keeps the old install marker. Fix the reported error, then rerun rebuild.
-The Settings UI can update/rebuild a server started by these launchers; its
-progress is in `$PAPERCLIP_HOME/logs/maintenance.log`.
+Update and rebuild check the checkout and build tools first, then stop the
+managed server, create a database backup, build, migrate, and relaunch only
+after success. A failed check leaves the old server running. A failure after
+the server has stopped leaves it stopped and keeps the old install marker: fix
+the reported error, then rerun rebuild.
+
+The Settings UI can update, rebuild, and restart a server started by these
+launchers. It runs the same checks before anything stops (`update-paperclip.sh
+--check`, `rebuild-paperclip.sh --check`) and shows the reason if one fails, or
+if the server was not started by these launchers. Once a run starts, its output
+goes to `$PAPERCLIP_HOME/logs/maintenance.log`. On macOS, a run started from the
+UI reopens the server in a new Terminal window when it succeeds, with the same
+environment the old server had, so Ctrl-C there stops it as usual. If the run
+itself fails, a macOS alert names the failed step, says whether Paperclip is
+still running, and says how to recover; a problem that starts only in the new
+Terminal window shows in that window. On Linux, a run started from the UI
+relaunches the server in the background with its output in the maintenance log.
 
 Windows retains `scripts/launchers/windows/*.bat` and its tray launcher. Full
 runtime builds now also require Rust and a C toolchain there: either MSVC in a

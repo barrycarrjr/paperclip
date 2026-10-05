@@ -19,10 +19,11 @@ import {
 import type { DeploymentMode } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
-import { systemApi } from "@/api/system";
+import { systemApi, type SystemActionResponse } from "@/api/system";
 import { queryKeys } from "@/lib/queryKeys";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
+import { useToastActions } from "../context/ToastContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -241,11 +242,17 @@ function IconAction({
   );
 }
 
+// Where the progress shows depends on the server's platform (a console window
+// on Windows, a log file on macOS and Linux), and the browser may not be on
+// that machine, so the confirms stay neutral and the server's reply says where.
 const UPDATE_CONFIRM_MESSAGE =
-  "Update Paperclip? A console window will open and pull the latest, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the update.";
+  "Update Paperclip? The server will stop, pull the latest, rebuild, migrate, and relaunch, which can take several minutes. Everyone connected will be disconnected during the update.";
 
 const REBUILD_CONFIRM_MESSAGE =
-  "Rebuild Paperclip? Everything is already downloaded, but it has not been built yet, so the server is still running older code. A console window will open and build, migrate, and relaunch the server. Everyone connected will be disconnected during the rebuild.";
+  "Rebuild Paperclip? Everything is already downloaded, but it has not been built yet, so the server is still running older code. The server will stop, build, migrate, and relaunch. Everyone connected will be disconnected during the rebuild.";
+
+const REBUILD_FROM_LOCAL_CONFIRM_MESSAGE =
+  "Rebuild Paperclip from your local working tree? The server will stop, rebuild, migrate, and relaunch. Everyone connected will be disconnected during the rebuild.";
 
 export function SidebarAccountMenu({
   deploymentMode,
@@ -281,8 +288,22 @@ export function SidebarAccountMenu({
     },
   });
 
+  const { pushToast } = useToastActions();
+
+  // The server's reply is the only place that says why an action was refused,
+  // or where an update's progress is going, so show it instead of just
+  // closing the menu. Without this a refused update looked like a dead button.
+  function announceStarted(title: string, resp: SystemActionResponse) {
+    pushToast({ title, body: resp.message, tone: "info", ttlMs: 15_000 });
+  }
+
+  function announceFailed(title: string, error: unknown) {
+    pushToast({ title, body: error instanceof Error ? error.message : "Unknown error", tone: "error" });
+  }
+
   const restartMutation = useMutation({
     mutationFn: () => systemApi.restart(),
+    onError: (error) => announceFailed("Paperclip could not restart", error),
     onSettled: () => {
       setOpen(false);
     },
@@ -290,6 +311,7 @@ export function SidebarAccountMenu({
 
   const shutdownMutation = useMutation({
     mutationFn: () => systemApi.shutdown(),
+    onError: (error) => announceFailed("Paperclip could not shut down", error),
     onSettled: () => {
       setOpen(false);
     },
@@ -297,6 +319,8 @@ export function SidebarAccountMenu({
 
   const updateMutation = useMutation({
     mutationFn: () => systemApi.update(),
+    onSuccess: (resp) => announceStarted("Paperclip is updating", resp),
+    onError: (error) => announceFailed("Paperclip could not start the update", error),
     onSettled: () => {
       setOpen(false);
     },
@@ -304,6 +328,8 @@ export function SidebarAccountMenu({
 
   const rebuildMutation = useMutation({
     mutationFn: () => systemApi.rebuild(),
+    onSuccess: (resp) => announceStarted("Paperclip is rebuilding", resp),
+    onError: (error) => announceFailed("Paperclip could not start the rebuild", error),
     onSettled: () => {
       setOpen(false);
     },
@@ -608,18 +634,14 @@ export function SidebarAccountMenu({
                   badge={updateAvailable && needsRebuildOnly}
                   onClick={() => {
                     if (lifecycleBusy) return;
-                    if (
-                      window.confirm(
-                        "Rebuild Paperclip from your local working tree? A console window will open, rebuild, migrate, and relaunch the server. Everyone connected will be disconnected during the rebuild.",
-                      )
-                    ) {
+                    if (window.confirm(REBUILD_FROM_LOCAL_CONFIRM_MESSAGE)) {
                       rebuildMutation.mutate();
                     }
                   }}
                 />
                 <IconAction
                   label={updateMutation.isPending ? "Updating…" : "Update Paperclip"}
-                  description="Pull the latest from origin/master, rebuild, migrate, and relaunch. Opens in a console window."
+                  description="Pull the latest from origin/master, rebuild, migrate, and relaunch."
                   icon={Download}
                   tone="warning"
                   disabled={lifecycleBusy}

@@ -32,7 +32,7 @@
  * actions for everyone connected to this paperclip instance.
  */
 import { Router, type Request, type Response } from "express";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +112,10 @@ function spawnRestartTrampoline(): void {
   let spawnCmd: string;
   let spawnArgs: string[];
   let spawnOpts: Record<string, unknown>;
+  // The launcher inherits the trampoline's environment. It is never put in
+  // spawnOpts: those are written into the trampoline's command line, which any
+  // local user can read with `ps`, and the environment can hold tokens.
+  let trampolineEnv: NodeJS.ProcessEnv = process.env;
 
   if (launcher && launcher.kind === "exe") {
     // paperclip.exe is a silent Windows launcher — no console window.
@@ -145,7 +149,8 @@ function spawnRestartTrampoline(): void {
     if (!script) throw new Error("The Unix restart launcher is missing; re-run the installer.");
     spawnCmd = "/bin/bash";
     spawnArgs = [script];
-    spawnOpts = { cwd: readInstallRepoPath()!, env: { ...process.env }, detached: true, stdio: "ignore" };
+    spawnOpts = { cwd: readInstallRepoPath()!, detached: true, stdio: "ignore" };
+    trampolineEnv = { ...process.env, PAPERCLIP_MAINTENANCE_LOG: maintenanceLogPath() };
   } else {
     // Cross-platform fallback: re-exec the same node binary + flags + script
     // + args. On Windows, `stdio:"inherit"` from the console-less trampoline
@@ -159,7 +164,6 @@ function spawnRestartTrampoline(): void {
     spawnArgs = [...process.execArgv, ...process.argv.slice(1)];
     spawnOpts = {
       cwd: process.cwd(),
-      env: { ...process.env },
       detached: true,
       stdio: process.platform === "win32" ? "ignore" : "inherit",
       windowsHide: true,
@@ -224,8 +228,54 @@ function spawnRestartTrampoline(): void {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
+    env: trampolineEnv,
   });
   child.unref();
+}
+
+/**
+ * Where a Unix maintenance run started from the UI writes its output. Passing
+ * it as PAPERCLIP_MAINTENANCE_LOG also tells the script that nobody is
+ * watching a terminal for it (scripts/launchers/unix/common.sh).
+ */
+function maintenanceLogPath(): string {
+  return path.join(resolvePaperclipHomeDir(), "logs", "maintenance.log");
+}
+
+const PREFLIGHT_TIMEOUT_MS = 120_000;
+
+/**
+ * Run a Unix update or rebuild script's checks only (`--check`) and return its
+ * reason for refusing, or null when it would go ahead. The detached run that
+ * follows has no way back to the browser, so a refusal it reached on its own
+ * (local changes, wrong branch, Rust missing) used to sit behind a reply that
+ * said the update had started.
+ */
+function runUnixPreflight(script: string, action: "update" | "rebuild"): Promise<string | null> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  // Without this the checks would write to the maintenance log, where the
+  // reason could not be read back.
+  delete env.PAPERCLIP_MAINTENANCE_LOG;
+  return new Promise((resolve) => {
+    execFile(
+      "/bin/bash",
+      [script, "--check"],
+      { cwd: os.homedir(), env, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        if (!error) {
+          resolve(null);
+          return;
+        }
+        if ((error as { killed?: boolean }).killed) {
+          resolve(`The checks before the ${action} did not finish within ${PREFLIGHT_TIMEOUT_MS / 1000} seconds. Server is still running.`);
+          return;
+        }
+        // fail() in common.sh prints its reason as the last line.
+        const reason = String(stderr ?? "").trim().split("\n").filter((line) => line.trim()).at(-1);
+        resolve(reason ? `${reason.trim()} Server is still running.` : `The checks before the ${action} failed: ${error.message}. Server is still running.`);
+      },
+    );
+  });
 }
 
 function killSelfGracefully(): void {
@@ -288,13 +338,21 @@ export function systemRoutes() {
       return;
     }
 
+    if (process.platform !== "win32") {
+      const refusal = await runUnixPreflight(bat, action);
+      if (refusal) {
+        res.status(409).json({ ok: false, action, error: refusal });
+        return;
+      }
+    }
+
     let logFd: number | undefined;
     try {
       const isWindows = process.platform === "win32";
       if (!isWindows) {
-        const logDir = path.join(resolvePaperclipHomeDir(), "logs");
+        const logDir = path.dirname(maintenanceLogPath());
         mkdirSync(logDir, { recursive: true });
-        logFd = openSync(path.join(logDir, "maintenance.log"), "a", 0o600);
+        logFd = openSync(maintenanceLogPath(), "a", 0o600);
       }
       const child = spawn(isWindows ? "cmd.exe" : "/bin/bash", isWindows ? ["/c", "start", "", bat] : [bat], {
         detached: true,
@@ -303,6 +361,7 @@ export function systemRoutes() {
         // Run from the user's home dir so the bat's `cd /d "%PAPERCLIP_SRC%"`
         // resolves predictably.
         cwd: os.homedir(),
+        ...(isWindows ? {} : { env: { ...process.env, PAPERCLIP_MAINTENANCE_LOG: maintenanceLogPath() } }),
       });
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);
@@ -320,10 +379,15 @@ export function systemRoutes() {
       if (logFd !== undefined) closeSync(logFd);
     }
 
+    // macOS relaunches in a new Terminal window and shows an alert if the run
+    // fails (scripts/launchers/unix/common.sh); Linux only has the log.
+    const unixOutcome = process.platform === "darwin"
+      ? `When the build and migration succeed it reopens in a new Terminal window. If the ${action} fails, a macOS alert says why.`
+      : "It will relaunch after the build and migration succeed.";
     res.json({
       ok: true,
       action,
-      message: process.platform === "win32" ? successMessage : `Paperclip is ${action === "update" ? "updating" : "rebuilding"}. Progress is recorded in ${path.join(resolvePaperclipHomeDir(), "logs", "maintenance.log")}; it will relaunch after the build and migration succeed.`,
+      message: process.platform === "win32" ? successMessage : `Paperclip is ${action === "update" ? "updating" : "rebuilding"}. Progress is recorded in ${maintenanceLogPath()}. ${unixOutcome}`,
     });
     // The maintenance launcher stops the managed installation.
   }
