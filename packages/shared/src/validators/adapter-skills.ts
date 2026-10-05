@@ -65,7 +65,7 @@ export const agentSkillSnapshotSchema = z.object({
 });
 
 export const agentSkillSyncSchema = z.object({
-  mode: agentSkillAssignmentModeSchema,
+  mode: agentSkillAssignmentModeSchema.optional().default("replace"),
   desiredSkills: z.array(agentDesiredSkillSelectionSchema),
 });
 
