@@ -32,6 +32,7 @@ const mockChatApi = vi.hoisted(() => ({
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => companyState,
+  useCompanyOptional: () => companyState,
 }));
 
 vi.mock("@/lib/router", () => ({

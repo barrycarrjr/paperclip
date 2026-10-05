@@ -87,7 +87,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   assistant: "Assistant",
 };
 
-export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
+export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 5;
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 
 // Config keys owned by Paperclip/company state rather than one concrete adapter.
@@ -1635,6 +1635,12 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "onboarding",
   "companies",
   "company",
+  "skills",
+  "execution-workspaces",
+  "instance",
+  "usage",
+  "routines",
+  "u",
   "settings",
   "plugins",
   "org",

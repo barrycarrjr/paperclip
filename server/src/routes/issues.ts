@@ -397,6 +397,9 @@ function buildExecutionStageWakeup(input: {
 
 
 async function listIssueLinkedCases(db: Db, companyId: string, issueId: string) {
+  if (!db || typeof (db as any).select !== "function") {
+    return [];
+  }
   const rows = await db
     .select({
       link: pipelineCaseIssueLinks,

@@ -53,6 +53,33 @@ import type {
   PluginEnvironmentDestroyLeaseParams,
   PluginEnvironmentExecuteParams,
   PluginEnvironmentExecuteResult,
+  PluginEnvironmentSyncInParams,
+  PluginEnvironmentSyncOutParams,
+  PluginEnvironmentSyncResult,
+  PluginEnvironmentRunnerIngressEndpointParams,
+  PluginEnvironmentRunnerIngressEndpoint,
+  PluginEnvironmentStartInteractiveSetupParams,
+  PluginEnvironmentInteractiveSetupSession,
+  PluginEnvironmentGetInteractiveSetupParams,
+  PluginEnvironmentCaptureTemplateParams,
+  PluginEnvironmentCaptureTemplateResult,
+  PluginEnvironmentCancelInteractiveSetupParams,
+  PluginEnvironmentCancelInteractiveSetupResult,
+  PluginEnvironmentDeleteTemplateParams,
+  PluginEnvironmentDeleteTemplateResult,
+  PluginEnvironmentTerminationReceipt,
+  PluginLoginPtyOpenParams,
+  PluginLoginPtyOpenResult,
+  PluginLoginPtyInputParams,
+  PluginLoginPtyStopParams,
+  PluginLoginPtyCloseParams,
+  PluginLoginPtyCloseResult,
+  PluginDuplexChannelOpenParams,
+  PluginDuplexChannelOpenResult,
+  PluginDuplexChannelWriteParams,
+  PluginDuplexChannelStopParams,
+  PluginDuplexChannelCloseParams,
+  PluginDuplexChannelCloseResult,
   PluginEnvironmentLease,
   PluginEnvironmentProbeParams,
   PluginEnvironmentProbeResult,
@@ -271,12 +298,17 @@ export interface PluginDefinition {
   /** Called when a run finishes and the provider lease can be released. */
   onEnvironmentReleaseLease?(
     params: PluginEnvironmentReleaseLeaseParams,
-  ): Promise<void>;
+  ): Promise<PluginEnvironmentTerminationReceipt | void>;
+
+  /** Called when an environment lease is stopped and retained. */
+  onEnvironmentStopLease?(
+    params: PluginEnvironmentReleaseLeaseParams,
+  ): Promise<PluginEnvironmentTerminationReceipt | void>;
 
   /** Called when the host needs to force-destroy provider state. */
   onEnvironmentDestroyLease?(
     params: PluginEnvironmentDestroyLeaseParams,
-  ): Promise<void>;
+  ): Promise<PluginEnvironmentTerminationReceipt | void>;
 
   /** Called to materialize the run workspace inside the provider lease. */
   onEnvironmentRealizeWorkspace?(
@@ -287,6 +319,70 @@ export interface PluginDefinition {
   onEnvironmentExecute?(
     params: PluginEnvironmentExecuteParams,
   ): Promise<PluginEnvironmentExecuteResult>;
+
+  /** Called to synchronize files into the sandbox environment. */
+  onEnvironmentSyncIn?(
+    params: PluginEnvironmentSyncInParams,
+  ): Promise<PluginEnvironmentSyncResult>;
+
+  /** Called to synchronize files out of the sandbox environment. */
+  onEnvironmentSyncOut?(
+    params: PluginEnvironmentSyncOutParams,
+  ): Promise<PluginEnvironmentSyncResult>;
+
+  /** Called to resolve an ingress endpoint to a runner running inside the sandbox. */
+  onEnvironmentRunnerIngressEndpoint?(
+    params: PluginEnvironmentRunnerIngressEndpointParams,
+  ): Promise<PluginEnvironmentRunnerIngressEndpoint>;
+
+  /** Called to start an interactive setup sandbox and return redacted connection metadata. */
+  onEnvironmentStartInteractiveSetup?(
+    params: PluginEnvironmentStartInteractiveSetupParams,
+  ): Promise<PluginEnvironmentInteractiveSetupSession>;
+
+  /** Called to read setup status and, when authorized, a one-time connection payload. */
+  onEnvironmentGetInteractiveSetup?(
+    params: PluginEnvironmentGetInteractiveSetupParams,
+  ): Promise<PluginEnvironmentInteractiveSetupSession>;
+
+  /** Called to capture a reusable provider template from a live setup sandbox. */
+  onEnvironmentCaptureTemplate?(
+    params: PluginEnvironmentCaptureTemplateParams,
+  ): Promise<PluginEnvironmentCaptureTemplateResult>;
+
+  /** Called to cancel and clean up a setup sandbox without promoting a template. */
+  onEnvironmentCancelInteractiveSetup?(
+    params: PluginEnvironmentCancelInteractiveSetupParams,
+  ): Promise<PluginEnvironmentCancelInteractiveSetupResult>;
+
+  /** Called for optional best-effort cleanup of a captured provider template. */
+  onEnvironmentDeleteTemplate?(
+    params: PluginEnvironmentDeleteTemplateParams,
+  ): Promise<PluginEnvironmentDeleteTemplateResult>;
+
+  onLoginPtyOpen?(
+    params: PluginLoginPtyOpenParams,
+  ): Promise<PluginLoginPtyOpenResult>;
+
+  onLoginPtyInput?(params: PluginLoginPtyInputParams): Promise<void>;
+
+  onLoginPtyStop?(params: PluginLoginPtyStopParams): Promise<void>;
+
+  onLoginPtyClose?(
+    params: PluginLoginPtyCloseParams,
+  ): Promise<PluginLoginPtyCloseResult>;
+
+  onDuplexChannelOpen?(
+    params: PluginDuplexChannelOpenParams,
+  ): Promise<PluginDuplexChannelOpenResult>;
+
+  onDuplexChannelWrite?(params: PluginDuplexChannelWriteParams): Promise<void>;
+
+  onDuplexChannelStop?(params: PluginDuplexChannelStopParams): Promise<void>;
+
+  onDuplexChannelClose?(
+    params: PluginDuplexChannelCloseParams,
+  ): Promise<PluginDuplexChannelCloseResult>;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,33 @@ const hermesExecuteMock = vi.hoisted(() =>
   })),
 );
 
+vi.mock("@paperclipai/hermes-paperclip-adapter", () => ({
+  createHermesGatewayServerAdapter: () => ({
+    type: "hermes_gateway",
+    execute: hermesExecuteMock,
+    testEnvironment: async () => ({
+      adapterType: "hermes_gateway",
+      status: "pass",
+      checks: [],
+      testedAt: new Date(0).toISOString(),
+    }),
+  }),
+  createHermesLocalServerAdapter: () => ({
+    type: "hermes_local",
+    execute: hermesExecuteMock,
+    testEnvironment: async () => ({
+      adapterType: "hermes_local",
+      status: "pass",
+      checks: [],
+      testedAt: new Date(0).toISOString(),
+    }),
+    sessionCodec: null,
+    listSkills: async () => [],
+    syncSkills: async () => ({ entries: [] }),
+    detectModel: async () => null,
+  }),
+}));
+
 vi.mock("hermes-paperclip-adapter/server", () => ({
   execute: hermesExecuteMock,
   testEnvironment: async () => ({

@@ -75,6 +75,12 @@ Use comments incrementally:
 
 Read enough ancestor/comment context to understand _why_ the task exists and what changed. Do not reflexively reload the whole thread on every heartbeat.
 
+**Company memories and shared knowledge.**
+- **Pre-hydrated context:** Durable company memories, guidelines, and user preferences are automatically injected into your initial heartbeat prompt under `Paperclip company memories:`. Use them to follow established standards and team preferences without wasting an extra round-trip.
+- **Looking up memories:** Call the `recall_memories` MCP tool (or `GET /api/companies/{companyId}/memories?q={query}`) to search for specific decisions, contacts, or project guidelines when you need details not covered in the pre-hydrated summary.
+- **Saving durable knowledge:** When you learn important user preferences, architectural rules, team conventions, or project decisions that future agents or runs should remember, call the `remember` MCP tool (or `POST /api/companies/{companyId}/memories` with `{ name, content, kind, description }`). Memories are encrypted at rest and shared company-wide.
+- **Removing obsolete memories:** When a remembered rule or note is obsolete, call `forget_memory` (or `DELETE /api/companies/{companyId}/memories/{id}`).
+
 **Execution-policy review/approval wakes.** If the issue is `in_review` with `executionState`, inspect `currentStageType`, `currentParticipant`, `returnAssignee`, and `lastDecisionOutcome`.
 
 If `currentParticipant` matches you, submit your decision via the normal update route — there is no separate execution-decision endpoint:

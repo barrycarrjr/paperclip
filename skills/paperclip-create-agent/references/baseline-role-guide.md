@@ -48,6 +48,7 @@ A good charter lets the agent say no to work that is not its job. Avoid generic 
 How the agent runs a single heartbeat end-to-end. Cover:
 
 - how it decides what to work on (scope to assigned tasks; do not freelance)
+- how it uses shared memory (check pre-hydrated company memories or call `recall_memories`; persist durable rules via `remember`)
 - what a progress comment must include (status, what changed, next action)
 - when to create child issues instead of polling or batching
 - how to mark work as `blocked` with owner + action

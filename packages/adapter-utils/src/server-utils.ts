@@ -131,6 +131,7 @@ export const DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE = [
   "- Final disposition checklist: mark `done` when complete; use `in_review` only with a real reviewer, approval, interaction, or monitor path; use `blocked` only with first-class blockers or a named unblock owner/action; create delegated follow-up issues with blockers when another agent owns the next step; keep `in_progress` only when a live continuation path exists.",
   "- Leave durable progress in comments, documents, or work products with a clear next action.",
   "- Prefer the smallest verification that proves the change; do not default to full workspace typecheck/build/test on every heartbeat unless the task scope warrants it.",
+  "- Check company memories pre-loaded in your context or call `recall_memories` to search conventions, preferences, and durable facts across runs. Call `remember` to persist new company facts.",
   "- Use child issues for parallel or long delegated work instead of polling agents, sessions, or processes.",
   "- If woken by a human comment on a dependency-blocked issue, respond or triage the comment without treating the blocked deliverable work as unblocked.",
   "- Create child issues directly when you know what needs to be done; use issue-thread interactions when the board/user must choose suggested tasks, answer structured questions, or confirm a proposal.",
@@ -1158,13 +1159,13 @@ async function readSkillRequired(skillDir: string): Promise<boolean> {
   try {
     const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
     const normalized = content.replace(/\r\n/g, "\n");
-    if (!normalized.startsWith("---\n")) return false;
+    if (!normalized.startsWith("---\n")) return true;
     const closing = normalized.indexOf("\n---\n", 4);
-    if (closing < 0) return false;
+    if (closing < 0) return true;
     const frontmatter = normalized.slice(4, closing);
-    return /^\s*required\s*:\s*true\s*$/m.test(frontmatter);
+    return !/^\s*required\s*:\s*false\s*$/m.test(frontmatter);
   } catch {
-    return false;
+    return true;
   }
 }
 

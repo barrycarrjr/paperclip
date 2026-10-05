@@ -353,6 +353,7 @@ export interface PluginEnvironmentDriverBaseParams {
   driverKey: string;
   companyId: string;
   environmentId: string;
+  issueId?: string | null;
   config: Record<string, unknown>;
 }
 
@@ -387,6 +388,11 @@ export interface PluginEnvironmentAcquireLeaseParams extends PluginEnvironmentDr
   runId: string;
   workspaceMode?: string;
   requestedCwd?: string;
+  requestedExpiresAt?: string | null;
+  agentId?: string;
+  executionWorkspaceId?: string | null;
+  adapterType?: string;
+  executionWorkspaceSettings?: Record<string, unknown> | null;
 }
 
 export interface PluginEnvironmentResumeLeaseParams extends PluginEnvironmentDriverBaseParams {
@@ -397,6 +403,8 @@ export interface PluginEnvironmentResumeLeaseParams extends PluginEnvironmentDri
 export interface PluginEnvironmentReleaseLeaseParams extends PluginEnvironmentDriverBaseParams {
   providerLeaseId: string | null;
   leaseMetadata?: Record<string, unknown>;
+  resourceDisposition?: string;
+  cancelActiveWork?: boolean;
 }
 
 export interface PluginEnvironmentDestroyLeaseParams extends PluginEnvironmentReleaseLeaseParams {}
@@ -424,6 +432,7 @@ export interface PluginEnvironmentExecuteParams extends PluginEnvironmentDriverB
   env?: Record<string, string>;
   stdin?: string;
   timeoutMs?: number;
+  bypassSession?: boolean;
 }
 
 export interface PluginEnvironmentExecuteResult {
@@ -434,6 +443,291 @@ export interface PluginEnvironmentExecuteResult {
   stderr: string;
   metadata?: Record<string, unknown>;
 }
+
+export interface PluginEnvironmentTerminationReceipt {
+  providerLeaseId?: string | null;
+  state?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginSyncFileMapping {
+  sourcePath: string;
+  targetPath: string;
+  kind: "file" | "directory";
+  mode?: number;
+  exclude?: string[];
+  followSymlinks?: boolean;
+  access?: "rw" | "ro";
+  writablePath?: string;
+}
+
+export interface PluginPostUploadCommand {
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export interface PluginSyncOperation {
+  operationId: string;
+  files: PluginSyncFileMapping[];
+  postUploadCommands?: PluginPostUploadCommand[];
+}
+
+export interface PluginEnvironmentSyncInParams extends PluginEnvironmentDriverBaseParams {
+  lease: PluginEnvironmentLease;
+  operations: PluginSyncOperation[];
+}
+
+export interface PluginEnvironmentSyncOutParams extends PluginEnvironmentDriverBaseParams {
+  lease: PluginEnvironmentLease;
+  operations: PluginSyncOperation[];
+}
+
+export interface PluginEnvironmentSyncResult {
+  operations: {
+    operationId: string;
+    filesTransferred: number;
+    bytesTransferred: number;
+  }[];
+}
+
+export interface PluginEnvironmentRunnerIngressEndpoint {
+  kind: "authenticated_websocket";
+  websocketUrl: string;
+  secretHeaders: Array<{ name: string; value: string }>;
+  generation: string;
+}
+
+export interface PluginEnvironmentRunnerIngressEndpointParams
+  extends PluginEnvironmentDriverBaseParams {
+  lease: PluginEnvironmentLease;
+  port: number;
+  path: string;
+}
+
+export type PluginEnvironmentInteractiveSetupStatus =
+  | "starting"
+  | "waiting_for_user"
+  | "capturing"
+  | "promoted"
+  | "cancelled"
+  | "timed_out"
+  | "failed"
+  | "missing";
+
+export type PluginEnvironmentInteractiveSetupConnectionType =
+  | "ssh"
+  | (string & {});
+
+export type PluginEnvironmentTemplateRefKind =
+  | "snapshot"
+  | "image"
+  | "provider_template"
+  | "unknown"
+  | (string & {});
+
+export interface PluginEnvironmentInteractiveSetupConnectionSummary {
+  type: PluginEnvironmentInteractiveSetupConnectionType;
+  username?: string | null;
+  hostRedacted: boolean;
+  portRedacted: boolean;
+  commandRedacted?: boolean;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginEnvironmentInteractiveSetupConnectionPayload {
+  type: PluginEnvironmentInteractiveSetupConnectionType;
+  command?: string | null;
+  token?: string | null;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginEnvironmentInteractiveSetupSession {
+  providerLeaseId: string | null;
+  status: PluginEnvironmentInteractiveSetupStatus;
+  connectionSummary: PluginEnvironmentInteractiveSetupConnectionSummary | null;
+  connectionPayload?: PluginEnvironmentInteractiveSetupConnectionPayload | null;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginEnvironmentStartInteractiveSetupParams extends PluginEnvironmentDriverBaseParams {
+  sessionId: string;
+  sourceTemplateRef?: string | null;
+  sourceTemplateKind?: PluginEnvironmentTemplateRefKind | null;
+  connectionExpiresInMinutes?: number | null;
+  expiresAt?: string | null;
+}
+
+export interface PluginEnvironmentGetInteractiveSetupParams extends PluginEnvironmentDriverBaseParams {
+  providerLeaseId: string | null;
+  setupMetadata?: Record<string, unknown>;
+  includeConnectionPayload?: boolean;
+  connectionExpiresInMinutes?: number | null;
+}
+
+export interface PluginEnvironmentCaptureTemplateParams extends PluginEnvironmentDriverBaseParams {
+  providerLeaseId: string | null;
+  setupMetadata?: Record<string, unknown>;
+  sourceTemplateRef?: string | null;
+  previousTemplateRef?: string | null;
+  templateLabel?: string | null;
+  timeoutMs?: number | null;
+}
+
+export interface PluginEnvironmentCaptureTemplateResult {
+  templateRef: string;
+  templateKind: PluginEnvironmentTemplateRefKind;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginEnvironmentCancelInteractiveSetupParams extends PluginEnvironmentDriverBaseParams {
+  providerLeaseId: string | null;
+  setupMetadata?: Record<string, unknown>;
+  reason?: string | null;
+}
+
+export interface PluginEnvironmentCancelInteractiveSetupResult {
+  status: Extract<PluginEnvironmentInteractiveSetupStatus, "cancelled" | "timed_out" | "failed" | "missing">;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginEnvironmentDeleteTemplateParams extends PluginEnvironmentDriverBaseParams {
+  templateRef: string;
+  templateKind?: PluginEnvironmentTemplateRefKind;
+  metadata?: Record<string, unknown>;
+  reason?: string | null;
+}
+
+export interface PluginEnvironmentDeleteTemplateResult {
+  deleted: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+
+export type PluginLoginCommandKey = "claude" | "codex" | "grok";
+
+export interface PluginLoginPtyOpenParams {
+  hostRouteId: string;
+  driverKey: string;
+  companyId: string;
+  environmentId: string;
+  providerLeaseId: string;
+  loginCommandKey: PluginLoginCommandKey;
+  sessionHome: string;
+}
+
+export interface PluginLoginPtyOpenResult {
+  workerSessionId: string;
+}
+
+export interface PluginLoginPtyInputParams {
+  workerSessionId: string;
+  data: string;
+}
+
+export interface PluginLoginPtyStopParams {
+  workerSessionId: string;
+}
+
+export interface PluginLoginPtyCloseParams {
+  hostRouteId: string;
+  workerSessionId?: string;
+}
+
+export interface PluginLoginPtyCloseResult {
+  hostRouteId: string;
+}
+
+export interface PluginLoginPtyOutputParams {
+  hostRouteId: string;
+  workerSessionId: string;
+  chunk: string;
+}
+
+export interface PluginLoginPtyExitParams {
+  hostRouteId: string;
+  workerSessionId: string;
+  exitCode: number | null;
+}
+
+export interface PluginLoginPtyWorkerSession {
+  onData(listener: (chunk: string) => void): void;
+  write(data: string): void;
+  wait(): Promise<{ exitCode: number | null }>;
+  kill(): void;
+  close(): Promise<void>;
+}
+
+export const LOGIN_PTY_OUTPUT_NOTIFICATION = "loginPty.output";
+export const LOGIN_PTY_EXIT_NOTIFICATION = "loginPty.exit";
+
+export type ChannelBytesWireValue = string;
+
+export function encodeChannelBytes(bytes: Uint8Array): ChannelBytesWireValue {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
+}
+
+export interface PluginDuplexChannelOpenParams {
+  hostRouteId: string;
+  driverKey: string;
+  companyId: string;
+  environmentId: string;
+  providerLeaseId: string;
+  command: readonly string[];
+}
+
+export interface PluginDuplexChannelOpenResult {
+  hostRouteId: string;
+  workerSessionId: string;
+}
+
+export interface PluginDuplexChannelWriteParams {
+  hostRouteId: string;
+  workerSessionId: string;
+  data: ChannelBytesWireValue;
+}
+
+export interface PluginDuplexChannelStopParams {
+  hostRouteId: string;
+  workerSessionId: string;
+}
+
+export interface PluginDuplexChannelCloseParams {
+  hostRouteId: string;
+  workerSessionId?: string;
+}
+
+export interface PluginDuplexChannelCloseResult {
+  hostRouteId: string;
+  workerSessionId?: string;
+}
+
+export interface PluginDuplexChannelDataParams {
+  hostRouteId: string;
+  workerSessionId: string;
+  chunk: ChannelBytesWireValue;
+}
+
+export interface PluginDuplexChannelExitParams {
+  hostRouteId: string;
+  workerSessionId: string;
+  exitCode: number | null;
+  transportClosed?: boolean;
+}
+
+export const DUPLEX_CHANNEL_DATA_NOTIFICATION = "duplexChannel.data";
+export const DUPLEX_CHANNEL_EXIT_NOTIFICATION = "duplexChannel.exit";
+
+export function decodeChannelBytes(value: unknown): Uint8Array | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) return null;
+  return new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength);
+}
+
 
 // ---------------------------------------------------------------------------
 // UI launcher / modal host interaction payloads
@@ -522,11 +816,11 @@ export interface HostToWorkerMethods {
   ];
   environmentReleaseLease: [
     params: PluginEnvironmentReleaseLeaseParams,
-    result: void,
+    result: PluginEnvironmentTerminationReceipt | void,
   ];
   environmentDestroyLease: [
     params: PluginEnvironmentDestroyLeaseParams,
-    result: void,
+    result: PluginEnvironmentTerminationReceipt | void,
   ];
   environmentRealizeWorkspace: [
     params: PluginEnvironmentRealizeWorkspaceParams,
@@ -535,6 +829,58 @@ export interface HostToWorkerMethods {
   environmentExecute: [
     params: PluginEnvironmentExecuteParams,
     result: PluginEnvironmentExecuteResult,
+  ];
+  environmentRunnerIngressEndpoint: [
+    params: PluginEnvironmentRunnerIngressEndpointParams,
+    result: PluginEnvironmentRunnerIngressEndpoint,
+  ];
+  environmentSyncIn: [
+    params: PluginEnvironmentSyncInParams,
+    result: PluginEnvironmentSyncResult,
+  ];
+  environmentSyncOut: [
+    params: PluginEnvironmentSyncOutParams,
+    result: PluginEnvironmentSyncResult,
+  ];
+  environmentStartInteractiveSetup: [
+    params: PluginEnvironmentStartInteractiveSetupParams,
+    result: PluginEnvironmentInteractiveSetupSession,
+  ];
+  environmentGetInteractiveSetup: [
+    params: PluginEnvironmentGetInteractiveSetupParams,
+    result: PluginEnvironmentInteractiveSetupSession,
+  ];
+  environmentCaptureTemplate: [
+    params: PluginEnvironmentCaptureTemplateParams,
+    result: PluginEnvironmentCaptureTemplateResult,
+  ];
+  environmentCancelInteractiveSetup: [
+    params: PluginEnvironmentCancelInteractiveSetupParams,
+    result: PluginEnvironmentCancelInteractiveSetupResult,
+  ];
+  environmentDeleteTemplate: [
+    params: PluginEnvironmentDeleteTemplateParams,
+    result: PluginEnvironmentDeleteTemplateResult,
+  ];
+  loginPtyOpen: [
+    params: PluginLoginPtyOpenParams,
+    result: PluginLoginPtyOpenResult,
+  ];
+  loginPtyInput: [params: PluginLoginPtyInputParams, result: void];
+  loginPtyStop: [params: PluginLoginPtyStopParams, result: void];
+  loginPtyClose: [
+    params: PluginLoginPtyCloseParams,
+    result: PluginLoginPtyCloseResult,
+  ];
+  duplexChannelOpen: [
+    params: PluginDuplexChannelOpenParams,
+    result: PluginDuplexChannelOpenResult,
+  ];
+  duplexChannelWrite: [params: PluginDuplexChannelWriteParams, result: void];
+  duplexChannelStop: [params: PluginDuplexChannelStopParams, result: void];
+  duplexChannelClose: [
+    params: PluginDuplexChannelCloseParams,
+    result: PluginDuplexChannelCloseResult,
   ];
 }
 
@@ -567,6 +913,22 @@ export const HOST_TO_WORKER_OPTIONAL_METHODS: readonly HostToWorkerMethodName[] 
   "environmentDestroyLease",
   "environmentRealizeWorkspace",
   "environmentExecute",
+  "environmentRunnerIngressEndpoint",
+  "environmentSyncIn",
+  "environmentSyncOut",
+  "environmentStartInteractiveSetup",
+  "environmentGetInteractiveSetup",
+  "environmentCaptureTemplate",
+  "environmentCancelInteractiveSetup",
+  "environmentDeleteTemplate",
+  "loginPtyOpen",
+  "loginPtyInput",
+  "loginPtyStop",
+  "loginPtyClose",
+  "duplexChannelOpen",
+  "duplexChannelWrite",
+  "duplexChannelStop",
+  "duplexChannelClose",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -1130,6 +1492,15 @@ export interface WorkerToHostNotifications {
   "streams.close": {
     channel: string;
     companyId: string;
+  };
+
+  /**
+   * Deliver one incremental output chunk of the active execute call to the
+   * host runner log sink.
+   */
+  "execute.log": {
+    stream: "stdout" | "stderr";
+    chunk: string;
   };
 }
 

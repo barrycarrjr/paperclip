@@ -1786,6 +1786,56 @@ export interface PluginStreamsClient {
   close(channel: string): void;
 }
 
+export type {
+  PluginEnvironmentCreationCleanup,
+} from "./environment-creation-cleanup.js";
+export {
+  PluginEnvironmentCreationCleanupError,
+  readEnvironmentCreationCleanupError,
+  environmentCreationCleanupErrorData,
+} from "./environment-creation-cleanup.js";
+
+export interface PluginSpan {
+  setAttribute(key: string, value: string | number | boolean): void;
+  setStatus(status: { code: number }): void;
+  end(): void;
+}
+
+export interface PluginTracer {
+  startSpan(name: string, options?: { attributes?: Record<string, string | number | boolean> }): PluginSpan;
+}
+
+export const NOOP_PLUGIN_TRACER: PluginTracer = {
+  startSpan() {
+    return {
+      setAttribute() {},
+      setStatus() {},
+      end() {},
+    };
+  },
+};
+
+
+export interface PluginLoginPtyClient {
+  output(hostRouteId: string, workerSessionId: string, chunk: string): void;
+  exit(hostRouteId: string, workerSessionId: string, exitCode: number | null): void;
+}
+
+export interface PluginDuplexChannelClient {
+  data(hostRouteId: string, workerSessionId: string, chunk: Uint8Array): void;
+  exit(
+    hostRouteId: string,
+    workerSessionId: string,
+    exitCode: number | null,
+    transportClosed?: boolean,
+  ): void;
+}
+
+export interface PluginExecutionClient {
+  log(stream: "stdout" | "stderr", chunk: string): void;
+}
+
+
 // ---------------------------------------------------------------------------
 // Full plugin context
 // ---------------------------------------------------------------------------
@@ -1899,4 +1949,13 @@ export interface PluginContext {
 
   /** Structured logger. Output is captured and surfaced in the plugin health dashboard. */
   logger: PluginLogger;
+
+  /** Deliver incremental command output from the active execute call to the host runner log sink. */
+  execution: PluginExecutionClient;
+
+  loginPty: PluginLoginPtyClient;
+  duplexChannel: PluginDuplexChannelClient;
+
+  /** Plugin tracer for provider spans. */
+  tracer: PluginTracer;
 }

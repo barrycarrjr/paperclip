@@ -160,6 +160,19 @@ export const pluginOperationPolicySchema = z.record(
 
 export type PluginOperationPolicyEntryInput = z.infer<typeof pluginOperationPolicyEntrySchema>;
 
+
+export const sandboxProviderCapabilitiesSchema = z.object({
+  reusableLeases: z.boolean().optional(),
+  nativeSyncIn: z.boolean().optional(),
+  nativeSyncOut: z.boolean().optional(),
+  persistentProcessSessions: z.boolean().optional(),
+  independentControlCommands: z.boolean().optional(),
+  incrementalSessionOutput: z.boolean().optional(),
+  concurrentSyncOperations: z.boolean().optional(),
+  duplexCommandStream: z.boolean().optional(),
+  runnerWebSocketIngress: z.boolean().optional(),
+});
+
 export const pluginEnvironmentDriverDeclarationSchema = z.object({
   driverKey: z.string().min(1).regex(
     /^[a-z0-9][a-z0-9._-]*$/,
@@ -169,6 +182,16 @@ export const pluginEnvironmentDriverDeclarationSchema = z.object({
   displayName: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   configSchema: jsonSchemaSchema,
+  supportsReusableLeases: z.boolean().optional(),
+  defaultAcquireTimeoutMs: z.number().int().positive().max(86_400_000).optional(),
+  sandboxCapabilities: sandboxProviderCapabilitiesSchema.optional(),
+  supportsInteractiveSetup: z.boolean().optional(),
+  interactiveSetupConnectionTypes: z.array(z.string().min(1).max(100)).max(10).optional(),
+  supportsTemplateCapture: z.boolean().optional(),
+  templateRefKind: z.string().min(1).max(100).optional(),
+  templateIdentityPaths: z.array(z.string().min(1).max(200)).max(20).optional(),
+  supportsTemplateDelete: z.boolean().optional(),
+  supportsLoginPty: z.boolean().optional(),
 });
 
 export type PluginEnvironmentDriverDeclarationInput = z.infer<

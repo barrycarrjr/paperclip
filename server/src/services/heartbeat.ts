@@ -76,6 +76,7 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { memoryService } from "./memories.js";
 import { issueEmailDelegationService } from "./issue-email-delegations.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import {
@@ -1885,6 +1886,60 @@ export function buildPaperclipTaskMarkdown(input: {
     lines.push("", "Latest wake comment:", fenceTaskText(wakeComment.body.trim()));
   }
   lines.push("", "Use this task context as the current assignment.");
+  return lines.join("\n");
+}
+
+export const HEARTBEAT_MEMORIES_MAX_ITEMS = 30;
+export const HEARTBEAT_MEMORIES_MAX_CHARS = 8000;
+
+export function buildPaperclipMemoriesMarkdown(
+  memoriesList: Array<{
+    name: string;
+    content: string;
+    description?: string | null;
+    kind?: string | null;
+  }>,
+): string | null {
+  if (!memoriesList || memoriesList.length === 0) return null;
+
+  const lines = [
+    "Paperclip company memories:",
+    "The following durable memories and instructions are remembered for this company. Treat them as company-wide context, preferences, and conventions for your assignments:",
+  ];
+
+  let totalChars = lines.join("\n").length;
+  let truncated = false;
+
+  for (const memory of memoriesList.slice(0, HEARTBEAT_MEMORIES_MAX_ITEMS)) {
+    const desc = memory.description?.trim() ? ` (${memory.description.trim()})` : "";
+    const cleanContent = memory.content.trim();
+    let entryText: string;
+    if (cleanContent.includes("\n")) {
+      const indented = cleanContent
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join("\n");
+      entryText = `- **${memory.name}**${desc}:\n${indented}`;
+    } else {
+      entryText = `- **${memory.name}**${desc}: ${cleanContent}`;
+    }
+
+    if (totalChars + entryText.length + 1 > HEARTBEAT_MEMORIES_MAX_CHARS) {
+      truncated = true;
+      break;
+    }
+
+    lines.push(entryText);
+    totalChars += entryText.length + 1;
+  }
+
+  if (truncated || memoriesList.length > HEARTBEAT_MEMORIES_MAX_ITEMS) {
+    lines.push(
+      "",
+      "_Some company memories were omitted to save context space. Call the `recall_memories` tool to search all memories._",
+    );
+  }
+
   return lines.join("\n");
 }
 
@@ -5094,6 +5149,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       context.paperclipTaskMarkdown = taskMarkdown;
     } else {
       delete context.paperclipTaskMarkdown;
+    }
+    const memoriesSvc = memoryService(db);
+    let memoriesMarkdown: string | null = null;
+    let loadedMemories: Array<{ id: string; name: string; content: string; description: string | null; kind: string }> = [];
+    try {
+      const rows = await memoriesSvc.list(agent.companyId, {
+        limit: HEARTBEAT_MEMORIES_MAX_ITEMS,
+      });
+      loadedMemories = rows;
+      if (rows.length > 0) {
+        memoriesMarkdown = buildPaperclipMemoriesMarkdown(rows);
+      }
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), companyId: agent.companyId, agentId: agent.id },
+        "Failed to load company memories for heartbeat context",
+      );
+    }
+    if (memoriesMarkdown) {
+      context.paperclipMemoriesMarkdown = memoriesMarkdown;
+      context.paperclipMemories = loadedMemories.map((m) => ({
+        id: m.id,
+        name: m.name,
+        kind: m.kind,
+        description: m.description,
+        content: m.content,
+      }));
+    } else {
+      delete context.paperclipMemoriesMarkdown;
+      delete context.paperclipMemories;
     }
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;

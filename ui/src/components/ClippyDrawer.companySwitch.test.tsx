@@ -30,6 +30,7 @@ const shownSessionIds = vi.hoisted(() => ({ calls: [] as Array<string | null> })
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => companyState,
+  useCompanyOptional: () => companyState,
 }));
 
 // The drawer reads its company out of the web address (useActiveCompanyId).
