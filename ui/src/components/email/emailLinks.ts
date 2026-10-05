@@ -19,18 +19,25 @@
 export function openEmailLinksInNewTab(html: string, { fragment = false }: { fragment?: boolean } = {}): string {
   if (!html || typeof DOMParser === "undefined") return html;
   const doc = new DOMParser().parseFromString(html, "text/html");
+  if (!retargetEmailLinks(doc)) return html;
+  if (fragment) return doc.body.innerHTML;
+  // Keep the message's own doctype, or none if it had none: it decides how
+  // the browser lays out old-style email tables.
+  const doctype = doc.doctype ? `${new XMLSerializer().serializeToString(doc.doctype)}\n` : "";
+  return doctype + doc.documentElement.outerHTML;
+}
+
+/**
+ * The same change on a document already parsed. True when any link changed.
+ */
+export function retargetEmailLinks(root: ParentNode): boolean {
   let changed = false;
-  for (const link of doc.querySelectorAll("a[href], area[href]")) {
+  for (const link of root.querySelectorAll("a[href], area[href]")) {
     const href = link.getAttribute("href")?.trim() ?? "";
     if (!/^(https?:)?\/\//i.test(href)) continue;
     link.setAttribute("target", "_blank");
     link.setAttribute("rel", "noopener noreferrer");
     changed = true;
   }
-  if (!changed) return html;
-  if (fragment) return doc.body.innerHTML;
-  // Keep the message's own doctype, or none if it had none: it decides how
-  // the browser lays out old-style email tables.
-  const doctype = doc.doctype ? `${new XMLSerializer().serializeToString(doc.doctype)}\n` : "";
-  return doctype + doc.documentElement.outerHTML;
+  return changed;
 }

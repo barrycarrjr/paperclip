@@ -66,7 +66,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkTriageBar } from "./BulkTriageBar";
 import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn } from "../lib/utils";
-import { openEmailLinksInNewTab } from "./email/emailLinks";
+import { EmailBodyFrame } from "./email/EmailBodyFrame";
 
 
 const STATUS_OPTIONS: Array<{ value: HSStatusFilter; label: string }> = [
@@ -1450,7 +1450,9 @@ function ThreadCard({
   const isNote = kind === "note";
   const isReply = kind === "reply" || kind === "message";
   const attachments = threadAttachments(thread);
-  const bodyHtml = useMemo(() => renderThreadBody(body), [body]);
+  // Belonged to the in-page rendering commented out below; EmailBodyFrame
+  // does this now.
+  // const bodyHtml = useMemo(() => renderThreadBody(body), [body]);
 
   // A lineitem is a state change, not a message — it has no body by design.
   // Render it the way Help Scout does: a thin timeline marker, not a card.
@@ -1484,13 +1486,16 @@ function ThreadCard({
           </span>
         )}
       </div>
-      {/* Email HTML is authored for a white background. Render it as a light
-          island (white bg, dark text, forced light color-scheme) so the app's
-          dark theme doesn't leave the body text washed-out and unreadable. */}
+      {/* In a frame that runs no scripts, as the IMAP reading pane does: the
+          email is not ours to trust. See EmailBodyFrame. */}
+      <EmailBodyFrame html={body} title={`Message from ${author}`} />
+      {/* The in-page rendering this replaced, which ran anything in the email
+          that runs code inside Paperclip:
       <div
         className="rounded bg-white text-zinc-900 [color-scheme:light] p-2 text-xs whitespace-pre-wrap break-words overflow-x-auto"
         dangerouslySetInnerHTML={bodyHtml}
       />
+      */}
       {attachments.length > 0 && (
         <AttachmentChipList
           className="mt-2"
@@ -1526,11 +1531,11 @@ function formatAuthor(thread: HSThread): string {
   return "(unknown)";
 }
 
-/** Help Scout returns HTML in `body`, rendered as is apart from its links,
- *  which open in a new browser tab instead of navigating this page away (see
- *  openEmailLinksInNewTab). Nothing else is stripped: unlike the IMAP pane,
- *  which draws the message in a frame that runs no scripts, this goes straight
- *  into the page. If it needs real sanitization, swap in DOMPurify. */
+/* The in-page rendering's helper, kept with it as the way back. Help Scout
+ * returns HTML in `body`; this rendered it as is apart from its links, so
+ * anything in it that runs code ran inside Paperclip. EmailBodyFrame replaced
+ * it.
 function renderThreadBody(html: string): { __html: string } {
   return { __html: openEmailLinksInNewTab(html, { fragment: true }) };
 }
+*/
