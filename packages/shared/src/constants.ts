@@ -728,6 +728,7 @@ export const OUTBOUND_TOOL_DRAFT_GATE = [
   "phone-tools:phone_call_make",
   "3cx-tools:pbx_click_to_call",
   "gbp-reviews:gbp_reply_to_review",
+  "review-tools:gbp_reply_to_review",
   "social-poster:post_to_facebook",
   "social-poster:post_to_instagram",
   "social-poster:post_to_x",

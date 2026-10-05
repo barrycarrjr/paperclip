@@ -265,6 +265,7 @@ const OUTBOUND_TOOL_SHORT_LABEL: Record<string, string> = {
   "3cx-tools:pbx_click_to_call": "click-to-call",
   // Public posts. Mirrors packages/shared/src/approval-labels.ts; edit both.
   "gbp-reviews:gbp_reply_to_review": "public review reply",
+  "review-tools:gbp_reply_to_review": "public review reply",
   "social-poster:post_to_facebook": "Facebook post",
   "social-poster:post_to_instagram": "Instagram post",
   "social-poster:post_to_x": "X post",

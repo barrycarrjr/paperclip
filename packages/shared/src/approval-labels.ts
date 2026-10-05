@@ -31,6 +31,7 @@ const OUTBOUND_TOOL_LABEL: Record<string, string> = {
   // comment there); edit both together or the receipt feed and the approval
   // card disagree.
   "gbp-reviews:gbp_reply_to_review": "Public review reply",
+  "review-tools:gbp_reply_to_review": "Public review reply",
   "social-poster:post_to_facebook": "Facebook post",
   "social-poster:post_to_instagram": "Instagram post",
   "social-poster:post_to_x": "X post",

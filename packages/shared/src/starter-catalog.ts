@@ -98,7 +98,7 @@ export const STARTER_CARDS: StarterCard[] = [
     title: "Reply to every Google review within a day",
     what: "Drafts a reply in your voice for each new review and puts it up for approval.",
     when: "Checks every morning at 8am",
-    requiresPlugins: ["gbp-reviews"],
+    requiresPlugins: ["review-tools"],
     matches: ["google", "reviews", "reputation", "stars", "gbp", "business profile"],
     routine: {
       title: "Reply to new Google reviews",

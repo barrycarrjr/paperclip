@@ -121,13 +121,30 @@ export async function pluginStateByKey(db: Db): Promise<PluginStateByKey> {
  * Start work planner refuses work on exactly the same terms as the cards,
  * rather than keeping a second, drifting copy of this check.
  */
+const PLUGIN_KEY_ALIASES: Record<string, string[]> = {
+  "gbp-reviews": ["review-tools"],
+  "review-tools": ["gbp-reviews"],
+};
+
 export function blockersForPlugins(
   requiredKeys: string[],
   state: PluginStateByKey,
 ): StarterBlocker[] {
   const blockers: StarterBlocker[] = [];
   for (const key of requiredKeys) {
-    const record = state.get(key);
+    let record = state.get(key);
+    if (!record || record.status === "uninstalled") {
+      const aliases = PLUGIN_KEY_ALIASES[key];
+      if (aliases) {
+        for (const alias of aliases) {
+          const aliasRecord = state.get(alias);
+          if (aliasRecord && aliasRecord.status !== "uninstalled") {
+            record = aliasRecord;
+            break;
+          }
+        }
+      }
+    }
     if (!record || record.status === "uninstalled") {
       blockers.push({
         pluginKey: key,
