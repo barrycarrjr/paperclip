@@ -208,6 +208,24 @@ describe("EmailPopoutDialog read/unread toggle", () => {
   });
 });
 
+describe("EmailPopoutDialog message body", () => {
+  it("opens the message's links in a new browser tab, not inside the message frame", async () => {
+    const plain = await mockApi.fetchMessage("personal", 42, "INBOX");
+    mockApi.fetchMessage.mockResolvedValue({
+      ...plain,
+      html: '<html><body><a href="https://console.example.com/billing">Update card</a></body></html>',
+    });
+    await mountDialog(request());
+
+    const frame = document.querySelector<HTMLIFrameElement>('iframe[title="Email body"]');
+    expect(frame).not.toBeNull();
+    const doc = new DOMParser().parseFromString(frame!.getAttribute("srcdoc") ?? "", "text/html");
+    const link = doc.querySelector("a")!;
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+});
+
 /** Click a toolbar button by the label its tooltip announces. */
 async function clickToolbar(label: string) {
   const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);

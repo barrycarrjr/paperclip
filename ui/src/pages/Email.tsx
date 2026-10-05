@@ -131,6 +131,7 @@ import { actionFailureText, inlineFailureText } from "../components/email/action
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
 import { EmailRecipientLines } from "../components/email/EmailRecipientLines";
+import { openEmailLinksInNewTab } from "../components/email/emailLinks";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
 import { sendOutcomeText } from "../components/email/sendOutcome";
 import { DraftModelSelect } from "../components/DraftModelSelect";
@@ -1060,6 +1061,12 @@ export function Email() {
     queryFn: () => emailApi!.fetchMessage(selectedMailbox!, selectedUid!, selectedFolder),
     enabled: !!emailApi && !!selectedMailbox && selectedUid !== null,
   });
+  // The open message as the reading pane draws it, with links opening in a
+  // new browser tab. Worked out once per message, not on every render.
+  const fullMessageHtml = useMemo(
+    () => openEmailLinksInNewTab(fullMessage?.html ?? ""),
+    [fullMessage?.html],
+  );
 
   // A different message means a different reply, so picked files must not
   // ride along to the next recipient.
@@ -3311,7 +3318,7 @@ export function Email() {
                   {fullMessage.html ? (
                     <iframe
                       key={fullMessage.uid}
-                      srcDoc={fullMessage.html}
+                      srcDoc={fullMessageHtml}
                       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
                       // Email HTML is authored for a white background. Force a light
                       // color-scheme so the app's dark theme doesn't leak in and flip

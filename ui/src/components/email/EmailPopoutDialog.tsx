@@ -47,6 +47,7 @@ import { SendingIdentityLine } from "./SendingIdentityLine";
 import { describeSendingIdentity, findSelectedMailbox } from "./sendingIdentity";
 import { EmailStateIcons } from "./EmailStateIcons";
 import { EmailRecipientLines } from "./EmailRecipientLines";
+import { openEmailLinksInNewTab } from "./emailLinks";
 import { cn } from "@/lib/utils";
 
 export interface EmailPopoutRequest {
@@ -173,6 +174,8 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     queryFn: () => api!.fetchMessage(request!.mailbox, request!.uid, request!.folder),
     enabled: Boolean(api && request),
   });
+  // Links open in a new browser tab rather than inside the message frame.
+  const messageHtml = useMemo(() => openEmailLinksInNewTab(message?.html ?? ""), [message?.html]);
 
   const { data: folders } = useQuery({
     queryKey: ["email-popout-folders", request?.pluginId, request?.companyId, request?.mailbox],
@@ -446,7 +449,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
           ) : message.html ? (
             <iframe
               key={message.uid}
-              srcDoc={message.html}
+              srcDoc={messageHtml}
               sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
               // Mail HTML is authored against a white background, so the app's
               // dark theme must not leak in and turn unstyled text invisible.

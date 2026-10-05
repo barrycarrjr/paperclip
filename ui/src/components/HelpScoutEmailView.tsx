@@ -66,6 +66,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkTriageBar } from "./BulkTriageBar";
 import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn } from "../lib/utils";
+import { openEmailLinksInNewTab } from "./email/emailLinks";
 
 
 const STATUS_OPTIONS: Array<{ value: HSStatusFilter; label: string }> = [
@@ -1449,6 +1450,7 @@ function ThreadCard({
   const isNote = kind === "note";
   const isReply = kind === "reply" || kind === "message";
   const attachments = threadAttachments(thread);
+  const bodyHtml = useMemo(() => renderThreadBody(body), [body]);
 
   // A lineitem is a state change, not a message — it has no body by design.
   // Render it the way Help Scout does: a thin timeline marker, not a card.
@@ -1487,7 +1489,7 @@ function ThreadCard({
           dark theme doesn't leave the body text washed-out and unreadable. */}
       <div
         className="rounded bg-white text-zinc-900 [color-scheme:light] p-2 text-xs whitespace-pre-wrap break-words overflow-x-auto"
-        dangerouslySetInnerHTML={renderThreadBody(body)}
+        dangerouslySetInnerHTML={bodyHtml}
       />
       {attachments.length > 0 && (
         <AttachmentChipList
@@ -1524,9 +1526,11 @@ function formatAuthor(thread: HSThread): string {
   return "(unknown)";
 }
 
-/** Help Scout returns HTML in `body`. We strip the obvious script/style and
- *  render — same trust level as the IMAP message body pane, which also renders
- *  HTML directly. If we need full sanitization later, swap for DOMPurify. */
+/** Help Scout returns HTML in `body`, rendered as is apart from its links,
+ *  which open in a new browser tab instead of navigating this page away (see
+ *  openEmailLinksInNewTab). Nothing else is stripped: unlike the IMAP pane,
+ *  which draws the message in a frame that runs no scripts, this goes straight
+ *  into the page. If it needs real sanitization, swap in DOMPurify. */
 function renderThreadBody(html: string): { __html: string } {
-  return { __html: html };
+  return { __html: openEmailLinksInNewTab(html, { fragment: true }) };
 }
