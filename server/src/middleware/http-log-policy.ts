@@ -13,6 +13,11 @@ const SILENCED_SUCCESS_API_PATHS = [
   // the log writes to the log, so the newest thing on screen is always the act
   // of looking at it, pushing out whatever the operator opened the page to see.
   /^\/api\/instance\/logs(?:\/|$)/,
+  // The desktop reminder client (the Windows tray, or the macOS and Linux
+  // client) polls this every 10 seconds. The ack POST stays logged. The
+  // request ends inside the /api router, so the logger sees the path with the
+  // prefix stripped.
+  /^(?:\/api)?\/internal\/desktop-notifications\/pending(?:\/|$)/,
 ];
 
 const SILENCED_SUCCESS_STATIC_PREFIXES = [
