@@ -452,19 +452,28 @@ export function ClippyComposer({
                 e.target.value = "";
               }}
             />
-            <Select
-              value={permissionMode}
-              onValueChange={(v) => onPatch({ permissionMode: v as PermissionMode })}
-              disabled={streaming}
-            >
-              <SelectTrigger size="sm" className="h-7 w-auto gap-1 px-2 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ask">Ask permission</SelectItem>
-                <SelectItem value="bypass">Bypass permissions</SelectItem>
-              </SelectContent>
-            </Select>
+            {(() => {
+              const isAdapterModel = Boolean(model && model.startsWith("adapter:"));
+              return (
+                <Select
+                  value={isAdapterModel ? "bypass" : permissionMode}
+                  onValueChange={(v) => onPatch({ permissionMode: v as PermissionMode })}
+                  disabled={streaming || isAdapterModel}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-7 w-auto gap-1 px-2 text-xs"
+                    title={isAdapterModel ? "CLI models run unattended and bypass permission prompts" : undefined}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ask">Ask permission</SelectItem>
+                    <SelectItem value="bypass">Bypass permissions</SelectItem>
+                  </SelectContent>
+                </Select>
+              );
+            })()}
             {/* A session model that is no longer in the list (an adapter was
                 disabled, a model retired, or a stale id from before the
                 adapter:* encoding) still shows, marked Not available, so the
@@ -472,7 +481,14 @@ export function ClippyComposer({
             <ModelPicker
               groups={modelGroups}
               value={model}
-              onChange={(v) => onPatch({ model: v })}
+              onChange={(v) => {
+                const isNewAdapter = Boolean(v && v.startsWith("adapter:"));
+                if (isNewAdapter && permissionMode === "ask") {
+                  onPatch({ model: v, permissionMode: "bypass" });
+                } else {
+                  onPatch({ model: v });
+                }
+              }}
               disabled={streaming || (models.length === 0 && !model)}
               loading={modelsQuery.isLoading}
               placeholder="Pick a model"

@@ -418,6 +418,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     // (e.g. claude_local Opus via Claude Pro auth) rather than a hardcoded
     // model that requires an API key they may not have set.
     const initialModel = input.model ?? (await pickBestDefaultModel(await readAgentDefaults()));
+    const isAdapter = Boolean(initialModel?.startsWith("adapter:"));
     const created = await db
       .insert(chatSessions)
       .values({
@@ -425,7 +426,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
         companyId: input.companyId ?? null,
         title: input.title?.slice(0, 200) ?? "New chat",
         mode: "agent",
-        permissionMode: input.permissionMode ?? "ask",
+        permissionMode: isAdapter ? "bypass" : (input.permissionMode ?? "ask"),
         model: initialModel,
         pageContext: input.pageContext ?? null,
       })
@@ -446,13 +447,19 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       archived?: boolean;
     },
   ) {
-    await getSession(actor, id);
+    const current = await getSession(actor, id);
+    const targetModel = patch.model !== undefined ? patch.model : current.model;
+    const isAdapter = Boolean(targetModel?.startsWith("adapter:"));
     // Drizzle infers `updatedAt` as `Date | SQL` because of the default; the
     // partial type widens that to include `undefined` which the `set()` call
     // rejects, so we build the update object as a plain record and cast.
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.title !== undefined) updates.title = patch.title.slice(0, 200);
-    if (patch.permissionMode !== undefined) updates.permissionMode = patch.permissionMode;
+    if (patch.permissionMode !== undefined) {
+      updates.permissionMode = isAdapter ? "bypass" : patch.permissionMode;
+    } else if (patch.model !== undefined && isAdapter) {
+      updates.permissionMode = "bypass";
+    }
     if (patch.effort !== undefined) updates.effort = patch.effort;
     if (patch.companyId !== undefined) updates.companyId = patch.companyId;
     if (patch.model !== undefined) updates.model = patch.model;
