@@ -147,6 +147,7 @@ export function ClippyConversation({
         streaming={streaming}
         liveToolCalls={liveToolCalls}
         lastEventAt={lastEventAt}
+        isAdapterModel={Boolean(session?.model?.startsWith("adapter:"))}
       />
       <ClippyComposer
         // Remount on a chat switch: the composer's draft text and pending

@@ -126,6 +126,10 @@ const PLUGIN_KEY_ALIASES: Record<string, string[]> = {
   "review-tools": ["gbp-reviews"],
 };
 
+function isPluginMissing(record: { id: string; status: string } | undefined): boolean {
+  return !record || record.status === "uninstalled";
+}
+
 export function blockersForPlugins(
   requiredKeys: string[],
   state: PluginStateByKey,
@@ -133,19 +137,19 @@ export function blockersForPlugins(
   const blockers: StarterBlocker[] = [];
   for (const key of requiredKeys) {
     let record = state.get(key);
-    if (!record || record.status === "uninstalled") {
+    if (isPluginMissing(record)) {
       const aliases = PLUGIN_KEY_ALIASES[key];
       if (aliases) {
         for (const alias of aliases) {
           const aliasRecord = state.get(alias);
-          if (aliasRecord && aliasRecord.status !== "uninstalled") {
+          if (!isPluginMissing(aliasRecord)) {
             record = aliasRecord;
             break;
           }
         }
       }
     }
-    if (!record || record.status === "uninstalled") {
+    if (!record || isPluginMissing(record)) {
       blockers.push({
         pluginKey: key,
         kind: "missing",

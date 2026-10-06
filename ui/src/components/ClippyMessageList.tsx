@@ -21,6 +21,8 @@ interface Props {
   liveToolCalls?: Record<string, LiveToolCall>;
   /** Epoch ms of the last stream event; drives the quiet-stream indicator. */
   lastEventAt?: number | null;
+  /** True when the active session model runs via a local CLI adapter. */
+  isAdapterModel?: boolean;
 }
 
 export function ClippyMessageList({
@@ -30,6 +32,7 @@ export function ClippyMessageList({
   streaming,
   liveToolCalls = {},
   lastEventAt = null,
+  isAdapterModel = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -82,9 +85,15 @@ export function ClippyMessageList({
             <div className="font-medium">Ask Clippy anything</div>
             <div className="mt-1 max-w-sm text-xs">
               Clippy can look things up and take actions for you; each action
-              shows up as a card as it runs. With{" "}
-              <span className="font-medium">Ask permission</span> selected below,
-              anything that makes a real change waits for your OK.
+              shows up as a card as it runs.{isAdapterModel ? (
+                <> CLI models execute actions directly.</>
+              ) : (
+                <>
+                  {" "}With{" "}
+                  <span className="font-medium">Ask permission</span> selected below,
+                  anything that makes a real change waits for your OK.
+                </>
+              )}
             </div>
           </div>
         )}

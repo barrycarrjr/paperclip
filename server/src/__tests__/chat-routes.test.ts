@@ -228,4 +228,47 @@ describe("chat routes", () => {
       .send({ decision: "approve" });
     expect(res.status).toBe(404);
   });
+
+  it("forces bypass permissionMode when creating a session with an adapter model", async () => {
+    const state = { rows: [], insertedRows: [], updates: [], deletes: 0 };
+    const db = createMockDb(state);
+    const app = buildApp(db);
+    const res = await request(app)
+      .post("/api/chat/sessions")
+      .send({ title: "CLI chat", model: "adapter:claude_local:claude-sonnet-4-6", permissionMode: "ask" });
+    expect(res.status).toBe(201);
+    expect(res.body.session.permissionMode).toBe("bypass");
+    expect(state.insertedRows[0]?.permissionMode).toBe("bypass");
+  });
+
+  it("forces bypass permissionMode when updating session model to an adapter model", async () => {
+    const state = {
+      rows: [
+        {
+          id: "sess-1",
+          boardUserId: "u1",
+          companyId: null,
+          title: "S1",
+          model: "claude-opus-4-7",
+          mode: "agent",
+          permissionMode: "ask",
+          effort: "auto",
+          archivedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+      insertedRows: [],
+      updates: [],
+      deletes: 0,
+    };
+    const db = createMockDb(state);
+    const app = buildApp(db);
+    const res = await request(app)
+      .patch("/api/chat/sessions/sess-1")
+      .send({ model: "adapter:claude_local:claude-sonnet-4-6" });
+    expect(res.status).toBe(200);
+    const update = state.updates[0];
+    expect(update.permissionMode).toBe("bypass");
+  });
 });

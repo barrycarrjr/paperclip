@@ -12,6 +12,7 @@ import {
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
+import { isLoopbackHost } from "../url-utils.js";
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -75,6 +76,14 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   if (config.deploymentMode === "authenticated") {
     const port = opts?.listenPort ?? config.port;
     const needsPortVariants = port !== 80 && port !== 443;
+    if (config.bind === "loopback" || (config.host && isLoopbackHost(config.host))) {
+      trustedOrigins.add(`http://localhost:${port}`);
+      trustedOrigins.add(`http://127.0.0.1:${port}`);
+      if (!needsPortVariants) {
+        trustedOrigins.add("http://localhost");
+        trustedOrigins.add("http://127.0.0.1");
+      }
+    }
     for (const hostname of config.allowedHostnames) {
       const trimmed = hostname.trim().toLowerCase();
       if (!trimmed) continue;

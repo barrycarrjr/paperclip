@@ -75,4 +75,21 @@ describe("Better Auth cookie scoping", () => {
     expect(trustedOrigins).not.toContain("https://board.example.test:3100");
     expect(trustedOrigins).not.toContain("http://board.example.test:3100");
   });
+
+  it("trusts loopback origins in authenticated mode when bind is loopback or host is 127.0.0.1", () => {
+    const trustedOrigins = deriveAuthTrustedOrigins({
+      deploymentMode: "authenticated",
+      authBaseUrlMode: "auto",
+      authPublicBaseUrl: undefined,
+      allowedHostnames: [],
+      bind: "loopback",
+      host: "127.0.0.1",
+      port: 3100,
+    } as Parameters<typeof deriveAuthTrustedOrigins>[0]);
+
+    expect(trustedOrigins).toEqual(expect.arrayContaining([
+      "http://localhost:3100",
+      "http://127.0.0.1:3100",
+    ]));
+  });
 });
