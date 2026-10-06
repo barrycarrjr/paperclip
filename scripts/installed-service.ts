@@ -65,8 +65,20 @@ if (action === "stop") {
       await terminateLocalService({ pid: child.pid!, processGroupId: process.platform === "win32" ? null : child.pid! });
       throw error;
     }
+    // Off Windows nothing else reads the desktop reminder queue (the tray does
+    // on Windows), so a small client shows those reminders while the server
+    // runs. It is stopped with the server, and exits on its own if this
+    // process disappears.
+    const reminders = process.platform === "win32" ? null : spawn(process.execPath, [
+      path.join(repoRoot, "scripts", "launchers", "unix", "desktop-reminders.mjs"),
+    ], { cwd: launchCwd, env: { ...process.env, PAPERCLIP_CONFIG: configPath }, stdio: "inherit" });
+    reminders?.on("error", (error) => console.error(`Desktop reminders did not start: ${error.message}`));
+    const stopReminders = () => {
+      if (reminders && reminders.exitCode === null && reminders.signalCode === null) reminders.kill("SIGTERM");
+    };
     let stopping = false;
     const stop = async () => {
+      stopReminders();
       if (stopping) return;
       stopping = true;
       await terminateLocalService({ pid: child.pid!, processGroupId: process.platform === "win32" ? null : child.pid! }, { forceAfterMs: 15_000 });
@@ -74,6 +86,7 @@ if (action === "stop") {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     const code = await exited;
+    stopReminders();
     await removeLocalServiceRegistryRecord(serviceKey);
     process.exitCode = code;
   }

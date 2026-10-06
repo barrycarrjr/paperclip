@@ -43,6 +43,12 @@ entry points for install, launch, stop, update, and rebuild. Stop targets the
 managed process for this checkout and config, rather than killing processes
 by port. Ctrl-C in the launch terminal stops the managed server.
 
+While the server runs, the launcher also shows calendar reminders sent to the
+desktop channel (the Windows tray does this on Windows). On macOS each one
+opens a dialog: Dismiss or Open marks it as seen, and Open goes to the page in
+Paperclip. A dialog left unanswered closes after ten minutes and the reminder
+comes back. On Linux reminders go through `notify-send` when it is installed.
+
 Data defaults to `~/.paperclip/instances/default`. `PAPERCLIP_HOME`,
 `PAPERCLIP_INSTANCE_ID`, and `PAPERCLIP_CONFIG` can select another installation.
 The Mac app records those selections when it is created. Set these variables

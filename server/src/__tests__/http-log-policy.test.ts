@@ -52,6 +52,13 @@ describe("shouldSilenceHttpSuccessLog", () => {
     ).toBe(true);
   });
 
+  it("silences the desktop reminder poll but keeps its acknowledgement", () => {
+    expect(shouldSilenceHttpSuccessLog("GET", "/internal/desktop-notifications/pending?limit=20", 200)).toBe(true);
+    expect(shouldSilenceHttpSuccessLog("GET", "/api/internal/desktop-notifications/pending?limit=20", 200)).toBe(true);
+    expect(shouldSilenceHttpSuccessLog("POST", "/internal/desktop-notifications/ack", 200)).toBe(false);
+    expect(shouldSilenceHttpSuccessLog("GET", "/internal/desktop-notifications/pending", 401)).toBe(false);
+  });
+
   it("silences successful static asset requests", () => {
     expect(shouldSilenceHttpSuccessLog("GET", "/", 200)).toBe(true);
     expect(shouldSilenceHttpSuccessLog("GET", "/index.html", 200)).toBe(true);
