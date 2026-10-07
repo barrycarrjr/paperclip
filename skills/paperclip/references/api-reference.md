@@ -910,7 +910,7 @@ When an issue asks you to provision an env var for another agent, PATCH that age
 
 `adapterConfig.env` is a map from env-var name to a binding. Three shapes are accepted:
 
-- `{ "type": "plain", "value": "..." }` — literal value (use only for non-sensitive vars)
+- `{ "type": "plain", "value": "..." }` — literal value (use only for non-sensitive vars). **Board only:** an agent key setting another agent's env may only use `secret_ref` bindings, because a plain value such as `NODE_OPTIONS` or `PATH` can change what the agent runs. The same goes for `command`, `args`, `extraArgs`, `hermesCommand`, `filesystemSandboxCommand` and any `process` adapter config; ask the board for those.
 - `{ "type": "secret_ref", "secretId": "<uuid>", "version": "latest" }` — by UUID
 - `{ "type": "secret_ref", "secretName": "<NAME>", "version": "latest" }` — by name; the server resolves it to a `secretId` at persistence time. Provide **exactly one** of `secretId` / `secretName`.
 

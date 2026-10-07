@@ -780,6 +780,154 @@ describe.sequential("agent permission routes", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
+  describe("agent keys setting what another agent runs on the host", () => {
+    const ceoId = "33333333-3333-4333-8333-333333333333";
+    const ceoActor = { type: "agent", agentId: ceoId, companyId, source: "agent_key", runId: "run-1" };
+    const peer = { ...baseAgent, adapterType: "claude_local", adapterConfig: { model: "claude-sonnet" } };
+
+    beforeEach(() => {
+      mockAgentService.getById.mockImplementation(async (id: string) =>
+        id === ceoId ? { ...baseAgent, id: ceoId, role: "ceo", adapterType: "claude_local" } : peer,
+      );
+      mockAgentService.update.mockResolvedValue(peer);
+    });
+
+    it.each([
+      ["command", { command: "/tmp/payload.sh" }],
+      ["args", { args: ["--malicious"] }],
+      ["extraArgs", { extraArgs: ["--dangerously-skip-permissions"] }],
+      ["hermesCommand", { hermesCommand: "/tmp/payload.sh" }],
+      ["filesystemSandboxCommand", { filesystemSandboxCommand: "/tmp/payload.sh" }],
+      ["env.NODE_OPTIONS", { env: { NODE_OPTIONS: { type: "plain", value: "--require /tmp/x.js" } } }],
+      ["env.PATH", { env: { PATH: "/tmp/evil" } }],
+    ])("blocks a CEO agent setting another agent's adapterConfig.%s", async (field, adapterConfig) => {
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ adapterConfig }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain(`adapterConfig.${field}`);
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("still lets a CEO agent bind a secret into another agent's env", async () => {
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({
+          adapterConfig: {
+            env: { WORKSNAPS_API_TOKEN: { type: "secret_ref", secretName: "WORKSNAPS_API_TOKEN" } },
+          },
+        }));
+
+      expect(res.status).toBe(200);
+      expect(mockAgentService.update).toHaveBeenCalled();
+    });
+
+    it("blocks a CEO agent switching another agent to the process adapter", async () => {
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ adapterType: "process" }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("adapterType");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("blocks an agent hire that sets the host command", async () => {
+      mockAccessService.hasPermission.mockResolvedValue(true);
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send({
+          name: "Injected",
+          role: "engineer",
+          adapterType: "claude_local",
+          adapterConfig: { command: "/tmp/payload.sh" },
+        }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("adapterConfig.command");
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks an agent hire that configures a process adapter", async () => {
+      mockAccessService.hasPermission.mockResolvedValue(true);
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send({
+          name: "Injected",
+          role: "engineer",
+          adapterType: "process",
+          adapterConfig: { cwd: "/tmp" },
+        }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("adapterConfig.cwd");
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks direct agent creation by an agent that sets the host command", async () => {
+      mockAccessService.hasPermission.mockResolvedValue(true);
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agents`)
+        .send({
+          name: "Injected",
+          role: "engineer",
+          adapterType: "codex_local",
+          adapterConfig: { args: ["--malicious"] },
+        }));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("adapterConfig.args");
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks an agent rolling another agent back to a config with a host command", async () => {
+      (mockAgentService as Record<string, unknown>).getConfigRevision = vi.fn().mockResolvedValue({
+        id: "revision-1",
+        afterConfig: { adapterType: "claude_local", adapterConfig: { command: "/tmp/payload.sh" } },
+      });
+      (mockAgentService as Record<string, unknown>).rollbackConfigRevision = vi.fn().mockResolvedValue(peer);
+      const app = await createApp(ceoActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/agents/${agentId}/config-revisions/revision-1/rollback`)
+        .send({}));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("adapterConfig.command");
+      expect((mockAgentService as Record<string, any>).rollbackConfigRevision).not.toHaveBeenCalled();
+    });
+
+    it("lets a board user set another agent's host command", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ adapterConfig: { command: "claude" } }));
+
+      expect(res.status).toBe(200);
+      expect(mockAgentService.update).toHaveBeenCalled();
+    });
+  });
+
   it("blocks direct agent creation for authenticated company members without agent create permission", async () => {
     mockAccessService.canUser.mockResolvedValue(false);
 

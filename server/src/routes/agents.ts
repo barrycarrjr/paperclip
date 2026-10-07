@@ -67,7 +67,9 @@ import {
   viewerUserIdForPersonalCheck,
 } from "../services/personal-companies.js";
 import {
+  assertNoAgentHostExecutionMutation,
   assertNoAgentHostWorkspaceCommandMutation,
+  collectAgentAdapterHostExecutionPaths,
   collectAgentAdapterWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -1583,6 +1585,21 @@ export function agentRoutes(
     }
     await assertCanUpdateAgent(req, existing);
 
+    if (req.actor.type === "agent") {
+      // A rollback replaces the whole adapterConfig, so check the snapshot it restores.
+      const revision = await svc.getConfigRevision(id, revisionId);
+      const snapshot = asRecord(revision?.afterConfig);
+      if (snapshot) {
+        assertNoAgentHostExecutionMutation(
+          req,
+          collectAgentAdapterHostExecutionPaths(
+            typeof snapshot.adapterType === "string" ? snapshot.adapterType : existing.adapterType,
+            snapshot.adapterConfig,
+          ),
+        );
+      }
+    }
+
     const actor = getActorInfo(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
       agentId: actor.agentId,
@@ -1687,6 +1704,10 @@ export function agentRoutes(
     assertNoAgentHostWorkspaceCommandMutation(
       req,
       collectAgentAdapterWorkspaceCommandPaths(hireInput.adapterConfig),
+    );
+    assertNoAgentHostExecutionMutation(
+      req,
+      collectAgentAdapterHostExecutionPaths(hireInput.adapterType, hireInput.adapterConfig),
     );
     assertNoAgentInstructionsConfigMutation(
       req,
@@ -1867,6 +1888,10 @@ export function agentRoutes(
     assertNoAgentHostWorkspaceCommandMutation(
       req,
       collectAgentAdapterWorkspaceCommandPaths(createInput.adapterConfig),
+    );
+    assertNoAgentHostExecutionMutation(
+      req,
+      collectAgentAdapterHostExecutionPaths(createInput.adapterType, createInput.adapterConfig),
     );
     assertNoAgentInstructionsConfigMutation(
       req,
@@ -2589,6 +2614,15 @@ export function agentRoutes(
       hasOwn(patchData, "adapterType") ||
       hasOwn(patchData, "adapterConfig");
     if (touchesAdapterConfiguration) {
+      const hostExecutionPaths = collectAgentAdapterHostExecutionPaths(
+        requestedAdapterType,
+        hasOwn(patchData, "adapterConfig") ? patchData.adapterConfig : {},
+      );
+      // Switching an agent to the process adapter would run its kept config as a host command.
+      if (requestedAdapterType === "process" && existing.adapterType !== "process") {
+        hostExecutionPaths.push("adapterType");
+      }
+      assertNoAgentHostExecutionMutation(req, hostExecutionPaths);
       const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
       const changingAdapterType =
         typeof patchData.adapterType === "string" && patchData.adapterType !== existing.adapterType;
