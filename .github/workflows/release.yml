@@ -35,6 +35,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+      actions: write
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
 
@@ -85,6 +86,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_REMOTE: origin
         run: ./scripts/create-github-release.sh "${TAG#v}"
+
+      # The Docker workflow's own tag trigger never fires for a release: the
+      # tagged notes commit says [skip ci]. A workflow_dispatch is not skipped.
+      - name: Start the Docker image build for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docker.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
 
 # --- Upstream npm release workflow, disabled on this fork (see the note above) ---
 #
