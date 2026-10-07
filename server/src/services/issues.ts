@@ -1635,6 +1635,33 @@ export function issueService(db: Db) {
     }
   }
 
+  // A task's project and goal must belong to the task's own company; other
+  // readers load them by id alone and would show another company's details.
+  async function assertIssueProjectAndGoalInCompany(
+    companyId: string,
+    refs: { projectId?: string | null; goalId?: string | null },
+    dbOrTx: any = db,
+  ) {
+    if (refs.projectId) {
+      const project = await dbOrTx
+        .select({ companyId: projects.companyId })
+        .from(projects)
+        .where(eq(projects.id, refs.projectId))
+        .then((rows: Array<{ companyId: string }>) => rows[0] ?? null);
+      if (!project) throw notFound("Project not found");
+      if (project.companyId !== companyId) throw unprocessable("Project must belong to same company");
+    }
+    if (refs.goalId) {
+      const goal = await dbOrTx
+        .select({ companyId: goals.companyId })
+        .from(goals)
+        .where(eq(goals.id, refs.goalId))
+        .then((rows: Array<{ companyId: string }>) => rows[0] ?? null);
+      if (!goal) throw notFound("Goal not found");
+      if (goal.companyId !== companyId) throw unprocessable("Goal must belong to same company");
+    }
+  }
+
   async function isTreeHoldInteractionCheckoutAllowed(
     companyId: string,
     checkoutRunId: string | null,
@@ -2693,6 +2720,10 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
+      await assertIssueProjectAndGoalInCompany(companyId, {
+        projectId: issueData.projectId,
+        goalId: issueData.goalId,
+      });
       return db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
@@ -2939,6 +2970,11 @@ export function issueService(db: Db) {
       if (issueData.assigneeUserId) {
         await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
       }
+      await assertIssueProjectAndGoalInCompany(
+        existing.companyId,
+        { projectId: issueData.projectId, goalId: issueData.goalId },
+        dbOrTx,
+      );
       const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
       const nextProjectWorkspaceId =
         issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;

@@ -94,6 +94,8 @@ The following upstream changes were ported locally on 2026-10-03:
 | `57a7da81e` | Signing keys also depend on the instance ID, and tokens carry `instance_id`. New tokens cannot downgrade to master-key verification. |
 | `05bcd3ce8` | Plugin entities, logs, job runs, and webhook deliveries have company foreign keys with cascading deletion. Entity lookups, upserts, and filtered lists use tenant scope. |
 | `582911ba74` (ported 2026-10-07) | Creating a human invitation requires `joins:approve` and `users:manage_permissions` whenever the invited role carries them, so an Admin cannot invite an Owner. The upstream widening of the Operator preset was not taken. |
+| `a1ab55a56d` (adapted 2026-10-07) | An agent key cannot set another agent's `command`, `args`, `extraArgs`, `hermesCommand`, `filesystemSandboxCommand`, non-`secret_ref` env values, or any `process` adapter config, on hire, create, update or config rollback, and cannot switch an agent to the `process` adapter. Board users still can. Binding a secret with `secret_ref` stays allowed. Upstream's default agent permission widening was not taken. |
+| `3a726e676f` (incidental, 2026-10-07) | A task's project and goal must belong to the task's company, on create and update. Before this, a foreign project ID was saved and its name, status and goal showed on the task. |
 
 For compatibility, pre-upgrade JWTs lacking `instance_id` can still use the old
 master signature. After the longest previously configured token TTL has elapsed

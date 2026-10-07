@@ -2282,3 +2282,76 @@ describeEmbeddedPostgres("issueService.clearExecutionRunIfTerminal", () => {
     expect(row).toEqual({ executionRunId: null, executionLockedAt: null });
   });
 });
+
+describeEmbeddedPostgres("issueService project and goal company checks", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issues-company-refs-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+    await ensureIssueRelationsTable(db);
+  }, 90_000);
+
+  afterEach(async () => {
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(projects);
+    await db.delete(goals);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function seedCompany() {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const goalId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({ id: projectId, companyId, name: "Project", status: "in_progress" });
+    await db.insert(goals).values({ id: goalId, companyId, title: "Goal", level: "task", status: "active" });
+    return { companyId, projectId, goalId };
+  }
+
+  it("rejects creating a task in another company's project or goal", async () => {
+    const own = await seedCompany();
+    const other = await seedCompany();
+
+    await expect(svc.create(own.companyId, { title: "Probe", projectId: other.projectId }))
+      .rejects.toMatchObject({ status: 422, message: "Project must belong to same company" });
+    await expect(svc.create(own.companyId, { title: "Probe", goalId: other.goalId }))
+      .rejects.toMatchObject({ status: 422, message: "Goal must belong to same company" });
+    expect(await db.select().from(issues)).toHaveLength(0);
+  });
+
+  it("rejects moving a task into another company's project or goal", async () => {
+    const own = await seedCompany();
+    const other = await seedCompany();
+    const issue = await svc.create(own.companyId, { title: "Task", projectId: own.projectId });
+
+    await expect(svc.update(issue.id, { projectId: other.projectId }))
+      .rejects.toMatchObject({ status: 422, message: "Project must belong to same company" });
+    await expect(svc.update(issue.id, { goalId: other.goalId }))
+      .rejects.toMatchObject({ status: 422, message: "Goal must belong to same company" });
+    const row = await db.select().from(issues).where(eq(issues.id, issue.id)).then((rows) => rows[0]);
+    expect(row?.projectId).toBe(own.projectId);
+  });
+
+  it("still accepts the task's own company's project and goal", async () => {
+    const own = await seedCompany();
+
+    const issue = await svc.create(own.companyId, { title: "Task", projectId: own.projectId, goalId: own.goalId });
+
+    expect(issue.projectId).toBe(own.projectId);
+    expect(issue.goalId).toBe(own.goalId);
+  });
+});
