@@ -93,6 +93,7 @@ The following upstream changes were ported locally on 2026-10-03:
 | `70357b961` | Agent JWTs use a company-derived HMAC signing key. The fork retains human tool-session attribution and its 48-hour default TTL. |
 | `57a7da81e` | Signing keys also depend on the instance ID, and tokens carry `instance_id`. New tokens cannot downgrade to master-key verification. |
 | `05bcd3ce8` | Plugin entities, logs, job runs, and webhook deliveries have company foreign keys with cascading deletion. Entity lookups, upserts, and filtered lists use tenant scope. |
+| `582911ba74` (ported 2026-10-07) | Creating a human invitation requires `joins:approve` and `users:manage_permissions` whenever the invited role carries them, so an Admin cannot invite an Owner. The upstream widening of the Operator preset was not taken. |
 
 For compatibility, pre-upgrade JWTs lacking `instance_id` can still use the old
 master signature. After the longest previously configured token TTL has elapsed

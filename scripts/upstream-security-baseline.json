@@ -1,10 +1,11 @@
 {
-  "reviewedAt": "2026-10-03",
-  "upstreamCommit": "2a8a99e4a5f69aa803b3f10b982f583e75a87042",
+  "reviewedAt": "2026-10-07",
+  "upstreamCommit": "fd8c6b920ae5968f7609566dece131a2d712bfa7",
   "ports": [
     { "commit": "1cfed0c0f", "change": "256-bit invite tokens and per-IP invite rate limiting" },
     { "commit": "70357b961", "change": "Per-company agent JWT signing keys, retaining the fork's 48-hour TTL and user attribution" },
     { "commit": "57a7da81e", "change": "Per-instance JWT keys and configurable legacy fallback" },
-    { "commit": "05bcd3ce8", "change": "Company foreign keys and tenant-aware plugin entity uniqueness" }
+    { "commit": "05bcd3ce8", "change": "Company foreign keys and tenant-aware plugin entity uniqueness" },
+    { "commit": "398cf7cbb", "change": "Invitations cannot grant joins:approve or users:manage_permissions the inviter lacks (from upstream 582911ba74, without its Operator preset widening)" }
   ]
 }
