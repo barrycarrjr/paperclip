@@ -425,6 +425,60 @@ describe("instance settings routes", () => {
     expect(mockLogActivity).toHaveBeenCalledTimes(2);
   });
 
+  it("logs the previous and new run-permission defaults to every company", async () => {
+    mockInstanceSettingsService.getAgentDefaults.mockResolvedValue({
+      defaultModelByAdapterType: {},
+      skipPermissionsByAdapterType: { claude_local: true },
+    });
+    mockInstanceSettingsService.updateAgentDefaults.mockResolvedValue({
+      id: "instance-settings-1",
+      agentDefaults: {
+        defaultModelByAdapterType: {},
+        skipPermissionsByAdapterType: { claude_local: false },
+      },
+    });
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings/agent-defaults")
+      .send({ skipPermissionsByAdapterType: { claude_local: false, codex_local: null } });
+
+    expect(res.status).toBe(200);
+    expect(mockInstanceSettingsService.updateAgentDefaults).toHaveBeenCalledWith({
+      skipPermissionsByAdapterType: { claude_local: false, codex_local: null },
+    });
+    expect(mockLogActivity).toHaveBeenCalledTimes(2);
+    expect(mockLogActivity.mock.calls[0][1]).toMatchObject({
+      action: "instance.settings.agent_defaults_updated",
+      details: {
+        previous: { skipPermissionsByAdapterType: { claude_local: true } },
+        agentDefaults: { skipPermissionsByAdapterType: { claude_local: false } },
+      },
+    });
+  });
+
+  it("rejects agent callers from changing run-permission defaults", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings/agent-defaults")
+      .send({ skipPermissionsByAdapterType: { claude_local: true } });
+
+    expect(res.status).toBe(403);
+    expect(mockInstanceSettingsService.updateAgentDefaults).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
   it("allows non-admin org members to read agent defaults", async () => {
     const app = await createApp({
       type: "board",

@@ -5,6 +5,7 @@ import {
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
   createCompanySchema,
+  patchCompanyAgentDefaultsSchema,
   updateCompanyBrandingSchema,
   updateCompanySchema,
 } from "@paperclipai/shared";
@@ -19,6 +20,7 @@ import {
   accessService,
   agentService,
   budgetService,
+  companyAgentDefaultsService,
   companyPortabilityService,
   companyService,
   logActivity,
@@ -287,6 +289,48 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     }
     res.status(201).json(company);
   });
+
+  router.get("/:companyId/agent-defaults", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    res.json(await companyAgentDefaultsService(db).get(companyId));
+  });
+
+  // Company defaults change what many agents may do at once, so only a board
+  // user may set them (never an agent or tool session), and every change is
+  // logged with the before and after values.
+  router.patch(
+    "/:companyId/agent-defaults",
+    validate(patchCompanyAgentDefaultsSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertBoard(req);
+      assertCompanyAccess(req, companyId);
+      const existingCompany = await svc.getById(companyId);
+      if (!existingCompany) {
+        res.status(404).json({ error: "Company not found" });
+        return;
+      }
+      const { previous, next } = await companyAgentDefaultsService(db).update(companyId, req.body);
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.agent_defaults_updated",
+        entityType: "company",
+        entityId: companyId,
+        details: {
+          previous,
+          agentDefaults: next,
+          changedKeys: Object.keys(req.body).sort(),
+        },
+      });
+      res.json(next);
+    },
+  );
 
   router.patch("/:companyId", async (req, res) => {
     const companyId = req.params.companyId as string;

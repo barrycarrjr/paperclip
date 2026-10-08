@@ -1,5 +1,7 @@
 import type {
   Company,
+  CompanyAgentDefaults,
+  PatchCompanyAgentDefaults,
   CompanyPortabilityExportRequest,
   CompanyPortabilityExportPreviewResult,
   CompanyPortabilityExportResult,
@@ -40,6 +42,10 @@ export const companiesApi = {
   ) => api.patch<Company>(`/companies/${companyId}`, data),
   updateBranding: (companyId: string, data: UpdateCompanyBranding) =>
     api.patch<Company>(`/companies/${companyId}/branding`, data),
+  getAgentDefaults: (companyId: string) =>
+    api.get<CompanyAgentDefaults>(`/companies/${companyId}/agent-defaults`),
+  updateAgentDefaults: (companyId: string, patch: PatchCompanyAgentDefaults) =>
+    api.patch<CompanyAgentDefaults>(`/companies/${companyId}/agent-defaults`, patch),
   archive: (companyId: string) => api.post<Company>(`/companies/${companyId}/archive`, {}),
   remove: (companyId: string) => api.delete<{ ok: true }>(`/companies/${companyId}`),
   exportBundle: (

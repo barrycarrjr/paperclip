@@ -19,6 +19,8 @@ import { environmentsApi } from "../api/environments";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { secretsApi } from "../api/secrets";
 import { queryKeys } from "../lib/queryKeys";
+import { RunPermissionDefaultsEditor } from "../components/RunPermissionDefaults";
+import { resolveAgentSkipPermissions } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { Settings, Check, Download, Upload, History } from "lucide-react";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
@@ -254,6 +256,34 @@ export function CompanySettings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     }
+  });
+
+  const companyAgentDefaultsQuery = useQuery({
+    queryKey: selectedCompanyId
+      ? queryKeys.companies.agentDefaults(selectedCompanyId)
+      : ["companies", "none", "agent-defaults"],
+    queryFn: () => companiesApi.getAgentDefaults(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId),
+  });
+  const instanceAgentDefaultsQuery = useQuery({
+    queryKey: queryKeys.instance.agentDefaults,
+    queryFn: () => instanceSettingsApi.getAgentDefaults(),
+  });
+  const agentDefaultsMutation = useMutation({
+    mutationFn: (patch: Parameters<typeof companiesApi.updateAgentDefaults>[1]) =>
+      companiesApi.updateAgentDefaults(selectedCompanyId!, patch),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.companies.agentDefaults(selectedCompanyId!),
+      });
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Could not save run permission default",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
+    },
   });
 
   const inviteMutation = useMutation({
@@ -1141,6 +1171,45 @@ export function CompanySettings() {
             onChange={(v) => settingsMutation.mutate(v)}
             toggleTestId="company-settings-team-approval-toggle"
           />
+        </div>
+      </div>
+
+      {/* Run permissions */}
+      <div className="space-y-4" data-testid="company-settings-run-permissions-section">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Run permissions
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          <p className="text-xs text-muted-foreground">
+            Whether this company's agents skip permission prompts (Codex: bypass approvals and
+            sandbox). Agents that set their own value keep it. Only board users can change this,
+            and each change is recorded in the activity log.
+          </p>
+          {companyAgentDefaultsQuery.error ? (
+            <div className="text-xs text-destructive">
+              {companyAgentDefaultsQuery.error instanceof Error
+                ? companyAgentDefaultsQuery.error.message
+                : "Failed to load run permission defaults."}
+            </div>
+          ) : (
+            <RunPermissionDefaultsEditor
+              values={companyAgentDefaultsQuery.data?.skipPermissionsByAdapterType ?? {}}
+              inherited={(adapterType) => {
+                const resolved = resolveAgentSkipPermissions({
+                  adapterType,
+                  adapterConfig: {},
+                  instanceDefaults: instanceAgentDefaultsQuery.data ?? null,
+                });
+                return { value: resolved?.skipPermissions ?? true, source: resolved?.source ?? "code" };
+              }}
+              inheritedLabel="Use instance setting"
+              onChange={(adapterType, value) =>
+                agentDefaultsMutation.mutate({ skipPermissionsByAdapterType: { [adapterType]: value } })
+              }
+              disabled={agentDefaultsMutation.isPending || companyAgentDefaultsQuery.isLoading}
+              testIdPrefix="company-run-permission"
+            />
+          )}
         </div>
       </div>
 

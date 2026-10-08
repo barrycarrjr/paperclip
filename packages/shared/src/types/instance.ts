@@ -118,6 +118,8 @@ export interface InstanceExperimentalSettings {
 
 export interface InstanceAgentDefaults {
   defaultModelByAdapterType: Record<string, string>;
+  /** Run-permission default per adapter type; see agent-permission-defaults.ts. */
+  skipPermissionsByAdapterType: Partial<Record<"claude_local" | "codex_local" | "opencode_local", boolean>>;
 }
 
 export interface InstanceSettings {

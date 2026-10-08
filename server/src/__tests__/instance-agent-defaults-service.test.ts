@@ -30,7 +30,7 @@ describe("instanceSettingsService — agent defaults", () => {
 
   it("returns an empty default when nothing has been configured", async () => {
     const result = await svc.getAgentDefaults();
-    expect(result).toEqual({ defaultModelByAdapterType: {} });
+    expect(result).toEqual({ defaultModelByAdapterType: {}, skipPermissionsByAdapterType: {} });
   });
 
   it("persists a default model for an adapter type", async () => {
@@ -39,9 +39,7 @@ describe("instanceSettingsService — agent defaults", () => {
     });
 
     const result = await svc.getAgentDefaults();
-    expect(result).toEqual({
-      defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
-    });
+    expect(result.defaultModelByAdapterType).toEqual({ claude_local: "claude-opus-4-7" });
   });
 
   it("merges a new adapter type into existing defaults instead of replacing", async () => {
@@ -53,7 +51,7 @@ describe("instanceSettingsService — agent defaults", () => {
     });
 
     const result = await svc.getAgentDefaults();
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       defaultModelByAdapterType: {
         claude_local: "claude-opus-4-7",
         codex_local: "gpt-5",
@@ -74,9 +72,7 @@ describe("instanceSettingsService — agent defaults", () => {
     });
 
     const result = await svc.getAgentDefaults();
-    expect(result).toEqual({
-      defaultModelByAdapterType: { codex_local: "gpt-5" },
-    });
+    expect(result.defaultModelByAdapterType).toEqual({ codex_local: "gpt-5" });
   });
 
   it("preserves other settings sections when updating agent defaults", async () => {
@@ -99,8 +95,24 @@ describe("instanceSettingsService — agent defaults", () => {
 
     const fresh = instanceSettingsService(db);
     const result = await fresh.getAgentDefaults();
+    expect(result.defaultModelByAdapterType).toEqual({ claude_local: "claude-opus-4-7" });
+  });
+
+  it("stores, merges and clears run-permission defaults without touching model defaults", async () => {
+    await svc.updateAgentDefaults({
+      defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
+    });
+    await svc.updateAgentDefaults({
+      skipPermissionsByAdapterType: { claude_local: false, codex_local: true },
+    });
+    await svc.updateAgentDefaults({
+      skipPermissionsByAdapterType: { codex_local: null, opencode_local: false },
+    });
+
+    const result = await svc.getAgentDefaults();
     expect(result).toEqual({
       defaultModelByAdapterType: { claude_local: "claude-opus-4-7" },
+      skipPermissionsByAdapterType: { claude_local: false, opencode_local: false },
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   help,
 } from "../../components/agent-config-primitives";
 import { ChoosePathButton } from "../../components/PathInstructionsModal";
+import { RunPermissionField } from "../../components/RunPermissionDefaults";
 import { LocalWorkspaceRuntimeFields } from "../local-workspace-runtime-fields";
 
 const inputClass =
@@ -70,14 +71,8 @@ export function ClaudeLocalConfigFields({
   );
 }
 
-export function ClaudeLocalAdvancedFields({
-  isCreate,
-  values,
-  set,
-  config,
-  eff,
-  mark,
-}: AdapterConfigFieldsProps) {
+export function ClaudeLocalAdvancedFields(props: AdapterConfigFieldsProps) {
+  const { isCreate, values, set, config, eff, mark } = props;
   return (
     <>
       <ToggleField
@@ -94,23 +89,12 @@ export function ClaudeLocalAdvancedFields({
             : mark("adapterConfig", "chrome", v)
         }
       />
-      <ToggleField
+      <RunPermissionField
         label="Skip permissions"
         hint={help.dangerouslySkipPermissions}
-        checked={
-          isCreate
-            ? values!.dangerouslySkipPermissions
-            : eff(
-                "adapterConfig",
-                "dangerouslySkipPermissions",
-                config.dangerouslySkipPermissions !== false,
-              )
-        }
-        onChange={(v) =>
-          isCreate
-            ? set!({ dangerouslySkipPermissions: v })
-            : mark("adapterConfig", "dangerouslySkipPermissions", v)
-        }
+        configKey="dangerouslySkipPermissions"
+        createValueKey="dangerouslySkipPermissions"
+        props={props}
       />
       <Field label="Max turns per run" hint={help.maxTurnsPerRun}>
         {isCreate ? (

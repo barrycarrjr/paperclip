@@ -51,4 +51,16 @@ describe("buildCodexLocalConfig", () => {
       dangerouslyBypassApprovalsAndSandbox: true,
     });
   });
+
+  it("leaves the bypass flag unset when none was chosen, so the agent inherits the default", () => {
+    const config = buildCodexLocalConfig(makeValues({ dangerouslyBypassSandbox: undefined }));
+
+    expect(config).not.toHaveProperty("dangerouslyBypassApprovalsAndSandbox");
+  });
+
+  it("keeps an explicit off choice", () => {
+    const config = buildCodexLocalConfig(makeValues({ dangerouslyBypassSandbox: false }));
+
+    expect(config.dangerouslyBypassApprovalsAndSandbox).toBe(false);
+  });
 });

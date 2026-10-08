@@ -567,10 +567,12 @@ export interface CreateConfigValues {
   model: string;
   thinkingEffort: string;
   chrome: boolean;
-  dangerouslySkipPermissions: boolean;
+  /** Unset means the agent inherits the company or instance default. */
+  dangerouslySkipPermissions?: boolean;
   search: boolean;
   fastMode: boolean;
-  dangerouslyBypassSandbox: boolean;
+  /** Unset means the agent inherits the company or instance default. */
+  dangerouslyBypassSandbox?: boolean;
   command: string;
   args: string;
   extraArgs: string;
