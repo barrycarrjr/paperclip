@@ -5,6 +5,14 @@
 Fork releases are GitHub-only. Nothing is published to npm. Everything below
 "Upstream" is upstream's npm process and does not apply to this fork.
 
+Merged pull requests release themselves: `.github/workflows/auto-release.yml`
+writes short notes from the pull request, tags the next free version and runs
+the Release workflow. Branch protection stops that job pushing to master, so
+its notes file lives only in the tag's commit, not on master. Do not release a
+merged pull request by hand as well. Use the steps below for direct pushes to
+master, for bot pull requests (lockfile refresh), or to replace automatic notes
+with fuller ones (edit the notes, then step 8).
+
 1. Push the code first: `git push origin master`. Users' Update button picks it up from master as soon as it is there.
 2. Pick the version: today's UTC date as `vYYYY.MDD.P`, with P the next free number. Check with `git ls-remote --tags origin 'vYYYY.MDD.*'`.
 3. Write `releases/vYYYY.MDD.P.md` in the same shape as the previous one.

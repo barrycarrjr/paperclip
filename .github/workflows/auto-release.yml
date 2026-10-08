@@ -1,0 +1,96 @@
+name: Auto release
+
+# Publishes a release every time a pull request is merged into master, so a
+# merge never sits unreleased. Direct pushes to master (no pull request) are
+# not released here, and neither are pull requests opened by a bot (the
+# lockfile refresh); release those by hand with doc/RELEASING.md.
+#
+# Branch protection on master needs a review for every change, so this job
+# cannot push the notes file to master. Instead it commits the notes on top of
+# the merged commit, tags that commit, and pushes only the tag. The tagged
+# code is exactly what was merged; the notes file lives in the tag, not on
+# master.
+#
+# A tag pushed with the workflow token starts no other workflow, so this job
+# starts the Release workflow itself, which typechecks, builds, publishes the
+# GitHub Release and starts the Docker image build.
+
+on:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Find the merged pull request for this commit
+        id: pr
+        run: |
+          number="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[] | select(.merged_at != null and .base.ref == "master" and .user.type != "Bot")][0].number // empty')"
+          if [ -z "$number" ]; then
+            echo "No merged pull request for $GITHUB_SHA; a direct push is released by hand."
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the merged commit
+        if: steps.pr.outputs.number != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if this commit is already released
+        if: steps.pr.outputs.number != ''
+        id: check
+        run: |
+          git fetch --tags --quiet origin
+          if git tag --list 'v*' --contains "$GITHUB_SHA" | grep -q .; then
+            echo "A release tag already contains $GITHUB_SHA."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.pr.outputs.number != '' && steps.check.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Write the release notes
+        if: steps.pr.outputs.number != '' && steps.check.outputs.skip != 'true'
+        id: notes
+        run: |
+          gh pr view "${{ steps.pr.outputs.number }}" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,author,closingIssuesReferences > "$RUNNER_TEMP/pr.json"
+          git ls-remote --tags origin 'v*' | awk '{print $2}' > "$RUNNER_TEMP/tags.txt"
+          tag="$(node scripts/auto-release.mjs "$RUNNER_TEMP/pr.json" "$RUNNER_TEMP/tags.txt")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          cat "releases/$tag.md"
+
+      - name: Commit the notes and push the tag
+        if: steps.pr.outputs.number != '' && steps.check.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.notes.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "releases/$TAG.md"
+          git commit -m "docs(release): add $TAG notes [skip ci]"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Start the Release workflow for the tag
+        if: steps.pr.outputs.number != '' && steps.check.outputs.skip != 'true'
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" -f tag="${{ steps.notes.outputs.tag }}"
