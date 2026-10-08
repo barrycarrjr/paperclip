@@ -108,16 +108,14 @@ import {
   indexHoldsBySource,
 } from "../lib/email-agent-holds";
 import {
-  EMAIL_LIST_VIEW_LABEL,
   EMAIL_LIST_VIEW_STORAGE_KEY,
-  EMAIL_LIST_VIEWS,
   EMAIL_SHOW_ALL_STORAGE_KEY,
   emptyListMessage,
   initialEmailListView,
   listViewShowsAllMail,
   type EmailListView,
 } from "../lib/email-list-view";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmailListViewTabs } from "../components/email/EmailListViewTabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
 import { useEmailBulkSelection } from "../components/email/useEmailBulkSelection";
@@ -2125,27 +2123,11 @@ export function Email() {
    * knowing whether anything is out there at all without opening it.
    */
   const listViewTabs = (
-    <div className="px-2 py-1.5 border-b border-border shrink-0 overflow-hidden">
-      <Tabs value={listView} onValueChange={(v) => chooseListView(v as EmailListView)}>
-        {/* Each tab keeps its own text on one line, which makes it as wide as
-            its longest word by default and lets the three of them paint out
-            over the mailbox column beside them when the column is narrow.
-            `min-w-0` lets a tab give way instead, and the label then cuts
-            short with three dots inside its own tab. */}
-        <TabsList className="w-full min-w-0">
-          {EMAIL_LIST_VIEWS.map((view) => (
-            <TabsTrigger key={view} value={view} className="min-w-0 text-xs">
-              <span className="truncate">{EMAIL_LIST_VIEW_LABEL[view]}</span>
-              {view === "agents" && agentHolds.length > 0 && (
-                <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
-                  {agentHolds.length}
-                </span>
-              )}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-    </div>
+    <EmailListViewTabs
+      value={listView}
+      onChange={chooseListView}
+      agentHoldCount={agentHolds.length}
+    />
   );
 
   // The messages behind the count on the bar, in the order they are on
