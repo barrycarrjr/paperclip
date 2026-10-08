@@ -47,7 +47,7 @@ The token never appears in logs or API responses, and the submit is synchronous 
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
 | `maxTurnsPerRun` | number | No | Max agentic turns per heartbeat (defaults to `300`) |
-| `dangerouslySkipPermissions` | boolean | No | Skip permission prompts (default: `true`); required for headless runs where interactive approval is impossible |
+| `dangerouslySkipPermissions` | boolean | No | Skip permission prompts; required for headless runs where interactive approval is impossible. When unset, the agent inherits the company default, then the instance default (Instance Settings > Agent defaults), then `true`. |
 
 ## Prompt Templates
 

@@ -263,6 +263,7 @@ Runs local `claude` CLI directly.
 - Base command: `claude --print <prompt> --output-format json`
 - Resume: add `--resume <sessionId>` when runtime state has session ID
 - Unsandboxed mode: add `--dangerously-skip-permissions` when enabled
+- Run-permission inheritance: when `dangerouslySkipPermissions` is not a boolean on the agent, the server fills it in before the run from the company default (`GET/PATCH /api/companies/:companyId/agent-defaults`), else the instance default (`skipPermissionsByAdapterType` in `/api/instance/settings/agent-defaults`), else `true`. The same applies to `codex_local` (`dangerouslyBypassApprovalsAndSandbox`) and `opencode_local`. Only board users can change the company default and only instance admins the instance default; agents cannot change either, and each change is written to the activity log.
 
 ### Output parsing
 
