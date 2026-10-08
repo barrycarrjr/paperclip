@@ -112,6 +112,7 @@ export function instanceSettingsRoutes(db: Db) {
     validate(patchInstanceAgentDefaultsSchema),
     async (req, res) => {
       assertCanManageInstanceSettings(req);
+      const previous = await svc.getAgentDefaults();
       const updated = await svc.updateAgentDefaults(req.body);
       const actor = getActorInfo(req);
       const companyIds = await svc.listCompanyIds();
@@ -127,6 +128,7 @@ export function instanceSettingsRoutes(db: Db) {
             entityType: "instance_settings",
             entityId: updated.id,
             details: {
+              previous,
               agentDefaults: updated.agentDefaults,
               changedKeys: Object.keys(req.body).sort(),
             },

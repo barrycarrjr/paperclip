@@ -20,6 +20,8 @@ export const queryKeys = {
     stats: ["companies", "stats"] as const,
     exportFidelity: (companyId: string) =>
       ["companies", companyId, "export-fidelity"] as const,
+    agentDefaults: (companyId: string) =>
+      ["companies", companyId, "agent-defaults"] as const,
   },
   apps: {
     gallery: (companyId: string) => ["apps", companyId, "gallery"] as const,

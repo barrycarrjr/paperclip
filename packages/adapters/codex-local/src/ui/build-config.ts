@@ -1,8 +1,5 @@
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
-import {
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL,
-} from "../index.js";
+import { DEFAULT_CODEX_LOCAL_MODEL } from "../index.js";
 
 function parseCommaArgs(value: string): string[] {
   return value
@@ -86,10 +83,10 @@ export function buildCodexLocalConfig(v: CreateConfigValues): Record<string, unk
   if (Object.keys(env).length > 0) ac.env = env;
   ac.search = v.search;
   ac.fastMode = v.fastMode;
-  ac.dangerouslyBypassApprovalsAndSandbox =
-    typeof v.dangerouslyBypassSandbox === "boolean"
-      ? v.dangerouslyBypassSandbox
-      : DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
+  // Left unset unless chosen, so the agent inherits the company or instance default.
+  if (typeof v.dangerouslyBypassSandbox === "boolean") {
+    ac.dangerouslyBypassApprovalsAndSandbox = v.dangerouslyBypassSandbox;
+  }
   if (v.workspaceStrategyType === "git_worktree") {
     ac.workspaceStrategy = {
       type: "git_worktree",

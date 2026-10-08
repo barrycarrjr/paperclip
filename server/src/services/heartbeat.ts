@@ -101,6 +101,7 @@ import {
   resolveExecutionWorkspaceMode,
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { companyAgentDefaultsService } from "./company-agent-defaults.js";
 import { resolveAgentModelForRun } from "./resolve-agent-model.js";
 import {
   RECOVERY_ORIGIN_KINDS,
@@ -2103,6 +2104,7 @@ export interface HeartbeatServiceOptions {
 
 export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) {
   const instanceSettings = instanceSettingsService(db);
+  const companyAgentDefaults = companyAgentDefaultsService(db);
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
   });
@@ -5063,6 +5065,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (resolvedAgentModel.length > 0) {
       config.model = resolvedAgentModel;
     }
+    // Agents that leave "skip permissions" unset inherit the company default,
+    // then the instance default, then the adapter's code default.
+    await companyAgentDefaults.applyRunPermissionDefault({
+      companyId: agent.companyId,
+      adapterType: agent.adapterType,
+      config,
+      instanceAgentDefaults,
+    });
     const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,

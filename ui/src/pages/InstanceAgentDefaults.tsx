@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import { ModelPicker } from "@/components/ModelPicker";
 import { SavedModelNotice } from "@/components/SavedModelNotice";
 import { useAdapterModelRefresh } from "@/hooks/useAdapterModelRefresh";
+import { RunPermissionDefaultsEditor } from "@/components/RunPermissionDefaults";
+import { AGENT_PERMISSION_CODE_DEFAULT } from "@paperclipai/shared";
 
 // opencode_local agents must specify a model — the "Default" affordance never
 // applies, so a configured default for it would be dead config. Hide it from
@@ -97,6 +99,7 @@ export function InstanceAgentDefaults() {
   }
 
   const defaults = defaultsQuery.data?.defaultModelByAdapterType ?? {};
+  const skipPermissionDefaults = defaultsQuery.data?.skipPermissionsByAdapterType ?? {};
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -124,6 +127,33 @@ export function InstanceAgentDefaults() {
           instance-wide; the picker just needs a company context to discover models.
         </div>
       )}
+
+      <section
+        className="rounded-xl border border-border bg-card p-4 space-y-3"
+        data-testid="instance-run-permission-defaults"
+      >
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold">Run permissions</h2>
+          <p className="text-xs text-muted-foreground">
+            Whether agents skip permission prompts (Codex: bypass approvals and sandbox). Applies to
+            every agent that has not set its own value, unless its company sets a different default.
+            Each change is recorded in every company's activity log.
+          </p>
+        </div>
+        <RunPermissionDefaultsEditor
+          values={skipPermissionDefaults}
+          inherited={(adapterType) => ({
+            value: AGENT_PERMISSION_CODE_DEFAULT[adapterType],
+            source: "code",
+          })}
+          inheritedLabel="No instance default"
+          onChange={(adapterType, value) =>
+            updateMutation.mutate({ skipPermissionsByAdapterType: { [adapterType]: value } })
+          }
+          disabled={updateMutation.isPending}
+          testIdPrefix="instance-run-permission"
+        />
+      </section>
 
       {visibleAdapters.length === 0 ? (
         <div className="rounded-md border border-border bg-card px-3 py-4 text-sm text-muted-foreground">

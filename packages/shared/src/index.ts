@@ -1413,6 +1413,7 @@ export {
 } from "./types/issue.js";
 
 export * from "./connection-intent-guidance.js";
+export * from "./agent-permission-defaults.js";
 
 export type { ExecutionContinuationEnvelope } from "./types/execution-continuation.js";
 export type { ExecutionProjection, ExecutionReconciliation, ExecutionBlocker } from "./types/execution-projection.js";

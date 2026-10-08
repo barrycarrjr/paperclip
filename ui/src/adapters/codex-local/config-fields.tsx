@@ -6,6 +6,7 @@ import {
   help,
 } from "../../components/agent-config-primitives";
 import { ChoosePathButton } from "../../components/PathInstructionsModal";
+import { RunPermissionField } from "../../components/RunPermissionDefaults";
 import { LocalWorkspaceRuntimeFields } from "../local-workspace-runtime-fields";
 import {
   CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS,
@@ -18,20 +19,19 @@ const inputClass =
 const instructionsFileHint =
   "Absolute path to a markdown file (e.g. AGENTS.md) that defines this agent's behavior. Injected into the system prompt at runtime. Note: Codex may still auto-apply repo-scoped AGENTS.md files from the workspace.";
 
-export function CodexLocalConfigFields({
-  mode,
-  isCreate,
-  adapterType,
-  values,
-  set,
-  config,
-  eff,
-  mark,
-  models,
-  hideInstructionsFile,
-}: AdapterConfigFieldsProps) {
-  const bypassEnabled =
-    config.dangerouslyBypassApprovalsAndSandbox === true || config.dangerouslyBypassSandbox === true;
+export function CodexLocalConfigFields(props: AdapterConfigFieldsProps) {
+  const {
+    mode,
+    isCreate,
+    adapterType,
+    values,
+    set,
+    config,
+    eff,
+    mark,
+    models,
+    hideInstructionsFile,
+  } = props;
   const fastModeEnabled = isCreate
     ? Boolean(values!.fastMode)
     : eff("adapterConfig", "fastMode", Boolean(config.fastMode));
@@ -75,23 +75,12 @@ export function CodexLocalConfigFields({
           </div>
         </Field>
       )}
-      <ToggleField
+      <RunPermissionField
         label="Bypass sandbox"
         hint={help.dangerouslyBypassSandbox}
-        checked={
-          isCreate
-            ? values!.dangerouslyBypassSandbox
-            : eff(
-                "adapterConfig",
-                "dangerouslyBypassApprovalsAndSandbox",
-                bypassEnabled,
-              )
-        }
-        onChange={(v) =>
-          isCreate
-            ? set!({ dangerouslyBypassSandbox: v })
-            : mark("adapterConfig", "dangerouslyBypassApprovalsAndSandbox", v)
-        }
+        configKey="dangerouslyBypassApprovalsAndSandbox"
+        createValueKey="dangerouslyBypassSandbox"
+        props={props}
       />
       <ToggleField
         label="Enable search"

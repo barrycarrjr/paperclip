@@ -6,6 +6,7 @@ import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   DEFAULT_SELF_NOTIFY_SETTINGS,
   instanceAgentDefaultsSchema,
+  mergeSkipPermissionsByAdapterType,
   instanceGeneralSettingsSchema,
   type InstanceAgentDefaults,
   type InstanceGeneralSettings,
@@ -82,9 +83,10 @@ function normalizeAgentDefaults(raw: unknown): InstanceAgentDefaults {
   if (parsed.success) {
     return {
       defaultModelByAdapterType: parsed.data.defaultModelByAdapterType ?? {},
+      skipPermissionsByAdapterType: parsed.data.skipPermissionsByAdapterType ?? {},
     };
   }
-  return { defaultModelByAdapterType: {} };
+  return { defaultModelByAdapterType: {}, skipPermissionsByAdapterType: {} };
 }
 
 function toInstanceSettings(row: typeof instanceSettings.$inferSelect): InstanceSettings {
@@ -202,6 +204,10 @@ export function instanceSettingsService(db: Db) {
           ...currentDefaults.defaultModelByAdapterType,
           ...(patch.defaultModelByAdapterType ?? {}),
         }),
+        skipPermissionsByAdapterType: mergeSkipPermissionsByAdapterType(
+          currentDefaults.skipPermissionsByAdapterType,
+          patch.skipPermissionsByAdapterType,
+        ),
       });
       const now = new Date();
       const [updated] = await db

@@ -89,12 +89,10 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { companyAgentDefaultsService } from "../services/company-agent-defaults.js";
 import { runClaudeLogin, extractClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
 import { runCodexLogin } from "@paperclipai/adapter-codex-local/server";
-import {
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL,
-} from "@paperclipai/adapter-codex-local";
+import { DEFAULT_CODEX_LOCAL_MODEL } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
@@ -709,12 +707,8 @@ export function agentRoutes(
         const gaveUp = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000).unref());
         next.model = (await Promise.race([askedCodex, gaveUp])) ?? DEFAULT_CODEX_LOCAL_MODEL;
       }
-      const hasBypassFlag =
-        typeof next.dangerouslyBypassApprovalsAndSandbox === "boolean" ||
-        typeof next.dangerouslyBypassSandbox === "boolean";
-      if (!hasBypassFlag) {
-        next.dangerouslyBypassApprovalsAndSandbox = DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
-      }
+      // The bypass flag is left unset so the agent inherits the company or
+      // instance default at run time (see company-agent-defaults.ts).
       return ensureGatewayDeviceKey(adapterType, next);
     }
     if (adapterType === "gemini_local" && !asNonEmptyString(next.model)) {
@@ -1050,6 +1044,12 @@ export function agentRoutes(
         companyId,
         normalizedAdapterConfig,
       );
+
+      await companyAgentDefaultsService(db).applyRunPermissionDefault({
+        companyId,
+        adapterType: type,
+        config: runtimeAdapterConfig,
+      });
 
       const result = await adapter.testEnvironment({
         companyId,
@@ -2560,6 +2560,8 @@ export function agentRoutes(
           "cwd",
           "env",
           "dangerouslySkipPermissions",
+          "dangerouslyBypassApprovalsAndSandbox",
+          "dangerouslyBypassSandbox",
           "secretBindings",
           "secrets",
         ] as const;

@@ -25,7 +25,6 @@ import { isValidAdapterType } from "../adapters/metadata";
 import { ReportsToPicker } from "../components/ReportsToPicker";
 import { buildNewAgentHirePayload } from "../lib/new-agent-hire-payload";
 import { useAdapterModelDefault } from "../hooks/useAdapterModelDefault";
-import { DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX } from "@paperclipai/adapter-codex-local";
 
 /**
  * Fresh values for a new agent on this adapter. `model` is the filled-in
@@ -36,12 +35,7 @@ function createValuesForAdapterType(
   model: string,
 ): CreateConfigValues {
   const { adapterType: _discard, ...defaults } = defaultCreateValues;
-  const nextValues: CreateConfigValues = { ...defaults, adapterType, model };
-  if (adapterType === "codex_local") {
-    nextValues.dangerouslyBypassSandbox =
-      DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
-  }
-  return nextValues;
+  return { ...defaults, adapterType, model };
 }
 
 export function NewAgent() {

@@ -11,6 +11,10 @@ import {
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "../types/instance.js";
+import {
+  patchSkipPermissionsByAdapterTypeSchema,
+  skipPermissionsByAdapterTypeSchema,
+} from "../agent-permission-defaults.js";
 
 function presetSchema<T extends readonly number[]>(presets: T, label: string) {
   return z.number().refine(
@@ -98,9 +102,14 @@ export const patchInstanceExperimentalSettingsSchema = instanceExperimentalSetti
 
 export const instanceAgentDefaultsSchema = z.object({
   defaultModelByAdapterType: z.record(z.string().min(1), z.string()).default({}),
+  skipPermissionsByAdapterType: skipPermissionsByAdapterTypeSchema.default({}),
 }).strict();
 
-export const patchInstanceAgentDefaultsSchema = instanceAgentDefaultsSchema.partial();
+export const patchInstanceAgentDefaultsSchema = z.object({
+  defaultModelByAdapterType: z.record(z.string().min(1), z.string()).optional(),
+  /** `null` for an adapter type clears that default. */
+  skipPermissionsByAdapterType: patchSkipPermissionsByAdapterTypeSchema.optional(),
+}).strict();
 
 export const issueGraphLivenessAutoRecoveryRequestSchema = z.object({
   lookbackHours: z

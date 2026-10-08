@@ -677,6 +677,8 @@ describe.sequential("agent permission routes", () => {
     ["cwd", { cwd: "/etc" }],
     ["env", { env: { SECRET: "stolen" } }],
     ["dangerouslySkipPermissions", { dangerouslySkipPermissions: true }],
+    ["dangerouslyBypassApprovalsAndSandbox", { dangerouslyBypassApprovalsAndSandbox: true }],
+    ["dangerouslyBypassSandbox", { dangerouslyBypassSandbox: true }],
     ["secretBindings", { secretBindings: { API_KEY: "secret-uuid" } }],
     ["secrets", { secrets: { API_KEY: "secret-uuid" } }],
   ])("blocks agent-authenticated self-updates that modify adapterConfig.%s", async (field, adapterConfig) => {
