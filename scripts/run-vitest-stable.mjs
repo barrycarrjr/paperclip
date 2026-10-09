@@ -7,6 +7,39 @@ import path from "node:path";
 const repoRoot = process.cwd();
 
 /**
+ * `--part=<non-server|server|serialized>` runs one of the three groups below
+ * on its own, so CI can run them side by side instead of one after another
+ * (together they took 11 to 13 minutes in a row). `--shard=<n>/<of>` splits
+ * the serialized suites further. With neither, everything runs in order, as
+ * it always has.
+ */
+const PARTS = ["all", "non-server", "server", "serialized"];
+const partArg = process.argv.find((arg) => arg.startsWith("--part="))?.slice("--part=".length) ?? "all";
+const shardArg = process.argv.find((arg) => arg.startsWith("--shard="))?.slice("--shard=".length) ?? null;
+if (!PARTS.includes(partArg)) {
+  console.error(`[test:run] Unknown --part "${partArg}". Expected one of: ${PARTS.join(", ")}.`);
+  process.exit(2);
+}
+let shard = null;
+if (shardArg !== null) {
+  const match = /^(\d+)\/(\d+)$/.exec(shardArg);
+  const index = match ? Number(match[1]) : Number.NaN;
+  const count = match ? Number(match[2]) : Number.NaN;
+  if (!match || count < 1 || index < 1 || index > count) {
+    console.error(`[test:run] --shard must look like 1/2, got "${shardArg}".`);
+    process.exit(2);
+  }
+  if (partArg !== "serialized") {
+    console.error("[test:run] --shard only applies to --part=serialized.");
+    process.exit(2);
+  }
+  shard = { index, count };
+}
+const runsPart = (part) => partArg === "all" || partArg === part;
+/** `--list` prints what would run, one line per Vitest invocation, and runs nothing. */
+const listOnly = process.argv.includes("--list");
+
+/**
  * Spawning pnpm as a child process on Windows takes two accommodations, and
  * missing either one makes `pnpm test:run` — the command that runs the whole
  * suite — impossible to run on a Windows machine at all.
@@ -100,6 +133,10 @@ function isRouteOrAuthzTest(file) {
 }
 
 function runVitest(args, label) {
+  if (listOnly) {
+    console.log(`[test:run] would run: ${label}`);
+    return;
+  }
   console.log(`\n[test:run] ${label}`);
   invocationIndex += 1;
   const testRoot = mkdtempSync(path.join(os.tmpdir(), `paperclip-vitest-${process.pid}-${invocationIndex}-`));
@@ -151,16 +188,30 @@ const routeTests = walk(serverTestsDir)
   .sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 
 const excludeRouteArgs = routeTests.flatMap((file) => ["--exclude", file.serverPath]);
-for (const project of nonServerProjects) {
-  runVitest(["--project", project], `non-server project ${project}`);
+if (runsPart("non-server")) {
+  for (const project of nonServerProjects) {
+    runVitest(["--project", project], `non-server project ${project}`);
+  }
 }
 
-runVitest(
-  ["--project", "@paperclipai/server", ...excludeRouteArgs],
-  `server suites excluding ${routeTests.length} serialized suites`,
-);
+if (runsPart("server")) {
+  runVitest(
+    ["--project", "@paperclipai/server", ...excludeRouteArgs],
+    `server suites excluding ${routeTests.length} serialized suites`,
+  );
+}
 
-for (const routeTest of routeTests) {
+// Round-robin over the sorted list, so each shard gets a similar mix and a
+// file always lands in the same shard.
+const serializedTests = !runsPart("serialized")
+  ? []
+  : shard
+    ? routeTests.filter((_, index) => index % shard.count === shard.index - 1)
+    : routeTests;
+if (shard) {
+  console.log(`\n[test:run] serialized suites, shard ${shard.index}/${shard.count}: ${serializedTests.length} of ${routeTests.length}`);
+}
+for (const routeTest of serializedTests) {
   runVitest(
     [
       "--project",
