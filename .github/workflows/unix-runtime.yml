@@ -1,6 +1,19 @@
 name: macOS and Linux runtime
 on:
+  # On a pull request this runs only when something it exercises changed:
+  # the launchers and build scripts, the runner, or dependencies. The macOS
+  # leg alone took about 14 minutes on every pull request. Every push to
+  # master still runs it in full, and it can be started by hand on any branch.
   pull_request:
+    paths:
+      - "scripts/**"
+      - "packages/paperclip-runner/**"
+      - "packages/paperclip-eval-kernel/**"
+      - "**/package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".npmrc"
+      - ".github/workflows/unix-runtime.yml"
   push:
     branches: [master]
   workflow_dispatch:

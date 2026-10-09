@@ -90,17 +90,64 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Run tests
-        run: pnpm test:run
+      - name: Check the test split
+        run: node --test scripts/run-vitest-stable.test.mjs
 
-      - name: Build
-        run: pnpm build
-
+      # The tests run in the `tests` job, side by side. There is no separate
+      # build step: release.sh runs `pnpm build` itself, so a build here
+      # built everything twice.
       - name: Release canary dry run
         run: |
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
+
+  # The suite in four parts at once instead of one after another (11 to 13
+  # minutes in a row). Together the parts run exactly what `pnpm test:run`
+  # does; scripts/run-vitest-stable.test.mjs checks that.
+  tests:
+    name: tests (${{ matrix.label }})
+    needs: [policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: non-server
+            args: --part=non-server
+          - label: server
+            args: --part=server
+          - label: serialized 1/2
+            args: --part=serialized --shard=1/2
+          - label: serialized 2/2
+            args: --part=serialized --shard=2/2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The server imports the plugin SDK from its built output. In the old
+      # single job, the typecheck step built it before the tests ran.
+      - name: Build what the tests import
+        run: node scripts/ensure-plugin-build-deps.mjs
+
+      - name: Run tests (${{ matrix.label }})
+        run: pnpm run preflight:workspace-links && node scripts/run-vitest-stable.mjs ${{ matrix.args }}
 
   e2e:
     needs: [policy]
