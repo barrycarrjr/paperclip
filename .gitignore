@@ -63,6 +63,8 @@ diagnostics/
 
 # Rust build artifacts (paperclip-launcher)
 tools/paperclip-launcher/target/
+tools/paperclip-menubar/target/
+tools/paperclip-menubar/dist/
 
 # Playwright
 tests/e2e/test-results/

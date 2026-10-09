@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import {
-  parseDialogResult, pickNext, resolveOpenUrl, resolveSettings, runReminderLoop,
+  menuBarHelperActive, parseDialogResult, pickNext, resolveOpenUrl, resolveSettings, runReminderLoop,
 } from "./desktop-reminders.mjs";
 
 test("polls loopback on the configured port and opens the banner address", () => {
@@ -47,7 +50,7 @@ test("an unanswered reminder goes behind the ones not shown yet", () => {
 });
 
 // A fake server queue and desktop, driven through a fixed list of answers.
-function harness(answers, { failAckOnce = false } = {}) {
+function harness(answers, { failAckOnce = false, handledElsewhere } = {}) {
   const queue = [
     { id: "r1", title: "Pay rent", body: "Due today", url: "/calendar" },
     { id: "r2", title: "Call", body: null, url: "https://evil.example/" },
@@ -81,11 +84,40 @@ function harness(answers, { failAckOnce = false } = {}) {
     queue, shown, opened, acked,
     run: () => runReminderLoop({
       settings: { pollBase: "http://127.0.0.1:3100", appUrl: "http://127.0.0.1:3100" },
-      platform, fetchImpl, sleep: async () => {},
+      platform, fetchImpl, sleep: async () => {}, handledElsewhere,
       isStopped: () => polls >= 8 || (queue.length === 0 && answers.length === 0),
     }),
   };
 }
+
+test("stays quiet while the menu-bar helper shows reminders for the same server", async () => {
+  let passes = 0;
+  // The helper is up for three passes, then quits.
+  const h = harness([{ answered: true, open: false }, { answered: true, open: false }], {
+    handledElsewhere: () => ++passes <= 3,
+  });
+  await h.run();
+  assert.ok(passes > 3);
+  assert.deepEqual(h.shown, ["r1", "r2"]);
+  assert.deepEqual(h.acked, ["r1", "r2"]);
+});
+
+test("the menu-bar marker counts only for a live helper on the same server", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "menubar-"));
+  const marker = path.join(dir, "menubar.json");
+  const base = "http://127.0.0.1:3100";
+  try {
+    assert.equal(menuBarHelperActive(marker, base), false, "no marker");
+    writeFileSync(marker, JSON.stringify({ pid: process.pid, pollBase: base }));
+    assert.equal(menuBarHelperActive(marker, base), true);
+    assert.equal(menuBarHelperActive(marker, "http://127.0.0.1:3199"), false, "another server");
+    assert.equal(menuBarHelperActive(marker, base, () => false), false, "helper gone");
+    writeFileSync(marker, "not json");
+    assert.equal(menuBarHelperActive(marker, base), false, "unreadable marker");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("Dismiss and Open acknowledge, and Open stays inside the instance", async () => {
   const h = harness([{ answered: true, open: true }, { answered: true, open: true }]);
