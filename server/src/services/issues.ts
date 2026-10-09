@@ -30,7 +30,14 @@ import {
   projects,
 } from "@paperclipai/db";
 import type { IssueBlockerAttention, IssueRelationIssueSummary } from "@paperclipai/shared";
-import { extractAgentMentionIds, extractProjectMentionIds, isUuidLike, issueExecutionStateSchema } from "@paperclipai/shared";
+import {
+  AGENT_FINDING_ORIGIN_KIND,
+  extractAgentMentionIds,
+  extractProjectMentionIds,
+  isAgentFindingOriginKind,
+  isUuidLike,
+  issueExecutionStateSchema,
+} from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -324,6 +331,61 @@ async function listUnresolvedBlockerIssueIds(
       ),
     )
     .then((rows) => rows.map((row) => row.id));
+}
+
+/**
+ * Refuse a second issue for a finding its reporter already reported.
+ *
+ * Any status counts, and hidden issues count: cancelling or hiding a finding
+ * is how it gets dismissed, and filing it again is exactly the repeat this
+ * exists to stop. A done one is refused too, with a pointer, so the reporter
+ * comments there if the problem is back rather than starting a new thread.
+ *
+ * Keys belong to the reporter (the creating agent, or user), so nobody else
+ * can silence a finding by filing its key first and cancelling it.
+ *
+ * The advisory lock makes check-then-insert safe when two runs report the
+ * same finding at once; it is released when the create's transaction ends.
+ */
+async function assertAgentFindingNotYetReported(
+  tx: Pick<Db, "select" | "execute">,
+  companyId: string,
+  findingKey: string,
+  reporter: { agentId: string | null; userId: string | null },
+) {
+  const reporterRef = reporter.agentId
+    ? `agent:${reporter.agentId}`
+    : reporter.userId
+      ? `user:${reporter.userId}`
+      : "system";
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`paperclip:agent-finding:${companyId}:${reporterRef}:${findingKey}`}))`,
+  );
+  const sameReporter = reporter.agentId
+    ? eq(issues.createdByAgentId, reporter.agentId)
+    : reporter.userId
+      ? and(isNull(issues.createdByAgentId), eq(issues.createdByUserId, reporter.userId))
+      : and(isNull(issues.createdByAgentId), isNull(issues.createdByUserId));
+  const existing = await tx
+    .select({ id: issues.id, identifier: issues.identifier, status: issues.status, title: issues.title })
+    .from(issues)
+    .where(
+      and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, AGENT_FINDING_ORIGIN_KIND),
+        eq(issues.originId, findingKey),
+        sameReporter,
+      ),
+    )
+    .orderBy(desc(issues.createdAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!existing) return;
+  throw conflict(
+    `This finding was already reported as ${existing.identifier ?? existing.id} (status: ${existing.status}). ` +
+      "Comment on that issue instead of filing a new one.",
+    { code: "agent_finding_already_reported", existingIssue: existing },
+  );
 }
 async function getProjectDefaultGoalId(
   db: ProjectGoalReader,
@@ -2725,6 +2787,12 @@ export function issueService(db: Db) {
         goalId: issueData.goalId,
       });
       return db.transaction(async (tx) => {
+        if (isAgentFindingOriginKind(issueData.originKind) && issueData.originId) {
+          await assertAgentFindingNotYetReported(tx, companyId, issueData.originId, {
+            agentId: issueData.createdByAgentId ?? null,
+            userId: issueData.createdByUserId ?? null,
+          });
+        }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;

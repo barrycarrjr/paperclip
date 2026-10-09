@@ -2154,8 +2154,10 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    // `origin` is the client-declarable subset (email handoff only — see
-    // clientDeclarableIssueOriginSchema). Map it onto the real columns and
+    // `origin` is the client-declarable subset (an email handoff or an agent's
+    // finding key; see clientDeclarableIssueOriginSchema). A finding key that
+    // was already reported is refused with 409 by issueService.create. Map it
+    // onto the real columns and
     // drop the wrapper: issueService.create spreads whatever is left straight
     // into the insert, so an unmapped `origin` key would reach Drizzle as an
     // unknown column.
@@ -2229,14 +2231,20 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    // Same mapping as the plain create route: without it a declared origin
+    // reached nothing and the child was stored as manual, so an agent's
+    // finding filed under a digest skipped the duplicate check entirely.
+    const { origin, ...childBody } = req.body;
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
-      ...req.body,
+      ...childBody,
+      ...(origin ? { originKind: origin.kind, originId: origin.id } : {}),
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
       actorAgentId: actor.agentId,
       actorUserId: actor.actorType === "user" ? actor.actorId : null,
     });
+    await recordEmailDelegationIfHandoff({ companyId: parent.companyId, issue, origin, actor });
 
     await logActivity(db, {
       companyId: parent.companyId,
