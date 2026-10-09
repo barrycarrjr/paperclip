@@ -12,6 +12,11 @@ import { agents } from "@paperclipai/db";
  * Phase 1 is propose-only — Steward never reaches a write path — but the
  * helper ships now so Phase 2's github-tools PR creation already has the
  * backstop in place.
+ *
+ * Local CLI agents write to disk themselves, so this helper cannot see their
+ * writes. claude_local enforces the list by passing it to the CLI as deny
+ * rules (see adapter-claude-local's forbidden-paths.ts); other local adapters
+ * do not enforce it yet.
  */
 export interface ForbiddenPathMatch {
   path: string;

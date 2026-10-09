@@ -11,6 +11,12 @@ export interface AdapterAgent {
   name: string;
   adapterType: string | null;
   adapterConfig: unknown;
+  /**
+   * Globs the agent must not write to. Adapters that spawn a local CLI should
+   * turn these into the CLI's own deny rules, since the CLI writes to disk
+   * without going through the server.
+   */
+  forbiddenWritePaths?: string[] | null;
 }
 
 export interface AdapterRuntime {

@@ -42,7 +42,7 @@ Detailed reference for the Paperclip control plane API. For the core heartbeat p
 }
 ```
 
-Use `chainOfCommand` to know who to escalate to. Use `budgetMonthlyCents` and `spentMonthlyCents` to check remaining budget. Use `urlKey` to build agent UI links (e.g. `/HQ/agents/backendeng`). Check `permissions.canCreateAgents` before attempting agent creation. Respect `forbiddenWritePaths` — these are enforced server-side.
+Use `chainOfCommand` to know who to escalate to. Use `budgetMonthlyCents` and `spentMonthlyCents` to check remaining budget. Use `urlKey` to build agent UI links (e.g. `/HQ/agents/backendeng`). Check `permissions.canCreateAgents` before attempting agent creation. Respect `forbiddenWritePaths`: never write to a path that matches one of these globs. For `claude_local` agents they are passed to Claude as deny rules, so its file-editing tools refuse them, but a shell command can still write there. Other adapters do not enforce them yet, so treat the list as a rule you follow yourself.
 
 ### Company Portability
 

@@ -48,6 +48,7 @@ import {
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
 import { prepareClaudePromptBundle } from "./prompt-cache.js";
+import { buildClaudeForbiddenPathRules, buildClaudeForbiddenPathSettings } from "./forbidden-paths.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -629,6 +630,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     heartbeatPromptChars: renderedPrompt.length,
   };
 
+  const forbiddenPathRules = buildClaudeForbiddenPathRules(agent.forbiddenWritePaths);
+  const forbiddenPathSettings = buildClaudeForbiddenPathSettings(forbiddenPathRules.denyRules);
+  if (forbiddenPathRules.skipped.length > 0) {
+    await onLog(
+      "stderr",
+      `[paperclip] Warning: these forbidden write paths cannot be passed to Claude and are not enforced this run: ${forbiddenPathRules.skipped.join(", ")}\n`,
+    );
+  }
+  if (forbiddenPathSettings && extraArgs.includes("--settings")) {
+    await onLog(
+      "stderr",
+      "[paperclip] Warning: extraArgs passes its own --settings, which may replace the forbidden write path rules for this run.\n",
+    );
+  }
+
   const buildClaudeArgs = (
     resumeSessionId: string | null,
     attemptInstructionsFilePath: string | undefined,
@@ -672,6 +688,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     } else {
       args.push("--strict-mcp-config");
     }
+    // The agent's forbiddenWritePaths, as deny rules the CLI enforces itself.
+    if (forbiddenPathSettings) args.push("--settings", forbiddenPathSettings);
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };
