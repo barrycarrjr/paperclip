@@ -8,13 +8,10 @@ import {
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { logger } from "../middleware/logger.js";
 import {
   approvalService,
   companyService,
-  heartbeatService,
   issueApprovalService,
-  issueService,
   logActivity,
   secretService,
 } from "../services/index.js";
@@ -26,8 +23,7 @@ import {
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
-import { executeDraftedApproval } from "../services/tool-draft-gate.js";
-import { appendApprovedDraftResultToChatSession } from "../services/chat.js";
+import { approvalDecisionService } from "../services/approval-decisions.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -50,12 +46,12 @@ export function approvalRoutes(
 ) {
   const router = Router();
   const svc = approvalService(db);
-  const heartbeat = heartbeatService(db, {
-    pluginWorkerManager: options.pluginWorkerManager,
-  });
   const issueApprovalsSvc = issueApprovalService(db);
-  const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
+  const decisions = approvalDecisionService(db, {
+    pluginWorkerManager: options.pluginWorkerManager,
+    getToolDispatcher: options.getToolDispatcher,
+  });
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function requireApprovalAccess(req: Request, id: string) {
@@ -204,236 +200,14 @@ export function approvalRoutes(
       return;
     }
     const decidedByUserId = req.actor.userId ?? "board";
-    const { approval, applied } = await svc.approve(id, decidedByUserId, req.body.decisionNote);
-
-    if (applied) {
-      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
-      const linkedIssueIds = linkedIssues.map((issue) => issue.id);
-      const primaryIssueId = linkedIssueIds[0] ?? null;
-
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
-        action: "approval.approved",
-        entityType: "approval",
-        entityId: approval.id,
-        details: {
-          type: approval.type,
-          requestedByAgentId: approval.requestedByAgentId,
-          linkedIssueIds,
-        },
-      });
-
-      // Trust loop: if this was a drafted outbound tool call, re-dispatch
-      // it now that the user has approved. The re-dispatch must pass
-      // `bypassDraftGate: true`, otherwise the dispatcher's gate will
-      // re-intercept the gated tool name and queue a fresh pending approval
-      // — the user would approve, a new pending appears, approve, repeat.
-      // Log a separate "approval.executed" activity so the receipt feed
-      // shows both the draft (created on the agent's call) and the actual send.
-      // What actually happened to the drafted call, so the wake below can say
-      // so. Without it the agent is woken knowing only that its draft was
-      // "approved", which is not the same as "sent" — one agent read that gap
-      // as the send still being pending and spent four more runs, and a
-      // second Slack draft, telling the operator about a message that had
-      // already gone out four minutes earlier.
-      let draftExecution:
-        | { ok: boolean; reason: string | null; error: string | null }
-        | null = null;
-
-      if (approval.type === "outbound_tool_draft") {
-        const dispatcher = options.getToolDispatcher?.() ?? null;
-        if (dispatcher) {
-          const exec = await executeDraftedApproval({
-            approvalId: approval.id,
-            decidedByUserId: req.actor.userId ?? "board",
-            executeTool: (toolName, params, runContext) =>
-              dispatcher.executeTool(toolName, params, runContext, {
-                bypassDraftGate: true,
-              }),
-            db,
-          });
-          draftExecution = {
-            ok: exec.ok && !exec.toolResult?.error,
-            reason: exec.reason ?? null,
-            error: exec.toolResult?.error ?? null,
-          };
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: req.actor.userId ?? "board",
-            action: exec.ok ? "approval.executed" : "approval.execute_failed",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              type: approval.type,
-              ok: exec.ok,
-              reason: exec.reason ?? null,
-              hadError: !!exec.toolResult?.error,
-            },
-          });
-
-          // Chat-session wake: if the draft was queued from a Clippy chat
-          // turn, append a follow-up message into the transcript so the LLM
-          // sees the resolved outcome on the user's next turn. Real agent
-          // runs are woken via the heartbeat branch below; chat sessions
-          // have no heartbeat, so this append is their only resume signal.
-          const payload = (approval.payload ?? {}) as Record<string, unknown>;
-          const chatSessionId =
-            typeof payload.chatSessionId === "string" ? payload.chatSessionId : null;
-          if (chatSessionId) {
-            const toolName =
-              typeof payload.toolName === "string" ? payload.toolName : "tool";
-            const summary =
-              typeof payload.summary === "string" ? payload.summary : toolName;
-            const outcome: Parameters<typeof appendApprovedDraftResultToChatSession>[1]["outcome"] =
-              !exec.ok
-                ? { ok: false, error: exec.reason ?? "execution_failed" }
-                : exec.toolResult?.error
-                  ? { ok: false, error: exec.toolResult.error }
-                  : {
-                      ok: true,
-                      content:
-                        typeof exec.toolResult?.content === "string"
-                          ? exec.toolResult.content
-                          : exec.toolResult?.data !== undefined
-                            ? JSON.stringify(exec.toolResult.data)
-                            : null,
-                    };
-            try {
-              const result = await appendApprovedDraftResultToChatSession(db, {
-                chatSessionId,
-                toolName,
-                summary,
-                outcome,
-              });
-              if ("skipped" in result) {
-                logger.warn(
-                  { approvalId: approval.id, chatSessionId, reason: result.skipped },
-                  "chat-session wake skipped — chat session no longer exists",
-                );
-              }
-            } catch (err) {
-              // Don't fail the approve response if the chat append fails;
-              // the underlying tool already ran. Log and move on.
-              logger.warn(
-                { err, approvalId: approval.id, chatSessionId },
-                "chat-session wake append failed (non-fatal)",
-              );
-            }
-          }
-        } else {
-          draftExecution = {
-            ok: false,
-            reason: "no_tool_dispatcher",
-            error: "Plugin tools were not available, so the approved call did not run.",
-          };
-          logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
-        }
-      }
-
-      // Say on the issue what happened to the message.
-      //
-      // Approving a draft used to leave no mark anywhere near the work: the
-      // approval row moved to `approved`, the send succeeded, and the issue
-      // the message was written for said nothing about either. The operator
-      // is left unable to tell an approved-and-sent message from one that
-      // silently failed, and the agent — which is only told its draft was
-      // "approved" — cannot tell either. A comment answers both, in the one
-      // place both of them are already looking.
-      if (draftExecution && primaryIssueId) {
-        const payload = (approval.payload ?? {}) as Record<string, unknown>;
-        const toolName = typeof payload.toolName === "string" ? payload.toolName : "the tool";
-        const summary = typeof payload.summary === "string" ? payload.summary.trim() : "";
-        const wentWrong = draftExecution.error ?? draftExecution.reason ?? null;
-        const paragraphs = draftExecution.ok
-          ? [`Sent. The approved \`${toolName}\` call went out just now.`, summary]
-          : [
-              `Not sent. The approved \`${toolName}\` call was approved but did not go out.`,
-              wentWrong ? `What went wrong: ${wentWrong}` : null,
-              "Nothing reached the recipient. It needs another try.",
-            ];
-        const body = paragraphs.filter((line): line is string => Boolean(line)).join("\n\n");
-        try {
-          await issuesSvc.addComment(primaryIssueId, body, {
-            userId: req.actor.userId ?? "board",
-          });
-        } catch (err) {
-          // The message itself already went (or already failed). Losing the
-          // note about it must not turn a successful send into a 500.
-          logger.warn(
-            { err, approvalId: approval.id, issueId: primaryIssueId },
-            "could not comment the send outcome on the issue (non-fatal)",
-          );
-        }
-      }
-
-      if (approval.requestedByAgentId) {
-        try {
-          const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "approval_approved",
-            payload: {
-              approvalId: approval.id,
-              approvalStatus: approval.status,
-              issueId: primaryIssueId,
-              issueIds: linkedIssueIds,
-              ...(draftExecution ? { draftExecution } : {}),
-            },
-            requestedByActorType: "user",
-            requestedByActorId: req.actor.userId ?? "board",
-            contextSnapshot: {
-              source: "approval.approved",
-              approvalId: approval.id,
-              approvalStatus: approval.status,
-              issueId: primaryIssueId,
-              issueIds: linkedIssueIds,
-              taskId: primaryIssueId,
-              wakeReason: "approval_approved",
-              ...(draftExecution ? { draftExecution } : {}),
-            },
-          });
-
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: req.actor.userId ?? "board",
-            action: "approval.requester_wakeup_queued",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              requesterAgentId: approval.requestedByAgentId,
-              wakeRunId: wakeRun?.id ?? null,
-              linkedIssueIds,
-            },
-          });
-        } catch (err) {
-          logger.warn(
-            {
-              err,
-              approvalId: approval.id,
-              requestedByAgentId: approval.requestedByAgentId,
-            },
-            "failed to queue requester wakeup after approval",
-          );
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: req.actor.userId ?? "board",
-            action: "approval.requester_wakeup_failed",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              requesterAgentId: approval.requestedByAgentId,
-              linkedIssueIds,
-              error: err instanceof Error ? err.message : String(err),
-            },
-          });
-        }
-      }
-    }
+    // Everything that follows a decision lives in the approval decision
+    // service, shared with the plugin host method `approvals.respond`, so a
+    // decision made from a channel such as Slack does exactly what this does.
+    const { approval } = await decisions.approve({
+      approvalId: id,
+      decidedByUserId,
+      decisionNote: req.body.decisionNote,
+    });
 
     res.json(redactApprovalPayload(approval));
   });
@@ -446,19 +220,11 @@ export function approvalRoutes(
       return;
     }
     const decidedByUserId = req.actor.userId ?? "board";
-    const { approval, applied } = await svc.reject(id, decidedByUserId, req.body.decisionNote);
-
-    if (applied) {
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
-        action: "approval.rejected",
-        entityType: "approval",
-        entityId: approval.id,
-        details: { type: approval.type },
-      });
-    }
+    const { approval } = await decisions.reject({
+      approvalId: id,
+      decidedByUserId,
+      decisionNote: req.body.decisionNote,
+    });
 
     res.json(redactApprovalPayload(approval));
   });

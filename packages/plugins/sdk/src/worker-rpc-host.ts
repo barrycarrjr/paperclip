@@ -194,6 +194,10 @@ interface EventRegistration {
 
 /** Default timeout for worker→host RPC calls. */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+/** A Clippy turn: model calls and tool calls, often a minute or more with the Claude CLI. */
+const CHAT_TURN_RPC_TIMEOUT_MS = 15 * 60_000;
+/** An approval decision re-dispatches the drafted outbound call before answering. */
+const APPROVAL_RESPOND_RPC_TIMEOUT_MS = 2 * 60_000;
 
 // ---------------------------------------------------------------------------
 // startWorkerRpcHost
@@ -956,6 +960,55 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             sessionEventCallbacks.delete(sessionId);
             await callHost("agents.sessions.close", { sessionId, companyId });
           },
+        },
+      },
+
+      channels: {
+        async startPairing(input) {
+          return callHost("channels.startPairing", {
+            identity: input.identity,
+            label: input.label ?? null,
+          });
+        },
+        async lookupUser(identity) {
+          return callHost("channels.lookupUser", { identity });
+        },
+      },
+
+      chat: {
+        async turn(input) {
+          // A Clippy turn runs a model, often the Claude CLI, with tool calls
+          // in between; the default 30 second RPC timeout would cut nearly
+          // every turn short.
+          return callHost(
+            "chat.turn",
+            {
+              identity: input.identity,
+              companyId: input.companyId,
+              sessionId: input.sessionId ?? null,
+              title: input.title,
+              text: input.text,
+              model: input.model,
+            },
+            CHAT_TURN_RPC_TIMEOUT_MS,
+          );
+        },
+      },
+
+      approvals: {
+        async respond(input) {
+          // Approving re-dispatches the drafted call (an email, a message, a
+          // phone call), which can take longer than the default timeout.
+          return callHost(
+            "approvals.respond",
+            {
+              identity: input.identity,
+              approvalId: input.approvalId,
+              decision: input.decision,
+              note: input.note ?? null,
+            },
+            APPROVAL_RESPOND_RPC_TIMEOUT_MS,
+          );
         },
       },
 

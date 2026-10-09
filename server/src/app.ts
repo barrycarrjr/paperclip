@@ -52,6 +52,7 @@ import {
 } from "./routes/system-snapshot.js";
 import { llmRoutes } from "./routes/llms.js";
 import { chatRoutes } from "./routes/chat.js";
+import { channelLinkRoutes } from "./routes/channel-links.js";
 import { emailDraftRoutes } from "./routes/email-drafts.js";
 import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
@@ -349,6 +350,9 @@ export async function createApp(
   // chat-Agent sessions can surface plugin tools via the dispatcher AND
   // mint MCP bridge tokens for adapter-execute providers.
   api.use(chatRoutes(db, { pluginToolDispatcher: toolDispatcher, pluginMcpBridge }));
+  // The signed-in user's connected chat app accounts (pairing codes from
+  // channel plugins such as Slack); see services/channel-links.ts.
+  api.use(channelLinkRoutes(db));
   const jobCoordinator = createPluginJobCoordinator({
     db,
     lifecycle,
@@ -381,6 +385,10 @@ export async function createApp(
         };
         const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker, {
           pluginWorkerManager: workerManager,
+          // Channel plugins run Clippy turns and decide approvals on a user's
+          // behalf; both need the plugin tool dispatcher and the MCP bridge.
+          getToolDispatcher: () => toolDispatcherRef.current,
+          pluginMcpBridge,
           // Backs `ctx.system.createSnapshot()`. Reaching it still requires
           // the `system.snapshot.read` capability in the plugin's manifest —
           // passing the service here only makes it available to be gated.

@@ -630,6 +630,7 @@ Per-agent schedule fields in `adapter_config`:
 - `enabled` boolean
 - `intervalSec` integer (minimum 30)
 - `maxConcurrentRuns` integer; new agents default to `5`
+- `freshSessionEveryRun` boolean (default `false`); start every run in a new session instead of resuming the saved one, for agents whose runs are self-contained sweeps
 
 Scheduler must skip invocation when:
 

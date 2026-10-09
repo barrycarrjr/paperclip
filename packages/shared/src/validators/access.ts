@@ -197,3 +197,36 @@ export const updateCurrentUserProfileSchema = z.object({
 });
 
 export type UpdateCurrentUserProfile = z.infer<typeof updateCurrentUserProfileSchema>;
+
+/** A pairing code a chat app sent its user, typed into their Paperclip profile. */
+export const channelPairingCodeSchema = z.object({
+  code: z.string().trim().min(4).max(32),
+});
+
+export type ChannelPairingCode = z.infer<typeof channelPairingCodeSchema>;
+
+/** What a pairing code would connect, shown before the user confirms it. */
+export const channelPairingPreviewSchema = z.object({
+  pluginKey: z.string(),
+  pluginName: z.string(),
+  externalWorkspace: z.string(),
+  externalUserId: z.string(),
+  externalLabel: z.string().nullable(),
+  expiresAt: z.string(),
+});
+
+export type ChannelPairingPreview = z.infer<typeof channelPairingPreviewSchema>;
+
+/** A chat app account connected to the signed-in user. */
+export const channelUserLinkSchema = z.object({
+  id: z.string(),
+  pluginKey: z.string(),
+  pluginName: z.string(),
+  externalWorkspace: z.string(),
+  externalUserId: z.string(),
+  externalLabel: z.string().nullable(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+});
+
+export type ChannelUserLink = z.infer<typeof channelUserLinkSchema>;

@@ -69,6 +69,12 @@ Session resume is cwd-aware: if the agent's working directory changed since the 
 
 If resume fails with an unknown session error, the adapter automatically retries with a fresh session.
 
+To start every run in a new session instead (for agents whose runs are self-contained sweeps that keep their state in Paperclip), turn on "Fresh session every run" in the agent's Run Policy (`runtimeConfig.heartbeat.freshSessionEveryRun`). It works for every adapter, not just this one.
+
+## Scheduling Tools Are Off
+
+Paperclip owns every wake, so the adapter passes `--disallowedTools ScheduleWakeup CronCreate CronDelete CronList RemoteTrigger` on every run. A wake or routine created inside the CLI could never fire, and `ScheduleWakeup` kept the CLI alive after its final result until the runner's cleanup killed it. Use Paperclip routines and wakes instead.
+
 ## Skills Injection
 
 The adapter creates a temporary directory with symlinks to Paperclip skills and passes it via `--add-dir`. This makes skills discoverable without polluting the agent's working directory.

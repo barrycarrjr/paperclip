@@ -224,6 +224,22 @@ export interface HostServices {
     close(params: WorkerToHostMethods["agents.sessions.close"][0]): Promise<void>;
   };
 
+  /** Provides `channels.startPairing`, `channels.lookupUser`: pairing chat app accounts to users. */
+  channels: {
+    startPairing(params: WorkerToHostMethods["channels.startPairing"][0]): Promise<WorkerToHostMethods["channels.startPairing"][1]>;
+    lookupUser(params: WorkerToHostMethods["channels.lookupUser"][0]): Promise<WorkerToHostMethods["channels.lookupUser"][1]>;
+  };
+
+  /** Provides `chat.turn`: one Clippy turn for the paired user of a chat account. */
+  chat: {
+    turn(params: WorkerToHostMethods["chat.turn"][0]): Promise<WorkerToHostMethods["chat.turn"][1]>;
+  };
+
+  /** Provides `approvals.respond`: approve or reject as the paired user of a chat account. */
+  approvals: {
+    respond(params: WorkerToHostMethods["approvals.respond"][0]): Promise<WorkerToHostMethods["approvals.respond"][1]>;
+  };
+
   /** Provides `goals.list`, `goals.get`, `goals.create`, `goals.update`. */
   goals: {
     list(params: WorkerToHostMethods["goals.list"][0]): Promise<WorkerToHostMethods["goals.list"][1]>;
@@ -383,6 +399,10 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "agents.sessions.list": "agent.sessions.list",
   "agents.sessions.sendMessage": "agent.sessions.send",
   "agents.sessions.close": "agent.sessions.close",
+  "channels.startPairing": "channels.pairing",
+  "channels.lookupUser": "channels.pairing",
+  "chat.turn": "chat.turn",
+  "approvals.respond": "approvals.respond",
 
   // Goals
   "goals.list": "goals.read",
@@ -661,6 +681,18 @@ export function createHostClientHandlers(
     }),
     "agents.sessions.close": gated("agents.sessions.close", async (params) => {
       return services.agentSessions.close(params);
+    }),
+    "channels.startPairing": gated("channels.startPairing", async (params) => {
+      return services.channels.startPairing(params);
+    }),
+    "channels.lookupUser": gated("channels.lookupUser", async (params) => {
+      return services.channels.lookupUser(params);
+    }),
+    "chat.turn": gated("chat.turn", async (params) => {
+      return services.chat.turn(params);
+    }),
+    "approvals.respond": gated("approvals.respond", async (params) => {
+      return services.approvals.respond(params);
     }),
 
     // Goals

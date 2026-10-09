@@ -30,6 +30,11 @@ import type {
   PluginWorkspace,
   AgentSession,
   AgentSessionEvent,
+  PluginApprovalRespondInput,
+  PluginApprovalRespondResult,
+  PluginChannelIdentity,
+  PluginChatTurnInput,
+  PluginChatTurnResult,
 } from "./types.js";
 import type {
   PluginEnvironmentValidateConfigParams,
@@ -55,6 +60,23 @@ export interface TestHarnessOptions {
   capabilities?: PluginCapability[];
   /** Initial config returned by `ctx.config.get()`. */
   config?: Record<string, unknown>;
+  /**
+   * Chat app accounts that count as paired, for `ctx.channels.lookupUser`,
+   * `ctx.chat.turn` and `ctx.approvals.respond`. Like the host, the fakes
+   * refuse an identity that is not in the list. Leave it out to treat every
+   * identity as paired.
+   */
+  pairedChannelUsers?: Array<{ workspace: string | null; externalUserId: string; userName?: string }>;
+  /**
+   * Answers `ctx.chat.turn(...)` in tests. Without it the fake returns an
+   * empty reply on the given (or a fresh) session id, which is enough for
+   * plumbing tests.
+   */
+  chatTurn?: (input: PluginChatTurnInput) => Promise<PluginChatTurnResult> | PluginChatTurnResult;
+  /** Answers `ctx.approvals.respond(...)` in tests. Without it the decision is applied. */
+  approvalsRespond?: (
+    input: PluginApprovalRespondInput,
+  ) => Promise<PluginApprovalRespondResult> | PluginApprovalRespondResult;
 }
 
 export interface TestHarnessLogEntry {
@@ -436,6 +458,28 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const telemetry: TestHarness["telemetry"] = [];
   const dbQueries: TestHarness["dbQueries"] = [];
   const dbExecutes: TestHarness["dbExecutes"] = [];
+
+  function requirePairableIdentity(identity: PluginChannelIdentity | undefined) {
+    if (!identity || typeof identity.externalUserId !== "string" || !identity.externalUserId.trim()) {
+      throw new Error("identity.externalUserId is required");
+    }
+  }
+
+  function findPairedChannelUser(identity: PluginChannelIdentity) {
+    if (!options.pairedChannelUsers) return { userName: "Test User" };
+    const workspace = identity.workspace ?? null;
+    const match = options.pairedChannelUsers.find(
+      (entry) => (entry.workspace ?? null) === workspace && entry.externalUserId === identity.externalUserId,
+    );
+    return match ? { userName: match.userName ?? "Test User" } : null;
+  }
+
+  function requirePairedChannelUser(identity: PluginChannelIdentity | undefined) {
+    requirePairableIdentity(identity);
+    if (!findPairedChannelUser(identity!)) {
+      throw new Error("This chat account is not connected to a Paperclip user yet");
+    }
+  }
 
   const state = new Map<string, unknown>();
   const entities = new Map<string, PluginEntityRecord>();
@@ -1214,6 +1258,58 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           session.status = "closed";
           sessionEventCallbacks.delete(sessionId);
         },
+      },
+    },
+    channels: {
+      async startPairing(input) {
+        requireCapability(manifest, capabilitySet, "channels.pairing");
+        requirePairableIdentity(input.identity);
+        return {
+          code: "TEST-CODE",
+          expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+          profilePath: "/instance/settings/profile",
+          profileUrl: null,
+        };
+      },
+      async lookupUser(identity) {
+        requireCapability(manifest, capabilitySet, "channels.pairing");
+        requirePairableIdentity(identity);
+        const paired = findPairedChannelUser(identity);
+        return { paired: paired !== null, userName: paired?.userName ?? null };
+      },
+    },
+    chat: {
+      async turn(input) {
+        requireCapability(manifest, capabilitySet, "chat.turn");
+        requirePairedChannelUser(input.identity);
+        if (options.chatTurn) return await options.chatTurn(input);
+        return {
+          sessionId: input.sessionId ?? randomUUID(),
+          replyText: "",
+          stopReason: "end_turn",
+          pendingApprovals: [],
+          needsConfirmation: [],
+          toolCalls: [],
+          error: null,
+        };
+      },
+    },
+    approvals: {
+      async respond(input) {
+        requireCapability(manifest, capabilitySet, "approvals.respond");
+        requirePairedChannelUser(input.identity);
+        if (input.decision !== "approve" && input.decision !== "reject") {
+          throw new Error(`decision must be "approve" or "reject"`);
+        }
+        if (options.approvalsRespond) return await options.approvalsRespond(input);
+        return {
+          id: input.approvalId,
+          companyId: "",
+          type: "outbound_tool_draft",
+          status: input.decision === "approve" ? "approved" : "rejected",
+          applied: true,
+          executed: null,
+        };
       },
     },
     goals: {

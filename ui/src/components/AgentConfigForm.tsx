@@ -1018,6 +1018,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   className={inputClass}
                 />
               </Field>
+              <ToggleField
+                label="Fresh session every run"
+                hint={help.freshSessionEveryRun}
+                checked={eff(
+                  "heartbeat",
+                  "freshSessionEveryRun",
+                  heartbeat.freshSessionEveryRun === true,
+                )}
+                onChange={(v) => mark("heartbeat", "freshSessionEveryRun", v)}
+              />
             </div>
           </CollapsibleSection>
           </div>

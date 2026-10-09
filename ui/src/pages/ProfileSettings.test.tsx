@@ -30,6 +30,10 @@ vi.mock("@/api/assets", () => ({
   assetsApi: mockAssetsApi,
 }));
 
+vi.mock("@/api/channelLinks", () => ({
+  channelLinksApi: { list: vi.fn().mockResolvedValue([]), preview: vi.fn(), claim: vi.fn(), remove: vi.fn() },
+}));
+
 vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({
     setBreadcrumbs: mockSetBreadcrumbs,

@@ -44,6 +44,14 @@ import type {
   PluginIssueWakeupResult,
   PluginJobContext,
   PluginWorkspace,
+  PluginApprovalRespondInput,
+  PluginApprovalRespondResult,
+  PluginChannelIdentity,
+  PluginChannelPairingStartInput,
+  PluginChannelPairingStartResult,
+  PluginChannelUserLookupResult,
+  PluginChatTurnInput,
+  PluginChatTurnResult,
   ToolRunContext,
   ToolResult,
 } from "./types.js";
@@ -1405,6 +1413,30 @@ export interface WorkerToHostMethods {
   "agents.sessions.close": [
     params: { sessionId: string; companyId: string },
     result: void,
+  ];
+
+  // Channels: outside chat apps (Slack, Teams, SMS) talking to Clippy and
+  // deciding approvals as the Paperclip user who paired the chat account.
+  // Pairing requires `channels.pairing`.
+  "channels.startPairing": [
+    params: PluginChannelPairingStartInput,
+    result: PluginChannelPairingStartResult,
+  ];
+  "channels.lookupUser": [
+    params: { identity: PluginChannelIdentity },
+    result: PluginChannelUserLookupResult,
+  ];
+
+  // One Clippy turn for the paired user. Requires `chat.turn`.
+  "chat.turn": [
+    params: PluginChatTurnInput,
+    result: PluginChatTurnResult,
+  ];
+
+  // An approval decision as the paired user. Requires `approvals.respond`.
+  "approvals.respond": [
+    params: PluginApprovalRespondInput,
+    result: PluginApprovalRespondResult,
   ];
 
   // Goals

@@ -85,6 +85,7 @@ export { pluginDatabaseNamespaces, pluginMigrations } from "./plugin_database.js
 export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
+export { channelUserLinks } from "./channel_user_links.js";
 export { chatSessions, chatMessages, chatAttachments } from "./chat_sessions.js";
 export { externalMcpServers } from "./external_mcp_servers.js";
 

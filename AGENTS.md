@@ -140,7 +140,7 @@ If anything cannot be run, explicitly report what was not run and why.
 - Base path: `/api`
 - Board access is treated as full-control operator context
 - Agent access uses bearer API keys (`agent_api_keys`), hashed at rest
-- Agent keys must not access other companies
+- Agent keys must not access other companies. One exception, deliberate in this fork: an agent of the portfolio root company (HQ) may READ any company (the portfolio list endpoints, and single-issue reads such as `GET /issues/:id` and its comments); writes stay inside its own company, Personal companies stay private, and tool sessions get no cross-company read at all
 
 When adding endpoints:
 

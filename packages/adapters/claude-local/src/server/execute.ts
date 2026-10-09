@@ -633,7 +633,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     resumeSessionId: string | null,
     attemptInstructionsFilePath: string | undefined,
   ) => {
-    const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
+    // Paperclip owns every wake, so the CLI's own scheduling tools can only
+    // mislead the agent: a wake or routine created inside the CLI never fires,
+    // and ScheduleWakeup keeps the CLI alive after its final result until the
+    // terminal-result cleanup kills it.
+    const args = [
+      "--print", "-", "--output-format", "stream-json", "--verbose",
+      "--disallowedTools", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "RemoteTrigger",
+    ];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
     if (chrome) args.push("--chrome");
