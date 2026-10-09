@@ -1085,6 +1085,11 @@ export { API_PREFIX, API } from "./api.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
 export { deriveProjectUrlKey, normalizeProjectUrlKey, hasNonAsciiContent } from "./project-url-key.js";
 export {
+  AGENT_FINDING_ORIGIN_KIND,
+  AGENT_FINDING_KEY_MAX_LENGTH,
+  isAgentFindingOriginKind,
+} from "./agent-finding-origin.js";
+export {
   EMAIL_HANDOFF_ORIGIN_KIND,
   buildEmailHandoffOriginId,
   parseEmailHandoffOriginId,

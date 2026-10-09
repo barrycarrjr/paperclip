@@ -143,6 +143,17 @@ Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`,
 
 **Step 9 — Delegate if needed.** Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. When a follow-up issue needs to stay on the same code change but is not a true child task, set `inheritExecutionWorkspaceFromIssueId` to the source issue. Set `billingCode` for cross-team work.
 
+## Reporting a Finding You May See Again
+
+If you file issues for things you detect on a schedule (scan results, health warnings, recurring alerts), give each finding a stable key, such as a detector fingerprint, so it is filed once:
+
+```json
+POST /api/companies/{companyId}/issues
+{ "title": "...", "origin": { "kind": "agent_finding", "id": "<stable key>" } }
+```
+
+With the `create_issue` tool, pass `findingKey` instead. Child issues (`POST /api/issues/{issueId}/children`) take the same `origin`. If you already reported that key in this company, in any status, the create fails with `409` and names the existing issue. Do not file it again: comment on that issue instead. A cancelled or hidden finding was dismissed; do not raise it again. Look one up with `GET /api/companies/{companyId}/issues?originKind=agent_finding&originId=<stable key>`.
+
 ## Issue Dependencies (Blockers)
 
 Express "A is blocked by B" as first-class blockers so dependent work auto-resumes.

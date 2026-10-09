@@ -114,6 +114,35 @@ describe("create_issue", () => {
     );
   });
 
+  it("files a finding key as an agent finding instead of a chat issue", async () => {
+    const result = await executeChatTool(
+      "create_issue",
+      { title: "Steward proposal: secret-scan: key in config", findingKey: "secret:abc123" },
+      agentCtx(emptyDb()),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockIssueService.create).toHaveBeenCalledWith(
+      COMPANY_ID,
+      expect.objectContaining({ originKind: "agent_finding", originId: "secret:abc123" }),
+    );
+  });
+
+  it("passes the refusal back when the finding was already reported", async () => {
+    mockIssueService.create.mockRejectedValueOnce(
+      Object.assign(new Error("This finding was already reported as HQ-12 (status: cancelled)."), { status: 409 }),
+    );
+
+    const result = await executeChatTool(
+      "create_issue",
+      { title: "Steward proposal: agent health: CEO in error", findingKey: "agent-error:eb7fabd63c2be400" },
+      agentCtx(emptyDb()),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("already reported as HQ-12");
+  });
+
   it("rejects when no company context is provided or found", async () => {
     const result = await executeChatTool(
       "create_issue",

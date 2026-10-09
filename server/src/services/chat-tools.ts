@@ -12,6 +12,8 @@ import {
   issues,
 } from "@paperclipai/db";
 import {
+  AGENT_FINDING_KEY_MAX_LENGTH,
+  AGENT_FINDING_ORIGIN_KIND,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
   MEMORY_CONTENT_MAX,
@@ -348,6 +350,7 @@ const createIssueTool: ChatToolDefinition<{
   companyId?: string;
   title: string;
   description?: string;
+  findingKey?: string;
 }> = {
   name: "create_issue",
   description: "Create a new issue in a company. Mutating — requires permission.",
@@ -356,6 +359,7 @@ const createIssueTool: ChatToolDefinition<{
     companyId: z.string().optional(),
     title: z.string().min(1).max(500),
     description: z.string().max(10_000).optional(),
+    findingKey: z.string().trim().min(1).max(AGENT_FINDING_KEY_MAX_LENGTH).optional(),
   }),
   spec: {
     name: "create_issue",
@@ -366,11 +370,18 @@ const createIssueTool: ChatToolDefinition<{
         companyId: { type: "string", description: "Optional. Defaults to current company." },
         title: { type: "string" },
         description: { type: "string" },
+        findingKey: {
+          type: "string",
+          description:
+            "Optional. A stable key for something you report repeatedly, such as a detector " +
+            "fingerprint. You file each key once per company: if you already reported it, in any " +
+            "status, the call fails and names the existing issue.",
+        },
       },
       required: ["title"],
     },
   },
-  async handler({ companyId, title, description }, ctx) {
+  async handler({ companyId, title, description, findingKey }, ctx) {
     const target = companyId ?? ctx.defaultCompanyId;
     if (!target) {
       throw forbidden("No company context: pass companyId or select a company first");
@@ -380,7 +391,11 @@ const createIssueTool: ChatToolDefinition<{
     const created = await issueService(ctx.db).create(target, {
       title,
       description: description ?? null,
-      originKind: "chat",
+      // A finding key replaces the "chat" origin: the key is what lets the
+      // next report of the same finding be recognised and refused.
+      ...(findingKey
+        ? { originKind: AGENT_FINDING_ORIGIN_KIND, originId: findingKey }
+        : { originKind: "chat" }),
       createdByUserId: attribution.actorUserId ?? null,
       createdByAgentId: attribution.actorAgentId ?? null,
     });
