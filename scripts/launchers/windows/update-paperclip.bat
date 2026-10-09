@@ -46,7 +46,7 @@ set "LOCK_BEFORE="
 if exist "%PAPERCLIP_SRC%\pnpm-lock.yaml" (
   for /f "delims=" %%H in ('powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '%PAPERCLIP_SRC%\pnpm-lock.yaml').Hash"') do set "LOCK_BEFORE=%%H"
 )
-git -C "%PAPERCLIP_SRC%" pull --ff-only origin master
+call :sync_from_origin                               
 if errorlevel 1 (
   echo.
   echo [!] git pull failed. Resolve manually and re-run.
@@ -315,3 +315,18 @@ echo ==========================================================
 pause
 endlocal
 exit /b 1
+
+:sync_from_origin
+REM The update step above calls this from a line padded to the exact length
+REM of the old `git pull --ff-only origin master` line, so every byte offset
+REM in this file stays where an older running copy expects it.
+REM It fetches, then fast-forwards from origin/master instead of FETCH_HEAD.
+REM FETCH_HEAD is one shared file per checkout, so another process fetching
+REM at the same moment made `git pull` fail with "Cannot fast-forward to
+REM multiple branches".
+REM Old form, kept for reference:
+REM git -C "%PAPERCLIP_SRC%" pull --ff-only origin master
+git -C "%PAPERCLIP_SRC%" fetch origin master
+if errorlevel 1 exit /b 1
+git -C "%PAPERCLIP_SRC%" merge --ff-only origin/master
+exit /b %errorlevel%
