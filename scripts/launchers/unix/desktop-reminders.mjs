@@ -9,6 +9,9 @@
 // be shown again. (`display notification` is not used because it exits 0 and
 // shows nothing when notifications are off or a Focus mode is on.) On Linux a
 // reminder is acknowledged once notify-send has accepted it.
+//
+// While the macOS menu-bar helper runs for the same server it shows reminders
+// as native notifications instead, and this checker stays quiet.
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import os from "node:os";
@@ -147,8 +150,35 @@ export function createPlatform(platform = process.platform) {
   };
 }
 
+/**
+ * True while the macOS menu-bar helper (tools/paperclip-menubar) is running
+ * for this server. It writes `menubar.json` in PAPERCLIP_HOME with its pid and
+ * the loopback address it polls, and shows reminders itself, so this checker
+ * stays quiet instead of showing each one twice.
+ */
+export function menuBarHelperActive(markerPath, pollBase, isAlive = processIsAlive) {
+  try {
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    return marker?.pollBase === pollBase && Number.isInteger(marker?.pid) && isAlive(marker.pid);
+  } catch {
+    return false;
+  }
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists but belongs to someone else.
+    return error?.code === "EPERM";
+  }
+}
+
 /** The poll, show, acknowledge loop. Resolves once `isStopped()` is true. */
-export async function runReminderLoop({ settings, platform, fetchImpl = fetch, sleep, isStopped, log = () => {} }) {
+export async function runReminderLoop({
+  settings, platform, fetchImpl = fetch, sleep, isStopped, log = () => {}, handledElsewhere = () => false,
+}) {
   const lastShown = new Map();
   // Answered, but the acknowledgement has not reached the server yet. These
   // are retried and never shown twice.
@@ -172,6 +202,10 @@ export async function runReminderLoop({ settings, platform, fetchImpl = fetch, s
 
   while (!isStopped()) {
     if (unacked.size) await ack([...unacked]);
+    if (handledElsewhere()) {
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
     let pending = null;
     try {
       const response = await fetchImpl(`${settings.pollBase}/api/internal/desktop-notifications/pending?limit=20`, {
@@ -245,7 +279,11 @@ async function main() {
         resolve();
       };
     });
-  await runReminderLoop({ settings, platform, sleep, isStopped: () => stopped, log: (line) => console.log(line) });
+  const markerPath = path.join(process.env.PAPERCLIP_HOME || path.join(os.homedir(), ".paperclip"), "menubar.json");
+  await runReminderLoop({
+    settings, platform, sleep, isStopped: () => stopped, log: (line) => console.log(line),
+    handledElsewhere: () => menuBarHelperActive(markerPath, settings.pollBase),
+  });
   clearInterval(watch);
 }
 

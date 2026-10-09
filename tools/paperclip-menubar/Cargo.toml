@@ -1,0 +1,32 @@
+[package]
+name = "paperclip-menubar"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Menu-bar helper for paperclip on macOS: start/stop and reminder notifications"
+
+[[bin]]
+name = "paperclip-menubar"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dependencies]
+# Same tray and event-loop crates as the Windows launcher in
+# tools/paperclip-launcher. Both are cross-platform.
+tray-icon = "0.21"
+tao = "0.34"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Loopback HTTP client for the health check and the notification poll/ack.
+# default-features off = no TLS; the helper only talks to local http.
+ureq = { version = "2", default-features = false }
+# Native macOS notifications that report a click, so a reminder can open its
+# deep link.
+mac-notification-sys = "0.6"
