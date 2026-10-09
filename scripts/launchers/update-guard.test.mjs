@@ -900,3 +900,62 @@ test("update-paperclip.bat sends each failure to the right place", async () => {
   assert.match(recordFailed, /Paperclip has NOT been restarted/);
   assert.doesNotMatch(recordFailed, /stop-paperclip\.ps1/);
 });
+
+// --- update-paperclip.bat: the update step ----------------------------------------------------------
+// The update step replaces the running .bat, and cmd carries on at its old
+// byte offset in the new file. So the lines up to and including the update
+// step must keep their exact bytes and length across releases.
+
+test("update-paperclip.bat keeps every byte offset up to the update step", async () => {
+  const lines = readFileSync(BAT, "utf8").replace(/\r\n/g, "\n").split("\n");
+  const top = lines.slice(0, 48).join("\n") + "\n";
+  const { createHash } = await import("node:crypto");
+  assert.equal(createHash("sha256").update(top).digest("hex"), "c46abf0e1c010e73f8c5f184914cc17a9a713aa963f4d01ccaa56b2af077e36d", "lines 1 to 48 are unchanged");
+  // Same length as the `git -C "%PAPERCLIP_SRC%" pull --ff-only origin master` line it replaced.
+  assert.equal(lines[48].length, 'git -C "%PAPERCLIP_SRC%" pull --ff-only origin master'.length);
+  assert.equal(lines[48].trimEnd(), "call :sync_from_origin");
+  assert.equal(lines[49], "if errorlevel 1 (");
+});
+
+async function syncHarness() {
+  const dir = await scratch("paperclip-guard-sync-");
+  const origin = path.join(dir, "origin.git");
+  const repo = path.join(dir, "checkout");
+  const run = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  run(dir, "init", "--bare", "-b", "master", origin);
+  run(dir, "clone", "-q", origin, repo);
+  run(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one");
+  run(repo, "push", "-q", "origin", "master");
+  const real = readFileSync(BAT, "utf8");
+  const section = real.slice(labelAt(real, "sync_from_origin"));
+  const harness = path.join(dir, "sync-harness.bat");
+  const header = ["@echo off", `set "PAPERCLIP_SRC=${repo}"`, "call :sync_from_origin", "echo EXIT=%errorlevel%", "exit /b 0", ""].join("\r\n");
+  await writeFile(harness, header + section);
+  const sync = () => spawnSync("cmd", ["/d", "/c", harness], { input: "", encoding: "utf8", windowsHide: true });
+  const advanceOrigin = async (message) => {
+    const other = path.join(dir, `other-${message}`);
+    run(dir, "clone", "-q", origin, other);
+    run(other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", message);
+    run(other, "push", "-q", "origin", "master");
+    return run(other, "rev-parse", "HEAD");
+  };
+  return { repo, run, sync, advanceOrigin };
+}
+
+test("the update step fast-forwards the checkout to origin/master", windowsOnly, async () => {
+  const { repo, run, sync, advanceOrigin } = await syncHarness();
+  const target = await advanceOrigin("two");
+  const result = sync();
+  assert.match(result.stdout, /EXIT=0/, result.stdout + result.stderr);
+  assert.equal(run(repo, "rev-parse", "HEAD"), target);
+});
+
+test("the update step fails when the checkout has diverged from origin/master", windowsOnly, async () => {
+  const { repo, run, sync, advanceOrigin } = await syncHarness();
+  await advanceOrigin("upstream");
+  run(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local");
+  const before = run(repo, "rev-parse", "HEAD");
+  const result = sync();
+  assert.match(result.stdout, /EXIT=1/, result.stdout + result.stderr);
+  assert.equal(run(repo, "rev-parse", "HEAD"), before, "nothing moved");
+});

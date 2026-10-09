@@ -213,9 +213,10 @@ the migrated database, restore the newest backup from
 
 The rollback point is the `commit` already in `install.json`, recorded just
 after the pull. It is not read before the pull because cmd re-reads a
-running .bat by position and the pull replaces the file, so nothing above
-the `git pull` line in `update-paperclip.bat` may change size. Keep that in
-mind when editing the script. For the same reason, everything from the
+running .bat by position and the update step replaces the file, so nothing
+above or on the update step line (`call :sync_from_origin`, padded to the
+length of the old `git pull` line) may change size. A test pins those
+bytes. Keep that in mind when editing the script. For the same reason, everything from the
 rollback to the end of the run is one parenthesised block: the rollback's
 `git reset --keep` can replace the running .bat with the previous version's
 copy, and cmd reads a whole block before running any of it, so nothing
@@ -253,9 +254,12 @@ is rewritten by `install-paperclip.bat` and `update-paperclip.bat`.
 - **Need to see live server output** — re-launch via `launch-paperclip.bat`
   instead of `paperclip.exe` (after stopping with `stop-paperclip.bat`).
 - **Port 3100 in use** — run `stop-paperclip.bat`, then launch again.
-- **`update-paperclip.bat` fails on `git pull`** — usually means you have
-  local commits or uncommitted changes that conflict with `origin/master`.
-  Resolve manually and re-run.
+- **`update-paperclip.bat` fails at step 2** (the fetch and fast-forward from
+  `origin/master`): usually means you have local commits that are not on
+  `origin/master`, or uncommitted changes in files the update touches.
+  Resolve manually and re-run. The step fetches, then fast-forwards from
+  `origin/master` rather than using `git pull`, so another program fetching
+  in the same checkout at the same moment can no longer break it.
 - **Server refuses to start with "pending migrations"** — run
   `pnpm db:migrate` from the repo root, then launch. (Update/install
   scripts already do this; you'll only hit this if launching directly
