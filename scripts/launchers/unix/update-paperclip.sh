@@ -13,9 +13,16 @@ git merge-base --is-ancestor HEAD origin/master || fail 'This checkout is ahead 
 backup_existing
 service stop
 cold_backup_if_needed
+record_previous_commit
 git merge --ff-only origin/master
-pnpm install --no-frozen-lockfile
-pnpm build:runtime
+# Nothing is migrated yet, so a failure here returns to the rollback point
+# rather than leave the new files to migrate the database when started.
+pnpm install --no-frozen-lockfile || roll_back_before_migrate 'Installing the new version failed' 'pnpm install'
+pnpm build:runtime || roll_back_before_migrate 'Building the new version failed' 'pnpm build:runtime'
 configure_database
-record_install
+# Start the new version once before the real relaunch; roll back if it fails.
+trial_start_or_roll_back
+# Refresh install.json (which also ends this update's rollback point) and keep
+# only the newest cold database copies.
+record_update_install
 start_after_maintenance

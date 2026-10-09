@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildInstallPatch, readInstallRecord, updateInstallRecord } from "../update-guard.mjs";
 
 export function shellQuote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
 const xmlEscape = (value) => value.replace(/[<>&"']/g, (c) => ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;', "'":'&apos;' }[c]));
@@ -30,11 +31,17 @@ async function main() {
   const instanceId = process.env.PAPERCLIP_INSTANCE_ID || "default";
   const configPath = process.env.PAPERCLIP_CONFIG || path.join(paperclipHome, "instances", instanceId, "config.json");
   const marker = path.join(paperclipHome, "install.json");
-  const existing = await readFile(marker, "utf8").then((raw) => JSON.parse(raw.replace(/^\uFEFF/, ""))).catch(() => ({}));
+  // Fields this script does not own are kept rather than dropped. The one
+  // exception is an update's rollback point (previousCommit): this runs only
+  // after a successful install, update or rebuild, when that point is used
+  // up, and a leftover one could send a later failed update back too far.
+  // const existing = await readFile(marker, "utf8").then((raw) => JSON.parse(raw.replace(/^\uFEFF/, ""))).catch(() => ({}));
+  const { record: existing } = await readInstallRecord(marker);
   const git = (...args) => execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8" }).trim();
   const now = new Date().toISOString();
   await mkdir(paperclipHome, { recursive: true });
-  await writeFile(marker, JSON.stringify({ repoPath, remote: git("remote", "get-url", "origin"), branch: git("branch", "--show-current"), commit: git("rev-parse", "HEAD"), installedAt: existing.installedAt || now, lastUpdated: now }, null, 2) + "\n");
+  // await writeFile(marker, JSON.stringify({ repoPath, remote: git("remote", "get-url", "origin"), branch: git("branch", "--show-current"), commit: git("rev-parse", "HEAD"), installedAt: existing.installedAt || now, lastUpdated: now }, null, 2) + "\n");
+  await updateInstallRecord(marker, buildInstallPatch(existing, { repoPath, remote: git("remote", "get-url", "origin"), branch: git("branch", "--show-current"), commit: git("rev-parse", "HEAD"), now }));
   for (const action of ["install", "launch", "stop", "update", "rebuild"]) {
     await chmod(path.join(repoPath, "scripts", "launchers", "macos", `${action}-paperclip.command`), 0o755);
     await chmod(path.join(repoPath, "scripts", "launchers", "unix", `${action}-paperclip.sh`), 0o755);

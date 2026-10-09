@@ -885,6 +885,7 @@ export async function startServer(): Promise<StartedServer> {
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
     heartbeatSchedulerEnabled: config.heartbeatSchedulerEnabled,
+    pluginRuntimeEnabled: config.pluginRuntimeEnabled,
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,

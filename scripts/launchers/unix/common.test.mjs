@@ -311,3 +311,223 @@ test("update, rebuild, and restart arm the alert first and relaunch through the 
     }
   }
 });
+
+// --- safe update: trial start and rollback --------------------------------------
+// update-guard.mjs has its own tests; here a stand-in node records which
+// command the shell flow ran and answers with the exit code under test.
+
+async function stubGuard(inst) {
+  const { chmod } = await import("node:fs/promises");
+  const stub = path.join(inst.bin, "node");
+  await writeFile(stub, [
+    "#!/usr/bin/env bash",
+    'echo "node ${1##*/} ${*:2}" >> "$STUB_LOG"',
+    'if [ "${1##*/}" = install-metadata.mjs ]; then exit "${STUB_INSTALL_EXIT:-0}"; fi',
+    'case "$2" in',
+    '  record-previous) exit "${STUB_RECORD_EXIT:-0}" ;;',
+    '  trial-start) exit "${STUB_TRIAL_EXIT:-0}" ;;',
+    '  rollback) exit "${STUB_ROLLBACK_EXIT:-0}" ;;',
+    '  prune-cold-backups) exit "${STUB_PRUNE_EXIT:-0}" ;;',
+    "esac",
+    "",
+  ].join("\n"));
+  await chmod(stub, 0o755);
+}
+
+// A failure that restarts Paperclip shows its alert in the background, so it
+// can land a moment after the run itself has returned.
+async function waitForAlerts(inst, count = 1, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = await alerts(inst);
+    if (found.length >= count || Date.now() > deadline) return found;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+test("update records the rollback point before the merge and runs the trial before recording the install", { skip }, async () => {
+  const source = await readFile(path.join(path.dirname(common), "update-paperclip.sh"), "utf8");
+  const at = (line) => source.indexOf(`\n${line}\n`);
+  for (const line of ["record_previous_commit", "git merge --ff-only origin/master", "configure_database", "trial_start_or_roll_back", "record_update_install"]) {
+    assert.ok(at(line) !== -1, `${line} present`);
+  }
+  assert.ok(at("cold_backup_if_needed") < at("record_previous_commit"), "backup first");
+  assert.ok(at("record_previous_commit") < at("git merge --ff-only origin/master"), "rollback point before the checkout moves");
+  assert.ok(at("configure_database") < at("trial_start_or_roll_back"), "trial after migrate");
+  assert.ok(at("trial_start_or_roll_back") < at("record_update_install"), "trial before the install marker changes");
+  assert.equal(at("record_install"), -1, "the update records its install through record_update_install");
+});
+
+test("if the rollback point cannot be recorded, the update stops and starts the unchanged version again", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; service stop; record_previous_commit; echo should-not-run", inst, { ...env, STUB_RECORD_EXIT: "1" });
+  assert.equal(result.code, 1);
+  const log = await readLog(inst);
+  assert.match(log, /node update-guard\.mjs record-previous/);
+  assert.match(log, /open -a Terminal/, "the version that was running starts again");
+  const [alert, extra] = await waitForAlerts(inst);
+  assert.equal(extra, undefined);
+  assert.match(alert, /Could not record the version to return to, so the update stopped before changing anything\. .*Paperclip is starting the version it had before\./);
+  assert.doesNotMatch(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /should-not-run/);
+});
+
+test("a failed install or build after the merge goes through the rollback, never straight to a start", { skip }, async () => {
+  const source = await readFile(path.join(path.dirname(common), "update-paperclip.sh"), "utf8");
+  assert.ok(source.includes("\npnpm install --no-frozen-lockfile || roll_back_before_migrate "), "install");
+  assert.ok(source.includes("\npnpm build:runtime || roll_back_before_migrate "), "build");
+  const at = (text) => source.indexOf(text);
+  assert.ok(at("git merge --ff-only origin/master") < at("pnpm install --no-frozen-lockfile") && at("pnpm build:runtime") < at("\nconfigure_database\n"), "between the merge and the migration");
+});
+
+test("a failed build is rolled back and the previous version starts", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; service stop; false || roll_back_before_migrate 'Building the new version failed' 'pnpm build:runtime'; echo should-not-run", inst, env);
+  assert.equal(result.code, 1);
+  const log = await readLog(inst);
+  assert.match(log, /node update-guard\.mjs rollback/);
+  assert.match(log, /open -a Terminal/, "the previous version starts");
+  const [alert, extra] = await waitForAlerts(inst);
+  assert.equal(extra, undefined);
+  assert.match(alert, /Building the new version failed, so the update was rolled back to the previous version\..*Paperclip is starting the previous version again\./);
+  assert.doesNotMatch(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /should-not-run/);
+});
+
+test("a failed install with no rollback point, or a failed rollback, stops without starting anything", { skip }, async () => {
+  for (const [exit, wording] of [["2", /no earlier version is recorded/], ["1", /rolling back to the previous version also failed/]]) {
+    const inst = await instance();
+    const env = await stubMac(inst);
+    await stubGuard(inst);
+    const result = run("watch_unattended_run update; service stop; false || roll_back_before_migrate 'Installing the new version failed' 'pnpm install'", inst, { ...env, STUB_ROLLBACK_EXIT: exit });
+    assert.equal(result.code, 1, exit);
+    const log = await readLog(inst);
+    assert.doesNotMatch(log, /open -a Terminal|installed-service\.ts start/, `rollback exit ${exit}: nothing started`);
+    const [alert] = await alerts(inst);
+    assert.match(alert ?? "", wording);
+    assert.match(alert ?? "", /Paperclip was not started, because .* migrate the database\..*Paperclip is stopped\. Fix the problem, then run the update again\./);
+  }
+});
+
+test("a recorded rollback point lets the update carry on", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; record_previous_commit; echo carried-on", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /carried-on/);
+  assert.doesNotMatch(await readLog(inst), /open -a Terminal/);
+});
+
+test("after a passing trial the install is recorded and old cold copies are pruned", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { fromUi: false });
+  await stubGuard(inst);
+  // run() keeps stderr only for a failed run, so the warnings are merged in.
+  const result = run("record_update_install 2>&1 && echo carried-on", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  const log = await readLog(inst);
+  assert.match(log, /node install-metadata\.mjs /);
+  assert.match(log, /node update-guard\.mjs prune-cold-backups/);
+  assert.match(result.stdout, /carried-on/);
+  assert.doesNotMatch(result.stdout, /Warning/);
+});
+
+test("a failure to record the install or prune is reported, but the healthy version still starts", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { fromUi: false });
+  await stubGuard(inst);
+  const result = run("record_update_install 2>&1 && echo carried-on", inst, { ...env, STUB_INSTALL_EXIT: "1", STUB_PRUNE_EXIT: "1" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /carried-on/);
+  assert.match(result.stdout, /the install record \(install\.json\) could not be refreshed\. The next update will not be able to roll back automatically/);
+  assert.match(result.stdout, /old cold database copies could not be removed/);
+});
+
+test("the failure alert does not hold up starting the previous version", { skip }, async () => {
+  const { chmod } = await import("node:fs/promises");
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  // An alert that stays up until it is clicked, which here is never: it
+  // waits for a release file the test only creates at the end.
+  const release = path.join(inst.root, "release-alert");
+  const closed = path.join(inst.root, "alert-closed");
+  await writeFile(path.join(inst.bin, "osascript"), [
+    "#!/usr/bin/env bash",
+    `printf 'osascript' >> "$STUB_LOG"; printf ' [%s]' "$@" >> "$STUB_LOG"; echo >> "$STUB_LOG"`,
+    `for _ in $(seq 1 300); do [ -e '${release}' ] && break; sleep 0.1; done`,
+    `touch '${closed}'`,
+    "",
+  ].join("\n"));
+  await chmod(path.join(inst.bin, "osascript"), 0o755);
+  try {
+    const started = Date.now();
+    const result = run("watch_unattended_run update; trial_start_or_roll_back", inst, { ...env, STUB_TRIAL_EXIT: "1" });
+    const elapsed = Date.now() - started;
+    assert.equal(result.code, 1);
+    assert.match(await readLog(inst), /open -a Terminal/, "the previous version was started");
+    const { existsSync } = await import("node:fs");
+    assert.equal(existsSync(closed), false, "while the alert was still waiting for its click");
+    assert.ok(elapsed < 20_000, `the run did not wait for the alert (${elapsed} ms)`);
+    const [alert] = await waitForAlerts(inst);
+    assert.match(alert ?? "", /rolled back to the previous version/, "the alert is still shown");
+  } finally {
+    await writeFile(release, "");
+  }
+});
+
+test("a passing trial carries on and leaves no trial server registered", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; trial_start_or_roll_back; echo carried-on", inst, env);
+  assert.equal(result.code, 0, result.stderr);
+  const log = await readLog(inst);
+  assert.match(log, /node update-guard\.mjs trial-start --launcher unix/);
+  assert.match(log, /installed-service\.ts stop/);
+  assert.doesNotMatch(log, /rollback/);
+  assert.match(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /carried-on/);
+  assert.deepEqual(await alerts(inst), []);
+});
+
+test("a failed trial rolls back, says so, and starts the previous version", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; trial_start_or_roll_back; echo should-not-run", inst, { ...env, STUB_TRIAL_EXIT: "1" });
+  assert.equal(result.code, 1);
+  const log = await readLog(inst);
+  assert.match(log, /node update-guard\.mjs rollback/);
+  assert.match(log, /open -a Terminal/, "the previous version is relaunched the usual way");
+  const [alert, extra] = await waitForAlerts(inst);
+  assert.equal(extra, undefined, "one alert, not a second one from the exit trap");
+  assert.match(alert, /\[Paperclip update failed\]/);
+  assert.match(alert, /rolled back to the previous version\. Paperclip is starting the previous version again\./);
+  assert.doesNotMatch(await readFile(env.PAPERCLIP_MAINTENANCE_LOG, "utf8"), /should-not-run/);
+});
+
+test("a failed trial with nothing to roll back to stops with the reason", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; service stop; trial_start_or_roll_back", inst, { ...env, STUB_TRIAL_EXIT: "1", STUB_ROLLBACK_EXIT: "2" });
+  assert.equal(result.code, 1);
+  const log = await readLog(inst);
+  assert.doesNotMatch(log, /installed-service\.ts start/);
+  assert.doesNotMatch(log, /open -a Terminal/);
+  const [alert] = await alerts(inst);
+  assert.match(alert, /no earlier version is recorded, so it could not be rolled back\. The reason is in the output above\. Paperclip is stopped\./);
+});
+
+test("a rollback that fails stops with the reason and does not relaunch", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst);
+  await stubGuard(inst);
+  const result = run("watch_unattended_run update; service stop; trial_start_or_roll_back", inst, { ...env, STUB_TRIAL_EXIT: "1", STUB_ROLLBACK_EXIT: "1" });
+  assert.equal(result.code, 1);
+  assert.doesNotMatch(await readLog(inst), /open -a Terminal|installed-service\.ts start/);
+  assert.match((await alerts(inst))[0] ?? "", /rolling back to the previous version also failed/);
+});

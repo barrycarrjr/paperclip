@@ -64,6 +64,42 @@ after success. A failed check leaves the old server running. A failure after
 the server has stopped leaves it stopped and keeps the old install marker: fix
 the reported error, then rerun rebuild.
 
+An update also checks that the new version actually starts. Before the merge
+it records the installed commit as `previousCommit` in
+`$PAPERCLIP_HOME/install.json`; if that cannot be recorded, the update stops
+before changing anything and starts the unchanged version again. If installing
+or building the new version fails after the merge, nothing has been migrated
+yet, so the checkout goes back to `previousCommit` and the previous version
+starts again; with no rollback point, or if that rollback fails, the update
+stops without starting anything rather than let the new files migrate the
+database. After
+migrating it starts the new version once, the same way `service start` does,
+and waits for `/api/health` (120 seconds by default,
+`PAPERCLIP_UPDATE_TRIAL_TIMEOUT_SECONDS` to change it) at the address the
+server reports in its `Server listening on` line, then stops that trial
+server and everything it started. The trial runs with
+`HEARTBEAT_SCHEDULER_ENABLED=false` and `PAPERCLIP_PLUGIN_RUNTIME_ENABLED=false`,
+so it starts no agent runs, schedules or plugins that would be cut off when it
+stops. A successful update refreshes `install.json`, which clears
+`previousCommit` (a rollback point that does not match the installed commit
+is refused later, so a leftover one can never skip a release), and keeps only
+the newest two `cold-*` database copies. If `install.json` cannot be
+refreshed, the new version still starts, with a warning that the next update
+cannot roll back automatically. If the trial does not become healthy, the
+update prints the reason and the server's last output (full output in
+`$PAPERCLIP_HOME/logs/update-trial-<timestamp>.log`), returns the checkout to
+`previousCommit` with `git reset --keep` (which refuses rather than discard
+local edits), reinstalls and rebuilds it, and starts that version. The run
+still counts as failed: on macOS a run from the UI shows an alert saying the
+update was rolled back, without waiting for that alert to be clicked before
+starting the previous version. Migrations are not undone and the database is not
+restored; the backup taken before the update is in the instance's
+`data/backups` folder. If no rollback point is recorded, or rolling back
+fails, the update stops with the reason and leaves Paperclip stopped. The
+first update that pulls this change in runs the previous version of the
+script, so it does not do a trial yet. Windows does the same; see
+`scripts/launchers/windows/README.md`.
+
 The Settings UI can update, rebuild, and restart a server started by these
 launchers. It runs the same checks before anything stops (`update-paperclip.sh
 --check`, `rebuild-paperclip.sh --check`) and shows the reason if one fails, or
