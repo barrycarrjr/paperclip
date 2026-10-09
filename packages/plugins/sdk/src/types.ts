@@ -1555,6 +1555,125 @@ export interface PluginIssuesClient {
   summaries: PluginIssueSummariesClient;
 }
 
+// ---------------------------------------------------------------------------
+// Channels: Clippy and approvals from outside chat apps (Slack, Teams, SMS)
+// ---------------------------------------------------------------------------
+
+/**
+ * A person in an outside chat app, as that app identifies them. A channel
+ * plugin never names a Paperclip user: it passes this, and the host looks up
+ * the user who paired this chat account to themselves from their profile.
+ */
+export interface PluginChannelIdentity {
+  /** The app's workspace or team id (a Slack team id); null when the app has none. */
+  workspace: string | null;
+  /** The app's own id for the person (a Slack user id). */
+  externalUserId: string;
+}
+
+export interface PluginChannelPairingStartInput {
+  identity: PluginChannelIdentity;
+  /** How to show the chat account in the user's profile, e.g. "Pat (Slack)". */
+  label?: string | null;
+}
+
+export interface PluginChannelPairingStartResult {
+  /** Send this to the person; they enter it in their Paperclip profile. */
+  code: string;
+  expiresAt: string;
+  /** Path of the profile page in the Paperclip web app. */
+  profilePath: string;
+  /** Full profile URL when the instance knows its public address, else null. */
+  profileUrl: string | null;
+}
+
+export interface PluginChannelUserLookupResult {
+  paired: boolean;
+  /** Display name of the paired user, for a greeting; null when not paired. */
+  userName: string | null;
+}
+
+/**
+ * `ctx.channels`: pairing chat app accounts to Paperclip users.
+ * Requires `channels.pairing`.
+ */
+export interface PluginChannelsClient {
+  /** A fresh pairing code for this chat account (earlier codes for it stop working). */
+  startPairing(input: PluginChannelPairingStartInput): Promise<PluginChannelPairingStartResult>;
+  /** Whether this chat account is paired to a Paperclip user yet. */
+  lookupUser(identity: PluginChannelIdentity): Promise<PluginChannelUserLookupResult>;
+}
+
+export interface PluginChatTurnInput {
+  /** Who sent the message; must be paired to a Paperclip user. */
+  identity: PluginChannelIdentity;
+  /** Company scope of a session this call starts. */
+  companyId: string;
+  /**
+   * Session to continue. If it no longer exists or belongs to someone else,
+   * a new one is started and its id returned.
+   */
+  sessionId?: string | null;
+  /** Title for a session started by this call. */
+  title?: string;
+  text: string;
+  /** Model for a session started by this call; defaults to the instance's Clippy default. */
+  model?: string;
+}
+
+export interface PluginChatTurnResult {
+  /** The session the turn ran in; save it to continue the conversation. */
+  sessionId: string;
+  replyText: string;
+  stopReason: string;
+  /** Outbound actions queued for approval during this turn that the user may decide. */
+  pendingApprovals: Array<{ id: string; toolName: string; summary: string | null }>;
+  /**
+   * Tools that needed the user's yes, which a chat app cannot give, so they
+   * did not run. Point the user at the Paperclip app for these.
+   */
+  needsConfirmation: string[];
+  toolCalls: Array<{ name: string; ok: boolean }>;
+  /** Set when the turn failed part way; the session id is still valid. */
+  error: string | null;
+}
+
+/**
+ * `ctx.chat`: one Clippy turn for the paired user of a chat account.
+ * Requires `chat.turn`.
+ */
+export interface PluginChatClient {
+  turn(input: PluginChatTurnInput): Promise<PluginChatTurnResult>;
+}
+
+export interface PluginApprovalRespondInput {
+  /** Who pressed the button; must be paired to a Paperclip user. */
+  identity: PluginChannelIdentity;
+  approvalId: string;
+  decision: "approve" | "reject";
+  note?: string | null;
+}
+
+export interface PluginApprovalRespondResult {
+  id: string;
+  companyId: string;
+  type: string;
+  status: string;
+  /** False when the approval had already been decided; `status` says how. */
+  applied: boolean;
+  /** What happened to a drafted outbound call on approve; null otherwise. */
+  executed: { ok: boolean; reason: string | null; error: string | null } | null;
+}
+
+/**
+ * `ctx.approvals`: approve or reject as the paired user of a chat account.
+ * The host applies the same access check as the web app's approval buttons.
+ * Requires `approvals.respond`.
+ */
+export interface PluginApprovalsClient {
+  respond(input: PluginApprovalRespondInput): Promise<PluginApprovalRespondResult>;
+}
+
 /**
  * `ctx.agents` — read and manage agents.
  *
@@ -1915,6 +2034,15 @@ export interface PluginContext {
 
   /** Read and manage agents. Requires `agents.read` for reads; `agents.pause` / `agents.resume` / `agents.invoke` for write ops. */
   agents: PluginAgentsClient;
+
+  /** Pair chat app accounts (Slack users, for example) to Paperclip users. Requires `channels.pairing`. */
+  channels: PluginChannelsClient;
+
+  /** One Clippy turn for the paired user of a chat account. Requires `chat.turn`. */
+  chat: PluginChatClient;
+
+  /** Approve or reject as the paired user of a chat account. Requires `approvals.respond`. */
+  approvals: PluginApprovalsClient;
 
   /** Read and mutate goals. Requires `goals.read` for reads; `goals.create` / `goals.update` for write ops. */
   goals: PluginGoalsClient;

@@ -164,6 +164,17 @@ const LIVENESS_BOOKKEEPING_ACTIVITY_ACTIONS = [
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
 const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
+/**
+ * Run-context key for free text handed over by whoever requested a wake (a
+ * plugin's `agents.invoke`, for example). Rendered into the task context.
+ * Holds one message as a string; when wakes carrying messages are merged
+ * into one run it holds all of them, oldest first, as an array.
+ */
+export const WAKE_PROMPT_CONTEXT_KEY = "wakePrompt";
+/** Messages kept when wakes are merged; the oldest are dropped beyond this. */
+export const MAX_WAKE_PROMPTS_PER_RUN = 20;
+/** Longest single message rendered into the task context. */
+export const MAX_WAKE_PROMPT_CHARS = 20_000;
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
@@ -1405,6 +1416,24 @@ export function shouldResetTaskSessionForWake(
   return false;
 }
 
+/**
+ * Whether a run starts in a new session, and why. The agent's own policy
+ * comes first: an agent set to start fresh every run never resumes, whatever
+ * woke it. Otherwise the wake decides (an assignment, a review request).
+ */
+export function resolveTaskSessionReset(
+  contextSnapshot: Record<string, unknown> | null | undefined,
+  policy: { freshSessionEveryRun: boolean },
+): { reset: boolean; reason: string | null } {
+  if (policy.freshSessionEveryRun) {
+    return { reset: true, reason: "the agent is set to start a fresh session every run" };
+  }
+  return {
+    reset: shouldResetTaskSessionForWake(contextSnapshot),
+    reason: describeSessionResetReason(contextSnapshot),
+  };
+}
+
 function shouldRequireIssueCommentForWake(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ) {
@@ -1509,6 +1538,9 @@ function shouldQueueFollowupForRunningIssueWake(input: {
   wakeCommentId: string | null;
 }) {
   if (input.wakeCommentId) return true;
+  // A run that has started has already built its prompt, so a message merged
+  // into it would never be read. It gets a run of its own instead.
+  if (readWakePrompts(input.contextSnapshot).length > 0) return true;
   const wakeReason = readNonEmptyString(input.contextSnapshot?.wakeReason);
   return Boolean(wakeReason && RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP.has(wakeReason));
 }
@@ -1573,6 +1605,15 @@ function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   }
 
   return merged;
+}
+
+/** Every message a run context carries for its wake, oldest first. */
+export function readWakePrompts(contextSnapshot: Record<string, unknown> | null | undefined): string[] {
+  const raw = contextSnapshot?.[WAKE_PROMPT_CONTEXT_KEY];
+  const values = Array.isArray(raw) ? raw : [raw];
+  return values
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
 }
 
 function enrichWakeContextSnapshot(input: {
@@ -1640,6 +1681,15 @@ export function mergeCoalescedContextSnapshot(
     ...existing,
     ...incoming,
   };
+  // Messages handed over with each wake are kept, never overwritten: a second
+  // Slack message landing on a run that is still queued joins the first one
+  // instead of replacing it.
+  const wakePrompts = [...readWakePrompts(existing), ...readWakePrompts(incoming)].slice(-MAX_WAKE_PROMPTS_PER_RUN);
+  if (wakePrompts.length > 1) {
+    merged[WAKE_PROMPT_CONTEXT_KEY] = wakePrompts;
+  } else if (wakePrompts.length === 1) {
+    merged[WAKE_PROMPT_CONTEXT_KEY] = wakePrompts[0];
+  }
   const mergedCommentIds = mergeWakeCommentIds(existing, incoming);
   if (mergedCommentIds.length > 0) {
     const latestCommentId = mergedCommentIds[mergedCommentIds.length - 1];
@@ -1824,7 +1874,7 @@ async function buildPaperclipWakePayload(input: {
   };
 }
 
-function runTaskKey(run: typeof heartbeatRuns.$inferSelect) {
+function runTaskKey(run: Pick<typeof heartbeatRuns.$inferSelect, "contextSnapshot">) {
   return deriveTaskKey(run.contextSnapshot as Record<string, unknown> | null, null);
 }
 
@@ -1855,19 +1905,36 @@ export function buildPaperclipTaskMarkdown(input: {
     id: string;
     body: string;
   } | null;
+  /**
+   * Free text handed over by whoever requested this wake (a plugin calling
+   * `agents.invoke`, for example a Slack message from the operator), oldest
+   * first when several wakes were merged. Rendered as user-authored data,
+   * never as instructions.
+   */
+  wakePrompts?: string[] | null;
 }) {
   const quoteTaskScalar = (value: string) => JSON.stringify(value);
   const fenceTaskText = (value: string) => {
-    const longestBacktickRun = Math.max(
-      2,
-      ...Array.from(value.matchAll(/`+/g), (match) => match[0].length),
-    );
+    // A loop, not Math.max(...runs): spreading every backtick run of a long
+    // text into one call can exceed the engine's argument limit.
+    let longestBacktickRun = 2;
+    for (const match of value.matchAll(/`+/g)) {
+      if (match[0].length > longestBacktickRun) longestBacktickRun = match[0].length;
+    }
     const fence = "`".repeat(longestBacktickRun + 1);
     return [fence + "text", value, fence].join("\n");
   };
+  const capWakePrompt = (value: string) =>
+    value.length > MAX_WAKE_PROMPT_CHARS
+      ? `${value.slice(0, MAX_WAKE_PROMPT_CHARS)}\n[message cut at ${MAX_WAKE_PROMPT_CHARS} characters]`
+      : value;
   const issue = input.issue;
   const wakeComment = input.wakeComment ?? null;
-  if (!issue && !wakeComment) return null;
+  const wakePrompts = (input.wakePrompts ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .map(capWakePrompt);
+  if (!issue && !wakeComment && wakePrompts.length === 0) return null;
 
   const lines = [
     "Paperclip task context:",
@@ -1885,6 +1952,14 @@ export function buildPaperclipTaskMarkdown(input: {
   }
   if (wakeComment?.body.trim()) {
     lines.push("", "Latest wake comment:", fenceTaskText(wakeComment.body.trim()));
+  }
+  if (wakePrompts.length === 1) {
+    lines.push("", "Message for this wake:", fenceTaskText(wakePrompts[0]!));
+  } else if (wakePrompts.length > 1) {
+    lines.push("", `Messages for this wake (${wakePrompts.length}, oldest first):`);
+    for (const [index, wakePrompt] of wakePrompts.entries()) {
+      lines.push("", `Message ${index + 1}:`, fenceTaskText(wakePrompt));
+    }
   }
   lines.push("", "Use this task context as the current assignment.");
   return lines.join("\n");
@@ -3975,6 +4050,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
       wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
+      // Start every run in a new session instead of resuming the saved one.
+      // For agents whose runs are self-contained sweeps that keep their state
+      // in Paperclip (memories, issues) rather than in the conversation: each
+      // run re-reads its full instructions and nothing stale carries over.
+      freshSessionEveryRun: asBoolean(heartbeat.freshSessionEveryRun, false),
     };
   }
 
@@ -4016,15 +4096,23 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return Number(count ?? 0);
   }
 
-  async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
+  async function claimQueuedRun(
+    run: typeof heartbeatRuns.$inferSelect,
+    opts: { holdsStartLock?: boolean } = {},
+  ) {
     if (run.status !== "queued") return run;
+    // Under the agent's start lock the caller goes on through the queue
+    // itself, so a cancel here must not start it again: that would wait out
+    // the lock this call is holding (30 seconds), then run alongside it.
+    const cancel = (reason: string) =>
+      cancelRunInternal(run.id, reason, { startNextQueued: !opts.holdsStartLock });
     const agent = await getAgent(run.agentId);
     if (!agent) {
-      await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
+      await cancel("Cancelled because the agent no longer exists");
       return null;
     }
     if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
-      await cancelRunInternal(run.id, "Cancelled because the agent is not invokable");
+      await cancel("Cancelled because the agent is not invokable");
       return null;
     }
 
@@ -4034,7 +4122,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
-      await cancelRunInternal(run.id, budgetBlock.reason);
+      await cancel(budgetBlock.reason);
       return null;
     }
 
@@ -4050,7 +4138,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         contextSnapshot: context,
       });
       if (activePauseHold && !treeHoldInteractionWake) {
-        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
+        await cancel("Cancelled because issue is held by an active subtree pause hold");
         await logActivity(db, {
           companyId: run.companyId,
           actorType: "system",
@@ -4860,8 +4948,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
-      const runningCount = await countRunningRunsForAgent(agentId);
-      const availableSlots = Math.max(0, policy.maxConcurrentRuns - runningCount);
+      // Only the fields a task is read from: a run's context also holds its
+      // rendered prompt, which can be large.
+      const runningRuns = await db
+        .select({
+          taskKey: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'taskKey'`,
+          taskId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'taskId'`,
+          issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
+        })
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "running")));
+      const availableSlots = Math.max(0, policy.maxConcurrentRuns - runningRuns.length);
       if (availableSlots <= 0) return [];
 
       const queuedRuns = await db
@@ -4908,11 +5005,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return left.createdAt.getTime() - right.createdAt.getTime();
       });
 
+      // Two runs of one task would resume the same saved session, so they never
+      // run side by side, whatever the agent's run limit allows. A queued run
+      // whose task already has a run going (the follow-up for a message that
+      // arrived mid-run, say) waits; the end of that run starts it.
+      const busyTaskScopes = runningRuns.map((row) => deriveTaskKey(row, null));
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
       for (const queuedRun of prioritizedRuns) {
         if (claimedRuns.length >= availableSlots) break;
-        const claimed = await claimQueuedRun(queuedRun);
-        if (claimed) claimedRuns.push(claimed);
+        const taskScope = runTaskKey(queuedRun);
+        if (busyTaskScopes.some((busyScope) => isSameTaskScope(busyScope, taskScope))) continue;
+        const claimed = await claimQueuedRun(queuedRun, { holdsStartLock: true });
+        if (!claimed) continue;
+        claimedRuns.push(claimed);
+        busyTaskScopes.push(taskScope);
       }
       if (claimedRuns.length === 0) return [];
 
@@ -5036,8 +5142,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const taskSession = taskKey
       ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
       : null;
-    const resetTaskSession = shouldResetTaskSessionForWake(context);
-    const sessionResetReason = describeSessionResetReason(context);
+    const { reset: resetTaskSession, reason: sessionResetReason } = resolveTaskSessionReset(
+      context,
+      parseHeartbeatPolicy(agent),
+    );
     const taskSessionForRun = resetTaskSession ? null : taskSession;
     const explicitResumeSessionParams = normalizeSessionParams(
       sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
@@ -5141,6 +5249,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }
         : null,
       wakeComment: wakeCommentContext,
+      wakePrompts: readWakePrompts(context),
     });
     if (issueRef) {
       context.paperclipIssue = {
@@ -6155,6 +6264,37 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         adapterResult.summary ?? null,
       );
 
+      // Save the session before the run is reported finished: whatever starts
+      // next reads it (a follow-up for a message that arrived mid-run, a
+      // deferred wake promoted below, a retry, a plugin sending its next
+      // message the moment this one is done). Saved after, a run started in
+      // between would resume the session this one began from. Only the session
+      // here; the run's cost is recorded after, because a budget stop it trips
+      // cancels whatever is still running, and that would include this run.
+      await db
+        .update(agentRuntimeState)
+        .set({ sessionId: nextSessionState.legacySessionId, updatedAt: new Date() })
+        .where(eq(agentRuntimeState.agentId, agent.id));
+      if (taskKey) {
+        if (adapterResult.clearSession || (!nextSessionState.params && !nextSessionState.displayId)) {
+          await clearTaskSessions(agent.companyId, agent.id, {
+            taskKey,
+            adapterType: agent.adapterType,
+          });
+        } else {
+          await upsertTaskSession({
+            companyId: agent.companyId,
+            agentId: agent.id,
+            adapterType: agent.adapterType,
+            taskKey,
+            sessionParamsJson: nextSessionState.params,
+            sessionDisplayId: nextSessionState.displayId,
+            lastRunId: run.id,
+            lastError: outcome === "succeeded" ? null : (adapterResult.errorMessage ?? "run_failed"),
+          });
+        }
+      }
+
       let persistedRun = await setRunStatus(run.id, status, {
         finishedAt: new Date(),
         error: runErrorMessage,
@@ -6225,25 +6365,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await updateRuntimeState(agent, finalizedRun, adapterResult, {
           legacySessionId: nextSessionState.legacySessionId,
         }, normalizedUsage);
-        if (taskKey) {
-          if (adapterResult.clearSession || (!nextSessionState.params && !nextSessionState.displayId)) {
-            await clearTaskSessions(agent.companyId, agent.id, {
-              taskKey,
-              adapterType: agent.adapterType,
-            });
-          } else {
-            await upsertTaskSession({
-              companyId: agent.companyId,
-              agentId: agent.id,
-              adapterType: agent.adapterType,
-              taskKey,
-              sessionParamsJson: nextSessionState.params,
-              sessionDisplayId: nextSessionState.displayId,
-              lastRunId: finalizedRun.id,
-              lastError: outcome === "succeeded" ? null : (adapterResult.errorMessage ?? "run_failed"),
-            });
-          }
-        }
       }
       await finalizeAgentStatus(agent.id, outcome);
     } catch (err) {
@@ -7621,7 +7742,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(
+    runId: string,
+    reason = "Cancelled by control plane",
+    // False only from claimQueuedRun under the start lock; see there.
+    opts: { startNextQueued?: boolean } = {},
+  ) {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -7675,7 +7801,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     runningProcesses.delete(run.id);
     await finalizeAgentStatus(run.agentId, "cancelled");
-    await startNextQueuedRunForAgent(run.agentId);
+    if (opts.startNextQueued !== false) await startNextQueuedRunForAgent(run.agentId);
     return cancelled;
   }
 

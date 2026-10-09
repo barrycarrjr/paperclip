@@ -11,6 +11,7 @@ const mockIssueService = vi.hoisted(() => ({
   findMentionedProjectIds: vi.fn(),
   getCommentCursor: vi.fn(),
   getComment: vi.fn(),
+  listComments: vi.fn(),
   listBlockerAttention: vi.fn(),
   listAttachments: vi.fn(),
 }));
@@ -106,17 +107,19 @@ vi.mock("../services/execution-workspaces.js", () => ({
   executionWorkspaceService: () => mockExecutionWorkspaceService,
 }));
 
-function createApp() {
+function createApp(
+  actor: Record<string, unknown> = {
+    type: "board",
+    userId: "local-board",
+    companyIds: ["company-1"],
+    source: "local_implicit",
+    isInstanceAdmin: false,
+  },
+) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
+    (req as any).actor = { ...actor };
     next();
   });
   app.use("/api", issueRoutes({} as any, {} as any));
@@ -230,6 +233,84 @@ describe.sequential("issue goal context routes", () => {
       { includeCommentBodies: false },
     );
     expect(mockGoalService.getDefaultCompanyGoal).not.toHaveBeenCalled();
+  });
+
+  // GET /issues/:id is a read, so the portfolio root's agents may open any
+  // company's issue, the same as the portfolio list endpoints already allow.
+  // An agent from another company that is not the portfolio root stays out.
+  it("lets a portfolio-root agent read an issue in another company", async () => {
+    const res = await request(
+      createApp({
+        type: "agent",
+        agentId: "55555555-5555-4555-8555-555555555555",
+        companyId: "company-hq",
+        source: "agent_jwt",
+        isPortfolioRootAgent: true,
+      }),
+    ).get("/api/issues/11111111-1111-4111-8111-111111111111");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("keeps an HQ-scoped tool session (Clippy) at its own company", async () => {
+    const res = await request(
+      createApp({
+        type: "tool_session",
+        companyId: "company-hq",
+        userId: "hq-viewer",
+        source: "tool_session",
+        isPortfolioRootAgent: true,
+      }),
+    ).get("/api/issues/11111111-1111-4111-8111-111111111111");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("applies the same read rule to heartbeat-context, the comment list and a single comment", async () => {
+    mockIssueService.listComments.mockResolvedValue([]);
+    mockIssueService.getComment.mockResolvedValue({
+      id: "c1",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      body: "hello",
+      createdAt: new Date("2026-10-09T10:00:00Z"),
+    });
+    const rootAgent = {
+      type: "agent",
+      agentId: "55555555-5555-4555-8555-555555555555",
+      companyId: "company-hq",
+      source: "agent_jwt",
+      isPortfolioRootAgent: true,
+    };
+    const hqToolSession = {
+      type: "tool_session",
+      companyId: "company-hq",
+      userId: "hq-viewer",
+      source: "tool_session",
+      isPortfolioRootAgent: true,
+    };
+    for (const path of [
+      "/api/issues/11111111-1111-4111-8111-111111111111/heartbeat-context",
+      "/api/issues/11111111-1111-4111-8111-111111111111/comments",
+      "/api/issues/11111111-1111-4111-8111-111111111111/comments/c1",
+    ]) {
+      expect((await request(createApp(rootAgent)).get(path)).status, `${path} as portfolio-root agent`).toBe(200);
+      expect((await request(createApp(hqToolSession)).get(path)).status, `${path} as HQ tool session`).toBe(403);
+    }
+  });
+
+  it("still blocks an agent from another company that is not the portfolio root", async () => {
+    const res = await request(
+      createApp({
+        type: "agent",
+        agentId: "55555555-5555-4555-8555-555555555555",
+        companyId: "company-2",
+        source: "agent_jwt",
+        isPortfolioRootAgent: false,
+      }),
+    ).get("/api/issues/11111111-1111-4111-8111-111111111111");
+
+    expect(res.status).toBe(403);
   });
 
   it("surfaces the project goal from GET /issues/:id/heartbeat-context", async () => {

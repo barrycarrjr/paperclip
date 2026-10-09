@@ -59,7 +59,25 @@ export function assertCompanyAccess(
   companyId: string,
   mode: AccessMode = "write",
 ) {
-  assertAuthenticated(req);
+  assertActorCompanyAccess(req.actor, companyId, mode, req.method);
+}
+
+/**
+ * The company access rule itself, for code that acts for an actor outside an
+ * HTTP request: a chat app paired to a user, deciding an approval or running
+ * a Clippy turn as that user. `method` plays the part of the request method,
+ * so pass "POST" for anything that changes state and the board membership
+ * checks for writes apply exactly as they do to the web app's own routes.
+ */
+export function assertActorCompanyAccess(
+  actor: Request["actor"],
+  companyId: string,
+  mode: AccessMode = "write",
+  method: string = "GET",
+) {
+  if (actor.type === "none") {
+    throw unauthorized();
+  }
 
   // Personal companies first, before any rule that could grant access.
   //
@@ -77,7 +95,7 @@ export function assertCompanyAccess(
   if (personalOwner) {
     // Single-operator local install: there is nobody to be isolated from, and
     // the implicit actor carries a synthetic id rather than a real user row.
-    if (req.actor.type === "board" && req.actor.source === "local_implicit") {
+    if (actor.type === "board" && actor.source === "local_implicit") {
       return;
     }
 
@@ -85,15 +103,15 @@ export function assertCompanyAccess(
     // company is the owner acting through it, so it is allowed; anything
     // scoped elsewhere is not, and that deliberately includes the portfolio
     // root's agents, which can otherwise read across every company.
-    if (req.actor.type === "agent" || req.actor.type === "tool_session") {
-      const sameCompany = req.actor.companyId === companyId;
+    if (actor.type === "agent" || actor.type === "tool_session") {
+      const sameCompany = actor.companyId === companyId;
       const sameUser =
-        req.actor.type === "agent" || !req.actor.userId || req.actor.userId === personalOwner;
+        actor.type === "agent" || !actor.userId || actor.userId === personalOwner;
       if (sameCompany && sameUser) return;
       throw forbidden("This is someone's personal company");
     }
 
-    if (req.actor.type === "board" && req.actor.userId === personalOwner) {
+    if (actor.type === "board" && actor.userId === personalOwner) {
       return;
     }
 
@@ -102,30 +120,30 @@ export function assertCompanyAccess(
     throw forbidden("This is someone's personal company");
   }
 
-  if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
-    if (mode === "read" && req.actor.isPortfolioRootAgent) {
+  if (actor.type === "agent" && actor.companyId !== companyId) {
+    if (mode === "read" && actor.isPortfolioRootAgent) {
       return;
     }
     throw forbidden("Agent key cannot access another company");
   }
-  if (req.actor.type === "tool_session" && req.actor.companyId !== companyId) {
-    if (mode === "read" && req.actor.isPortfolioRootAgent) {
+  if (actor.type === "tool_session" && actor.companyId !== companyId) {
+    if (mode === "read" && actor.isPortfolioRootAgent) {
       return;
     }
     throw forbidden("Tool session cannot access another company");
   }
-  if (req.actor.type === "board" && req.actor.source !== "local_implicit") {
-    const allowedCompanies = req.actor.companyIds ?? [];
+  if (actor.type === "board" && actor.source !== "local_implicit") {
+    const allowedCompanies = actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
-      if (mode === "read" && req.actor.isPortfolioRootUserAdmin) {
+      if (mode === "read" && actor.isPortfolioRootUserAdmin) {
         return;
       }
       throw forbidden("User does not have access to this company");
     }
-    const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
-    const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(method);
-    if (!isSafeMethod && !req.actor.isInstanceAdmin && Array.isArray(req.actor.memberships)) {
-      const membership = req.actor.memberships.find((item) => item.companyId === companyId);
+    const normalizedMethod = typeof method === "string" ? method.toUpperCase() : "GET";
+    const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(normalizedMethod);
+    if (!isSafeMethod && !actor.isInstanceAdmin && Array.isArray(actor.memberships)) {
+      const membership = actor.memberships.find((item) => item.companyId === companyId);
       if (!membership || membership.status !== "active") {
         throw forbidden("User does not have active company access");
       }
@@ -176,6 +194,20 @@ export function getActorInfo(req: Request) {
 export function hasCompanyAccess(req: Request, companyId: string, mode: AccessMode = "read"): boolean {
   try {
     assertCompanyAccess(req, companyId, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function hasActorCompanyAccess(
+  actor: Request["actor"],
+  companyId: string,
+  mode: AccessMode = "read",
+  method: string = "GET",
+): boolean {
+  try {
+    assertActorCompanyAccess(actor, companyId, mode, method);
     return true;
   } catch {
     return false;

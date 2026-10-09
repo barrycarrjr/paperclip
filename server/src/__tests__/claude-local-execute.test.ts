@@ -157,6 +157,10 @@ describe("claude execute", () => {
       });
       const captured = JSON.parse(await fs.readFile(capturePath, "utf-8"));
       expect(captured.argv).toContain("--append-system-prompt-file");
+      // The CLI's own scheduling tools never fire under Paperclip, and
+      // ScheduleWakeup keeps the CLI alive after its final result.
+      expect(captured.argv).toContain("--disallowedTools");
+      expect(captured.argv).toContain("ScheduleWakeup");
     } finally {
       restore();
       await fs.rm(root, { recursive: true, force: true });
@@ -653,6 +657,74 @@ describe("claude execute", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("treats a CLI that lingers after its clean result, and is killed by the cleanup, as a succeeded run", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-linger-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    // What ScheduleWakeup did on 2026-10-07 and 2026-10-08: the CLI printed its
+    // success result, then stayed alive waiting for a wake Paperclip never
+    // delivers. The runner kills it, and on Windows that kill used to surface
+    // as exit code 1, so 76 finished mailbox-triage runs were recorded failed.
+    const resultEvent = {
+      type: "result",
+      subtype: "success",
+      session_id: "claude-session-linger",
+      is_error: false,
+      result: "Nothing new to triage this run.",
+    };
+    const commandPath = await writeFakeCli(
+      path.join(root, "claude"),
+      `console.log(${JSON.stringify(JSON.stringify(resultEvent))});
+setInterval(() => {}, 1000);
+`,
+    );
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const result = await execute({
+        runId: "run-claude-linger",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Follow the paperclip heartbeat.",
+          terminalResultCleanupGraceMs: 100,
+          graceSec: 1,
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      // The scheduler marks a run succeeded when the exit code is 0 or null
+      // and there is no error message.
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBeNull();
+      expect(result.signal).toBe("SIGTERM");
+      expect(result.errorMessage).toBeNull();
+      expect(result.errorCode).toBeNull();
+      expect(result.sessionId).toBe("claude-session-linger");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
   // "Out of extra usage" means the paid overage on top of the subscription is
   // gone, so the same account keeps refusing until its window resets. It used

@@ -2,13 +2,14 @@ import type { Db } from "@paperclipai/db";
 import {
   agentTaskSessions as agentTaskSessionsTable,
   agents as agentsTable,
+  approvals as approvalsTable,
   budgetIncidents,
   costEvents,
   heartbeatRuns,
   issues as issuesTable,
   pluginLogs,
 } from "@paperclipai/db";
-import { eq, and, like, desc, inArray, sql } from "drizzle-orm";
+import { eq, and, asc, like, desc, inArray, or, sql } from "drizzle-orm";
 import type {
   HostServices,
   Company,
@@ -42,6 +43,21 @@ import { pluginStateStore } from "./plugin-state-store.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
 import { logActivity } from "./activity-log.js";
+import { chatService } from "./chat.js";
+import { approvalService } from "./approvals.js";
+import { approvalDecisionService } from "./approval-decisions.js";
+import {
+  buildInvokeWakeContext,
+  CHANNEL_PROFILE_PATH,
+  createChannelHostMethods,
+} from "./channel-host-methods.js";
+import { channelLinkService } from "./channel-links.js";
+import { registerChatToolInteractions } from "./chat-tool-interactions.js";
+import { chatPermissions } from "./chat-permissions.js";
+import { WAKE_PROMPT_CONTEXT_KEY } from "./heartbeat.js";
+import { boardActorForLinkedUser } from "../middleware/auth.js";
+import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
+import type { PluginMcpBridge } from "./plugin-mcp-bridge.js";
 import {
   pickBestVisionModel,
   isVisionCapableModel,
@@ -648,6 +664,14 @@ export function buildHostServices(
   options: {
     pluginWorkerManager?: PluginWorkerManager;
     systemSnapshotService?: SystemSnapshotService;
+    /**
+     * Backs `chat.turn` (Clippy's plugin tools) and `approvals.respond`
+     * (re-dispatch of an approved outbound draft). Lazy because the
+     * dispatcher is built after the loader that builds these services.
+     */
+    getToolDispatcher?: () => PluginToolDispatcher | null;
+    /** Backs `chat.turn` for adapter-run Clippy sessions (plugin tools over MCP). */
+    pluginMcpBridge?: PluginMcpBridge | null;
   } = {},
 ): HostServices & { dispose(): void } {
   /**
@@ -684,6 +708,68 @@ export function buildHostServices(
   const budgets = budgetService(db);
   const issueApprovals = issueApprovalService(db);
   const assets = assetService(db);
+  const approvalsSvc = approvalService(db);
+  const channelLinks = channelLinkService(db);
+  const decisions = approvalDecisionService(db, {
+    pluginWorkerManager: options.pluginWorkerManager,
+    getToolDispatcher: options.getToolDispatcher,
+    heartbeat,
+  });
+  let chatSvc: ReturnType<typeof chatService> | null = null;
+  const getChat = () => {
+    if (!chatSvc) {
+      chatSvc = chatService(db, {
+        pluginToolDispatcher: options.getToolDispatcher?.() ?? null,
+        pluginMcpBridge: options.pluginMcpBridge ?? null,
+      });
+    }
+    return chatSvc;
+  };
+  const channelMethods = createChannelHostMethods({
+    pluginId,
+    pluginKey,
+    links: {
+      resolveUserId: (identity) => channelLinks.resolveUserId(pluginId, identity),
+      startPairing: (identity, label) => channelLinks.startPairing({ pluginId, identity, label }),
+    },
+    boardActorForUser: (userId) => boardActorForLinkedUser(db, userId),
+    ensurePluginAvailableForCompany: (companyId) => ensurePluginAvailableForCompany(companyId),
+    chat: () => getChat(),
+    registerInteractions: (sessionId, emit) => registerChatToolInteractions(sessionId, emit),
+    denyConfirmation: (sessionId, toolUseId) => {
+      chatPermissions.resolve(sessionId, toolUseId, "deny");
+    },
+    listPendingDrafts: async ({ chatSessionId, includeIds }) => {
+      const fromSession = sql`${approvalsTable.payload} ->> 'chatSessionId' = ${chatSessionId}`;
+      const rows = await db
+        .select({ id: approvalsTable.id, companyId: approvalsTable.companyId, payload: approvalsTable.payload })
+        .from(approvalsTable)
+        .where(
+          and(
+            eq(approvalsTable.type, "outbound_tool_draft"),
+            eq(approvalsTable.status, "pending"),
+            includeIds.length > 0 ? or(fromSession, inArray(approvalsTable.id, includeIds)) : fromSession,
+          ),
+        )
+        .orderBy(asc(approvalsTable.createdAt));
+      return rows.map((row) => ({
+        id: row.id,
+        companyId: row.companyId,
+        payload: (row.payload ?? {}) as Record<string, unknown>,
+      }));
+    },
+    getApproval: async (approvalId) => {
+      const approval = await approvalsSvc.getById(approvalId);
+      return approval
+        ? { id: approval.id, companyId: approval.companyId, type: approval.type, status: approval.status }
+        : null;
+    },
+    decisions,
+    profileUrl: () => {
+      const base = process.env.PAPERCLIP_PUBLIC_URL?.trim();
+      return base ? `${base.replace(/\/+$/, "")}${CHANNEL_PROFILE_PATH}` : null;
+    },
+  });
   const scopedBus = eventBus.forPlugin(pluginKey);
 
   // Track active session event subscriptions for cleanup
@@ -1904,10 +1990,35 @@ export function buildHostServices(
           payload: { prompt: params.prompt },
           requestedByActorType: "system",
           requestedByActorId: pluginId,
+          // The prompt reaches the agent through the run context: the
+          // heartbeat renders it into the task context the adapters already
+          // hand to the agent. The payload alone is never rendered.
+          contextSnapshot: buildInvokeWakeContext({
+            prompt: params.prompt,
+            reason: params.reason,
+            pluginId,
+            pluginKey,
+          }),
         });
         if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
         return { runId: run.id };
       },
+    },
+
+    // Channel plugins acting for the user paired to a chat account; the
+    // rules live in channel-host-methods.ts so they can be tested without a
+    // database.
+    channels: {
+      startPairing: (params) => channelMethods.startPairing(params),
+      lookupUser: (params) => channelMethods.lookupUser(params),
+    },
+
+    chat: {
+      turn: (params) => channelMethods.chatTurn(params),
+    },
+
+    approvals: {
+      respond: (params) => channelMethods.approvalsRespond(params),
     },
 
     goals: {
@@ -2032,10 +2143,13 @@ export function buildHostServices(
           triggerDetail: "system",
           reason: params.reason ?? null,
           payload: { prompt: params.prompt },
+          // The message reaches the agent through the run context, the same
+          // way an `agents.invoke` prompt does; the payload is never rendered.
           contextSnapshot: {
             taskKey: session.taskKey,
             wakeSource: "automation",
             wakeTriggerDetail: "system",
+            [WAKE_PROMPT_CONTEXT_KEY]: params.prompt,
           },
           requestedByActorType: "system",
           requestedByActorId: pluginId,

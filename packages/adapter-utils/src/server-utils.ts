@@ -15,6 +15,14 @@ export interface RunProcessResult {
   stderr: string;
   pid: number | null;
   startedAt: string | null;
+  /**
+   * The runner itself ended the process because it lingered after printing
+   * its terminal result (see `terminalResultCleanupOptions`). Such a run is
+   * reported with `exitCode: null` and a signal on every platform, the way a
+   * POSIX kill looks, so callers that treat a non-zero exit code as a failed
+   * run do not count the runner's own cleanup against the child.
+   */
+  killedAfterTerminalResult?: boolean;
 }
 
 export interface TerminalResultCleanupOptions {
@@ -1674,6 +1682,7 @@ export async function runChildProcess(
         let logChain: Promise<void> = Promise.resolve();
         let terminalResultSeen = false;
         let terminalCleanupStarted = false;
+        let terminalCleanupKilledChild = false;
         let terminalCleanupTimer: NodeJS.Timeout | null = null;
         let terminalCleanupKillTimer: NodeJS.Timeout | null = null;
         let terminalResultStdoutScanOffset = 0;
@@ -1713,6 +1722,10 @@ export async function runChildProcess(
             terminalCleanupTimer = null;
             if (terminalCleanupStarted || timedOut) return;
             terminalCleanupStarted = true;
+            // Only a child that is still running is ours to end. One that has
+            // already exited by itself, with descendants holding its pipes
+            // open, keeps its real exit code.
+            terminalCleanupKilledChild = child.exitCode === null && child.signalCode === null;
             signalRunningProcess({ child, processGroupId }, "SIGTERM");
             terminalCleanupKillTimer = setTimeout(() => {
               terminalCleanupKillTimer = null;
@@ -1796,18 +1809,25 @@ export async function runChildProcess(
           if (timeout) clearTimeout(timeout);
           clearTerminalCleanupTimers();
           runningProcesses.delete(runId);
+          // The runner's own kill of a child that lingered after its terminal
+          // result is not the child failing. POSIX reports that kill as a
+          // signal with no exit code, which every caller already reads as a
+          // clean run; Windows (taskkill) reports exit code 1 with no signal,
+          // which they read as a failed run. Report it the POSIX way everywhere.
+          const killedAfterTerminalResult = terminalCleanupKilledChild && !timedOut;
           void logChain.finally(() => {
             void Promise.resolve()
               .then(() => target.cleanup?.())
               .finally(() => {
               resolve({
-                exitCode: code,
-                signal,
+                exitCode: killedAfterTerminalResult ? null : code,
+                signal: killedAfterTerminalResult ? (signal ?? "SIGTERM") : signal,
                 timedOut,
                 stdout,
                 stderr,
                 pid: child.pid ?? null,
                 startedAt,
+                ...(killedAfterTerminalResult ? { killedAfterTerminalResult: true } : {}),
               });
               });
           });

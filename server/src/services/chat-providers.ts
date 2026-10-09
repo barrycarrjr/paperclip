@@ -1068,9 +1068,14 @@ class AdapterExecuteProvider implements ChatProvider {
     const cwd = await ensureClippyWorkspace(ctx.sessionId);
     const canUseImages = adapterSupportsImageInputs(decoded.adapterType);
 
-    // Latest user message is the new prompt; older history was provided to the
-    // adapter on prior turns and re-anchored via sessionParams resume.
-    const lastUserMsg = [...input.messages].reverse().find((m) => m.role === "user");
+    // Everything since Clippy last answered is the new prompt; older history
+    // was provided to the adapter on prior turns and re-anchored via
+    // sessionParams resume. Usually that is just the user's message, but
+    // Paperclip also adds notes in between, such as an approval decided on the
+    // Approvals page or from Slack. Sending only the latest message lost them,
+    // and Clippy went on saying a message it had sent was still waiting.
+    const lastAssistantIndex = input.messages.map((m) => m.role).lastIndexOf("assistant");
+    const newUserMessages = input.messages.slice(lastAssistantIndex + 1).filter((m) => m.role === "user");
 
     // For adapter-routed providers, the underlying CLI can't accept inline
     // image bytes. For adapters in ADAPTER_TYPES_WITH_IMAGE_SUPPORT we
@@ -1098,21 +1103,20 @@ class AdapterExecuteProvider implements ChatProvider {
       return `[Attached image at: ${targetPath} (${block.mediaType})]`;
     }
 
-    let userPrompt = "";
-    if (lastUserMsg) {
-      if (typeof lastUserMsg.content === "string") {
-        userPrompt = lastUserMsg.content;
-      } else {
-        const expanded = await Promise.all(
-          lastUserMsg.content.map((b) =>
-            b.type === "text" || b.type === "image" || b.type === "file"
-              ? expandBlockForAdapter(b)
-              : Promise.resolve(""),
-          ),
-        );
-        userPrompt = expanded.filter(Boolean).join("\n");
-      }
-    }
+    const expandMessageForAdapter = async (message: CanonicalMessage): Promise<string> => {
+      if (typeof message.content === "string") return message.content;
+      const expanded = await Promise.all(
+        message.content.map((b) =>
+          b.type === "text" || b.type === "image" || b.type === "file"
+            ? expandBlockForAdapter(b)
+            : Promise.resolve(""),
+        ),
+      );
+      return expanded.filter(Boolean).join("\n");
+    };
+    let userPrompt = (await Promise.all(newUserMessages.map(expandMessageForAdapter)))
+      .filter((text) => text.trim())
+      .join("\n\n");
 
     // When images were materialized, add a final instruction so the adapter
     // knows it needs to Read each file before reasoning. Without this the
@@ -1187,7 +1191,12 @@ class AdapterExecuteProvider implements ChatProvider {
             | undefined;
           for (const block of message?.content ?? []) {
             if (block?.type === "text" && typeof block.text === "string" && block.text.length > 0) {
-              emitText(block.text);
+              // The CLI sends each assistant message whole, so what Clippy
+              // writes before a tool call and after it arrive separately. Each
+              // starts a new paragraph, or the two read as one run-on sentence
+              // ("...is first.Calystah isn't...").
+              const separator = accumulatedText && !/\s$/.test(accumulatedText) ? "\n\n" : "";
+              emitText(separator + block.text);
             }
           }
         }

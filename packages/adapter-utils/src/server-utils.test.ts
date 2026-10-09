@@ -221,7 +221,11 @@ describe("runChildProcess", () => {
     expect(await waitForPidExit(descendantPid, 2_000)).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")("cleans up a still-running child after terminal output", async () => {
+  // Runs on Windows too: there taskkill reports the runner's own kill as exit
+  // code 1, which turned 76 finished mailbox-triage runs into "failed" runs on
+  // 2026-10-07 and 2026-10-08. The runner must report its cleanup the same way
+  // on every platform.
+  it("cleans up a still-running child after terminal output and reports it as a signal, not a failure", async () => {
     const result = await runChildProcess(
       randomUUID(),
       process.execPath,
@@ -246,8 +250,39 @@ describe("runChildProcess", () => {
     );
 
     expect(result.timedOut).toBe(false);
+    expect(result.killedAfterTerminalResult).toBe(true);
+    expect(result.exitCode).toBeNull();
     expect(result.signal).toBe("SIGTERM");
     expect(result.stdout).toContain('"type":"result"');
+  });
+
+  it("does not mark a child that exits by itself after terminal output as killed", async () => {
+    const result = await runChildProcess(
+      randomUUID(),
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.stdout.write(`${JSON.stringify({ type: 'result', result: 'done' })}\\n`);",
+          "setTimeout(() => process.exit(3), 10);",
+        ].join(" "),
+      ],
+      {
+        cwd: process.cwd(),
+        env: {},
+        timeoutSec: 0,
+        graceSec: 1,
+        onLog: async () => {},
+        terminalResultCleanup: {
+          graceMs: 2_000,
+          hasTerminalResult: ({ stdout }) => stdout.includes('"type":"result"'),
+        },
+      },
+    );
+
+    expect(result.killedAfterTerminalResult).toBeUndefined();
+    expect(result.exitCode).toBe(3);
+    expect(result.signal).toBeNull();
   });
 
   it.skipIf(process.platform === "win32")("does not clean up noisy runs that have no terminal output", async () => {

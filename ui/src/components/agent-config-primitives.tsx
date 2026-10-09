@@ -56,6 +56,7 @@ export const help: Record<string, string> = {
   wakeOnDemand: "Allow this agent to be woken by assignments, API calls, UI actions, or automated systems.",
   cooldownSec: "Minimum seconds between consecutive heartbeat runs.",
   maxConcurrentRuns: "Maximum number of heartbeat runs that can execute simultaneously for this agent.",
+  freshSessionEveryRun: "Start every run in a new session instead of continuing the last one. For agents whose runs are self-contained sweeps that keep their state in Paperclip: the full instructions are read each run and nothing stale carries over.",
   budgetMonthlyCents: "Monthly spending limit in cents. 0 means no limit.",
 };
 

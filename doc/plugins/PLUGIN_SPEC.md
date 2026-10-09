@@ -1069,6 +1069,27 @@ export interface EventFilter {
 }
 ```
 
+## 14.3 Channels: Clippy and approvals from chat apps
+
+A channel plugin (Slack, Teams, SMS) lets people talk to Clippy and decide approvals from a chat app. The plugin never says which Paperclip user it is acting for. It passes the chat app's identity of whoever sent the message, `{ workspace, externalUserId }`, and the host looks up the user who paired that chat account to themselves.
+
+Pairing:
+
+1. A message arrives from a chat account `ctx.channels.lookupUser(identity)` reports as not paired.
+2. The plugin calls `ctx.channels.startPairing({ identity, label })` and sends the person the returned code (it works for ten minutes; a newer code replaces it).
+3. The person signs in to Paperclip, enters the code under Profile, Chat apps, checks which chat account it names, and confirms.
+4. The link belongs to that plugin installation only. The user can disconnect it from the same page; uninstalling the plugin removes it.
+
+Rules the host applies to `chat.turn` and `approvals.respond`:
+
+- The identity must be paired, and the paired user must still exist.
+- The user's access is built the way a signed-in request's is, and the web app's own company access check for a write (`POST`) applies: membership, viewer role, Personal companies, and no cross-company pass from the portfolio root or instance admin role.
+- The plugin must be enabled for the company.
+- `chat.turn` runs one turn at a time per Clippy session, shared with the web app; a second turn in the same session is refused while one runs. A session that was deleted, or re-scoped in the app, is replaced and the new id returned.
+- A tool that needs the user's confirmation cannot get it from a chat app, so it is answered no at once and named in `needsConfirmation`.
+- `pendingApprovals` lists the outbound drafts this turn queued, read back from the approval records, limited to ones the user may decide.
+- `approvals.respond` accepts only `approve` or `reject`, and records the decision as the user, with `sourcePluginId` and `sourcePluginKey` in the activity details.
+
 ## 15. Capability Model
 
 Capabilities are mandatory and static.
@@ -1103,6 +1124,9 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 - `issue.relations.write`
 - `issues.checkout`
 - `issues.wakeup`
+- `channels.pairing`: pair chat app accounts to Paperclip users (`ctx.channels.startPairing`, `ctx.channels.lookupUser`). See 14.3.
+- `approvals.respond`: approve or reject an approval as the user paired to a chat account (`ctx.approvals.respond`). The host applies the web app's own access check for the approve and reject routes at call time. See 14.3.
+- `chat.turn`: run one Clippy turn as the user paired to a chat account and receive the reply (`ctx.chat.turn`). This is how channel plugins (Slack, Teams, SMS) give users the in-app assistant outside the app. See 14.3.
 - `assets.write`
 - `assets.read`
 - `activity.log.write`

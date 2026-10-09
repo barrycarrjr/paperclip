@@ -73,6 +73,10 @@ async function annotateHqStatus(req: Request, db: Db): Promise<void> {
   if (actor.type === "board" && actor.userId && actor.source !== "local_implicit") {
     await ensurePersonalCompanyOnce(db, actor.userId, actor.userName ?? null);
   }
+  await annotatePortfolioRootStatus(actor, db);
+}
+
+async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Promise<void> {
   if ((actor.type === "agent" || actor.type === "tool_session") && actor.companyId) {
     const rootId = await getPortfolioRootCompanyId(db);
     if (rootId && actor.companyId === rootId) {
@@ -94,6 +98,30 @@ async function annotateHqStatus(req: Request, db: Db): Promise<void> {
       if (isAdmin) actor.isPortfolioRootUserAdmin = true;
     }
   }
+}
+
+/**
+ * The board actor for a user acting through a paired chat app rather than a
+ * browser: the same memberships, admin flag and portfolio-root status a
+ * signed-in request from that user gets, so every access rule treats a
+ * Slack message exactly like a click in the web app. Null when the user no
+ * longer exists.
+ */
+export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
+  const access = await boardAuthService(db).resolveBoardAccess(userId);
+  if (!access.user) return null;
+  const actor: Request["actor"] = {
+    type: "board",
+    userId,
+    userName: access.user.name ?? null,
+    userEmail: access.user.email ?? null,
+    companyIds: access.companyIds,
+    memberships: access.memberships,
+    isInstanceAdmin: access.isInstanceAdmin,
+    source: "channel_link",
+  };
+  await annotatePortfolioRootStatus(actor, db);
+  return actor;
 }
 
 interface ActorMiddlewareOptions {

@@ -1463,6 +1463,14 @@ export const PLUGIN_CAPABILITIES = [
   "agents.resume",
   "agents.invoke",
   "agents.managed",
+  // Pair chat app accounts (a Slack user, for example) to Paperclip users:
+  // the plugin sends the person a code, and they enter it in their profile.
+  "channels.pairing",
+  // Run one Clippy turn for the Paperclip user paired to a chat account and
+  // receive the reply (channel plugins such as Slack). The host looks the
+  // user up from the pairing and applies the web app's own access checks;
+  // Clippy then acts with that user's permissions exactly as in the web app.
+  "chat.turn",
   "access.members.write",
   "access.invites.write",
   "authorization.grants.write",

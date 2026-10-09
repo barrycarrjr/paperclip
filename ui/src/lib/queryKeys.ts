@@ -538,6 +538,7 @@ export const queryKeys = {
   },
   auth: {
     session: ["auth", "session"] as const,
+    channelLinks: ["auth", "channel-links"] as const,
   },
   inboxAgentPolicy: {
     mine: (companyId: string) =>

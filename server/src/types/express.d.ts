@@ -32,6 +32,8 @@ declare global {
           | "agent_key"
           | "agent_jwt"
           | "tool_session_jwt"
+          /** A chat app account (Slack, for example) the user paired to themselves from their profile. */
+          | "channel_link"
           | "none";
       };
     }
