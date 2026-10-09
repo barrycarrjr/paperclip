@@ -19,6 +19,9 @@ unattended_run() { [ -n "${PAPERCLIP_MAINTENANCE_LOG:-}" ]; }
 
 # The last fail() message, so report_unattended_failure can show the reason.
 PAPERCLIP_FAILURE=''
+# Set when a failure leaves Paperclip in a state the generic wording does not
+# describe, such as a rolled-back update that is starting the old version.
+PAPERCLIP_FAILURE_STATE=''
 fail() { PAPERCLIP_FAILURE="$*"; printf '%s\n' "$*" >&2; exit 1; }
 check_runtime() {
   command -v node >/dev/null || fail 'Install Node.js 24.11 or newer first.'
@@ -92,7 +95,9 @@ report_unattended_failure() {
   [ "$code" -ne 0 ] && unattended_run && [ "$(uname -s)" = Darwin ] || return 0
   reason="${PAPERCLIP_FAILURE:-This step failed: $step.}"
   # A UI restart only runs after the old server has already exited.
-  if [ "$action" = restart ]; then
+  if [ -n "$PAPERCLIP_FAILURE_STATE" ]; then
+    state="$PAPERCLIP_FAILURE_STATE"
+  elif [ "$action" = restart ]; then
     state='Paperclip is stopped. Open the Paperclip app to start it again.'
   elif [ "$PAPERCLIP_SERVICE_STOPPED" != 1 ]; then
     state='Paperclip is still running the version it had before.'
@@ -178,4 +183,82 @@ discard_generated_lockfile() {
 }
 record_install() {
   node "$PAPERCLIP_SRC/scripts/launchers/unix/install-metadata.mjs" "$PAPERCLIP_SRC"
+}
+# Safe update: scripts/launchers/update-guard.mjs holds the logic shared with
+# the Windows update. Call record_previous_commit before the checkout moves,
+# so a failed trial has a commit to return to.
+UPDATE_GUARD="$PAPERCLIP_SRC/scripts/launchers/update-guard.mjs"
+# Reports a failed update, starts the version that is now in the checkout
+# again, and ends the run with an error. The macOS alert waits for a click, so
+# it runs in the background: an unattended run must not keep Paperclip down
+# until somebody clicks it.
+restart_and_fail() {
+  local reason="$1" state="$2" step="$3"
+  PAPERCLIP_FAILURE="$reason"
+  PAPERCLIP_FAILURE_STATE="$state"
+  printf '%s\n' "$PAPERCLIP_FAILURE" >&2
+  report_unattended_failure 1 update "$step" </dev/null >/dev/null 2>&1 &
+  start_after_maintenance
+  exit 1
+}
+# Install or build of the new version failed after the merge. The database has
+# not been migrated, so the checkout goes back to the rollback point and that
+# version starts again. If that is not possible the run stops WITHOUT starting
+# anything: the new files would migrate the database with no trial.
+roll_back_before_migrate() {
+  local what="$1" step="$2" code=0
+  node "$UPDATE_GUARD" rollback || code=$?
+  PAPERCLIP_FAILURE_STATE='Paperclip is stopped. Fix the problem, then run the update again.'
+  if [ "$code" -eq 2 ]; then
+    fail "$what, and no earlier version is recorded, so it could not be rolled back. Paperclip was not started, because the new files would migrate the database. The reason is in the output above."
+  fi
+  [ "$code" -eq 0 ] || fail "$what, and rolling back to the previous version also failed. Paperclip was not started, because the files in the checkout could migrate the database. The reason is in the output above."
+  restart_and_fail \
+    "$what, so the update was rolled back to the previous version. The reason is in the output above." \
+    'Paperclip is starting the previous version again.' \
+    "$step"
+}
+# Nothing has changed yet when this runs, so if the rollback point cannot be
+# recorded the update stops and the version that was running starts again.
+record_previous_commit() {
+  node "$UPDATE_GUARD" record-previous && return 0
+  restart_and_fail \
+    'Could not record the version to return to, so the update stopped before changing anything. The reason is in the output above.' \
+    'Paperclip is starting the version it had before.' \
+    'recording the rollback point'
+}
+# After a passing trial. The new version is healthy, so a failure to refresh
+# install.json is reported but does not stop the relaunch. Until a later run
+# refreshes it, the next update cannot roll back automatically: update-guard
+# refuses a rollback point that does not match install.json.
+record_update_install() {
+  if ! record_install; then
+    printf '%s\n' 'Warning: the update worked, but the install record (install.json) could not be refreshed. The next update will not be able to roll back automatically until an update or rebuild refreshes it.' >&2
+  fi
+  node "$UPDATE_GUARD" prune-cold-backups ||
+    printf '%s\n' 'Warning: old cold database copies could not be removed. They are in the backup folder as cold-* folders.' >&2
+}
+# Call after build and migrate, before record_update_install. Starts the new
+# version once the way `service start` does and waits for /api/health. On success it
+# returns and the update carries on. On failure it rolls the checkout back to
+# the recorded commit (git reset --keep), reinstalls and rebuilds it, reports
+# the failure, starts the previous version, and ends the run with an error.
+# Migrations are not run down and the database is not restored.
+trial_start_or_roll_back() {
+  local code=0
+  node "$UPDATE_GUARD" trial-start --launcher unix || code=$?
+  # The trial stops its own server. This also stops one the trial left
+  # registered if its stop was cut short; it prints nothing useful otherwise.
+  service stop >/dev/null || true
+  [ "$code" -ne 0 ] || return 0
+  code=0
+  node "$UPDATE_GUARD" rollback || code=$?
+  if [ "$code" -eq 2 ]; then
+    fail 'The updated Paperclip did not start, and no earlier version is recorded, so it could not be rolled back. The reason is in the output above.'
+  fi
+  [ "$code" -eq 0 ] || fail 'The updated Paperclip did not start, and rolling back to the previous version also failed. The reason is in the output above.'
+  restart_and_fail \
+    'The updated Paperclip did not start, so the update was rolled back to the previous version.' \
+    'Paperclip is starting the previous version again.' \
+    'trial start'
 }

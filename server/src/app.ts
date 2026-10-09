@@ -70,6 +70,7 @@ import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
 import { createPluginWorkerManager, type PluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
+import { PLUGIN_RUNTIME_ENV, startPluginRuntime } from "./plugin-runtime-startup.js";
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
 import { createPluginOperationIdempotencyStore } from "./services/plugin-operation-idempotency.js";
@@ -167,6 +168,8 @@ export async function createApp(
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     heartbeatSchedulerEnabled?: boolean;
+    /** False skips starting plugins; see plugin-runtime-startup.ts. Defaults to true. */
+    pluginRuntimeEnabled?: boolean;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
   },
@@ -549,8 +552,10 @@ export async function createApp(
 
   app.use(errorHandler);
 
-  jobCoordinator.start();
-  scheduler.start();
+  // jobCoordinator.start();
+  // scheduler.start();
+  // Both now start in startPluginRuntime below, together with loading the
+  // plugins, so the update trial can leave all three off.
   void toolDispatcher.initialize().catch((err) => {
     logger.error({ err }, "Failed to initialize plugin tool dispatcher");
   });
@@ -567,19 +572,28 @@ export async function createApp(
       },
     )
     : null;
-  void loader.loadAll().then((result) => {
-    if (!result) return;
-    for (const loaded of result.results) {
-      if (devWatcher && loaded.success) {
-        const watchPath =
-          loaded.plugin.localSourcePath ?? loaded.plugin.packagePath ?? null;
-        if (watchPath) {
-          devWatcher.watch(loaded.plugin.id, watchPath);
+  startPluginRuntime(opts.pluginRuntimeEnabled !== false, {
+    startJobCoordinator: () => jobCoordinator.start(),
+    startScheduler: () => scheduler.start(),
+    loadPlugins: () => {
+      void loader.loadAll().then((result) => {
+        if (!result) return;
+        for (const loaded of result.results) {
+          if (devWatcher && loaded.success) {
+            const watchPath =
+              loaded.plugin.localSourcePath ?? loaded.plugin.packagePath ?? null;
+            if (watchPath) {
+              devWatcher.watch(loaded.plugin.id, watchPath);
+            }
+          }
         }
-      }
-    }
-  }).catch((err) => {
-    logger.error({ err }, "Failed to load ready plugins on startup");
+      }).catch((err) => {
+        logger.error({ err }, "Failed to load ready plugins on startup");
+      });
+    },
+    onSkipped: () => {
+      logger.warn(`Plugins were not started: ${PLUGIN_RUNTIME_ENV}=false`);
+    },
   });
   process.once("exit", () => {
     devWatcher?.close();

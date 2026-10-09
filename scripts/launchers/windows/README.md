@@ -100,6 +100,19 @@ the file; the file overrides the built-in defaults.
   verifies that Paperclip is healthy before declaring the restart complete.
   If an earlier step fails, it preserves the error on screen while attempting
   to restore the server from the files already present.
+  Before migrating it copies the stopped database folder to
+  `instances\default\data\backups\cold-<timestamp>\` (a successful update
+  keeps only the newest two of these). After migrating it
+  starts the new version once as a trial, exactly the way `paperclip.exe`
+  does, and waits for `/api/health` (120 seconds by default; set
+  `PAPERCLIP_UPDATE_TRIAL_TIMEOUT_SECONDS` to change it). If the trial does
+  not become healthy, the update prints the reason and the server's last
+  output, returns the checkout to the commit that was installed before
+  (`git reset --keep`, which refuses rather than discard local edits),
+  reinstalls and rebuilds it, starts that version, and leaves the console
+  open with the error. Migrations are not undone and the database is not
+  restored; the backup above is there if the old version needs it. See
+  [Safe update and rollback](#safe-update-and-rollback).
 
 > **Note on `build:runtime` vs `build`:** the launchers use `pnpm
 > build:runtime`, which skips the in-repo plugin packages
@@ -154,6 +167,60 @@ server is up — it stops, updates, and restarts. Cancel the auto-restart
 within 5 seconds if you want to manually verify the build before going
 live.
 
+### Safe update and rollback
+
+1. The update records the commit that is installed now as `previousCommit`
+   in `install.json` (the rollback point). If that cannot be recorded, the
+   update stops there and does not start Paperclip, because the new files
+   are already in place but not built. Fix the reported problem and run
+   the update again; it carries on from where it stopped.
+2. It pulls, installs, builds, backs up the database, and migrates. If the
+   install, the build or the backup fails, nothing has been migrated yet:
+   the checkout goes back to
+   `previousCommit` and the previous version is started. With no rollback
+   point, or if rolling back fails, the update stops without starting
+   anything rather than run the new version on a database it would
+   migrate with no backup.
+3. It starts the new version once as a trial and waits for `/api/health`.
+   The trial runs with `HEARTBEAT_SCHEDULER_ENABLED=false` and
+   `PAPERCLIP_PLUGIN_RUNTIME_ENABLED=false`, so it starts no agent runs,
+   schedules or plugins that it would abandon when it stops. It checks the
+   address the server prints in its `Server listening on` line; until then
+   it expects the port from `PORT`, the instance `config.json`,
+   `launcher.json`, or 3100, in that order, on the address the server's bind
+   settings give. The trial's output goes to
+   `%USERPROFILE%\.paperclip\logs\update-trial-<timestamp>.log`.
+4. Trial healthy: the trial server is stopped (its own process tree, by
+   pid, plus the database processes it started from this checkout) and
+   the update carries on. It refreshes `install.json`, which also clears
+   `previousCommit`, keeps only the newest two `cold-*` database copies,
+   and does the normal restart. If `install.json` cannot be refreshed the
+   restart still happens, with a warning: until a later update or rebuild
+   refreshes it, the next update cannot roll back automatically.
+5. Trial not healthy: the checkout goes back to `previousCommit`, the
+   previous version is reinstalled, rebuilt and started, and the console
+   window stays open with the reason. The update exits with an error.
+6. No rollback point recorded: the failure is reported but nothing can be
+   rolled back, and the update tries to start the new version anyway.
+
+A rollback point is only used if it matches the commit `install.json`
+says is installed. One left over from an earlier run is refused, because
+rolling back to it could skip a release.
+
+Migrations are never run down. If the previous version does not work with
+the migrated database, restore the newest backup from
+`instances\default\data\backups\`.
+
+The rollback point is the `commit` already in `install.json`, recorded just
+after the pull. It is not read before the pull because cmd re-reads a
+running .bat by position and the pull replaces the file, so nothing above
+the `git pull` line in `update-paperclip.bat` may change size. Keep that in
+mind when editing the script. For the same reason, everything from the
+rollback to the end of the run is one parenthesised block: the rollback's
+`git reset --keep` can replace the running .bat with the previous version's
+copy, and cmd reads a whole block before running any of it, so nothing
+after the reset is read from the file.
+
 ## Where things live
 
 | What | Path |
@@ -163,11 +230,14 @@ live.
 | Paperclip data | `%USERPROFILE%\.paperclip\instances\default\` |
 | Backups (manual) | `%USERPROFILE%\paperclip-backups\paperclip-<timestamp>\` |
 | Backups (auto, hourly) | `%USERPROFILE%\.paperclip\instances\default\data\backups\` |
+| Backups (taken by each update) | `%USERPROFILE%\.paperclip\instances\default\data\backups\cold-<timestamp>\` |
+| Update trial output | `%USERPROFILE%\.paperclip\logs\update-trial-<timestamp>.log` |
 | Server logs (in-app) | `%USERPROFILE%\.paperclip\instances\default\logs\` |
 | Launcher logs (paperclip.exe) | `%USERPROFILE%\.paperclip\logs\paperclip-YYYYMMDD.log` |
 
 The install marker (`install.json`) records `repoPath`, `remote`,
-`branch`, `commit`, `installedAt`, and `lastUpdated`. It's the single
+`branch`, `commit`, `installedAt`, `lastUpdated`, and, from the start of an
+update until one succeeds, `previousCommit` (the rollback point). It's the single
 source of truth for "where is paperclip installed on this machine" and
 is rewritten by `install-paperclip.bat` and `update-paperclip.bat`.
 
