@@ -36,6 +36,21 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Same key as pr.yml. A cache this job saves on a push to master is the
+      # one every pull request restores, so the runner's Rust code is not
+      # compiled from scratch on each of them.
+      - name: Rust and Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            packages/paperclip-runner/runner/target/
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/paperclip-runner/runner/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
       - name: Validate launchers
         run: |
           for script in scripts/launchers/unix/*.sh scripts/launchers/macos/*.command; do bash -n "$script"; done
