@@ -9,7 +9,7 @@ import {
 } from "../services/chat-attachments.js";
 import { badRequest, forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
-import { attachmentTooLargeMessage, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
+import { attachmentTooLargeMessage, contentDispositionHeader, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { registerChatToolInteractions } from "../services/chat-tool-interactions.js";
 import { parseInlineConsentReply } from "@paperclipai/shared";
 
@@ -281,8 +281,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
       res.setHeader("Content-Length", String(buf.length));
       res.setHeader("Cache-Control", "private, max-age=300");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      const safeName = att.name.replaceAll('"', "");
-      res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+      res.setHeader("Content-Disposition", contentDispositionHeader("inline", att.name));
       res.end(buf);
     } catch (err) {
       next(err);

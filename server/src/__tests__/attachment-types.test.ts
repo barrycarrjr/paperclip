@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  contentDispositionHeader,
   DEFAULT_ALLOWED_TYPES,
   INLINE_ATTACHMENT_TYPES,
   isInlineAttachmentContentType,
@@ -121,5 +122,29 @@ describe("isInlineAttachmentContentType", () => {
     expect(INLINE_ATTACHMENT_TYPES).not.toContain("text/html");
     expect(isInlineAttachmentContentType("text/html")).toBe(false);
     expect(isInlineAttachmentContentType("application/zip")).toBe(false);
+  });
+});
+
+describe("contentDispositionHeader", () => {
+  it("keeps a plain name as it is, with the same name in filename*", () => {
+    expect(contentDispositionHeader("inline", "invoice-7.png")).toBe(
+      `inline; filename="invoice-7.png"; filename*=UTF-8''invoice-7.png`,
+    );
+  });
+
+  it("falls back to ASCII and percent-encodes the real name", () => {
+    expect(contentDispositionHeader("attachment", "Résumé (final).pdf")).toBe(
+      `attachment; filename="Resume (final).pdf"; filename*=UTF-8''R%C3%A9sum%C3%A9%20%28final%29.pdf`,
+    );
+  });
+
+  it("drops what would break the quoted name, and survives half a surrogate pair", () => {
+    expect(contentDispositionHeader("inline", 'say "hi"\\.png')).toBe(
+      `inline; filename="say hi.png"; filename*=UTF-8''say%20%22hi%22%5C.png`,
+    );
+    expect(contentDispositionHeader("inline", "a\uD800b.png")).toBe(
+      `inline; filename="a_b.png"; filename*=UTF-8''a%EF%BF%BDb.png`,
+    );
+    expect(contentDispositionHeader("inline", "")).toBe(`inline; filename="file"; filename*=UTF-8''`);
   });
 });

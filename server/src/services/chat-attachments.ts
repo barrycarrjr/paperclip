@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { chatAttachments, chatSessions } from "@paperclipai/db";
+import { chatAttachments, chatMessages, chatSessions } from "@paperclipai/db";
 import { forbidden, notFound, badRequest } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { resolveClippyAttachmentDir } from "../home-paths.js";
@@ -225,6 +225,42 @@ export function chatAttachmentService(db: Db) {
     return fs.readFile(att.storagePath);
   }
 
+  /**
+   * Deletes those of `ids` that no message in the session refers to, files
+   * included, and returns their ids. For attachments stored ahead of a turn
+   * that stopped before saving the message they were meant for (an unknown
+   * model, a missing API key): kept, they would sit on disk with nothing
+   * pointing at them.
+   */
+  async function removeUnreferenced(sessionId: string, ids: string[]): Promise<string[]> {
+    const removed: string[] = [];
+    for (const id of ids) {
+      const referenced = await db
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.sessionId, sessionId),
+            sql`${chatMessages.content} @> ${JSON.stringify([{ attachmentId: id }])}::jsonb`,
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows.length > 0);
+      if (referenced) continue;
+      const row = await db
+        .delete(chatAttachments)
+        .where(and(eq(chatAttachments.id, id), eq(chatAttachments.sessionId, sessionId)))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!row) continue;
+      await fs.rm(row.storagePath, { force: true }).catch((err) => {
+        logger.warn({ err, attachmentId: id }, "failed to remove an unused chat attachment file");
+      });
+      removed.push(id);
+    }
+    return removed;
+  }
+
   return {
     upload,
     getById,
@@ -233,6 +269,7 @@ export function chatAttachmentService(db: Db) {
     findByIdsForSession,
     removeAllForSession,
     readContent,
+    removeUnreferenced,
   };
 }
 

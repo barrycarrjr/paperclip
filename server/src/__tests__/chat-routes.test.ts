@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
@@ -239,6 +242,48 @@ describe("chat routes", () => {
     expect(res.status).toBe(201);
     expect(res.body.session.permissionMode).toBe("bypass");
     expect(state.insertedRows[0]?.permissionMode).toBe("bypass");
+  });
+
+  it("serves an attachment whose name is not Latin-1, with an ASCII fallback and the real name in filename*", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "paperclip-chat-attachment-route-"));
+    try {
+      const storagePath = path.join(dir, "att-1");
+      const bytes = Buffer.from("89504e470d0a1a0a", "hex");
+      await writeFile(storagePath, bytes);
+      for (const [name, expected] of [
+        [
+          // macOS puts a narrow no-break space (U+202F) before AM and PM.
+          "Screenshot 2026-10-09 at 9.41.12 AM.png",
+          `inline; filename="Screenshot 2026-10-09 at 9.41.12 AM.png"; filename*=UTF-8''Screenshot%202026-10-09%20at%209.41.12%E2%80%AFAM.png`,
+        ],
+        ["отчёт.png", `inline; filename="_____.png"; filename*=UTF-8''%D0%BE%D1%82%D1%87%D1%91%D1%82.png`],
+      ] as const) {
+        const state: MockChain = {
+          rows: [
+            {
+              id: "att-1",
+              sessionId: "sess-1",
+              boardUserId: "u1",
+              kind: "image",
+              mediaType: "image/png",
+              name,
+              sizeBytes: bytes.length,
+              sha256: "0".repeat(64),
+              storagePath,
+              createdAt: new Date(),
+            },
+          ],
+          insertedRows: [],
+          updates: [],
+          deletes: 0,
+        };
+        const res = await request(buildApp(createMockDb(state))).get("/api/chat/attachments/att-1/content");
+        expect(res.status).toBe(200);
+        expect(res.headers["content-disposition"]).toBe(expected);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("forces bypass permissionMode when updating session model to an adapter model", async () => {

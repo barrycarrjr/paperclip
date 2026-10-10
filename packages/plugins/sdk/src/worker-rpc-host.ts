@@ -989,6 +989,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
               title: input.title,
               text: input.text,
               model: input.model,
+              images: input.images,
             },
             CHAT_TURN_RPC_TIMEOUT_MS,
           );

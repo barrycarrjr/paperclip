@@ -209,7 +209,7 @@ describe("issue attachment routes", () => {
     expect(res.status).toBe(200);
     expect([
       undefined,
-      'attachment; filename="report.html"',
+      `attachment; filename="report.html"; filename*=UTF-8''report.html`,
     ]).toContain(res.headers["content-disposition"]);
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
   });
@@ -224,7 +224,24 @@ describe("issue attachment routes", () => {
     expect(res.status).toBe(200);
     expect([
       undefined,
-      'inline; filename="preview.png"',
+      `inline; filename="preview.png"; filename*=UTF-8''preview.png`,
     ]).toContain(res.headers["content-disposition"]);
+  });
+
+  it("serves an attachment whose name is not Latin-1, with an ASCII fallback and the real name in filename*", async () => {
+    const storage = createStorageService();
+    // macOS puts a narrow no-break space (U+202F) before AM and PM, which
+    // Node refuses in a header as it is.
+    mockIssueService.getAttachmentById.mockResolvedValue(
+      makeAttachment("image/png", "Screenshot 2026-10-09 at 9.41.12 AM.png"),
+    );
+
+    const app = await createApp(storage);
+    const res = await request(app).get("/api/attachments/attachment-1/content");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toBe(
+      `inline; filename="Screenshot 2026-10-09 at 9.41.12 AM.png"; filename*=UTF-8''Screenshot%202026-10-09%20at%209.41.12%E2%80%AFAM.png`,
+    );
   });
 });

@@ -1,17 +1,29 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../services/chat.js";
 import { DRAFT_RESULT_HEADER } from "../services/tool-draft-gate.js";
 import { WAKE_PROMPT_CONTEXT_KEY } from "../services/heartbeat.js";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import {
   buildInvokeWakeContext,
   CHANNEL_PROFILE_PATH,
   createChannelHostMethods,
+  MAX_CHAT_TURN_IMAGES,
   NOT_PAIRED_MESSAGE,
   type ChannelHostDeps,
   type PendingDraft,
 } from "../services/channel-host-methods.js";
+import { definePlugin } from "../../../packages/plugins/sdk/src/define-plugin.js";
+import { startWorkerRpcHost } from "../../../packages/plugins/sdk/src/worker-rpc-host.js";
+import {
+  createRequest,
+  createSuccessResponse,
+  isJsonRpcRequest,
+  parseMessage,
+  serializeMessage,
+  type JsonRpcRequest,
+} from "../../../packages/plugins/sdk/src/protocol.js";
 
 const USER = "user-pat";
 const HQ = "company-hq";
@@ -20,6 +32,12 @@ const APPROVAL = "3f1c2b4e-9d8a-4c7b-8e6f-0a1b2c3d4e5f";
 const EARLIER_APPROVAL = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
 const PAT_SLACK = { workspace: "T0001", externalUserId: "U0TESTUSR01" };
 const STRANGER_SLACK = { workspace: "T0001", externalUserId: "U0STRANGER" };
+
+// The first bytes of each image type; the host goes by these, not the name.
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+const JPEG = Buffer.from("ffd8ffe000104a46494600", "hex");
+const GIF = Buffer.from("GIF89a\x01\x00\x01\x00", "latin1");
+const WEBP = Buffer.from("RIFF\x24\x00\x00\x00WEBPVP8 ", "latin1");
 
 type Actor = Express.Request["actor"];
 
@@ -78,6 +96,7 @@ function makeDeps(options: {
     })),
   };
   let draftCalls = 0;
+  const stored: Array<Parameters<ChannelHostDeps["storeAttachment"]>[0]> = [];
   const deps: ChannelHostDeps = {
     pluginId: "plugin-slack",
     pluginKey: "slack-tools",
@@ -90,6 +109,12 @@ function makeDeps(options: {
     ),
     ensurePluginAvailableForCompany: vi.fn(async () => undefined),
     chat: () => chat,
+    storeAttachment: vi.fn(async (input: Parameters<ChannelHostDeps["storeAttachment"]>[0]) => {
+      stored.push(input);
+      return { id: `att-${stored.length}` };
+    }),
+    // The turn saved its message, so nothing it stored is unused.
+    removeUnusedAttachments: vi.fn(async () => [] as string[]),
     registerInteractions: vi.fn((sessionId: string, emit: (event: StreamEvent) => void) => {
       if (emitters.has(sessionId)) throw conflict("This conversation already has a running turn");
       emitters.set(sessionId, emit);
@@ -109,7 +134,7 @@ function makeDeps(options: {
     profileUrl: () => null,
     ...options.overrides,
   };
-  return { deps, chat, decisions, emitters };
+  return { deps, chat, decisions, emitters, stored };
 }
 
 describe("channels pairing", () => {
@@ -142,7 +167,7 @@ describe("chat.turn", () => {
       { userId: USER, isInstanceAdmin: false, companyIds: [HQ] },
       { title: "Slack DM", companyId: HQ, model: undefined },
     );
-    expect(chat.runTurn).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }), "s-new", "chase the invoices");
+    expect(chat.runTurn).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }), "s-new", "chase the invoices", undefined, []);
     expect(result).toEqual({
       sessionId: "s-new",
       replyText: "Done: two invoices chased.",
@@ -151,6 +176,7 @@ describe("chat.turn", () => {
       needsConfirmation: [],
       toolCalls: [],
       error: null,
+      skippedImages: [],
     });
   });
 
@@ -369,6 +395,295 @@ describe("chat.turn", () => {
     await expect(methods.chatTurn({ identity: PAT_SLACK, companyId: HQ, text: "x".repeat(50_001) })).rejects.toThrow(
       "longer than",
     );
+  });
+});
+
+describe("chat.turn images", () => {
+  const image = (name: string | undefined, mediaType: string, bytes: Buffer | string) => ({
+    ...(name ? { name } : {}),
+    mediaType,
+    base64: typeof bytes === "string" ? bytes : bytes.toString("base64"),
+  });
+
+  it("stores each image as an attachment of the session and sends it with the message, as the composer does", async () => {
+    const { deps, chat, stored } = makeDeps();
+    const result = await createChannelHostMethods(deps).chatTurn({
+      identity: PAT_SLACK,
+      companyId: HQ,
+      text: "what is this error?",
+      images: [
+        image("screenshot.png", "image/png", PNG),
+        // The bytes decide the type: a JPEG sent as a PNG is stored as a JPEG.
+        image("photo.png", "image/png", JPEG),
+        image(undefined, "image/gif", GIF),
+        image("sticker.webp", "image/webp", WEBP),
+      ],
+    });
+
+    expect(stored.map(({ sessionId, userId, mediaType, name }) => ({ sessionId, userId, mediaType, name }))).toEqual([
+      { sessionId: "s-new", userId: USER, mediaType: "image/png", name: "screenshot.png" },
+      { sessionId: "s-new", userId: USER, mediaType: "image/jpeg", name: "photo.png" },
+      { sessionId: "s-new", userId: USER, mediaType: "image/gif", name: "image 3" },
+      { sessionId: "s-new", userId: USER, mediaType: "image/webp", name: "sticker.webp" },
+    ]);
+    expect(stored[0]!.buffer.equals(PNG)).toBe(true);
+    expect(chat.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER }),
+      "s-new",
+      "what is this error?",
+      undefined,
+      ["att-1", "att-2", "att-3", "att-4"],
+    );
+    expect(result).toMatchObject({ replyText: "Done: two invoices chased.", error: null, skippedImages: [] });
+  });
+
+  it("leaves out each image that breaks a rule, says why, and still runs the turn", async () => {
+    // As base64, PNG takes 24 bytes and JPEG 16. These caps stand in for 10 MB
+    // an image and 24 MB a turn: 40 allows a 30 byte file, 60 all of them.
+    const { deps, chat, stored } = makeDeps({
+      overrides: { imageLimits: { perImageBase64Bytes: 40, totalBase64Bytes: 60 } },
+    });
+    const result = await createChannelHostMethods(deps).chatTurn({
+      identity: PAT_SLACK,
+      companyId: HQ,
+      text: "look at these",
+      images: [
+        image("ok.png", "image/png", PNG),
+        image("photo.heic", "image/heic", PNG),
+        image("inline.png", "image/png", `data:image/png;base64,${PNG.toString("base64")}`),
+        image("notes.png", "image/png", Buffer.from("not an image at all")),
+        image("empty.png", "image/png", ""),
+        image("huge.png", "image/png", Buffer.concat([PNG, Buffer.alloc(100)])),
+        image("more.jpg", "image/jpg", JPEG),
+        image("one-too-many.png", "image/png", PNG),
+        image("ninth.png", "image/png", PNG),
+        image("tenth.png", "image/png", PNG),
+      ],
+    });
+
+    expect(stored.map((entry) => entry.name)).toEqual(["ok.png", "more.jpg"]);
+    expect(chat.runTurn).toHaveBeenCalledWith(expect.anything(), "s-new", "look at these", undefined, ["att-1", "att-2"]);
+    expect(result.skippedImages).toEqual([
+      { name: "photo.heic", reason: "image/heic is not supported. Send PNG, JPEG, GIF or WebP." },
+      { name: "inline.png", reason: "Send the image as plain base64, without a data: prefix." },
+      { name: "notes.png", reason: "The data is not a PNG, JPEG, GIF or WebP image." },
+      { name: "empty.png", reason: "The image is empty." },
+      { name: "huge.png", reason: "File is 116 B, which is over the 30 B limit. Compress it or trim it down and try again." },
+      {
+        name: "one-too-many.png",
+        reason: "With the other images in this message it is over the 45 B limit for all of them together. Send fewer or smaller images.",
+      },
+      { name: "ninth.png", reason: `Only ${MAX_CHAT_TURN_IMAGES} images can go with one message.` },
+      { name: "tenth.png", reason: `Only ${MAX_CHAT_TURN_IMAGES} images can go with one message.` },
+    ]);
+    expect(result).toMatchObject({ replyText: "Done: two invoices chased.", error: null });
+  });
+
+  it("caps images at the sizes ai.complete takes: 10 MB of base64 for one, 24 MB for a turn's", async () => {
+    // 7.5 MB of file is exactly 10 MB of base64; one byte more is over.
+    const FULL = 7.5 * 1024 * 1024;
+    const padded = (bytes: number) => Buffer.concat([PNG, Buffer.alloc(bytes - PNG.length)]);
+    const { deps, stored } = makeDeps();
+    const result = await createChannelHostMethods(deps).chatTurn({
+      identity: PAT_SLACK,
+      companyId: HQ,
+      text: "big screenshots",
+      images: [
+        image("first.png", "image/png", padded(FULL)),
+        image("over.png", "image/png", padded(FULL + 1)),
+        image("second.png", "image/png", padded(FULL)),
+        image("third.png", "image/png", padded(FULL)),
+        // 20 MB of the 24 are taken, and a small one still fits.
+        image("small.png", "image/png", padded(1024)),
+      ],
+    });
+
+    expect(stored.map((entry) => entry.name)).toEqual(["first.png", "second.png", "small.png"]);
+    expect(result.skippedImages).toEqual([
+      { name: "over.png", reason: "File is 7.5 MB, which is over the 7.5 MB limit. Compress it or trim it down and try again." },
+      {
+        name: "third.png",
+        reason: "With the other images in this message it is over the 18.0 MB limit for all of them together. Send fewer or smaller images.",
+      },
+    ]);
+  });
+
+  it("removes the images it stored when the turn stops before saving the message, and says so", async () => {
+    const { deps, stored } = makeDeps({
+      turn: [{ type: "error", error: 'No provider supports model "retired-model".', code: "unsupported_model" }],
+      // What the attachment service finds after such a turn: no message refers to them.
+      overrides: { removeUnusedAttachments: vi.fn(async ({ attachmentIds }: { attachmentIds: string[] }) => attachmentIds) },
+    });
+    const result = await createChannelHostMethods(deps).chatTurn({
+      identity: PAT_SLACK,
+      companyId: HQ,
+      text: "what is this?",
+      images: [image("a.png", "image/png", PNG), image("b.gif", "image/gif", GIF)],
+    });
+
+    expect(stored).toHaveLength(2);
+    expect(deps.removeUnusedAttachments).toHaveBeenCalledWith({ sessionId: "s-new", attachmentIds: ["att-1", "att-2"] });
+    const reason = "The turn stopped before the message was saved, so the image was not kept.";
+    expect(result.skippedImages).toEqual([
+      { name: "a.png", reason },
+      { name: "b.gif", reason },
+    ]);
+    expect(result.error).toBe('No provider supports model "retired-model".');
+  });
+
+  it("still answers when the unused images cannot be checked", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      const { deps } = makeDeps({
+        overrides: { removeUnusedAttachments: vi.fn().mockRejectedValue(new Error("connection terminated")) },
+      });
+      const result = await createChannelHostMethods(deps).chatTurn({
+        identity: PAT_SLACK,
+        companyId: HQ,
+        text: "see attached",
+        images: [image("a.png", "image/png", PNG)],
+      });
+
+      expect(result).toMatchObject({ replyText: "Done: two invoices chased.", error: null, skippedImages: [] });
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ chatSessionId: "s-new" }),
+        expect.stringContaining("did not attach"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("leaves out an image the attachment rules refuse, or that cannot be stored, without failing the turn", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      const { deps, chat } = makeDeps({
+        overrides: {
+          storeAttachment: vi
+            .fn()
+            .mockRejectedValueOnce(badRequest("Unsupported attachment type: image/png"))
+            .mockRejectedValueOnce(new Error("ENOSPC: no space left on device")),
+        },
+      });
+      const result = await createChannelHostMethods(deps).chatTurn({
+        identity: PAT_SLACK,
+        companyId: HQ,
+        text: "see attached",
+        images: [image("a.png", "image/png", PNG), image("b.png", "image/png", PNG)],
+      });
+
+      expect(result.skippedImages).toEqual([
+        { name: "a.png", reason: "Unsupported attachment type: image/png" },
+        { name: "b.png", reason: "The image could not be stored." },
+      ]);
+      expect(chat.runTurn).toHaveBeenCalledWith(expect.anything(), "s-new", "see attached", undefined, []);
+      expect(result).toMatchObject({ replyText: "Done: two invoices chased.", error: null });
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ chatSessionId: "s-new" }),
+        expect.stringContaining("Could not store an image"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stores nothing when the conversation is busy and the message is refused", async () => {
+    const { deps, stored } = makeDeps({
+      overrides: {
+        registerInteractions: vi.fn(() => {
+          throw conflict("This conversation already has a running turn");
+        }),
+      },
+    });
+    await expect(
+      createChannelHostMethods(deps).chatTurn({
+        identity: PAT_SLACK,
+        companyId: HQ,
+        sessionId: "s-busy",
+        text: "and this one",
+        images: [image("a.png", "image/png", PNG)],
+      }),
+    ).rejects.toThrow("already has a running turn");
+    expect(stored).toEqual([]);
+  });
+});
+
+describe("chat.turn from a real plugin worker", () => {
+  it("carries the plugin's images to the host", async () => {
+    // The test harness hands ctx.chat.turn its input as it is, but the worker
+    // that ships builds the host call field by field, and a field it leaves
+    // out never reaches the host. This drives that worker over streams.
+    const images = [{ name: "screenshot.png", mediaType: "image/png", base64: PNG.toString("base64") }];
+    const plugin = definePlugin({
+      async setup(ctx) {
+        ctx.actions.register("send", async () =>
+          ctx.chat.turn({ identity: PAT_SLACK, companyId: HQ, text: "what is this?", images }),
+        );
+      },
+    });
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const host = startWorkerRpcHost({ plugin, stdin, stdout });
+    const messages: unknown[] = [];
+    stdout.on("data", (chunk) => {
+      for (const line of String(chunk).split("\n").filter(Boolean)) messages.push(parseMessage(line));
+    });
+    const answered = (id: number) => messages.some((message) => (message as { id?: unknown }).id === id && !isJsonRpcRequest(message));
+
+    try {
+      stdin.write(
+        serializeMessage(
+          createRequest(
+            "initialize",
+            {
+              manifest: {
+                id: "paperclip.test-chat-images",
+                apiVersion: 1,
+                version: "0.1.0",
+                displayName: "Test chat images",
+                description: "Test plugin",
+                author: "Paperclip",
+                categories: ["automation"],
+                capabilities: ["chat.turn"],
+                entrypoints: { worker: "./dist/worker.js" },
+              },
+              config: {},
+              instanceInfo: { instanceId: "instance-1", hostVersion: "1.0.0" },
+              apiVersion: 1,
+            },
+            1,
+          ),
+        ),
+      );
+      await vi.waitFor(() => expect(answered(1)).toBe(true));
+
+      stdin.write(serializeMessage(createRequest("performAction", { key: "send", params: {} }, 2)));
+      const call = await vi.waitFor(() => {
+        const found = messages.find((message) => isJsonRpcRequest(message) && message.method === "chat.turn");
+        expect(found).toBeDefined();
+        return found as JsonRpcRequest;
+      });
+      expect((call.params as { images?: unknown }).images).toEqual(images);
+
+      // Answer the call so the action finishes.
+      stdin.write(
+        serializeMessage(
+          createSuccessResponse(call.id, {
+            sessionId: "s-new",
+            replyText: "It is a stack trace.",
+            stopReason: "end_turn",
+            pendingApprovals: [],
+            needsConfirmation: [],
+            toolCalls: [],
+            error: null,
+            skippedImages: [],
+          }),
+        ),
+      );
+      await vi.waitFor(() => expect(answered(2)).toBe(true));
+    } finally {
+      host.stop();
+    }
   });
 });
 
