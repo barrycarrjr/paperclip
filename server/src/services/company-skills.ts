@@ -8,6 +8,7 @@ import { companies, companySkills } from "@paperclipai/db";
 import { readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
 import type { PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
 import type {
+  AgentDesiredSkillEntry,
   CompanySkill,
   CompanySkillCreateRequest,
   CompanySkillCompatibility,
@@ -1292,21 +1293,40 @@ function resolveSkillReference(
   return { skill: null, ambiguous: false };
 }
 
-function resolveRequestedSkillKeysOrThrow(
-  skills: CompanySkill[],
-  requestedReferences: string[],
+// Compared in this form, "Retired" and "retired" are the same reference.
+function skillReferenceMatchKey(reference: string) {
+  return normalizeSkillKey(reference) ?? reference.trim().toLowerCase();
+}
+
+export function resolveRequestedSkillKeysOrThrow(
+  skills: SkillReferenceTarget[],
+  requestedReferences: Array<string | AgentDesiredSkillEntry>,
+  options: { keepUnresolved?: string[] } = {},
 ) {
   const missing = new Set<string>();
   const ambiguous = new Set<string>();
   const resolved = new Set<string>();
+  const keptReferences = new Map(
+    (options.keepUnresolved ?? []).map((reference) => [skillReferenceMatchKey(reference), reference.trim()]),
+  );
 
   for (const reference of requestedReferences) {
-    const trimmed = reference.trim();
+    // Entries may carry a versionId; only the key is used here.
+    const trimmed = (typeof reference === "string" ? reference : reference.key).trim();
     if (!trimmed) continue;
 
     const match = resolveSkillReference(skills, trimmed);
     if (match.skill) {
       resolved.add(match.skill.key);
+      continue;
+    }
+
+    // A reference listed in keepUnresolved (a key the agent already has) stays
+    // as it was saved when it no longer matches exactly one skill: the skill
+    // was removed, or two skills now share its short name.
+    const kept = keptReferences.get(skillReferenceMatchKey(trimmed));
+    if (kept) {
+      resolved.add(kept);
       continue;
     }
 
@@ -2459,9 +2479,13 @@ export function companySkillService(db: Db) {
     listFull,
     getById,
     getByKey,
-    resolveRequestedSkillKeys: async (companyId: string, requestedReferences: string[]) => {
+    resolveRequestedSkillKeys: async (
+      companyId: string,
+      requestedReferences: Array<string | AgentDesiredSkillEntry>,
+      options?: { keepUnresolved?: string[] },
+    ) => {
       const skills = await listFull(companyId);
-      return resolveRequestedSkillKeysOrThrow(skills, requestedReferences);
+      return resolveRequestedSkillKeysOrThrow(skills, requestedReferences, options);
     },
     detail,
     updateStatus,

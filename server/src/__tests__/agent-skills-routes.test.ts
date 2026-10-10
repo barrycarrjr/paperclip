@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentDesiredSkillEntry } from "@paperclipai/shared";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -388,6 +389,273 @@ describe.sequential("agent skill routes", () => {
         }),
       }),
       expect.any(Object),
+    );
+  });
+
+  describe("sync modes", () => {
+    const currentSkills = [
+      "paperclipai/paperclip/paperclip",
+      "company/company-1/review",
+      "company/company-1/deploy",
+    ];
+    // The library the real resolver matches against. Two skills share the
+    // short name "review".
+    const library = [
+      { id: "skill-1", key: "paperclipai/paperclip/paperclip", slug: "paperclip" },
+      { id: "skill-2", key: "company/company-1/review", slug: "review" },
+      { id: "skill-3", key: "company/company-1/deploy", slug: "deploy" },
+      { id: "skill-4", key: "company/company-1/triage", slug: "triage" },
+      { id: "skill-5", key: "acme/skills/review", slug: "review" },
+    ];
+
+    function givenSavedSkills(desiredSkills: string[]) {
+      mockAgentService.getById.mockResolvedValue({
+        ...makeAgent("claude_local"),
+        adapterConfig: { paperclipSkillSync: { desiredSkills } },
+      });
+    }
+
+    function storedDesiredSkills() {
+      const patch = mockAgentService.update.mock.calls.at(-1)?.[1] as
+        | { adapterConfig?: { paperclipSkillSync?: { desiredSkills?: unknown } } }
+        | undefined;
+      return patch?.adapterConfig?.paperclipSkillSync?.desiredSkills;
+    }
+
+    async function sync(body: Record<string, unknown>) {
+      return requestApp(await createApp(), (baseUrl) => request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/skills/sync?companyId=company-1")
+        .send(body));
+    }
+
+    beforeEach(() => {
+      givenSavedSkills(currentSkills);
+      mockCompanySkillService.resolveRequestedSkillKeys.mockImplementation(
+        async (
+          _companyId: string,
+          requested: Array<string | AgentDesiredSkillEntry>,
+          options?: { keepUnresolved?: string[] },
+        ) => {
+          // Loaded here so its errors come from the same module as the route's.
+          const { resolveRequestedSkillKeysOrThrow } = await import("../services/company-skills.js");
+          return resolveRequestedSkillKeysOrThrow(library, requested, options);
+        },
+      );
+    });
+
+    it.each([
+      ["plain keys", ["company/company-1/triage"]],
+      ["skill entries", [{ key: "company/company-1/triage", versionId: null }]],
+    ])("replaces the whole set with %s", async (_label, desiredSkills) => {
+      const res = await sync({ mode: "replace", desiredSkills });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(storedDesiredSkills()).toEqual([
+        "paperclipai/paperclip/paperclip",
+        "company/company-1/triage",
+      ]);
+    });
+
+    it.each([
+      ["plain keys", ["company/company-1/triage"]],
+      ["skill entries", [{ key: "company/company-1/triage", versionId: null }]],
+    ])("adds %s to the current set", async (_label, desiredSkills) => {
+      const res = await sync({ mode: "add", desiredSkills });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(storedDesiredSkills()).toEqual([...currentSkills, "company/company-1/triage"]);
+    });
+
+    it.each([
+      ["plain keys", ["company/company-1/review"]],
+      ["skill entries", [{ key: "company/company-1/review", versionId: null }]],
+    ])("removes %s from the current set", async (_label, desiredSkills) => {
+      const res = await sync({ mode: "remove", desiredSkills });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(storedDesiredSkills()).toEqual([
+        "paperclipai/paperclip/paperclip",
+        "company/company-1/deploy",
+      ]);
+    });
+
+    it("saves the dialog's full entry list and ignores version ids", async () => {
+      const res = await sync({
+        mode: "replace",
+        desiredSkills: [
+          ...currentSkills.map((key) => ({ key, versionId: null })),
+          { key: "company/company-1/triage", versionId: "33333333-3333-4333-8333-333333333333" },
+        ],
+      });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(storedDesiredSkills()).toEqual([...currentSkills, "company/company-1/triage"]);
+    });
+
+    it("replaces the set when no mode is sent", async () => {
+      const res = await sync({ desiredSkills: ["company/company-1/triage"] });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(storedDesiredSkills()).toEqual([
+        "paperclipai/paperclip/paperclip",
+        "company/company-1/triage",
+      ]);
+    });
+
+    describe("when the agent has a skill that is no longer in the library", () => {
+      const savedSkills = [...currentSkills, "company/company-1/retired"];
+
+      beforeEach(() => {
+        givenSavedSkills(savedSkills);
+      });
+
+      // The agents dialog sends the agent's whole list back with one change.
+      it("saves the dialog's list when adding a skill", async () => {
+        const res = await sync({
+          mode: "replace",
+          desiredSkills: [...savedSkills, "company/company-1/triage"].map((key) => ({ key, versionId: null })),
+        });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual([...savedSkills, "company/company-1/triage"]);
+      });
+
+      it("saves the dialog's list when removing a skill", async () => {
+        const res = await sync({
+          mode: "replace",
+          desiredSkills: savedSkills
+            .filter((key) => key !== "company/company-1/review")
+            .map((key) => ({ key, versionId: null })),
+        });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual([
+          "paperclipai/paperclip/paperclip",
+          "company/company-1/deploy",
+          "company/company-1/retired",
+        ]);
+      });
+
+      it.each([
+        ["replace", savedSkills, savedSkills],
+        ["add", ["company/company-1/retired"], savedSkills],
+        ["remove", ["company/company-1/retired"], currentSkills],
+      ])("accepts that key in %s mode", async (mode, desiredSkills, expected) => {
+        const res = await sync({ mode, desiredSkills });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual(expected);
+      });
+
+      it("matches that key whatever its case", async () => {
+        givenSavedSkills([...currentSkills, "Company/Company-1/Retired"]);
+
+        const res = await sync({ mode: "remove", desiredSkills: ["company/company-1/retired"] });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual(currentSkills);
+      });
+    });
+
+    it.each(["replace", "add", "remove"])("rejects a key in %s mode that is neither in the library nor on the agent", async (mode) => {
+      const res = await sync({ mode, desiredSkills: [...currentSkills, "company/company-1/missing"] });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toContain("unknown references: company/company-1/missing");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    describe("when the agent has a short name that two skills now share", () => {
+      const savedSkills = ["paperclipai/paperclip/paperclip", "review", "company/company-1/deploy"];
+
+      beforeEach(() => {
+        givenSavedSkills(savedSkills);
+      });
+
+      it("adds a skill and keeps the short name", async () => {
+        const res = await sync({ mode: "add", desiredSkills: ["company/company-1/triage"] });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual([...savedSkills, "company/company-1/triage"]);
+      });
+
+      it("removes a skill and keeps the short name", async () => {
+        const res = await sync({ mode: "remove", desiredSkills: ["company/company-1/deploy"] });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual(["paperclipai/paperclip/paperclip", "review"]);
+      });
+
+      it("removes the short name itself", async () => {
+        const res = await sync({ mode: "remove", desiredSkills: ["review"] });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual(["paperclipai/paperclip/paperclip", "company/company-1/deploy"]);
+      });
+
+      it("saves the agents dialog's whole list", async () => {
+        const res = await sync({
+          mode: "replace",
+          desiredSkills: [...savedSkills, "company/company-1/triage"].map((key) => ({ key, versionId: null })),
+        });
+
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(storedDesiredSkills()).toEqual([...savedSkills, "company/company-1/triage"]);
+      });
+    });
+
+    it("rejects a shared short name the agent does not have", async () => {
+      const res = await sync({ mode: "add", desiredSkills: ["review"] });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toContain("ambiguous references: review");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+  });
+
+  it("accepts skill entries when creating an agent directly", async () => {
+    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/agents")
+      .send({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+        desiredSkills: [{ key: "paperclip", versionId: null }],
+        adapterConfig: {},
+      }));
+
+    expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
+    expect(mockAgentService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          paperclipSkillSync: expect.objectContaining({
+            desiredSkills: ["paperclipai/paperclip/paperclip"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("accepts skill entries in hire requests", async () => {
+    const res = await request(await createApp(createDb(true)))
+      .post("/api/companies/company-1/agent-hires")
+      .send({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+        desiredSkills: [{ key: "paperclip", versionId: "33333333-3333-4333-8333-333333333333" }],
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockApprovalService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          desiredSkills: ["paperclipai/paperclip/paperclip"],
+        }),
+      }),
     );
   });
 
