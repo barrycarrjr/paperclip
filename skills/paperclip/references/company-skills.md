@@ -18,6 +18,7 @@ The canonical model is:
 
 - Company skill reads: any same-company actor
 - Company skill mutations: board, CEO, or an agent with the effective `agents:create` capability
+- Importing from folders on the server's computer (a local path import or a project scan): instance admins only. Agents and other members get `403` with code `skill_local_import_admin_required`.
 - Agent skill assignment: same permission model as updating that agent
 
 ## Core Endpoints
@@ -25,7 +26,7 @@ The canonical model is:
 - `GET /api/companies/:companyId/skills`
 - `GET /api/companies/:companyId/skills/:skillId`
 - `POST /api/companies/:companyId/skills/import`
-- `POST /api/companies/:companyId/skills/scan-projects`
+- `POST /api/companies/:companyId/skills/scan-projects` (instance admins only)
 - `POST /api/companies/:companyId/skills/:skillId/install-update`
 - `GET /api/agents/:agentId/skills`
 - `POST /api/agents/:agentId/skills/sync`
@@ -34,7 +35,7 @@ The canonical model is:
 
 ## Install A Skill Into The Company
 
-Import using a **skills.sh URL**, a key-style source string, a GitHub URL, or a local path.
+Import using a **skills.sh URL**, a key-style source string, or a GitHub URL. Only an instance admin can import from a local path.
 
 ### Source types (in order of preference)
 
@@ -43,7 +44,7 @@ Import using a **skills.sh URL**, a key-style source string, a GitHub URL, or a 
 | **skills.sh URL** | `https://skills.sh/google-labs-code/stitch-skills/design-md` | When a user gives you a `skills.sh` link. This is the managed skill registry — **always prefer it when available**. |
 | **Key-style string** | `google-labs-code/stitch-skills/design-md` | Shorthand for the same skill — `org/repo/skill-name` format. Equivalent to the skills.sh URL. |
 | **GitHub URL** | `https://github.com/vercel-labs/agent-browser` | When the skill is in a GitHub repo but not on skills.sh. |
-| **Local path** | `/abs/path/to/skill-dir` | When the skill is on disk (dev/testing only). |
+| **Local path** | `/abs/path/to/skill-dir` | Instance admins only. An agent gets `403`, so ask an instance admin to import it. |
 
 **Critical:** If a user gives you a `https://skills.sh/...` URL, use that URL or its key-style equivalent (`org/repo/skill-name`) as the `source`. Do **not** convert it to a GitHub URL — skills.sh is the managed registry and the source of truth for versioning, discovery, and updates.
 
@@ -86,14 +87,7 @@ You can also use source strings such as:
 - `vercel-labs/agent-browser/agent-browser`
 - `npx skills add https://github.com/vercel-labs/agent-browser --skill agent-browser`
 
-If the task is to discover skills from the company project workspaces first:
-
-```sh
-curl -sS -X POST "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/skills/scan-projects" \
-  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
+Discovering skills in the company's project workspaces (`POST /api/companies/:companyId/skills/scan-projects`) reads folders on the server's computer, so only an instance admin can run it. An agent gets `403`. If the task needs a scan, ask an instance admin to run it from the Skills page.
 
 ## Inspect What Was Installed
 
