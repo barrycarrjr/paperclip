@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { brandBanner } from "@/lib/status-colors";
 import { ClippyConversation } from "./ClippyConversation";
 
 const mockChatSession = {
@@ -48,7 +49,19 @@ vi.mock("@/lib/router", () => ({
   useParams: () => ({ companyPrefix: "HQ" }),
 }));
 
-vi.mock("./ClippyMessageList", () => ({ ClippyMessageList: () => <div data-testid="messages" /> }));
+/** What the conversation last handed the message list for an empty chat. */
+const mockMessageList = { emptyState: null as unknown };
+
+vi.mock("./ClippyMessageList", () => ({
+  ClippyMessageList: ({ emptyState }: { emptyState?: unknown }) => {
+    mockMessageList.emptyState = emptyState;
+    return <div data-testid="messages" />;
+  },
+}));
+
+function suggestionsShown(): string[] {
+  return (mockMessageList.emptyState as { props: { suggestions: string[] } }).props.suggestions;
+}
 vi.mock("./ClippyComposer", () => ({ ClippyComposer: () => <div data-testid="composer" /> }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,16 +154,21 @@ describe("ClippyConversation", () => {
     expect(badge?.textContent).toContain("Industry Bureau");
   });
 
-  it("says quietly when the chat belongs to another company, with a way to start one here", async () => {
+  it("warns when the chat belongs to another company, with a way to start one here", async () => {
     mockChatSession.session.companyId = "c2"; // Industry Bureau while route is HQ (c1)
     const onNewSession = vi.fn();
     await render({ sessionId: "s1", onNewSessionForCurrentCompany: onNewSession });
 
-    // One muted line rather than the amber warning banner it replaced.
-    expect(container.querySelector('[data-testid="company-mismatch-banner"]')).toBeNull();
+    // One line, but in the warning colours: a muted grey line was too easy to miss.
     const note = container.querySelector('[data-testid="company-mismatch-note"]');
     expect(note).not.toBeNull();
-    expect(note?.className).toContain("text-muted-foreground");
+    for (const warningClass of brandBanner.warning.split(" ")) {
+      expect(note?.classList.contains(warningClass)).toBe(true);
+    }
+    expect(note?.className).not.toContain("text-muted-foreground");
+    // Inside a status region that is always there, so a screen reader
+    // announces it when it appears.
+    expect(note?.parentElement?.getAttribute("role")).toBe("status");
     expect(note?.textContent).toContain("This chat is in Industry Bureau.");
 
     const startHere = [...note!.querySelectorAll("button")].find((b) =>
@@ -163,10 +181,63 @@ describe("ClippyConversation", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
   });
 
+  it("does not flash the note in the frame before a company switch swaps the chat", async () => {
+    mockChatSession.session.companyId = "c2"; // the old company's chat against the new page
+    const inFirstFrame: boolean[] = [];
+    function FirstFrameProbe() {
+      // Layout effects run after the first commit, before any passive effect.
+      useLayoutEffect(() => {
+        inFirstFrame.push(Boolean(container.querySelector('[data-testid="company-mismatch-note"]')));
+      }, []);
+      return null;
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ClippyConversation sessionId="s1" onNewSessionForCurrentCompany={vi.fn()} />
+          <FirstFrameProbe />
+        </QueryClientProvider>,
+      );
+    });
+
+    // ClippyContext swaps in the new company's chat in an effect; until then
+    // the mismatch is not real.
+    expect(inFirstFrame).toEqual([false]);
+    // One that is still there afterwards is, and shows.
+    expect(container.querySelector('[data-testid="company-mismatch-note"]')).not.toBeNull();
+  });
+
+  it("keeps a long company name from pushing the note's button out of the window", async () => {
+    mockChatSession.session.companyId = "c2";
+    await render({ sessionId: "s1", onNewSessionForCurrentCompany: vi.fn() });
+
+    const button = container.querySelector('[data-testid="company-mismatch-note"] button');
+    expect(button?.className).toContain("max-w-[45%]");
+    expect(button?.querySelector("span")?.className).toContain("truncate");
+    expect(button?.getAttribute("title")).toBe("Start one in HQ");
+  });
+
   it("says nothing about the company when the chat belongs to the one being viewed", async () => {
     mockChatSession.session.companyId = "c1";
     await render({ sessionId: "s1", onNewSessionForCurrentCompany: vi.fn() });
 
     expect(container.querySelector('[data-testid="company-mismatch-note"]')).toBeNull();
+  });
+
+  it("suggests questions about the chat's own company when it is not the one being viewed", async () => {
+    mockChatSession.session.companyId = "c2"; // Industry Bureau while route is HQ (c1)
+    await render({ sessionId: "s1", suggestions: ["Summarize this issue", "Summarize open issues in HQ"] });
+
+    expect(suggestionsShown()).toContain("Summarize open issues in Industry Bureau");
+    expect(suggestionsShown()).not.toContain("Summarize this issue");
+    expect(suggestionsShown()).not.toContain("Summarize open issues in HQ");
+  });
+
+  it("keeps the page's suggestions when the chat belongs to the company being viewed", async () => {
+    mockChatSession.session.companyId = "c1";
+    await render({ sessionId: "s1", suggestions: ["Summarize this issue"] });
+
+    expect(suggestionsShown()).toEqual(["Summarize this issue"]);
   });
 });
