@@ -1,4 +1,5 @@
 import {
+  findModelInList,
   groupModelsForPicker,
   type ModelLifecycleFields,
   type ModelListEntry,
@@ -233,4 +234,26 @@ export function chatModelEntry(model: AvailableModel): ModelPickerEntry {
       ? { replacementId: adapterRouted ? `adapter:${source}:${replacementId}` : replacementId }
       : {}),
   };
+}
+
+/**
+ * A chat model's name for people: the provider's name for it when the list
+ * has it ("Claude Sonnet 5.5"), or else the bare model id with the
+ * `adapter:<type>:` routing taken off. Never the stored id itself.
+ */
+/**
+ * How a model picker names a saved chat model the list does not have: the
+ * bare model id, with where it is routed as a hint ("via claude_local").
+ */
+export function describeChatModelId(id: string): { label: string; hint?: string } {
+  const label = formatDraftModelLabel(id);
+  if (label === id) return { label };
+  const adapter = id.slice("adapter:".length, id.length - label.length - 1);
+  return adapter ? { label, hint: `via ${adapter}` } : { label };
+}
+
+export function chatModelDisplayName(id: string, models: readonly AvailableModel[]): string {
+  // The same match the model picker makes, so both say the same name.
+  const listed = findModelInList(models.map(chatModelEntry), id);
+  return listed ? listed.label : formatDraftModelLabel(id);
 }

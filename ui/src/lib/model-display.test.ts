@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { describeSavedModel, type ModelListEntry } from "@paperclipai/shared";
 import {
   buildModelPickerSections,
+  chatModelDisplayName,
   chatModelEntry,
+  describeChatModelId,
   formatModelShortDate,
   groupModelsByProvider,
   modelLifecycleTags,
@@ -162,5 +164,35 @@ describe("chatModelEntry", () => {
     expect(entry.id).toBe("adapter:codex_local:gpt-5.5");
     expect(entry.replacementId).toBe("adapter:codex_local:gpt-6-sol");
     expect(entry.status).toBe("deprecated");
+  });
+});
+
+describe("chatModelDisplayName", () => {
+  const listed = [
+    {
+      provider: "adapter" as const,
+      model: "adapter:claude_local:claude-sonnet-5-5",
+      source: "claude_local",
+      label: "Claude Sonnet 5.5",
+    },
+  ];
+
+  it("uses the provider's name for a model on offer", () => {
+    expect(chatModelDisplayName("adapter:claude_local:claude-sonnet-5-5", listed)).toBe("Claude Sonnet 5.5");
+  });
+
+  it("never shows the stored adapter id for a model that is not on offer", () => {
+    // The chat list and composer used to show `adapter:claude_local:...`.
+    const name = chatModelDisplayName("adapter:codex_local:gpt-5.5", listed);
+    expect(name).toBe("gpt-5.5");
+    expect(name).not.toContain("adapter:");
+  });
+
+  it("says where an unlisted model is routed, as a hint", () => {
+    expect(describeChatModelId("adapter:claude_local:claude-opus-5")).toEqual({
+      label: "claude-opus-5",
+      hint: "via claude_local",
+    });
+    expect(describeChatModelId("claude-opus-5")).toEqual({ label: "claude-opus-5" });
   });
 });

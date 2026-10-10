@@ -120,6 +120,11 @@ vi.mock("./MobileBottomNav", () => ({
   MobileBottomNav: () => null,
 }));
 
+// The window has tests of its own; here only what the shell does around it.
+vi.mock("./ClippyWindow", () => ({
+  ClippyWindow: () => null,
+}));
+
 vi.mock("./WorktreeBanner", () => ({
   WorktreeBanner: () => null,
 }));
@@ -703,7 +708,7 @@ describe("Layout", () => {
     sidebarState.sidebarOpen = false;
     const { root } = await renderLayout();
 
-    const launcher = document.querySelector('button[aria-label^="Open Clippy"]');
+    const launcher = document.querySelector('button[aria-label^="Ask Clippy"]');
     expect(launcher).not.toBeNull();
     for (const part of ABOVE_MOBILE_BOTTOM_NAV_CLASS.split(" ")) {
       expect(launcher!.classList.contains(part)).toBe(true);
@@ -712,6 +717,49 @@ describe("Layout", () => {
 
     await act(async () => {
       root.unmount();
+    });
+  });
+
+  it("takes everything behind full screen Clippy out of the keyboard's reach, the skip link and banners included", async () => {
+    // Only the page itself used to be, so Tab still walked out of Clippy to
+    // the skip link and the banners at the top.
+    window.localStorage.setItem("paperclip.clippy.mode", "fullscreen");
+    const { root } = await renderLayout();
+    const skipLink = container.querySelector('a[href="#main-content"]')!;
+    expect(skipLink.hasAttribute("inert")).toBe(false);
+
+    const launcher = document.querySelector<HTMLButtonElement>('button[aria-label^="Ask Clippy"]')!;
+    await act(async () => {
+      launcher.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(skipLink.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector("#main-content")!.closest("[inert]")).not.toBeNull();
+    expect(container.querySelector("div.contents")?.hasAttribute("inert")).toBe(true);
+
+    window.localStorage.removeItem("paperclip.clippy.mode");
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("hides the Clippy launcher on the full Clippy page, and only there", async () => {
+    // There it would only open a second Clippy over the page, and the pill
+    // sat against the corner of the page's own message box.
+    currentPathname = "/PAP/clippy";
+    const { root } = await renderLayout();
+    const launcher = document.querySelector<HTMLButtonElement>('button[aria-label^="Ask Clippy"]');
+    expect(launcher?.hidden).toBe(true);
+    await act(async () => {
+      root.unmount();
+    });
+
+    currentPathname = "/PAP/clippy-notes";
+    const second = await renderLayout();
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label^="Ask Clippy"]')?.hidden).toBe(false);
+    await act(async () => {
+      second.root.unmount();
     });
   });
 

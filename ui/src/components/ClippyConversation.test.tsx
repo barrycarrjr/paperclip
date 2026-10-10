@@ -2,6 +2,7 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClippyConversation } from "./ClippyConversation";
 
@@ -27,7 +28,8 @@ const mockChatSession = {
 };
 
 vi.mock("../hooks/useChatSession", () => ({
-  useChatSession: () => mockChatSession,
+  // Like the real hook: a new chat (no id yet) has no session record.
+  useChatSession: (sessionId: string | null) => (sessionId ? mockChatSession : { ...mockChatSession, session: null }),
 }));
 
 const mockCompanyContext = {
@@ -56,8 +58,13 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
 async function render(props: Parameters<typeof ClippyConversation>[0]) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
-    root.render(<ClippyConversation {...props} />);
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <ClippyConversation {...props} />
+      </QueryClientProvider>,
+    );
   });
 }
 
@@ -110,14 +117,19 @@ describe("ClippyConversation", () => {
     expect(title?.className).toContain("min-w-0");
   });
 
-  it("offers the list from the empty state too, so a phone is never stuck", async () => {
+  it("offers the list from a new chat too, so a phone is never stuck", async () => {
     const onOpenSessionList = vi.fn();
     await render({ sessionId: null, onOpenSessionList });
 
-    const button = [...container.querySelectorAll("button")].find((candidate) =>
-      candidate.textContent?.includes("Show chats"),
-    );
-    expect(button?.className).toContain("md:hidden");
+    expect(container.textContent).toContain("New chat");
+    expect(listButton()?.className).toContain("md:hidden");
+  });
+
+  it("leaves its own title row out where the window above it has one", async () => {
+    await render({ sessionId: "s1", showHeader: false, onOpenSessionList: vi.fn() });
+
+    expect(listButton()).toBeUndefined();
+    expect(container.querySelector('[data-testid="session-company-badge"]')).toBeNull();
   });
 
   it("displays the company badge matching the chat's pinned company", async () => {
@@ -129,22 +141,32 @@ describe("ClippyConversation", () => {
     expect(badge?.textContent).toContain("Industry Bureau");
   });
 
-  it("displays a mismatch banner when viewing a different company route", async () => {
+  it("says quietly when the chat belongs to another company, with a way to start one here", async () => {
     mockChatSession.session.companyId = "c2"; // Industry Bureau while route is HQ (c1)
     const onNewSession = vi.fn();
     await render({ sessionId: "s1", onNewSessionForCurrentCompany: onNewSession });
 
-    const banner = container.querySelector('[data-testid="company-mismatch-banner"]');
-    expect(banner).toBeDefined();
-    expect(banner?.textContent).toContain("This chat is attached to Industry Bureau, but you are viewing HQ.");
+    // One muted line rather than the amber warning banner it replaced.
+    expect(container.querySelector('[data-testid="company-mismatch-banner"]')).toBeNull();
+    const note = container.querySelector('[data-testid="company-mismatch-note"]');
+    expect(note).not.toBeNull();
+    expect(note?.className).toContain("text-muted-foreground");
+    expect(note?.textContent).toContain("This chat is in Industry Bureau.");
 
-    const newChatBtn = [...banner!.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("New chat in HQ"),
+    const startHere = [...note!.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Start one in HQ"),
     );
-    expect(newChatBtn).toBeDefined();
+    expect(startHere).toBeDefined();
     act(() => {
-      newChatBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      startHere?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(onNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing about the company when the chat belongs to the one being viewed", async () => {
+    mockChatSession.session.companyId = "c1";
+    await render({ sessionId: "s1", onNewSessionForCurrentCompany: vi.fn() });
+
+    expect(container.querySelector('[data-testid="company-mismatch-note"]')).toBeNull();
   });
 });

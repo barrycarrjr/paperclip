@@ -8,7 +8,11 @@
  *
  * The ordering that matters, lowest first:
  *
- *   BASE_OVERLAY (50)  dialogs, sheets, dropdown menus, selects
+ *   PAGE_FLOATING (40) a page's own fixed bars and buttons: selection action
+ *                      bars, scroll-to-top/bottom, the Clippy launcher
+ *   PAGE_NOTICE   (42) a page's own short notices ("Archived"), above its bars
+ *   CLIPPY        (45) the Clippy window, in any of its layouts
+ *   BASE_OVERLAY  (50) dialogs, sheets, dropdown menus, selects
  *   PANEL        (60)  popovers, hover cards
  *   TOOLTIP      (70)  tooltips
  *   TOAST       (120)  toast notifications
@@ -36,6 +40,32 @@
  * inline property menu (`z-[200]`). If you touch any of them, move it onto this
  * scale.
  */
+
+/**
+ * A page's own fixed controls: a selection's action bar, the scroll buttons,
+ * the Clippy launcher. Page content, so under the Clippy window, which floats
+ * over the page or covers it.
+ */
+export const Z_PAGE_FLOATING = "z-40";
+
+/**
+ * A page's own short-lived notice, such as the Email page's "Archived". Above
+ * the page's floating controls, so the launcher in the same corner never
+ * hides it; still page content, so under Clippy. The app-wide toasts are
+ * TOAST, far above.
+ */
+export const Z_PAGE_NOTICE = "z-[42]";
+
+/**
+ * The Clippy window, in every layout. Above everything a page draws,
+ * including its fixed bars and notices (PAGE_FLOATING, PAGE_NOTICE), so the
+ * floating window is never under them and full screen covers the whole page.
+ * Below dialogs, so a dialog opened while Clippy is on screen comes up in
+ * front of it. Clippy's own menus are `z-50` and up, so they open in front of
+ * it too. A page must not put its own fixed elements on `z-50`: that is the
+ * dialog layer, and they would draw over Clippy.
+ */
+export const Z_CLIPPY = "z-[45]";
 
 /** Dialogs, sheets, dropdown menus, selects. */
 export const Z_BASE_OVERLAY = "z-50";
