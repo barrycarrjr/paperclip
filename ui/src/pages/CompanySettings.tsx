@@ -499,14 +499,6 @@ export function CompanySettings() {
     ]);
   }, [setBreadcrumbs, selectedCompany?.name]);
 
-  if (!selectedCompany) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        No company selected. Select a company from the switcher above.
-      </div>
-    );
-  }
-
   function handleSaveGeneral() {
     generalMutation.mutate({
       name: companyName.trim(),
@@ -621,6 +613,17 @@ export function CompanySettings() {
       environmentForm.sandboxProvider.trim().length > 0 &&
       environmentForm.sandboxProvider !== "fake" &&
       Object.keys(sandboxConfigErrors).length === 0);
+
+  // Every hook must run before this return. On a direct visit the company list
+  // is still loading at the first render, so a hook below here would be skipped
+  // then and called once the list arrives, and React throws.
+  if (!selectedCompany) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        No company selected. Select a company from the switcher above.
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
