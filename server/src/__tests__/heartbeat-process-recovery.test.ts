@@ -1371,6 +1371,79 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(runs).toHaveLength(0);
   });
 
+  async function addOpenBlocker(input: { companyId: string; agentId: string; blockedIssueId: string }) {
+    const blockerIssueId = randomUUID();
+    const issuePrefix = `T${input.companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(issues).values({
+      id: blockerIssueId,
+      companyId: input.companyId,
+      title: "Blocker that is itself blocked",
+      status: "blocked",
+      priority: "medium",
+      assigneeAgentId: input.agentId,
+      issueNumber: 99,
+      identifier: `${issuePrefix}-99`,
+    });
+    await db.insert(issueRelations).values({
+      companyId: input.companyId,
+      issueId: blockerIssueId,
+      relatedIssueId: input.blockedIssueId,
+      type: "blocks",
+    });
+    return blockerIssueId;
+  }
+
+  it("leaves assigned todo work alone while it waits on an unfinished blocker, then dispatches it once the blocker is done", async () => {
+    const { companyId, agentId, issueId } = await seedAssignedTodoNoRunFixture();
+    const blockerIssueId = await addOpenBlocker({ companyId, agentId, blockedIssueId: issueId });
+    const heartbeat = heartbeatService(db);
+
+    for (let sweep = 0; sweep < 2; sweep += 1) {
+      const result = await heartbeat.reconcileStrandedAssignedIssues();
+      expect(result.assignmentDispatched).toBe(0);
+      expect(result.issueIds).toEqual([]);
+    }
+    const waitingWakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+    expect(waitingWakeups).toHaveLength(0);
+
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, blockerIssueId));
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.assignmentDispatched).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const wakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakeups).toEqual([
+      expect.objectContaining({
+        reason: "issue_assigned",
+        payload: expect.objectContaining({ issueId, mutation: "assigned_todo_liveness_dispatch" }),
+      }),
+    ]);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(1);
+    if (runs[0]?.id) {
+      await waitForRunToSettle(heartbeat, runs[0].id);
+    }
+  });
+
+  it("does not re-enqueue continuation for in-progress work that waits on an unfinished blocker", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "failed",
+    });
+    await addOpenBlocker({ companyId, agentId, blockedIssueId: issueId });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.continuationRequeued).toBe(0);
+    expect(result.escalated).toBe(0);
+    expect(result.issueIds).toEqual([]);
+
+    const wakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakeups.map((wakeup) => wakeup.reason)).toEqual(["issue_assigned"]);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs.map((run) => run.id)).toEqual([runId]);
+  });
+
   it("re-enqueues assigned todo work when the last issue run died and no wake remains", async () => {
     const { agentId, issueId, runId } = await seedStrandedIssueFixture({
       status: "todo",
