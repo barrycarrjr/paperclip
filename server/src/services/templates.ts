@@ -818,12 +818,15 @@ export function templateService(
       }
 
       try {
+        // A redeploy may replace the skill this template deployed before. Any
+        // other skill that already has the slug is left alone.
+        const previousDeployment = await getExistingDeployment("skill", templateId, companyId);
         const skill = await skills.createLocalSkill(companyId, {
           name: template.skillName,
           slug: template.skillKey,
           description: template.skillDescription ?? null,
           markdown: template.markdown,
-        });
+        }, { replaceSkillId: previousDeployment?.deployedEntityId ?? null });
         await recordDeployment("skill", templateId, companyId, skill.id, actor);
         results.push({
           companyId,
