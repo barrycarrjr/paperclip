@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import type { QueryKey } from "@tanstack/react-query";
 import type { DocumentRevision } from "@paperclipai/shared";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
@@ -123,16 +124,21 @@ export function DocumentDiffModal({
   latestRevisionNumber,
   open,
   onOpenChange,
+  revisionsQueryKey,
+  revisionsQueryFn,
 }: {
-  issueId: string;
+  issueId?: string;
   documentKey: string;
   latestRevisionNumber: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Where the revisions come from when they are not a task's, such as a case document's. */
+  revisionsQueryKey?: QueryKey;
+  revisionsQueryFn?: () => Promise<DocumentRevision[]>;
 }) {
   const { data: revisions } = useQuery({
-    queryKey: queryKeys.issues.documentRevisions(issueId, documentKey),
-    queryFn: () => issuesApi.listDocumentRevisions(issueId, documentKey),
+    queryKey: revisionsQueryKey ?? queryKeys.issues.documentRevisions(issueId ?? "", documentKey),
+    queryFn: () => revisionsQueryFn ? revisionsQueryFn() : issuesApi.listDocumentRevisions(issueId ?? "", documentKey),
     enabled: open,
   });
 

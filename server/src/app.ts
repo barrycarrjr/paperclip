@@ -273,8 +273,11 @@ export async function createApp(
     getToolDispatcher: () => toolDispatcherRef.current,
   }));
   api.use(issueTreeControlRoutes(db));
-  api.use(pipelineRoutes(db));
+  // Cases before pipelines: both answer seven /cases/:id addresses, and the
+  // cases router hands every id that is not one of its own rows on to the
+  // pipelines router (resolveSharedPathCase in routes/cases.ts).
   api.use(caseRoutes(db, opts.storageService));
+  api.use(pipelineRoutes(db));
   api.use(routineRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(
     starterCatalogRoutes(db, {

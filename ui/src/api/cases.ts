@@ -308,7 +308,7 @@ export const casesApi = {
     key: string,
     data: { title?: string | null; format?: string; body: string; baseRevisionId?: string | null },
   ) =>
-    api.put<{ document: CaseDocument & { key: string; body: string }; revision: CaseDocumentRevision }>(
+    api.put<{ document: CaseDocument; revision: CaseDocumentRevision }>(
       `/cases/${idOrIdentifier}/documents/${encodeURIComponent(key)}`,
       data,
     ),

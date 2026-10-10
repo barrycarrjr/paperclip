@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type {
   DocumentRevision,
   Issue,
@@ -45,6 +46,31 @@ type DocumentConflictState = {
   serverDocument: IssueDocument;
   localDraft: DraftState;
   showRemote: boolean;
+};
+
+// Where the section reads and writes its documents. A task uses the task
+// document addresses (makeIssueDocumentSubject); a case passes its own.
+type DocumentSubjectConfig = {
+  id: string;
+  detailQueryKey?: QueryKey;
+  documentsQueryKey: QueryKey;
+  /** The revisions key of one document with a placeholder as its last part. */
+  idleDocumentRevisionsQueryKey: QueryKey;
+  documentRevisionsQueryKey: (key: string) => QueryKey;
+  listDocuments: () => Promise<IssueDocument[]>;
+  listDocumentRevisions: (key: string) => Promise<DocumentRevision[]>;
+  getDocument: (key: string) => Promise<IssueDocument>;
+  upsertDocument: (key: string, data: {
+    title: string | null;
+    format: "markdown";
+    body: string;
+    baseRevisionId: string | null;
+  }) => Promise<IssueDocument>;
+  deleteDocument: (key: string) => Promise<unknown>;
+  restoreDocumentRevision: (key: string, revisionId: string) => Promise<IssueDocument>;
+  syncDetailCache?: (queryClient: QueryClient, document: IssueDocument) => void;
+  hideSystemDocuments?: boolean;
+  legacyPlanDocument?: { body: string } | null;
 };
 
 const DOCUMENT_AUTOSAVE_DEBOUNCE_MS = 900;
@@ -130,14 +156,54 @@ function toDocumentSummary(document: IssueDocument) {
   };
 }
 
+function makeIssueDocumentSubject(issueId: string): DocumentSubjectConfig {
+  return {
+    id: issueId,
+    detailQueryKey: queryKeys.issues.detail(issueId),
+    documentsQueryKey: queryKeys.issues.documents(issueId),
+    idleDocumentRevisionsQueryKey: ["issues", "document-revisions", issueId, "__idle__"],
+    documentRevisionsQueryKey: (key) => queryKeys.issues.documentRevisions(issueId, key),
+    listDocuments: () => issuesApi.listDocuments(issueId),
+    listDocumentRevisions: (key) => issuesApi.listDocumentRevisions(issueId, key),
+    getDocument: (key) => issuesApi.getDocument(issueId, key),
+    upsertDocument: (key, data) => issuesApi.upsertDocument(issueId, key, data),
+    deleteDocument: (key) => issuesApi.deleteDocument(issueId, key),
+    restoreDocumentRevision: (key, revisionId) => issuesApi.restoreDocumentRevision(issueId, key, revisionId),
+    syncDetailCache: (queryClient, document) => {
+      queryClient.setQueryData<Issue | undefined>(
+        queryKeys.issues.detail(issueId),
+        (current) => {
+          if (!current) return current;
+          const nextSummaries = (() => {
+            const summary = toDocumentSummary(document);
+            const existingIndex = (current.documentSummaries ?? []).findIndex((entry) => entry.key === document.key);
+            if (existingIndex === -1) return [...(current.documentSummaries ?? []), summary];
+            return (current.documentSummaries ?? []).map((entry, index) => index === existingIndex ? summary : entry);
+          })();
+          return {
+            ...current,
+            planDocument: document.key === "plan" ? document : current.planDocument ?? null,
+            documentSummaries: nextSummaries,
+            legacyPlanDocument: document.key === "plan" ? null : current.legacyPlanDocument ?? null,
+          };
+        },
+      );
+    },
+    hideSystemDocuments: true,
+  };
+}
+
 export function IssueDocumentsSection({
   issue,
+  subject,
   canDeleteDocuments,
   mentions,
   imageUploadHandler,
   extraActions,
 }: {
-  issue: Issue;
+  issue?: Issue;
+  /** Documents that do not belong to a task, such as a case's. Takes the place of issue. */
+  subject?: DocumentSubjectConfig;
   canDeleteDocuments: boolean;
   mentions?: MentionOption[];
   imageUploadHandler?: (file: File) => Promise<string>;
@@ -145,11 +211,20 @@ export function IssueDocumentsSection({
 }) {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const issueId = issue?.id;
+  // Keyed on the task id, not the task object, so a refetched task does not
+  // rebuild the callbacks below.
+  const documentSubject = useMemo(() => {
+    if (subject) return subject;
+    if (!issueId) throw new Error("IssueDocumentsSection requires either issue or subject");
+    return makeIssueDocumentSubject(issueId);
+  }, [issueId, subject]);
+  const legacyPlanDocument = subject ? subject.legacyPlanDocument ?? null : issue?.legacyPlanDocument ?? null;
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [documentConflict, setDocumentConflict] = useState<DocumentConflictState | null>(null);
-  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(issue.id));
+  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(documentSubject.id));
   const [autosaveDocumentKey, setAutosaveDocumentKey] = useState<string | null>(null);
   const [copiedDocumentKey, setCopiedDocumentKey] = useState<string | null>(null);
   const [highlightDocumentKey, setHighlightDocumentKey] = useState<string | null>(null);
@@ -167,37 +242,35 @@ export function IssueDocumentsSection({
   } = useAutosaveIndicator();
 
   const { data: documents } = useQuery({
-    queryKey: queryKeys.issues.documents(issue.id),
-    queryFn: () => issuesApi.listDocuments(issue.id),
+    queryKey: documentSubject.documentsQueryKey,
+    queryFn: () => documentSubject.listDocuments(),
   });
 
   const { data: activeDocumentRevisions, isFetching: isFetchingDocumentRevisions } = useQuery({
     queryKey: revisionMenuOpenKey
-      ? queryKeys.issues.documentRevisions(issue.id, revisionMenuOpenKey)
-      : ["issues", "document-revisions", issue.id, "__idle__"],
+      ? documentSubject.documentRevisionsQueryKey(revisionMenuOpenKey)
+      : documentSubject.idleDocumentRevisionsQueryKey,
     queryFn: async () => {
       if (!revisionMenuOpenKey) return [];
-      return issuesApi.listDocumentRevisions(issue.id, revisionMenuOpenKey);
+      return documentSubject.listDocumentRevisions(revisionMenuOpenKey);
     },
     enabled: Boolean(revisionMenuOpenKey),
   });
 
   const invalidateIssueDocuments = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.issues.documents(issue.id) });
-    queryClient.invalidateQueries({
-      predicate: (query) =>
-        Array.isArray(query.queryKey)
-        && query.queryKey[0] === "issues"
-        && query.queryKey[1] === "document-revisions"
-        && query.queryKey[2] === issue.id,
-    });
-  }, [issue.id, queryClient]);
+    if (documentSubject.detailQueryKey) {
+      queryClient.invalidateQueries({ queryKey: documentSubject.detailQueryKey });
+    }
+    queryClient.invalidateQueries({ queryKey: documentSubject.documentsQueryKey });
+    // The idle key without its placeholder is the start of every revisions key
+    // for this subject, so this refreshes the history of each document.
+    queryClient.invalidateQueries({ queryKey: documentSubject.idleDocumentRevisionsQueryKey.slice(0, -1) });
+  }, [documentSubject, queryClient]);
 
   const syncDocumentCaches = useCallback((document: IssueDocument) => {
-    if (isSystemIssueDocumentKey(document.key)) return;
+    if (documentSubject.hideSystemDocuments && isSystemIssueDocumentKey(document.key)) return;
     queryClient.setQueryData<IssueDocument[] | undefined>(
-      queryKeys.issues.documents(issue.id),
+      documentSubject.documentsQueryKey,
       (current) => {
         if (!current) return [document];
         const existingIndex = current.findIndex((entry) => entry.key === document.key);
@@ -205,29 +278,12 @@ export function IssueDocumentsSection({
         return current.map((entry, index) => index === existingIndex ? document : entry);
       },
     );
-    queryClient.setQueryData<Issue | undefined>(
-      queryKeys.issues.detail(issue.id),
-      (current) => {
-        if (!current) return current;
-        const nextSummaries = (() => {
-          const summary = toDocumentSummary(document);
-          const existingIndex = (current.documentSummaries ?? []).findIndex((entry) => entry.key === document.key);
-          if (existingIndex === -1) return [...(current.documentSummaries ?? []), summary];
-          return (current.documentSummaries ?? []).map((entry, index) => index === existingIndex ? summary : entry);
-        })();
-        return {
-          ...current,
-          planDocument: document.key === "plan" ? document : current.planDocument ?? null,
-          documentSummaries: nextSummaries,
-          legacyPlanDocument: document.key === "plan" ? null : current.legacyPlanDocument ?? null,
-        };
-      },
-    );
-  }, [issue.id, queryClient]);
+    documentSubject.syncDetailCache?.(queryClient, document);
+  }, [documentSubject, queryClient]);
 
   const upsertDocument = useMutation({
     mutationFn: async (nextDraft: DraftState) =>
-      issuesApi.upsertDocument(issue.id, nextDraft.key, {
+      documentSubject.upsertDocument(nextDraft.key, {
         title: isPlanKey(nextDraft.key) ? null : nextDraft.title.trim() || null,
         format: "markdown",
         body: nextDraft.body,
@@ -236,7 +292,7 @@ export function IssueDocumentsSection({
   });
 
   const deleteDocument = useMutation({
-    mutationFn: (key: string) => issuesApi.deleteDocument(issue.id, key),
+    mutationFn: (key: string) => documentSubject.deleteDocument(key),
     onSuccess: () => {
       setError(null);
       setConfirmDeleteKey(null);
@@ -249,7 +305,7 @@ export function IssueDocumentsSection({
 
   const restoreDocumentRevision = useMutation({
     mutationFn: ({ key, revisionId }: { key: string; revisionId: string }) =>
-      issuesApi.restoreDocumentRevision(issue.id, key, revisionId),
+      documentSubject.restoreDocumentRevision(key, revisionId),
     onSuccess: (document, variables) => {
       syncDocumentCaches(document);
       setSelectedRevisionIds((current) => ({ ...current, [variables.key]: null }));
@@ -265,15 +321,15 @@ export function IssueDocumentsSection({
   });
 
   const sortedDocuments = useMemo(() => {
-    return (documents ?? []).filter((doc) => !isSystemIssueDocumentKey(doc.key)).sort((a, b) => {
+    return (documents ?? []).filter((doc) => !documentSubject.hideSystemDocuments || !isSystemIssueDocumentKey(doc.key)).sort((a, b) => {
       if (a.key === "plan" && b.key !== "plan") return -1;
       if (a.key !== "plan" && b.key === "plan") return 1;
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
-  }, [documents]);
+  }, [documentSubject.hideSystemDocuments, documents]);
 
   const hasRealPlan = sortedDocuments.some((doc) => doc.key === "plan");
-  const isEmpty = sortedDocuments.length === 0 && !issue.legacyPlanDocument;
+  const isEmpty = sortedDocuments.length === 0 && !legacyPlanDocument;
   const newDocumentKeyError =
     draft?.isNew && draft.key.trim().length > 0 && !DOCUMENT_KEY_PATTERN.test(draft.key.trim())
       ? "Use lowercase letters, numbers, -, or _, and start with a letter or number."
@@ -420,7 +476,7 @@ export function IssueDocumentsSection({
     } catch (err) {
       if (isDocumentConflictError(err)) {
         try {
-          const latestDocument = await issuesApi.getDocument(issue.id, normalizedKey);
+          const latestDocument = await documentSubject.getDocument(normalizedKey);
           setDocumentConflict({
             key: normalizedKey,
             serverDocument: latestDocument,
@@ -445,7 +501,7 @@ export function IssueDocumentsSection({
       setError(err instanceof Error ? err.message : "Failed to save document");
       return false;
     }
-  }, [documentConflict, invalidateIssueDocuments, issue.id, resetAutosaveState, runSave, sortedDocuments, syncDocumentCaches, upsertDocument]);
+  }, [documentConflict, documentSubject, invalidateIssueDocuments, resetAutosaveState, runSave, sortedDocuments, syncDocumentCaches, upsertDocument]);
 
   const reloadDocumentFromServer = useCallback((key: string) => {
     if (documentConflict?.key !== key) return;
@@ -508,11 +564,11 @@ export function IssueDocumentsSection({
   }, []);
 
   const getDocumentRevisions = useCallback((key: string) => {
-    const cached = queryClient.getQueryData<DocumentRevision[]>(queryKeys.issues.documentRevisions(issue.id, key));
+    const cached = queryClient.getQueryData<DocumentRevision[]>(documentSubject.documentRevisionsQueryKey(key));
     if (cached) return cached;
     if (revisionMenuOpenKey === key) return activeDocumentRevisions ?? [];
     return [];
-  }, [activeDocumentRevisions, issue.id, queryClient, revisionMenuOpenKey]);
+  }, [activeDocumentRevisions, documentSubject, queryClient, revisionMenuOpenKey]);
 
   const returnToLatestRevision = useCallback((key: string) => {
     setSelectedRevisionIds((current) => ({ ...current, [key]: null }));
@@ -563,27 +619,27 @@ export function IssueDocumentsSection({
   };
 
   useEffect(() => {
-    setFoldedDocumentKeys(loadFoldedDocumentKeys(issue.id));
-  }, [issue.id]);
+    setFoldedDocumentKeys(loadFoldedDocumentKeys(documentSubject.id));
+  }, [documentSubject.id]);
 
   useEffect(() => {
     hasScrolledToHashRef.current = false;
-  }, [issue.id, location.hash]);
+  }, [documentSubject.id, location.hash]);
 
   useEffect(() => {
     const validKeys = new Set(sortedDocuments.map((doc) => doc.key));
     setFoldedDocumentKeys((current) => {
       const next = current.filter((key) => validKeys.has(key));
       if (next.length !== current.length) {
-        saveFoldedDocumentKeys(issue.id, next);
+        saveFoldedDocumentKeys(documentSubject.id, next);
       }
       return next;
     });
-  }, [issue.id, sortedDocuments]);
+  }, [documentSubject.id, sortedDocuments]);
 
   useEffect(() => {
-    saveFoldedDocumentKeys(issue.id, foldedDocumentKeys);
-  }, [foldedDocumentKeys, issue.id]);
+    saveFoldedDocumentKeys(documentSubject.id, foldedDocumentKeys);
+  }, [documentSubject.id, foldedDocumentKeys]);
 
   useEffect(() => {
     if (!documentConflict) return;
@@ -601,7 +657,7 @@ export function IssueDocumentsSection({
     if (!hash.startsWith("#document-")) return;
     const documentKey = decodeURIComponent(hash.slice("#document-".length));
     const targetExists = sortedDocuments.some((doc) => doc.key === documentKey)
-      || (documentKey === "plan" && Boolean(issue.legacyPlanDocument));
+      || (documentKey === "plan" && Boolean(legacyPlanDocument));
     if (!targetExists || hasScrolledToHashRef.current) return;
     setFoldedDocumentKeys((current) => current.filter((key) => key !== documentKey));
     const element = document.getElementById(`document-${documentKey}`);
@@ -611,7 +667,7 @@ export function IssueDocumentsSection({
     element.scrollIntoView({ behavior: "smooth", block: "center" });
     const timer = setTimeout(() => setHighlightDocumentKey((current) => current === documentKey ? null : current), 3000);
     return () => clearTimeout(timer);
-  }, [issue.legacyPlanDocument, location.hash, sortedDocuments]);
+  }, [legacyPlanDocument, location.hash, sortedDocuments]);
 
   useEffect(() => {
     return () => {
@@ -743,7 +799,7 @@ export function IssueDocumentsSection({
         </div>
       )}
 
-      {!hasRealPlan && issue.legacyPlanDocument ? (
+      {!hasRealPlan && legacyPlanDocument ? (
         <div
           id="document-plan"
           className={cn(
@@ -757,7 +813,7 @@ export function IssueDocumentsSection({
               PLAN
             </span>
           </div>
-          {renderFoldableBody(issue.legacyPlanDocument.body, documentBodyContentClassName)}
+          {renderFoldableBody(legacyPlanDocument.body, documentBodyContentClassName)}
         </div>
       ) : null}
 
@@ -1155,9 +1211,10 @@ export function IssueDocumentsSection({
         if (!diffDoc) return null;
         return (
           <DocumentDiffModal
-            issueId={issue.id}
             documentKey={diffDoc.key}
             latestRevisionNumber={diffDoc.latestRevisionNumber}
+            revisionsQueryKey={documentSubject.documentRevisionsQueryKey(diffDoc.key)}
+            revisionsQueryFn={() => documentSubject.listDocumentRevisions(diffDoc.key)}
             open
             onOpenChange={(open) => { if (!open) setDiffViewKey(null); }}
           />
