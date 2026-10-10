@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  activityLog,
   agentWakeupRequests,
   agents,
   companies,
@@ -15,8 +16,8 @@ import {
   issueThreadInteractions,
   issues,
 } from "@paperclipai/db";
-import { START_WORK_ORIGIN_KIND } from "@paperclipai/shared";
-import { eq } from "drizzle-orm";
+import { START_WORK_ORIGIN_KIND, type CreateIssueThreadInteraction, type LiveEvent } from "@paperclipai/shared";
+import { eq, sql } from "drizzle-orm";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -24,6 +25,7 @@ import {
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { issueService } from "../services/issues.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
+import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -42,6 +44,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
   }, 90_000);
 
   afterEach(async () => {
+    await db.delete(activityLog);
     await db.delete(agentWakeupRequests);
     await db.delete(issueThreadInteractions);
     await db.delete(issueDocuments);
@@ -880,6 +883,234 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
           revisionId,
         },
       },
+    });
+  });
+
+  describe("closing a task while a card is pending", () => {
+    // One pending card of every kind this server creates. Closing the task
+    // expires each one inside the same update, and the expired card is read
+    // back through its own result schema, so a result that schema refuses
+    // rolls the whole status change back.
+    type PendingCardKind = CreateIssueThreadInteraction["kind"];
+    const pendingCardInputs: Record<PendingCardKind, CreateIssueThreadInteraction> = {
+      suggest_tasks: {
+        kind: "suggest_tasks",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          tasks: [{ clientKey: "follow-up", title: "Write the follow-up" }],
+        },
+      },
+      ask_user_questions: {
+        kind: "ask_user_questions",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          questions: [
+            {
+              id: "scope",
+              prompt: "Choose the scope",
+              selectionMode: "single",
+              required: true,
+              options: [
+                { id: "small", label: "Small" },
+                { id: "large", label: "Large" },
+              ],
+            },
+          ],
+        },
+      },
+      request_confirmation: {
+        kind: "request_confirmation",
+        continuationPolicy: "none",
+        payload: {
+          version: 1,
+          prompt: "Proceed with the current draft?",
+          allowDeclineReason: true,
+        },
+      },
+    };
+
+    const closedResultByKind: Record<PendingCardKind, Record<string, unknown>> = {
+      suggest_tasks: { version: 1, outcome: "issue_closed", reason: null },
+      ask_user_questions: {
+        version: 1,
+        outcome: "issue_closed",
+        reason: null,
+        answers: [],
+        summaryMarkdown: null,
+      },
+      request_confirmation: { version: 1, outcome: "issue_closed", reason: null },
+    };
+
+    async function seedOpenTask() {
+      const companyId = randomUUID();
+      const issueId = randomUUID();
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Task with an open card",
+        status: "todo",
+        priority: "medium",
+      });
+      return { companyId, issueId };
+    }
+
+    const closingCases = (["done", "cancelled"] as const).flatMap((status) =>
+      (Object.keys(pendingCardInputs) as PendingCardKind[]).map((kind) => [status, kind] as const));
+
+    it.each(closingCases)("marks the task %s while a %s card is pending and expires the card", async (status, kind) => {
+      const { companyId, issueId } = await seedOpenTask();
+      const created = await interactionsSvc.create(
+        { id: issueId, companyId },
+        pendingCardInputs[kind],
+        { userId: "local-board" },
+      );
+
+      const updated = await issuesSvc.update(issueId, { status, actorUserId: "local-board" });
+
+      expect(updated?.status).toBe(status);
+      const interactions = await interactionsSvc.listForIssue(issueId);
+      expect(interactions).toHaveLength(1);
+      expect(interactions[0]).toMatchObject({
+        id: created.id,
+        kind,
+        status: "expired",
+        resolvedByUserId: "local-board",
+      });
+      expect(interactions[0]?.resolvedAt).toBeTruthy();
+      expect(interactions[0]?.result).toEqual(closedResultByKind[kind]);
+    });
+
+    it("logs each card the close expired, so an open task page reloads it, with who closed the task", async () => {
+      const { companyId, issueId } = await seedOpenTask();
+      const card = await interactionsSvc.create(
+        { id: issueId, companyId },
+        pendingCardInputs.ask_user_questions,
+        { userId: "local-board" },
+      );
+      const announced: LiveEvent[] = [];
+      // What a task page that reloads its cards on the event reads at that moment.
+      const reloads: Array<Promise<Array<{ status: string }>>> = [];
+      // Open spare connections first, as a busy server has, so that read
+      // starts at once instead of waiting for a new connection.
+      await Promise.all(Array.from({ length: 4 }, () => db.execute(sql`select pg_sleep(0.05)`)));
+      const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
+        if (event.payload.action !== "issue.thread_interaction_expired") return;
+        announced.push(event);
+        reloads.push(
+          db
+            .select({ status: issueThreadInteractions.status })
+            .from(issueThreadInteractions)
+            .where(eq(issueThreadInteractions.id, card.id))
+            .then((rows) => rows),
+        );
+      });
+      try {
+        await issuesSvc.update(issueId, { status: "done", actorUserId: "local-board" });
+      } finally {
+        unsubscribe();
+      }
+
+      const details = {
+        interactionId: card.id,
+        interactionKind: "ask_user_questions",
+        interactionStatus: "expired",
+        source: "issue.closed",
+        result: closedResultByKind.ask_user_questions,
+      };
+      const logged = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.action, "issue.thread_interaction_expired"));
+      expect(logged).toEqual([
+        expect.objectContaining({
+          companyId,
+          actorType: "user",
+          actorId: "local-board",
+          agentId: null,
+          entityType: "issue",
+          entityId: issueId,
+          details: expect.objectContaining(details),
+        }),
+      ]);
+      expect(announced).toEqual([
+        expect.objectContaining({
+          type: "activity.logged",
+          payload: expect.objectContaining({
+            action: "issue.thread_interaction_expired",
+            entityType: "issue",
+            entityId: issueId,
+            details: expect.objectContaining(details),
+          }),
+        }),
+      ]);
+      expect(await Promise.all(reloads)).toEqual([[{ status: "expired" }]]);
+    });
+
+    it("lets the agent that asked close its own task, expiring every pending card and leaving answered ones alone", async () => {
+      const { companyId, issueId } = await seedOpenTask();
+      const agentId = randomUUID();
+      await db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "CodexCoder",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      });
+      const pending: Array<{ id: string; kind: PendingCardKind }> = [];
+      for (const [kind, input] of Object.entries(pendingCardInputs) as Array<[PendingCardKind, CreateIssueThreadInteraction]>) {
+        const card = await interactionsSvc.create({ id: issueId, companyId }, input, { agentId });
+        pending.push({ id: card.id, kind });
+      }
+      const answered = await interactionsSvc.create(
+        { id: issueId, companyId },
+        pendingCardInputs.ask_user_questions,
+        { agentId },
+      );
+      const answeredResult = (await interactionsSvc.answerQuestions(
+        { id: issueId, companyId },
+        answered.id,
+        { answers: [{ questionId: "scope", optionIds: ["small"] }] },
+        { userId: "local-board" },
+      )).result;
+
+      const updated = await issuesSvc.update(issueId, { status: "done", actorAgentId: agentId });
+
+      expect(updated?.status).toBe("done");
+      const byId = new Map((await interactionsSvc.listForIssue(issueId)).map((row) => [row.id, row]));
+      for (const card of pending) {
+        expect(byId.get(card.id)).toMatchObject({
+          status: "expired",
+          resolvedByAgentId: agentId,
+          resolvedByUserId: null,
+          result: closedResultByKind[card.kind],
+        });
+      }
+      expect(byId.get(answered.id)).toMatchObject({
+        status: "answered",
+        resolvedByUserId: "local-board",
+        result: answeredResult,
+      });
+      const logged = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.action, "issue.thread_interaction_expired"));
+      expect(logged.map((row) => row.details?.interactionId).sort()).toEqual(pending.map((card) => card.id).sort());
+      for (const row of logged) {
+        expect(row).toMatchObject({ actorType: "agent", actorId: agentId, agentId });
+      }
     });
   });
 

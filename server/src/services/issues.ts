@@ -29,7 +29,7 @@ import {
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
-import type { IssueBlockerAttention, IssueRelationIssueSummary } from "@paperclipai/shared";
+import type { IssueBlockerAttention, IssueRelationIssueSummary, IssueThreadInteraction } from "@paperclipai/shared";
 import {
   AGENT_FINDING_ORIGIN_KIND,
   extractAgentMentionIds,
@@ -39,6 +39,7 @@ import {
   issueExecutionStateSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { logActivity } from "./activity-log.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   gateProjectExecutionWorkspacePolicy,
@@ -3080,6 +3081,7 @@ export function issueService(db: Db) {
         patch.executionLockedAt = null;
       }
 
+      let expiredInteractions: IssueThreadInteraction[] = [];
       const runUpdate = async (tx: any) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
@@ -3108,7 +3110,7 @@ export function issueService(db: Db) {
         if (!updated) return null;
         if (existing.status !== updated.status && (updated.status === "done" || updated.status === "cancelled")) {
           const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
-          await issueThreadInteractionService(tx).expirePendingInteractionsForTerminalIssue(updated, {
+          expiredInteractions = await issueThreadInteractionService(tx).expirePendingInteractionsForTerminalIssue(updated, {
             agentId: actorAgentId ?? null,
             userId: actorUserId ?? null,
           });
@@ -3132,7 +3134,33 @@ export function issueService(db: Db) {
         return enriched;
       };
 
-      return dbOrTx === db ? db.transaction(runUpdate) : runUpdate(dbOrTx);
+      const updatedIssue = dbOrTx === db ? await db.transaction(runUpdate) : await runUpdate(dbOrTx);
+      // An open task page reloads its cards only on a thread interaction
+      // activity, so each card the close expired gets one, as upstream does.
+      // Logged once this update is saved, so that reload finds the card
+      // expired; a caller's own transaction gets it inside that transaction.
+      // The source is not upstream's "issue.status_transition.issue_closed":
+      // a value with three dotted parts is hidden in the log as a likely token.
+      for (const interaction of expiredInteractions) {
+        await logActivity(dbOrTx, {
+          companyId: existing.companyId,
+          actorType: actorAgentId ? "agent" : actorUserId ? "user" : "system",
+          actorId: actorAgentId ?? actorUserId ?? "issue_service",
+          agentId: actorAgentId ?? null,
+          action: "issue.thread_interaction_expired",
+          entityType: "issue",
+          entityId: existing.id,
+          details: {
+            identifier: existing.identifier ?? null,
+            interactionId: interaction.id,
+            interactionKind: interaction.kind,
+            interactionStatus: interaction.status,
+            source: "issue.closed",
+            result: interaction.result ?? null,
+          },
+        });
+      }
+      return updatedIssue;
     },
 
     clearExecutionWorkspaceEnvironmentSelection: async (companyId: string, environmentId: string) => {

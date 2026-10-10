@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import type { Agent } from "@paperclipai/shared";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, GitBranch, ListChecks, Loader2, MessageSquareQuote, XCircle } from "lucide-react";
 import { Link } from "@/lib/router";
@@ -134,6 +135,21 @@ function statusClasses(status: IssueThreadInteraction["status"]) {
         badge: "border-sky-500/70 bg-sky-500/10 text-sky-900 dark:bg-sky-500/15 dark:text-sky-100",
       };
   }
+}
+
+function expiredWhenTaskClosed(interaction: IssueThreadInteraction) {
+  return interaction.status === "expired" && interaction.result?.outcome === "issue_closed";
+}
+
+function TaskClosedNotice({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-sm border border-amber-500/60 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+        Expired when the task closed
+      </div>
+      <p className="mt-1 leading-6">{children}</p>
+    </div>
+  );
 }
 
 function TaskField({
@@ -495,6 +511,14 @@ function SuggestTasksCard({
         </div>
       ) : null}
 
+      {expiredWhenTaskClosed(interaction) ? (
+        <TaskClosedNotice>
+          {totalTasks === 1
+            ? "The task was closed before this draft was accepted or rejected."
+            : "The task was closed before these drafts were accepted or rejected."}
+        </TaskClosedNotice>
+      ) : null}
+
       {interaction.status === "pending" ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -850,6 +874,13 @@ function AskUserQuestionsCard({
         </div>
       ) : (
         <div className="space-y-3">
+          {expiredWhenTaskClosed(interaction) ? (
+            <TaskClosedNotice>
+              {questions.length === 1
+                ? "The task was closed before this question was answered."
+                : "The task was closed before these questions were answered."}
+            </TaskClosedNotice>
+          ) : null}
           {questions.map((question) => {
             const labels = getQuestionAnswerLabels({
               question,
@@ -986,6 +1017,14 @@ function RequestConfirmationResolution({
           </blockquote>
         ) : null}
       </div>
+    );
+  }
+
+  if (expiredWhenTaskClosed(interaction)) {
+    return (
+      <TaskClosedNotice>
+        The task was closed before this confirmation was resolved.
+      </TaskClosedNotice>
     );
   }
 

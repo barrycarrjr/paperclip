@@ -356,8 +356,19 @@ export const suggestTasksResultCreatedTaskSchema = z.object({
   parentIdentifier: z.string().trim().min(1).nullable().optional(),
 });
 
+// Why a card ended without a normal reply. This server writes only
+// "issue_closed", when the card's task is marked done or cancelled.
+const interactionAdministrativeOutcomeSchema = z.enum([
+  "skipped",
+  "withdrawn",
+  "issue_closed",
+  "addressee_deleted",
+]);
+
 export const suggestTasksResultSchema = z.object({
   version: z.literal(1),
+  outcome: interactionAdministrativeOutcomeSchema.optional(),
+  reason: z.string().trim().max(4000).nullable().optional(),
   createdTasks: z.array(suggestTasksResultCreatedTaskSchema).max(50).optional(),
   skippedClientKeys: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
   rejectionReason: z.string().trim().max(4000).nullable().optional(),
@@ -417,6 +428,8 @@ export const askUserQuestionsAnswerSchema = z.object({
 
 export const askUserQuestionsResultSchema = z.object({
   version: z.literal(1),
+  outcome: interactionAdministrativeOutcomeSchema.optional(),
+  reason: z.string().trim().max(4000).nullable().optional(),
   answers: z.array(askUserQuestionsAnswerSchema).max(20),
   summaryMarkdown: z.string().max(20000).nullable().optional(),
 });
