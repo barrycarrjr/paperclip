@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Download, FileText, Info, Loader2, MessageSquare } from "lucide-react";
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ArrowDown, ChevronDown, Download, FileText, Info, Loader2, MessageSquare } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { MarkdownBody } from "./MarkdownBody";
@@ -11,6 +11,8 @@ import { resolveStreamActivity } from "../lib/clippy-stream-reducer";
 import type { ChatContentBlock } from "../api/chat";
 import { useNowTick } from "../hooks/useNowTick";
 import { formatElapsed } from "../lib/clippy-tool-labels";
+import { splitChatAppNotes, summarizeChatAppNotes, type ChatAppNotes } from "../lib/chat-app-notes";
+import { brandWarningText } from "../lib/status-colors";
 
 interface Props {
   transcript: ClippyTranscriptEntry[];
@@ -171,10 +173,15 @@ function MessageBubble({
   onPermissionDecision: (toolUseId: string, decision: "approve" | "deny") => void;
 }) {
   const isUser = role === "user";
-  const text = blocks
+  const allText = blocks
     .filter((b): b is ChatContentBlock & { type: "text" } => b.type === "text")
     .map((b) => b.text)
     .join("\n\n");
+  // A message sent from a chat app (Slack) carries notes the app added for
+  // Clippy. They go in a line above the bubble, which keeps only what the
+  // person wrote. Display only: the stored message is unchanged.
+  const appNotes = isUser ? splitChatAppNotes(allText) : null;
+  const text = appNotes ? appNotes.text : allText;
   const toolUses = blocks.filter(
     (b): b is ChatContentBlock & { type: "tool_use" } => b.type === "tool_use",
   );
@@ -185,8 +192,20 @@ function MessageBubble({
     (b): b is ChatContentBlock & { type: "file" } => b.type === "file",
   );
 
+  // Only notes, such as a file sent with no words: an outlined bubble of its
+  // own on the person's side, so it is not read as a caption for the message
+  // next to it.
+  if (appNotes && !text && images.length === 0 && files.length === 0) {
+    return (
+      <div className="flex flex-col items-end">
+        <ChatAppNotesLine notes={appNotes} imagesSeen={images.length} standalone />
+      </div>
+    );
+  }
+
   return (
-    <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
+    <div className={cn("flex flex-col", isUser ? "items-end" : "items-start", appNotes && "gap-1")}>
+      {appNotes && <ChatAppNotesLine notes={appNotes} imagesSeen={images.length} />}
       <div
         className={cn(
           "max-w-[85%] rounded-lg px-3 py-2 text-sm",
@@ -196,7 +215,9 @@ function MessageBubble({
         )}
       >
         {(images.length > 0 || files.length > 0) && (
-          <div className="mb-2 flex flex-wrap gap-2">
+          // A gap only above words: an image sent with no words has nothing
+          // under it, and a gap there makes the bubble's padding uneven.
+          <div className={cn("flex flex-wrap gap-2", text && "mb-2")}>
             {images.map((img) => (
               <ImageAttachment key={img.attachmentId} block={img} />
             ))}
@@ -323,6 +344,102 @@ function SystemNote({ blocks }: { blocks: ChatContentBlock[] }) {
 }
 
 /**
+ * The notes a chat app added to a person's message for Clippy, as one small
+ * line: "From Slack · thread reply". It opens to the notes and, for a thread
+ * reply, the message it was sent under. It sits above the person's bubble
+ * or, for a message that is only notes, inside an outlined bubble of its own.
+ */
+function ChatAppNotesLine({
+  notes,
+  imagesSeen,
+  standalone = false,
+}: {
+  notes: ChatAppNotes;
+  /** How many images the message holds: the ones Clippy was given. */
+  imagesSeen: number;
+  /** The message is only notes, so the line is its whole bubble. */
+  standalone?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const parts = summarizeChatAppNotes(notes, imagesSeen);
+  return (
+    <div
+      className={cn(
+        "flex max-w-[85%] flex-col",
+        standalone
+          ? // The size and corners of the person's bubble, outlined instead
+            // of filled: these are not words they typed.
+            "items-start gap-2 rounded-lg border border-dashed border-border px-3 py-2"
+          : "items-end gap-1",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={detailsId}
+        title={open ? `Hide what ${notes.app} added` : `Show what ${notes.app} added`}
+        className={cn(
+          "-mx-1 flex items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+          standalone ? "text-left" : "text-right",
+        )}
+      >
+        {/* Each part stays on one line with its dot after it, so a narrow
+            window breaks the line between parts, never inside one, and no
+            line starts with a dot. */}
+        <span>
+          {parts.map((part, index) => (
+            <Fragment key={index}>
+              {index > 0 && " "}
+              <span className="whitespace-nowrap">
+                {part.warning ? <span className={brandWarningText}>{part.text}</span> : part.text}
+                {index < parts.length - 1 && " ·"}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+        <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div
+          id={detailsId}
+          className={cn(
+            "w-full space-y-2 break-words text-xs text-muted-foreground",
+            // Inside a bubble of their own the notes need no second outline.
+            !standalone && "rounded-lg border border-border px-3 py-2",
+          )}
+        >
+          {notes.leading && (
+            <>
+              <p className="first-letter:uppercase">{notes.leading.note}</p>
+              {/* A long message scrolls in place. Its scrollbar is styled to
+                  stay in view, but a Mac set to show scroll bars only while
+                  scrolling can still hide it. It takes focus so the keyboard
+                  can scroll it too, which Safari does not do for a box with
+                  nothing in it that can take focus. The ring stands off a
+                  little, as the quote has no padding to keep it off the text. */}
+              <blockquote
+                tabIndex={0}
+                aria-label="The message this replies to"
+                className="max-h-48 overflow-y-auto whitespace-pre-wrap border-l-2 border-border pl-3 text-foreground/90 outline-none scrollbar-visible focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                {notes.leading.quote}
+              </blockquote>
+            </>
+          )}
+          {notes.trailing.map((note, index) => (
+            <p key={index} className="first-letter:uppercase">
+              {note}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Live status line under the transcript. Covers the two silent stretches of
  * a turn: before the first token ("thinking"), and the quiet gap after text
  * stops while the model assembles its next tool call — previously the UI
@@ -379,10 +496,12 @@ function ImageAttachment({
       className="block overflow-hidden rounded-md border border-border bg-background"
       title={block.name}
     >
+      {/* Never wider than the bubble: in a narrow window a fixed 280px cap
+          ran past the bubble's edge and the right of the image was cut off. */}
       <img
         src={block.url}
         alt={block.name}
-        className="block max-h-72 max-w-[280px] object-contain"
+        className="block max-h-72 max-w-[min(280px,100%)] object-contain"
         loading="lazy"
       />
     </a>
