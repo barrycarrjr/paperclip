@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useToastActions } from "../context/ToastContext";
 import { companiesApi } from "../api/companies";
 import { queryKeys } from "../lib/queryKeys";
 import { formatCents, relativeTime } from "../lib/utils";
@@ -38,6 +39,7 @@ export function Companies() {
   } = useCompany();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
 
   const { data: stats } = useQuery({
@@ -50,12 +52,22 @@ export function Companies() {
   const [editName, setEditName] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  // A rename or delete that worked shows itself: the new name, or the company
+  // gone from the list. One that failed used to show nothing, and the editor
+  // or the confirmation just stayed open.
   const editMutation = useMutation({
     mutationFn: ({ id, newName }: { id: string; newName: string }) =>
       companiesApi.update(id, { name: newName }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
       setEditingId(null);
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Could not rename the company",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
     },
   });
 
@@ -65,6 +77,13 @@ export function Companies() {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.stats });
       setConfirmDeleteId(null);
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Could not delete the company",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
     },
   });
 
@@ -123,6 +142,12 @@ export function Companies() {
               tabIndex={0}
               onClick={() => setSelectedCompanyId(company.id)}
               onKeyDown={(e) => {
+                // Only keys pressed on the card itself. Keys pressed in the
+                // controls inside it reach here too, and Enter in the rename
+                // box used to switch into the company as well as rename it.
+                // Switching reloads the page, so a rename that failed lost
+                // the name typed. A space could not be typed there at all.
+                if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   setSelectedCompanyId(company.id);

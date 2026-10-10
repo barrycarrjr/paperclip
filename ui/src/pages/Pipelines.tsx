@@ -96,6 +96,7 @@ import { PipelineWorkReferences } from "../components/PipelineWorkReferences";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { assigneeValueFromSelection, parseAssigneeValue, suggestedCommentAssigneeValue } from "../lib/assignees";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, isAgentTaskTarget } from "../lib/company-members";
 import { useStandardMarkdownMentionOptions } from "../hooks/useStandardMarkdownMentionOptions";
@@ -4232,7 +4233,6 @@ function formatShortDate(value: Date | string) {
 function PipelineAddItems({ pipelineId }: { pipelineId: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { pushToast } = useToastActions();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [rows, setRows] = useState<DraftRow[]>(() => [newDraftRow(true)]);
 
@@ -4257,28 +4257,49 @@ function PipelineAddItems({ pipelineId }: { pipelineId: string }) {
   const errors = useMemo(() => validateDraftRows(rows, fields), [fields, rows]);
   const invalid = rows.length === 0 || Object.keys(errors).length > 0;
 
-  const submit = useMutation({
-    mutationFn: () => pipelinesApi.ingestCasesBatch(pipelineId, { items: buildBatchPayload(rows, fields) }),
-    onSuccess: async (results) => {
-      const failedByIndex = new Map<number, string>();
+  // The rows sent go with the request, so each result is matched to the row it
+  // came from even if the list changes while the request is out.
+  const submit = useSaveMutation({
+    mutationFn: (sent: DraftRow[]) => pipelinesApi.ingestCasesBatch(pipelineId, { items: buildBatchPayload(sent, fields) }),
+    successMessage: (results) => {
+      const created = results.filter((result) => result.ok).length;
+      if (created === 0) return null;
+      return created === results.length
+        ? `${itemCountLabel(created)} submitted`
+        : `${created} of ${itemCountLabel(results.length)} submitted`;
+    },
+    // A batch turned away as a whole has nowhere else on the page to show.
+    errorMessage: "Could not submit the items",
+    onSuccess: async (results, sent) => {
+      // The server adds each row on its own, so some can go in while others
+      // fail. The ones that went in leave the list: they used to stay, and
+      // pressing Submit again added them a second time.
+      const createdIds = new Set<string>();
+      const failedById = new Map<string, string>();
       results.forEach((result, index) => {
-        if (!result.ok) failedByIndex.set(index, plainBatchError(result));
+        const row = sent[index];
+        if (!row) return;
+        if (result.ok) createdIds.add(row.id);
+        else failedById.set(row.id, plainBatchError(result));
       });
-      if (failedByIndex.size > 0) {
+      if (createdIds.size > 0) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.detail(pipelineId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.cases(pipelineId) }),
+        ]);
+      }
+      if (failedById.size > 0) {
         setRows((current) =>
-          current.map((row, index) => ({
-            ...row,
-            expanded: failedByIndex.has(index) ? true : row.expanded,
-            serverError: failedByIndex.get(index) ?? null,
-          })),
+          current
+            .filter((row) => !createdIds.has(row.id))
+            .map((row) =>
+              failedById.has(row.id)
+                ? { ...row, expanded: true, serverError: failedById.get(row.id) ?? null }
+                : row,
+            ),
         );
         return;
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.detail(pipelineId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.cases(pipelineId) }),
-      ]);
-      pushToast({ title: `${itemCountLabel(rows.length)} submitted`, tone: "success" });
       navigate(`/pipelines/${pipelineId}`);
     },
   });
@@ -4352,7 +4373,7 @@ function PipelineAddItems({ pipelineId }: { pipelineId: string }) {
           <span className="text-sm text-muted-foreground">
             {rows.length === 0 ? "Add at least one item." : "Count updates live."}
           </span>
-          <Button disabled={invalid || submit.isPending} onClick={() => submit.mutate()}>
+          <Button disabled={invalid || submit.isPending} onClick={() => submit.mutate(rows)}>
             {submit.isPending ? "Submitting..." : `Submit ${itemCountLabel(rows.length)}`}
           </Button>
         </div>

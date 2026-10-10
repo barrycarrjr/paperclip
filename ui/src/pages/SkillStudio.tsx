@@ -3,7 +3,7 @@ import { SkillCardIcon, type DiscoveryCard } from "@/components/SkillCardIcon";
 import { SkillBinaryFile } from "../components/SkillBinaryFile";
 import { SkillSourceProvenance } from "../components/SkillSourceProvenance";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -53,6 +53,7 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useOptionalToastActions } from "../context/ToastContext";
 import { useSaveMutation } from "../hooks/useSaveMutation";
+import { useDialogOpening, type DialogOpening } from "../hooks/useDialogOpening";
 import { classifySkillDenial } from "@/lib/skill-policy-denial";
 import { agentsApi } from "@/api/agents";
 import { companySkillsApi } from "@/api/companySkills";
@@ -208,6 +209,56 @@ function useMutationErrorToast() {
       toast?.pushToast({ tone: "error", title, body });
     },
     [toast],
+  );
+}
+
+/**
+ * The same failure as useMutationErrorToast, worded for a line inside a modal
+ * dialog or sheet. A toast does not work there: the dialog hides it from
+ * screen readers, and clicking it closes the dialog.
+ */
+function dialogFailureText(title: string, error: unknown) {
+  const denial = classifySkillDenial(error);
+  if (denial) return `${denial.title} ${denial.remediation}`;
+  const reason = error instanceof Error && error.message ? error.message : "Please try again.";
+  return `${title}. ${reason}`;
+}
+
+// A dialog that sends a request stays open until the request is done, however
+// long that takes: Escape does nothing, Cancel is off and the corner close
+// button is gone until then. So a failure always has the dialog it came from
+// to be said in. Closed mid-request, a failure was kept for a dialog nobody
+// could see, and turned up the next time the dialog opened instead. An answer
+// that comes after the dialog has gone with its pane or page (see
+// hooks/useDialogOpening.ts) is said in a toast if it is a failure, and
+// changes nothing on screen if it is a success.
+
+/**
+ * The line a dialog says a problem in, or how its request is getting on. It is
+ * on the page even while empty, so a screen reader hears what appears in it.
+ * Put it after the dialog's spaced group of fields, not inside it: as the last
+ * item of a space-y group the empty line put a gap above itself, so the dialog
+ * had a band of empty space above its buttons. It only takes room once it has
+ * something to say.
+ */
+function DialogStatusLine({
+  message,
+  tone = "problem",
+}: {
+  message: string | null;
+  tone?: "problem" | "progress";
+}) {
+  return (
+    <p
+      role="status"
+      className={cn(
+        "text-xs",
+        tone === "progress" ? "text-muted-foreground" : "text-destructive",
+        message && "mt-2",
+      )}
+    >
+      {message}
+    </p>
   );
 }
 
@@ -1288,6 +1339,16 @@ function SkillPane({
   const [savedContent, setSavedContent] = useState<string>("");
   const [createDialog, setCreateDialog] = useState<"file" | "folder" | null>(null);
   const [deleteFolderOpen, setDeleteFolderOpen] = useState(false);
+  // Why the last create or folder delete failed, said inside the dialog it
+  // came from (see dialogFailureText).
+  const [createFailure, setCreateFailure] = useState<string | null>(null);
+  const [deleteFolderFailure, setDeleteFolderFailure] = useState<string | null>(null);
+  // Which opening of each dialog a request was sent from (see
+  // useDialogOpening). This pane is rebuilt when the window crosses
+  // MOBILE_BREAKPOINT, and gone when the page is left, so an answer can come
+  // back after the dialog that asked for it has.
+  const createOpening = useDialogOpening(createDialog !== null);
+  const deleteFolderOpening = useDialogOpening(deleteFolderOpen);
   // Gate rich-editor onChange until the user actually interacts with the body.
   // MDXEditor can emit a normalizing onChange on mount, which would otherwise
   // dirty the file on open and break the byte-identity guarantee (PAP-13156).
@@ -1353,9 +1414,19 @@ function SkillPane({
     onError: onError("Couldn't save file"),
   });
 
+  // target says whether a file or a folder is being made. It goes with the
+  // request rather than being read from createDialog, which a failure used to
+  // find already cleared, so a folder that failed read "Couldn't create file".
+  // opening is the opening of the dialog it was sent from.
   const createMutation = useMutation({
-    mutationFn: ({ path, content }: { path: string; content: string }) =>
+    mutationFn: ({ path, content }: {
+      path: string;
+      content: string;
+      target: "file" | "folder";
+      opening: DialogOpening | null;
+    }) =>
       companySkillsApi.updateFile(companyId, skillId, path, content),
+    onMutate: () => setCreateFailure(null),
     onSuccess: (created) => {
       setSelectedFile(created.path);
       setDraft(created.content);
@@ -1371,12 +1442,40 @@ function SkillPane({
         queryKey: queryKeys.companySkills.versions(companyId, skillId),
       });
     },
-    onError: onError("Couldn't create file"),
+    // Said inside the Add file or Add folder dialog, which stays open. As a
+    // toast it sat behind that dialog, hidden from screen readers, and a click
+    // on it closed the dialog. Once that dialog has gone with this pane, a
+    // toast is the only place left to say it, and nothing hides it.
+    // onError: onError("Couldn't create file"),
+    onError: (error, input) => {
+      const title = input.target === "folder" ? "Couldn't create folder" : "Couldn't create file";
+      if (createOpening.isShowing(input.opening)) setCreateFailure(dialogFailureText(title, error));
+      else onError(title)(error);
+    },
   });
 
+  // A reason left from an earlier try is not about this one, so each dialog
+  // opens without one.
+  const openCreateDialog = (mode: "file" | "folder") => {
+    setCreateFailure(null);
+    setCreateDialog(mode);
+  };
+  const openDeleteFolderDialog = () => {
+    setDeleteFolderFailure(null);
+    setDeleteFolderOpen(true);
+  };
+  const submitCreate = (path: string, content: string) =>
+    createMutation.mutate({
+      path,
+      content,
+      target: createDialog === "folder" ? "folder" : "file",
+      opening: createOpening.current(),
+    });
+
   const deleteMutation = useMutation({
-    mutationFn: (input: { path: string; target: "file" | "folder" }) =>
-      companySkillsApi.deleteFile(companyId, skillId, input),
+    mutationFn: ({ path, target }: { path: string; target: "file" | "folder"; opening?: DialogOpening | null }) =>
+      companySkillsApi.deleteFile(companyId, skillId, { path, target }),
+    onMutate: () => setDeleteFolderFailure(null),
     onSuccess: (result) => {
       const deleted = new Set(result.deletedPaths);
       const remaining = paths.filter((path) => !deleted.has(path));
@@ -1392,7 +1491,21 @@ function SkillPane({
         queryKey: queryKeys.companySkills.versions(companyId, skillId),
       });
     },
-    onError: onError("Couldn't delete file"),
+    // A file is deleted from the toolbar, so a toast is right for it. A folder
+    // is deleted from its own dialog, and that failure is said inside it, for
+    // the same reason as createMutation's, while that dialog is still there.
+    // onError: onError("Couldn't delete file"),
+    onError: (error, input) => {
+      if (input.target === "folder") {
+        if (deleteFolderOpening.isShowing(input.opening)) {
+          setDeleteFolderFailure(dialogFailureText("Couldn't delete folder", error));
+        } else {
+          onError("Couldn't delete folder")(error);
+        }
+        return;
+      }
+      onError("Couldn't delete file")(error);
+    },
   });
 
   // Read-only skills (bundled Paperclip, remote GitHub, URL, skills.sh) reject
@@ -1411,10 +1524,10 @@ function SkillPane({
             currentFolder=""
             canDeleteFile={false}
             pending={createMutation.isPending || deleteMutation.isPending || dirty}
-            onAddFile={() => setCreateDialog("file")}
-            onAddFolder={() => setCreateDialog("folder")}
+            onAddFile={() => openCreateDialog("file")}
+            onAddFolder={() => openCreateDialog("folder")}
             onDeleteFile={() => {}}
-            onDeleteFolder={() => setDeleteFolderOpen(true)}
+            onDeleteFolder={openDeleteFolderDialog}
           />
         }
       >
@@ -1428,7 +1541,8 @@ function SkillPane({
           currentFolder=""
           existingPaths={pathSet}
           pending={createMutation.isPending}
-          onSubmit={(path, content) => createMutation.mutate({ path, content })}
+          failure={createFailure}
+          onSubmit={submitCreate}
         />
       </PaneScaffold>
     );
@@ -1447,10 +1561,10 @@ function SkillPane({
           currentFolder={currentFolder}
           canDeleteFile={selectedFile !== "SKILL.md"}
           pending={createMutation.isPending || deleteMutation.isPending || dirty}
-          onAddFile={() => setCreateDialog("file")}
-          onAddFolder={() => setCreateDialog("folder")}
+          onAddFile={() => openCreateDialog("file")}
+          onAddFolder={() => openCreateDialog("folder")}
           onDeleteFile={() => deleteMutation.mutate({ path: selectedFile, target: "file" })}
-          onDeleteFolder={() => setDeleteFolderOpen(true)}
+          onDeleteFolder={openDeleteFolderDialog}
         />
       }
     >
@@ -1586,7 +1700,8 @@ function SkillPane({
         currentFolder={currentFolder}
         existingPaths={pathSet}
         pending={createMutation.isPending}
-        onSubmit={(path, content) => createMutation.mutate({ path, content })}
+        failure={createFailure}
+        onSubmit={submitCreate}
       />
       <DeleteFolderDialog
         open={deleteFolderOpen}
@@ -1594,7 +1709,9 @@ function SkillPane({
         currentFolder={currentFolder}
         existingPaths={pathSet}
         pending={deleteMutation.isPending}
-        onSubmit={(path) => deleteMutation.mutate({ path, target: "folder" })}
+        failure={deleteFolderFailure}
+        onSubmit={(path) =>
+          deleteMutation.mutate({ path, target: "folder", opening: deleteFolderOpening.current() })}
       />
     </PaneScaffold>
   );
@@ -1720,6 +1837,7 @@ function SkillPathDialog({
   currentFolder,
   existingPaths,
   pending,
+  failure,
   onSubmit,
 }: {
   mode: "file" | "folder" | null;
@@ -1728,6 +1846,8 @@ function SkillPathDialog({
   currentFolder: string;
   existingPaths: Set<string>;
   pending: boolean;
+  /** Why the last create failed on the server. */
+  failure: string | null;
   onSubmit: (path: string, content: string) => void;
 }) {
   const [pathValue, setPathValue] = useState("");
@@ -1768,37 +1888,49 @@ function SkillPathDialog({
     onSubmit(folderSeedFile(folderPath), folderSeedContent(folderPath));
   }
 
+  const progress = pending ? (mode === "folder" ? "Creating the folder…" : "Creating the file…") : null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      // Held open until the create is done: Escape does nothing until then.
+      onOpenChange={(next) => {
+        if (!next && pending) return;
+        onOpenChange(next);
+      }}
+    >
+      {/* The corner close button would do nothing while the create runs. */}
+      <DialogContent showCloseButton={!pending}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             Saved changes create a new version immediately. External sources are not updated until you publish or install an update.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor="skill-path-input">{label}</Label>
-          <Input
-            id="skill-path-input"
-            value={pathValue}
-            onChange={(event) => {
-              setPathValue(event.target.value);
-              setError(null);
-            }}
-            placeholder={mode === "folder" ? "references/examples" : "references/examples.md"}
-          />
-          {mode === "folder" ? (
-            <p className="text-xs text-muted-foreground">A README.md seed file is created so the folder appears in the file tree.</p>
-          ) : null}
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        <div>
+          <div className="space-y-2">
+            <Label htmlFor="skill-path-input">{label}</Label>
+            <Input
+              id="skill-path-input"
+              value={pathValue}
+              onChange={(event) => {
+                setPathValue(event.target.value);
+                setError(null);
+              }}
+              placeholder={mode === "folder" ? "references/examples" : "references/examples.md"}
+            />
+            {mode === "folder" ? (
+              <p className="text-xs text-muted-foreground">A README.md seed file is created so the folder appears in the file tree.</p>
+            ) : null}
+          </div>
+          <DialogStatusLine message={progress ?? error ?? failure} tone={progress ? "progress" : "problem"} />
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button disabled={pending} onClick={submit}>
-            Create
+            {pending ? "Creating…" : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1812,6 +1944,7 @@ function DeleteFolderDialog({
   currentFolder,
   existingPaths,
   pending,
+  failure,
   onSubmit,
 }: {
   open: boolean;
@@ -1819,6 +1952,8 @@ function DeleteFolderDialog({
   currentFolder: string;
   existingPaths: Set<string>;
   pending: boolean;
+  /** Why the last delete failed on the server. */
+  failure: string | null;
   onSubmit: (path: string) => void;
 }) {
   const [pathValue, setPathValue] = useState("");
@@ -1848,34 +1983,46 @@ function DeleteFolderDialog({
     onSubmit(normalized);
   }
 
+  const progress = pending ? "Deleting the folder…" : null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      // Held open until the delete is done: Escape does nothing until then.
+      onOpenChange={(next) => {
+        if (!next && pending) return;
+        onOpenChange(next);
+      }}
+    >
+      {/* The corner close button would do nothing while the delete runs. */}
+      <DialogContent showCloseButton={!pending}>
         <DialogHeader>
           <DialogTitle>Delete folder</DialogTitle>
           <DialogDescription>
             This removes every skill file under the folder and saves the result as the next version.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor="skill-folder-delete">Folder path</Label>
-          <Input
-            id="skill-folder-delete"
-            value={pathValue}
-            onChange={(event) => {
-              setPathValue(event.target.value);
-              setError(null);
-            }}
-            placeholder="references/examples"
-          />
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        <div>
+          <div className="space-y-2">
+            <Label htmlFor="skill-folder-delete">Folder path</Label>
+            <Input
+              id="skill-folder-delete"
+              value={pathValue}
+              onChange={(event) => {
+                setPathValue(event.target.value);
+                setError(null);
+              }}
+              placeholder="references/examples"
+            />
+          </div>
+          <DialogStatusLine message={progress ?? error ?? failure} tone={progress ? "progress" : "problem"} />
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button variant="destructive" disabled={pending} onClick={submit}>
-            Delete
+            {pending ? "Deleting…" : "Delete"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2210,19 +2357,34 @@ function SaveInputDialog({
   onSaved: (input: CompanySkillTestInput) => void;
 }) {
   const queryClient = useQueryClient();
+  const onError = useMutationErrorToast();
   const [name, setName] = useState("");
   const [content, setContent] = useState(initialContent);
+  // Why the last save failed, said inside the dialog (see dialogFailureText).
+  // A failed save used to say nothing at all.
+  const [failure, setFailure] = useState<string | null>(null);
+  // Which opening of this dialog a save was sent from (see useDialogOpening).
+  const opening = useDialogOpening(open);
 
   useEffect(() => {
     if (open) {
       setContent(initialContent);
       setName("");
+      setFailure(null);
     }
   }, [open, initialContent]);
 
   const createMutation = useMutation({
-    mutationFn: () => companySkillsApi.createTestInput(companyId, skillId, { name: name.trim(), content }),
-    onSuccess: (input) => {
+    mutationFn: (sent: { name: string; content: string; opening: DialogOpening | null }) =>
+      companySkillsApi.createTestInput(companyId, skillId, { name: sent.name, content: sent.content }),
+    onMutate: () => setFailure(null),
+    // Said in the dialog while it is still there, and in a toast once it has
+    // gone with its pane or page.
+    onError: (error, sent) => {
+      if (opening.isShowing(sent.opening)) setFailure(dialogFailureText("Couldn't save input", error));
+      else onError("Couldn't save input")(error);
+    },
+    onSuccess: (input, sent) => {
       queryClient.setQueryData<CompanySkillTestInput[]>(
         queryKeys.companySkills.testInputs(companyId, skillId),
         (current) => {
@@ -2235,49 +2397,65 @@ function SaveInputDialog({
       queryClient.invalidateQueries({
         queryKey: queryKeys.companySkills.testInputs(companyId, skillId),
       });
-      onSaved(input);
+      // Saved after the dialog had gone with its pane or page, the input is in
+      // the list, but it is not opened over what the person has moved on to.
+      if (opening.isShowing(sent.opening)) onSaved(input);
     },
   });
 
+  const pending = createMutation.isPending;
+  const progress = pending ? "Saving the input…" : null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      // Held open until the save is done: Escape does nothing until then.
+      onOpenChange={(next) => {
+        if (!next && pending) return;
+        onOpenChange(next);
+      }}
+    >
+      {/* The corner close button would do nothing while the save runs. */}
+      <DialogContent showCloseButton={!pending}>
         <DialogHeader>
           <DialogTitle>Save test input</DialogTitle>
           <DialogDescription>
             Runs snapshot input at run time — editing later won't change past runs.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor="input-name">Name</Label>
-            <Input
-              id="input-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="onboarding/happy-path"
-            />
-            <p className="text-xs text-muted-foreground">Use “/” for folders, e.g. onboarding/happy-path</p>
+        <div>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="input-name">Name</Label>
+              <Input
+                id="input-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="onboarding/happy-path"
+              />
+              <p className="text-xs text-muted-foreground">Use “/” for folders, e.g. onboarding/happy-path</p>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="input-content">Content</Label>
+              <Textarea
+                id="input-content"
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="min-h-(--sz-160px)"
+              />
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="input-content">Content</Label>
-            <Textarea
-              id="input-content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="min-h-(--sz-160px)"
-            />
-          </div>
+          <DialogStatusLine message={progress ?? failure} tone={progress ? "progress" : "problem"} />
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={!name.trim() || !content.trim() || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
+            disabled={!name.trim() || !content.trim() || pending}
+            onClick={() => createMutation.mutate({ name: name.trim(), content, opening: opening.current() })}
           >
-            Save
+            {pending ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2332,6 +2510,12 @@ function RunsPane({
     () => loadRunTemplateSelection(companyId),
   );
   const [templateDialog, setTemplateDialog] = useState<RunTemplateDialogState>(null);
+  // Why the last template save failed, said inside the template dialog (see
+  // dialogFailureText).
+  const [templateFailure, setTemplateFailure] = useState<string | null>(null);
+  // Which opening of the template dialog a save was sent from (see
+  // useDialogOpening).
+  const templateOpening = useDialogOpening(templateDialog !== null);
 
   const agentsQuery = useQuery({
     queryKey: queryKeys.agents.list(companyId),
@@ -2404,41 +2588,68 @@ function RunsPane({
       : null;
 
   const createTemplateMutation = useMutation({
-    mutationFn: (payload: CompanySkillTestRunTemplateCreateRequest) =>
+    mutationFn: ({ payload }: { payload: CompanySkillTestRunTemplateCreateRequest; opening: DialogOpening | null }) =>
       companySkillsApi.createTestRunTemplate(companyId, payload),
-    onSuccess: (template) => {
-      setTemplateDialog(null);
-      updateTemplateSelection(template.id);
+    onMutate: () => setTemplateFailure(null),
+    onSuccess: (template, sent) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.companySkills.testRunTemplates(companyId),
       });
+      // Saved after the dialog had gone with its pane or page, the template
+      // is in the list, but the person has moved on: the picker and the
+      // company's default template stay as they are, and nothing is said.
+      if (!templateOpening.isShowing(sent.opening)) return;
+      setTemplateDialog(null);
+      updateTemplateSelection(template.id);
       toast?.pushToast({
         tone: "success",
         title: "Template saved",
         body: `${template.name} is ready for Skills Studio runs.`,
       });
     },
-    onError: onError("Couldn't save template"),
+    // Said inside the template dialog, which stays open. As a toast it sat
+    // behind that dialog, hidden from screen readers, and a click on it closed
+    // the dialog. Once that dialog has gone, a toast is the only place left.
+    // onError: onError("Couldn't save template"),
+    onError: (error, sent) => {
+      if (templateOpening.isShowing(sent.opening)) {
+        setTemplateFailure(dialogFailureText("Couldn't save template", error));
+      } else {
+        onError("Couldn't save template")(error);
+      }
+    },
   });
 
   const updateTemplateMutation = useMutation({
     mutationFn: ({ templateId, payload }: {
       templateId: string;
       payload: CompanySkillTestRunTemplateUpdateRequest;
+      opening: DialogOpening | null;
     }) => companySkillsApi.updateTestRunTemplate(companyId, templateId, payload),
-    onSuccess: (template) => {
-      setTemplateDialog(null);
-      updateTemplateSelection(template.id);
+    onMutate: () => setTemplateFailure(null),
+    onSuccess: (template, sent) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.companySkills.testRunTemplates(companyId),
       });
+      // As createTemplateMutation's: once the dialog has gone, nothing changes.
+      if (!templateOpening.isShowing(sent.opening)) return;
+      setTemplateDialog(null);
+      updateTemplateSelection(template.id);
       toast?.pushToast({
         tone: "success",
         title: "Template updated",
         body: `${template.name} is ready for Skills Studio runs.`,
       });
     },
-    onError: onError("Couldn't update template"),
+    // Said inside the template dialog, as createTemplateMutation's is.
+    // onError: onError("Couldn't update template"),
+    onError: (error, sent) => {
+      if (templateOpening.isShowing(sent.opening)) {
+        setTemplateFailure(dialogFailureText("Couldn't update template", error));
+      } else {
+        onError("Couldn't update template")(error);
+      }
+    },
   });
 
   const deleteTemplateMutation = useMutation({
@@ -2459,6 +2670,13 @@ function RunsPane({
     },
     onError: onError("Couldn't delete template"),
   });
+
+  // A reason left from an earlier try is not about this one, so the dialog
+  // opens without one.
+  const openTemplateDialog = (state: NonNullable<RunTemplateDialogState>) => {
+    setTemplateFailure(null);
+    setTemplateDialog(state);
+  };
 
   const selectedTemplate = selectedTemplateId === null
     ? null
@@ -2546,9 +2764,9 @@ function RunsPane({
           selectedTemplate={selectedTemplate}
           selectedTemplateName={selectedTemplateName}
           onSelectTemplate={updateTemplateSelection}
-          onCreateTemplate={() => setTemplateDialog({ mode: "create" })}
-          onEditTemplate={(template) => setTemplateDialog({ mode: "edit", source: template })}
-          onDuplicateTemplate={(template) => setTemplateDialog({ mode: "create", source: template })}
+          onCreateTemplate={() => openTemplateDialog({ mode: "create" })}
+          onEditTemplate={(template) => openTemplateDialog({ mode: "edit", source: template })}
+          onDuplicateTemplate={(template) => openTemplateDialog({ mode: "create", source: template })}
           onDeleteTemplate={(template) => {
             if (
               typeof window !== "undefined"
@@ -2596,14 +2814,16 @@ function RunsPane({
       <RunTemplateDialog
         state={templateDialog}
         pending={createTemplateMutation.isPending || updateTemplateMutation.isPending}
+        failure={templateFailure}
         onOpenChange={(open) => {
           if (!open) setTemplateDialog(null);
         }}
         onSubmit={(payload) => {
+          const opening = templateOpening.current();
           if (templateDialog?.mode === "edit") {
-            updateTemplateMutation.mutate({ templateId: templateDialog.source.id, payload });
+            updateTemplateMutation.mutate({ templateId: templateDialog.source.id, payload, opening });
           } else {
-            createTemplateMutation.mutate(payload);
+            createTemplateMutation.mutate({ payload, opening });
           }
         }}
       />
@@ -2830,11 +3050,14 @@ function RunTemplateAdvancedPanel({
 function RunTemplateDialog({
   state,
   pending,
+  failure,
   onOpenChange,
   onSubmit,
 }: {
   state: RunTemplateDialogState;
   pending: boolean;
+  /** Why the last save of this template failed. */
+  failure: string | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (payload: CompanySkillTestRunTemplateCreateRequest) => void;
 }) {
@@ -2859,47 +3082,60 @@ function RunTemplateDialog({
     ? "Update the custom run instructions used by Skills Studio."
     : "Save reusable run instructions for Skills Studio.";
 
+  const progress = pending ? "Saving the template…" : null;
+
   return (
-    <Dialog open={Boolean(state)} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={Boolean(state)}
+      // Held open until the save is done: Escape does nothing until then.
+      onOpenChange={(next) => {
+        if (!next && pending) return;
+        onOpenChange(next);
+      }}
+    >
+      {/* The corner close button would do nothing while the save runs. */}
+      <DialogContent showCloseButton={!pending}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{descriptionText}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor="run-template-name">Name</Label>
-            <Input
-              id="run-template-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Focused smoke"
-            />
+        <div>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="run-template-name">Name</Label>
+              <Input
+                id="run-template-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Focused smoke"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="run-template-description">Description</Label>
+              <Input
+                id="run-template-description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="Short instructions for common skill checks"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="run-template-body">Body</Label>
+              <Textarea
+                id="run-template-body"
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+                className="min-h-(--sz-240px) font-mono text-xs leading-5"
+              />
+              <p className="text-xs text-muted-foreground">
+                Placeholders: {"{{skillName}}"}, {"{{skillKey}}"}, {"{{skillInvocation}}"}, {"{{skillVersion}}"}, {"{{runId}}"}, {"{{issueId}}"}, {"{{outputDocumentKey}}"}.
+              </p>
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="run-template-description">Description</Label>
-            <Input
-              id="run-template-description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder="Short instructions for common skill checks"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="run-template-body">Body</Label>
-            <Textarea
-              id="run-template-body"
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-              className="min-h-(--sz-240px) font-mono text-xs leading-5"
-            />
-            <p className="text-xs text-muted-foreground">
-              Placeholders: {"{{skillName}}"}, {"{{skillKey}}"}, {"{{skillInvocation}}"}, {"{{skillVersion}}"}, {"{{runId}}"}, {"{{issueId}}"}, {"{{outputDocumentKey}}"}.
-            </p>
-          </div>
+          <DialogStatusLine message={progress ?? failure} tone={progress ? "progress" : "problem"} />
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
@@ -3319,7 +3555,8 @@ function RunDocumentsSection({ documents }: { documents: IssueDocument[] }) {
   );
 }
 
-function InteractionSection({
+// Exported for its tests.
+export function InteractionSection({
   companyId,
   detail,
   agents,
@@ -3330,13 +3567,16 @@ function InteractionSection({
   agents: Agent[];
   onAnswered: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const onError = useMutationErrorToast();
   const harnessIssueId = detail.harnessIssue?.id ?? null;
   const hasInlineAnswerable = detail.interactions.some((i) => isInteractionAnswerable(i));
 
   // Only fetch the full interaction objects (needed to render answerable cards)
   // when there is at least one pending inline interaction on a live harness issue.
+  const fullQueryKey = ["skill-studio", "interactions", harnessIssueId];
   const fullQuery = useQuery({
-    queryKey: ["skill-studio", "interactions", harnessIssueId],
+    queryKey: fullQueryKey,
     queryFn: () => issuesApi.listInteractions(harnessIssueId!),
     enabled: Boolean(harnessIssueId && hasInlineAnswerable),
     refetchInterval: hasInlineAnswerable ? POLL_MS : false,
@@ -3347,22 +3587,45 @@ function InteractionSection({
   );
   const agentMap = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
+  // The cards are drawn from the full interactions, and those stop refreshing
+  // once nothing is left to answer, so an answered card kept looking
+  // unanswered until a reload. The server sends the answered interaction back,
+  // and it goes straight in.
+  //
+  // A refresh already on its way is stopped first. The list refreshes every
+  // two seconds while anything is unanswered, so one often is, and it would
+  // land after the answer and put the card back to unanswered, for good once
+  // the refreshing stops.
+  const showAnswer = async (answered: IssueThreadInteraction) => {
+    await queryClient.cancelQueries({ queryKey: fullQueryKey });
+    queryClient.setQueryData<IssueThreadInteraction[]>(
+      fullQueryKey,
+      (current) => current?.map((interaction) => (interaction.id === answered.id ? answered : interaction)),
+    );
+    onAnswered();
+  };
+
+  // A failed answer never said why: a confirmation card says only "Try again",
+  // and a questions card said nothing at all.
   const accept = useMutation({
     mutationFn: (vars: { interaction: IssueThreadInteraction; optionIds?: string[] }) =>
       issuesApi.acceptInteraction(harnessIssueId!, vars.interaction.id, {
         selectedClientKeys: vars.optionIds,
       }),
-    onSuccess: onAnswered,
+    onSuccess: showAnswer,
+    onError: onError("Couldn't confirm"),
   });
   const respond = useMutation({
     mutationFn: (vars: { interaction: AskUserQuestionsInteraction; answers: AskUserQuestionsAnswer[] }) =>
       issuesApi.respondToInteraction(harnessIssueId!, vars.interaction.id, { answers: vars.answers }),
-    onSuccess: onAnswered,
+    onSuccess: showAnswer,
+    onError: onError("Couldn't send answers"),
   });
   const reject = useMutation({
     mutationFn: (vars: { interaction: IssueThreadInteraction; reason?: string }) =>
       issuesApi.rejectInteraction(harnessIssueId!, vars.interaction.id, vars.reason),
-    onSuccess: onAnswered,
+    onSuccess: showAnswer,
+    onError: onError("Couldn't decline"),
   });
 
   if (detail.interactions.length === 0) return null;
@@ -3389,7 +3652,13 @@ function InteractionSection({
                   await reject.mutateAsync({ interaction, reason });
                 }}
                 onSubmitInteractionAnswers={async (interaction, answers) => {
-                  await respond.mutateAsync({ interaction, answers });
+                  // The questions card does not catch a failed send itself, so
+                  // it reached the browser as an uncaught error. respond's own
+                  // message already says why, and the card stays unanswered to
+                  // try again. (A confirmation card catches its own, and shows
+                  // "Try again", so accept and reject still pass failures on.)
+                  // await respond.mutateAsync({ interaction, answers });
+                  await respond.mutateAsync({ interaction, answers }).catch(() => undefined);
                 }}
               />
             );
@@ -3436,6 +3705,7 @@ function VersionHistorySheet({
 }) {
   const skillId = skill.id;
   const queryClient = useQueryClient();
+  const onError = useMutationErrorToast();
   const versionsQuery = useQuery({
     queryKey: queryKeys.companySkills.versions(companyId, skillId),
     queryFn: () => companySkillsApi.versions(companyId, skillId),
@@ -3448,13 +3718,25 @@ function VersionHistorySheet({
   // here: the sheet is modal, so it hides the toast from screen readers, the
   // toast sits over the sheet, and clicking the toast closes the sheet.
   const [restoreOutcome, setRestoreOutcome] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  // Which opening of the sheet a restore was sent from (see
+  // useDialogOpening). The sheet stays open while its restore runs, but the
+  // page can be left first.
+  const opening = useDialogOpening(open);
 
   useEffect(() => {
     if (!open) setRestoreOutcome(null);
   }, [open]);
 
+  // A restore carries on after the page is left, so this sheet, opened again
+  // on a later visit, can find one of this skill's restores still running
+  // that it did not send. Two at once wrote files from two versions into the
+  // one skill, so Restore stays off while any restore of the skill runs.
+  const restoreKey = ["skill-studio", "restore", companyId, skillId];
+  const restoreRunning = useIsMutating({ mutationKey: restoreKey }) > 0;
+
   const restore = useMutation({
-    mutationFn: async (version: CompanySkillVersion) => {
+    mutationKey: restoreKey,
+    mutationFn: async ({ version }: { version: CompanySkillVersion; opening: DialogOpening | null }) => {
       // Restore = write each file from the chosen version back, then cut a new
       // head version (immutability: never rewrites history).
       for (const file of version.fileInventory) {
@@ -3470,16 +3752,23 @@ function VersionHistorySheet({
       onRestored();
       setRestoreOutcome({ tone: "success", text: `Restored as v${created.revisionNumber}.` });
     },
-    // A restore that failed part way through used to say nothing at all.
-    onError: (error) => {
-      const denial = classifySkillDenial(error);
-      const reason = error instanceof Error && error.message ? error.message : "Please try again.";
-      setRestoreOutcome({
-        tone: "error",
-        text: denial ? `${denial.title} ${denial.remediation}` : `Couldn't restore version. ${reason}`,
-      });
+    // A restore that failed part way through used to say nothing at all. Once
+    // the sheet it came from has gone with its page, a toast is the only place
+    // left to say it, and nothing hides it then.
+    onError: (error, sent) => {
+      if (opening.isShowing(sent.opening)) {
+        setRestoreOutcome({ tone: "error", text: dialogFailureText("Couldn't restore version", error) });
+      } else {
+        onError("Couldn't restore version")(error);
+      }
     },
   });
+
+  const status = restore.isPending
+    ? { tone: "progress" as const, text: `Restoring v${restore.variables?.version.revisionNumber ?? ""}…` }
+    : restoreRunning
+      ? { tone: "progress" as const, text: "An earlier restore is still running. Restore is off until it finishes." }
+      : restoreOutcome;
 
   const left = versions.find((v) => v.id === leftId) ?? null;
   const right = versions.find((v) => v.id === rightId) ?? null;
@@ -3489,23 +3778,33 @@ function VersionHistorySheet({
   ) : null;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="w-full sm:max-w-(--sz-560px)">
+    <Sheet
+      open={open}
+      // Held open until its restore is done: Escape does nothing until then.
+      onOpenChange={(next) => {
+        if (!next && restore.isPending) return;
+        onOpenChange(next);
+      }}
+    >
+      {/* The corner close button would do nothing while the restore runs. */}
+      <SheetContent side="left" className="w-full sm:max-w-(--sz-560px)" showCloseButton={!restore.isPending}>
         <SheetHeader>
           <SheetTitle>Version history</SheetTitle>
           {/* On the page even while empty, so a screen reader hears each
-              restore's outcome; it stays in view while the list scrolls. */}
+              restore's outcome, and how one still running is getting on; it
+              stays in view while the list scrolls. */}
           <div
             role="status"
             className={cn(
               "text-sm",
-              restoreOutcome && "rounded-md border px-3 py-2",
-              restoreOutcome?.tone === "success" &&
+              status && "rounded-md border px-3 py-2",
+              status?.tone === "progress" && "border-border text-muted-foreground",
+              status?.tone === "success" &&
                 "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-              restoreOutcome?.tone === "error" && "border-destructive/40 bg-destructive/5 text-destructive",
+              status?.tone === "error" && "border-destructive/40 bg-destructive/5 text-destructive",
             )}
           >
-            {restoreOutcome?.text}
+            {status?.text}
           </div>
         </SheetHeader>
         <div className="mt-3 space-y-2 overflow-auto">
@@ -3535,10 +3834,10 @@ function VersionHistorySheet({
                     <Button
                       variant="outline"
                       size="xs"
-                      disabled={restore.isPending || skill.editable === false}
+                      disabled={restore.isPending || restoreRunning || skill.editable === false}
                       onClick={(e) => {
                         e.stopPropagation();
-                        restore.mutate(v);
+                        restore.mutate({ version: v, opening: opening.current() });
                       }}
                     >
                       Restore as v{(skill.currentVersion?.revisionNumber ?? v.revisionNumber) + 1}

@@ -215,6 +215,8 @@ export function Costs() {
     mutationFn: (input: {
       scopeType: BudgetPolicySummary["scopeType"];
       scopeId: string;
+      /** Whose budget it is, for the failure message. Not sent. */
+      scopeName: string;
       amount: number;
       windowKind: BudgetPolicySummary["windowKind"];
     }) =>
@@ -225,8 +227,14 @@ export function Costs() {
         windowKind: input.windowKind,
       }),
     successMessage: "Budget saved",
-    // The budget cards have nowhere to show a failure.
-    errorMessage: "Could not save the budget",
+    // The budget cards have nowhere to show a failure. This one save serves
+    // every card, so each card keeps its own failure message until that card
+    // saves, even after leaving the page and coming back, and the message
+    // says whose budget it is.
+    // errorMessage: "Could not save the budget",
+    errorMessage: (_error, input) => `Could not save the budget for ${input.scopeName}`,
+    saveName: "costs-budget",
+    saveKey: (input) => `${input.scopeType}:${input.scopeId}:${input.windowKind}`,
     onSuccess: invalidateBudgetViews,
   });
 
@@ -933,6 +941,7 @@ export function Costs() {
                               policyMutation.mutate({
                                 scopeType: summary.scopeType,
                                 scopeId: summary.scopeId,
+                                scopeName: summary.scopeName,
                                 amount,
                                 windowKind: summary.windowKind,
                               })}

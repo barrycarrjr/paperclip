@@ -255,6 +255,277 @@ describe("useSaveMutation", () => {
     expect(region.textContent).toContain("The budget is locked");
   });
 
+  it("takes back its failure message when the next try works", async () => {
+    const mutationFn = vi
+      .fn<(name: string) => Promise<Saved>>()
+      .mockRejectedValueOnce(new Error("The budget is locked"))
+      .mockResolvedValueOnce({ name: "Pat" });
+    await render({
+      mutationFn,
+      successMessage: "Budget saved",
+      errorMessage: "Could not save the budget",
+    });
+    const region = liveRegion();
+
+    await save("Pat");
+    expect(region.textContent).toContain("Could not save the budget");
+
+    // A failure stays until it is closed, so without this it sat next to
+    // "Budget saved" after the retry worked.
+    await save("Pat");
+
+    expect(region.textContent).toContain("Budget saved");
+    expect(region.textContent).not.toContain("Could not save the budget");
+    expect(messages()).toHaveLength(1);
+  });
+
+  it("takes back its failure message when the next try works but has nothing to say", async () => {
+    const mutationFn = vi
+      .fn<(name: string) => Promise<Saved>>()
+      .mockRejectedValueOnce(new Error("The budget is locked"))
+      .mockResolvedValueOnce({ name: "quiet" });
+    await render({
+      mutationFn,
+      successMessage: (saved) => (saved.name === "quiet" ? null : `Saved ${saved.name}`),
+      errorMessage: "Could not save the budget",
+    });
+    const region = liveRegion();
+
+    await save("Pat");
+    expect(region.textContent).toContain("Could not save the budget");
+
+    await save("quiet");
+
+    expect(mutation?.isSuccess).toBe(true);
+    expect(messages()).toHaveLength(0);
+  });
+
+  it("shows the same failure again when it happens again straight away", async () => {
+    vi.useFakeTimers();
+    await render({
+      mutationFn: () => Promise.reject(new Error("Name is taken")),
+      successMessage: "Settings saved",
+      errorMessage: "Could not save settings",
+    });
+    const region = liveRegion();
+
+    await act(async () => {
+      mutation?.mutate("Pat");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(messages()).toHaveLength(1);
+    const first = messages()[0];
+
+    // A second try a moment later fails the same way. It used to be taken for
+    // a duplicate of the first and dropped, so nothing moved and nothing was
+    // read out.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    await act(async () => {
+      mutation?.mutate("Pat");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0]).not.toBe(first);
+    expect(region.textContent).toContain("Could not save settings");
+
+    // Closed, then failing again within the same few seconds, it comes back.
+    // It used to show nothing at all.
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Dismiss notification"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(messages()).toHaveLength(0);
+    await act(async () => {
+      mutation?.mutate("Pat");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(messages()).toHaveLength(1);
+    expect(region.textContent).toContain("Could not save settings");
+    expect(region.textContent).toContain("Name is taken");
+  });
+
+  it("keeps one item's failure when the same hook then saves another item", async () => {
+    // One hook for every budget card: Ada's card fails and keeps its typed
+    // amount, then Bo's card saves fine.
+    const mutationFn = vi
+      .fn<(name: string) => Promise<Saved>>()
+      .mockRejectedValueOnce(new Error("The budget is locked"))
+      .mockResolvedValueOnce({ name: "Bo" })
+      .mockResolvedValueOnce({ name: "Ada" });
+    await render({
+      mutationFn,
+      successMessage: "Budget saved",
+      errorMessage: (_error, name) => `Could not save the budget for ${name}`,
+      saveKey: (name) => name,
+    });
+    const region = liveRegion();
+
+    await save("Ada");
+    expect(region.textContent).toContain("Could not save the budget for Ada");
+
+    await save("Bo");
+
+    // Bo's save took back Ada's failure, so Ada's card looked saved while it
+    // still showed an amount that never went through.
+    expect(region.textContent).toContain("Budget saved");
+    expect(region.textContent).toContain("Could not save the budget for Ada");
+    expect(region.textContent).toContain("The budget is locked");
+
+    // Ada's own save that works still takes it back.
+    await save("Ada");
+    expect(region.textContent).not.toContain("Could not save the budget for Ada");
+    expect(messages()).toHaveLength(1);
+  });
+
+  it("keeps another save's failure that has the same words", async () => {
+    // Two saves on the page, as the costs page and an agent's budget both say
+    // "Could not save the budget". Each failure used to be named by its words,
+    // so the second replaced the first, and either save working took it back.
+    const saves: Array<UseMutationResult<Saved, Error, string> | null> = [null, null];
+    function TwoSaves({ first, second }: { first: Options; second: Options }) {
+      saves[0] = useSaveMutation(first);
+      saves[1] = useSaveMutation(second);
+      return null;
+    }
+    const failsThenWorks = () =>
+      vi
+        .fn<(name: string) => Promise<Saved>>()
+        .mockRejectedValueOnce(new Error("The budget is locked"))
+        .mockResolvedValueOnce({ name: "Pat" });
+    const options = (): Options => ({
+      mutationFn: failsThenWorks(),
+      successMessage: "Budget saved",
+      errorMessage: "Could not save the budget",
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <ToastProvider>
+            <TwoSaves first={options()} second={options()} />
+            <ToastViewport />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+    });
+    const region = liveRegion();
+    async function saveWith(index: 0 | 1) {
+      await act(async () => {
+        saves[index]?.mutate("Pat");
+      });
+      await flushReact();
+    }
+
+    await saveWith(0);
+    await saveWith(1);
+    expect(messages()).toHaveLength(2);
+
+    await saveWith(1);
+
+    expect(region.textContent).toContain("Budget saved");
+    expect(region.textContent).toContain("Could not save the budget");
+    expect(messages()).toHaveLength(2);
+  });
+
+  /**
+   * Leaving a page and coming back draws its save again from nothing, while
+   * the message viewport, and a failure on it, stays on screen: a failure
+   * stays until it is closed. The save on the next visit has to treat that
+   * failure as its own.
+   */
+  describe("across visits to the page", () => {
+    const budgetOptions = (mutationFn: Options["mutationFn"]): Options => ({
+      mutationFn,
+      successMessage: "Budget saved",
+      errorMessage: (_error, name) => `Could not save the budget for ${name}`,
+      saveName: "budgets",
+      saveKey: (name) => name,
+    });
+
+    /** Draws the page's save inside the viewport, and returns a way to leave the page and come back. */
+    async function renderVisits(options: Options) {
+      const queryClient = new QueryClient();
+      const draw = (onPage: boolean) =>
+        act(async () => {
+          root.render(
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                {onPage ? <Harness options={options} /> : null}
+                <ToastViewport />
+              </ToastProvider>
+            </QueryClientProvider>,
+          );
+        });
+      await draw(true);
+      return {
+        leaveAndComeBack: async () => {
+          await draw(false);
+          await draw(true);
+        },
+      };
+    }
+
+    it("takes back a failure said before the page was left once the same item saves", async () => {
+      const mutationFn = vi
+        .fn<(name: string) => Promise<Saved>>()
+        .mockRejectedValueOnce(new Error("The budget is locked"))
+        .mockResolvedValueOnce({ name: "Ada" });
+      const { leaveAndComeBack } = await renderVisits(budgetOptions(mutationFn));
+      const region = liveRegion();
+
+      await save("Ada");
+      expect(region.textContent).toContain("Could not save the budget for Ada");
+
+      await leaveAndComeBack();
+      await save("Ada");
+
+      // It used to stay up beside "Budget saved", as if Ada's budget had not
+      // saved.
+      expect(region.textContent).toContain("Budget saved");
+      expect(region.textContent).not.toContain("Could not save the budget for Ada");
+      expect(messages()).toHaveLength(1);
+    });
+
+    it("replaces a failure said before the page was left when the same item fails again", async () => {
+      const { leaveAndComeBack } = await renderVisits(
+        budgetOptions(() => Promise.reject(new Error("The budget is locked"))),
+      );
+      const region = liveRegion();
+
+      await save("Ada");
+      expect(messages()).toHaveLength(1);
+
+      await leaveAndComeBack();
+      await save("Ada");
+
+      // It used to add a second message, the same as the first.
+      expect(messages()).toHaveLength(1);
+      expect(region.textContent).toContain("Could not save the budget for Ada");
+      expect(region.textContent).toContain("The budget is locked");
+    });
+  });
+
+  it("still says a failure when its wording trips", async () => {
+    const onError = vi.fn();
+    await render({
+      mutationFn: () => Promise.reject(new Error("Name is taken")),
+      successMessage: "Settings saved",
+      errorMessage: () => {
+        throw new Error("no name to word it with");
+      },
+      onError,
+    });
+    const region = liveRegion();
+
+    await save("Pat");
+
+    expect(region.textContent).toContain("Could not save");
+    expect(region.textContent).toContain("Name is taken");
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the reason a save failed when the page shows failures nowhere else", async () => {
     const onError = vi.fn();
     await render({
