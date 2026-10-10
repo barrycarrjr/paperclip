@@ -77,6 +77,7 @@ import {
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { secretService } from "../services/secrets.js";
+import type { AuthorizationActor } from "../services/authorization.js";
 import {
   detectAdapterModel,
   findActiveServerAdapter,
@@ -371,8 +372,42 @@ export function agentRoutes(
     }
   }
 
+  // "Configure agents" (agents:configure) and "Suggest agent changes"
+  // (agents:suggest-changes) from Company Access, decided by the shared
+  // authorization rules. They add to agents:create and never replace it.
+  // Applying a suggested change needs a person to accept it first, and this
+  // server has no check for that, so a suggest grant on its own only reads.
+  async function canReadConfigurationsByGrant(req: Request, companyId: string) {
+    const decision = await access.decide({
+      actor: req.actor as AuthorizationActor,
+      action: "agent_config:read",
+      resource: { type: "company", companyId },
+    });
+    return decision.allowed;
+  }
+
+  async function canConfigureAgentByGrant(req: Request, targetAgent: { id: string; companyId: string }) {
+    const decision = await access.decide({
+      actor: req.actor as AuthorizationActor,
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: targetAgent.companyId, agentId: targetAgent.id },
+    });
+    return decision.allowed;
+  }
+
+  async function assertBoardCanConfigureAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+    assertBoard(req);
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (await access.canUser(targetAgent.companyId, req.actor.userId, "agents:create")) return;
+    if (await canConfigureAgentByGrant(req, targetAgent)) return;
+    throw forbidden("Missing permission: agents:create");
+  }
+
   async function assertCanReadConfigurations(req: Request, companyId: string) {
-    return assertCanCreateAgentsForCompany(req, companyId);
+    if (await actorCanReadConfigurationsForCompany(req, companyId)) return;
+    // Refused: answer with the same errors as the agents:create check.
+    await assertCanCreateAgentsForCompany(req, companyId);
   }
 
   async function getAccessibleAgent(req: Request, res: Response, id: string) {
@@ -392,13 +427,15 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
-      return access.canUser(companyId, req.actor.userId, "agents:create");
+      if (await access.canUser(companyId, req.actor.userId, "agents:create")) return true;
+      return canReadConfigurationsByGrant(req, companyId);
     }
     if (!req.actor.agentId) return false;
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== companyId) return false;
     const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
-    return allowedByGrant || canCreateAgents(actorAgent);
+    if (allowedByGrant || canCreateAgents(actorAgent)) return true;
+    return canReadConfigurationsByGrant(req, companyId);
   }
 
   async function buildSkippedWakeupResponse(
@@ -471,7 +508,7 @@ export function agentRoutes(
   async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+      await assertBoardCanConfigureAgent(req, targetAgent);
       return;
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
@@ -490,6 +527,7 @@ export function agentRoutes(
       "agents:create",
     );
     if (allowedByGrant || canCreateAgents(actorAgent)) return;
+    if (await canConfigureAgentByGrant(req, targetAgent)) return;
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
@@ -673,7 +711,7 @@ export function agentRoutes(
   /**
    * Derived scheduler-heartbeat fields appended to company-scoped agent
    * responses so the UI can show "next wake" without reading runtimeConfig
-   * (which is redacted for members lacking agents:create). Mirrors the
+   * (which is redacted for members who cannot read configurations). Mirrors the
    * status eligibility used by heartbeat.tickTimers and the instance
    * scheduler-heartbeats route.
    */
@@ -839,7 +877,7 @@ export function agentRoutes(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    await assertBoardCanConfigureAgent(req, targetAgent);
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -1081,7 +1119,7 @@ export function agentRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const type = assertKnownAdapterType(req.params.type as string);
-      await assertCanReadConfigurations(req, companyId);
+      await assertCanCreateAgentsForCompany(req, companyId);
 
       const adapter = requireServerAdapter(type);
 
@@ -2633,8 +2671,9 @@ export function agentRoutes(
 
     // Role changes require CEO or board approval even for non-self targets.
     // assertCanUpdateAgent permits non-CEO agents with an agents:create grant
-    // to update other agents (for hiring), but role escalation must be reserved
-    // to the CEO so a hiring grant can't be used to mint a peer CEO.
+    // (for hiring) or an agents:configure grant to update other agents, but role
+    // escalation must be reserved to the CEO so such a grant can't be used to
+    // mint a peer CEO.
     if (hasOwn(req.body as object, "role") && req.actor.type === "agent") {
       const actorAgent = await svc.getById(req.actor.agentId!);
       if (!actorAgent || actorAgent.role !== "ceo") {

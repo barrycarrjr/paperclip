@@ -9,6 +9,7 @@ const mockAgentService = vi.hoisted(() => ({
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
   hasPermission: vi.fn(),
+  decide: vi.fn(),
 }));
 
 const mockCompanySkillService = vi.hoisted(() => ({
@@ -100,6 +101,8 @@ describe("company skill mutation permissions", () => {
     mockLogActivity.mockResolvedValue(undefined);
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(false);
+    // No "Create skills" grant unless a test adds one.
+    mockAccessService.decide.mockResolvedValue({ allowed: false, reason: "deny_no_grant" });
   });
 
   it("allows local board operators to mutate company skills", async () => {
