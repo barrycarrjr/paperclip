@@ -13,13 +13,17 @@ import type {
   AcceptIssueThreadInteraction,
   AskUserQuestionsAnswer,
   AskUserQuestionsInteraction,
+  AskUserQuestionsResult,
   CreateIssueThreadInteraction,
   IssueThreadInteraction,
+  IssueThreadInteractionResult,
   RequestConfirmationInteraction,
+  RequestConfirmationResult,
   RequestConfirmationTarget,
   RejectIssueThreadInteraction,
   RespondIssueThreadInteraction,
   SuggestTasksInteraction,
+  SuggestTasksResult,
   SuggestTasksResultCreatedTask,
 } from "@paperclipai/shared";
 import {
@@ -226,6 +230,29 @@ function appendAcceptedPlanSection(args: {
 
 function isTerminalIssueStatus(status: string) {
   return status === "done" || status === "cancelled";
+}
+
+/**
+ * The result a pending card gets when its task is marked done or cancelled.
+ * The card is read back through its own kind's result schema inside the same
+ * update, so a shape that schema refuses would roll the status change back.
+ */
+function buildIssueClosedResult(row: IssueThreadInteractionRow): IssueThreadInteractionResult {
+  switch (row.kind) {
+    case "ask_user_questions":
+      // A question result must list answers, even when nobody answered.
+      return {
+        version: 1,
+        outcome: "issue_closed",
+        reason: null,
+        answers: [],
+        summaryMarkdown: null,
+      } satisfies AskUserQuestionsResult;
+    case "suggest_tasks":
+      return { version: 1, outcome: "issue_closed", reason: null } satisfies SuggestTasksResult;
+    default:
+      return { version: 1, outcome: "issue_closed", reason: null } satisfies RequestConfirmationResult;
+  }
 }
 
 function shouldReturnAcceptedConfirmationToCreatorAgent(args: {
@@ -1339,6 +1366,12 @@ export function issueThreadInteractionService(db: Db) {
       await touchIssue(db, issue.id);
       return hydrateInteraction(updated);
     },
+    /**
+     * Done and cancelled both expire every pending card, questions included.
+     * Upstream keeps some questions open after Done so they can be answered
+     * later; here a question on a closed task is moot (the Brief hides it and
+     * an answer wakes nobody), so it expires with the rest.
+     */
     expirePendingInteractionsForTerminalIssue: async (
       issue: { id: string; companyId: string; status: string },
       actor: InteractionActor = {},
@@ -1363,7 +1396,7 @@ export function issueThreadInteractionService(db: Db) {
           .update(issueThreadInteractions)
           .set({
             status: "expired",
-            result: { version: 1, outcome: "issue_closed", reason: null },
+            result: buildIssueClosedResult(row),
             resolvedByAgentId: actor.agentId ?? null,
             resolvedByUserId: actor.userId ?? null,
             resolvedAt: now,

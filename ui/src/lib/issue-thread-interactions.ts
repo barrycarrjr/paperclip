@@ -78,6 +78,7 @@ export function buildIssueThreadInteractionSummary(
       const outcome = interaction.result?.outcome;
       if (outcome === "superseded_by_comment") return "Confirmation expired after comment";
       if (outcome === "stale_target") return "Confirmation expired after target changed";
+      if (outcome === "issue_closed") return "Confirmation expired when the task closed";
       return "Confirmation expired";
     }
     return "Requested confirmation";

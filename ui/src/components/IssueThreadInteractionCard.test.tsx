@@ -299,4 +299,54 @@ describe("IssueThreadInteractionCard", () => {
       "This request could not be resolved. Try again or create a new request.",
     );
   });
+
+  describe("cards that expired because their task was closed", () => {
+    const taskClosedResult = { version: 1, outcome: "issue_closed", reason: null } as const;
+
+    it("says the task closed instead of blaming a target change on a confirmation", () => {
+      const host = renderCard({
+        interaction: {
+          ...pendingRequestConfirmationInteraction,
+          status: "expired",
+          result: taskClosedResult,
+        },
+      });
+
+      expect(host.textContent).toContain("Expired when the task closed");
+      expect(host.textContent).toContain("The task was closed before this confirmation was resolved.");
+      expect(host.textContent).not.toContain("Expired by target change");
+      expect(host.textContent).not.toContain("Approve plan");
+    });
+
+    it("explains expired suggested tasks", () => {
+      const host = renderCard({
+        interaction: {
+          ...pendingSuggestedTasksInteraction,
+          status: "expired",
+          result: taskClosedResult,
+        },
+      });
+
+      expect(host.textContent).toContain("Expired when the task closed");
+      expect(host.textContent).toContain("The task was closed before these drafts were accepted or rejected.");
+      expect(host.textContent).not.toContain("Accept drafts");
+    });
+
+    it("explains expired questions and still shows what was asked", () => {
+      const host = renderCard({
+        interaction: {
+          ...pendingAskUserQuestionsInteraction,
+          status: "expired",
+          result: { ...taskClosedResult, answers: [], summaryMarkdown: null },
+        },
+      });
+
+      expect(host.textContent).toContain("Expired when the task closed");
+      expect(host.textContent).toContain("The task was closed before these questions were answered.");
+      expect(host.textContent).toContain(
+        "How aggressive should the suggested-task preview collapse descendant work?",
+      );
+      expect(host.querySelector('[role="radio"]')).toBeNull();
+    });
+  });
 });

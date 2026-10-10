@@ -126,6 +126,28 @@ describe("issue thread interaction helpers", () => {
     })).toBe("Answered 1 question");
   });
 
+  it("says when a confirmation expired because its task was closed", () => {
+    expect(buildIssueThreadInteractionSummary({
+      id: "interaction-closed",
+      companyId: "company-1",
+      issueId: "issue-1",
+      kind: "request_confirmation",
+      status: "expired",
+      continuationPolicy: "none",
+      createdAt: "2026-04-06T12:00:00.000Z",
+      updatedAt: "2026-04-06T12:00:00.000Z",
+      payload: {
+        version: 1,
+        prompt: "Proceed with the current draft?",
+      },
+      result: {
+        version: 1,
+        outcome: "issue_closed",
+        reason: null,
+      },
+    })).toBe("Confirmation expired when the task closed");
+  });
+
   it("maps stored option ids back to labels for answered summaries", () => {
     const labels = getQuestionAnswerLabels({
       question: {
