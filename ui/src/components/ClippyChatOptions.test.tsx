@@ -88,6 +88,15 @@ describe("ClippyChatOptions", () => {
     expect(container.textContent).not.toContain("adapter:");
   });
 
+  it("says Model, not the raw model id, while the model list is still loading", () => {
+    render({ model: "claude-opus-4-8", models: [], modelGroups: [], modelsLoading: true });
+    expect(trigger().textContent).toBe("Model");
+    expect(container.textContent).not.toContain("claude-opus-4-8");
+
+    render({ model: "claude-opus-5", modelsLoading: false });
+    expect(trigger().textContent).toBe("Claude Opus 5");
+  });
+
   it("holds the model, permissions and effort behind the one control", async () => {
     render();
     expect(document.querySelector('[role="radiogroup"]')).toBeNull();
