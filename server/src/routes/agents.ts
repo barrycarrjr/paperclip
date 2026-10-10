@@ -25,6 +25,8 @@ import {
   isUuidLike,
   resetAgentSessionSchema,
   testAdapterEnvironmentSchema,
+  type AgentDesiredSkillEntry,
+  type AgentSkillAssignmentMode,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
   upsertAgentInstructionsFileSchema,
@@ -121,6 +123,36 @@ function extractRewrittenContent(text: string): string {
   // Fallback: model ignored the tag instruction. Strip a wrapping code fence
   // if the whole response is one fenced block. Otherwise return as-is.
   return stripWrappingCodeFence(text.trim());
+}
+
+// Skill selections arrive as plain keys or as { key, versionId } entries (the
+// Skill Studio agents dialog sends entries). Version pins are not stored here,
+// so only the key is kept and any versionId is ignored.
+function normalizeDesiredSkillSelections(
+  requestedDesiredSkills: Array<string | AgentDesiredSkillEntry> | undefined,
+): string[] | undefined {
+  if (!requestedDesiredSkills) return undefined;
+  const out = new Set<string>();
+  for (const value of requestedDesiredSkills) {
+    const key = (typeof value === "string" ? value : value.key).trim();
+    if (key) out.add(key);
+  }
+  return Array.from(out);
+}
+
+function mergeDesiredSkillKeys(
+  current: string[],
+  requested: string[],
+  mode: AgentSkillAssignmentMode,
+) {
+  if (mode === "replace") return requested;
+
+  const requestedKeys = new Set(requested);
+  if (mode === "remove") {
+    return current.filter((key) => !requestedKeys.has(key));
+  }
+
+  return Array.from(new Set([...current, ...requested]));
 }
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
@@ -889,6 +921,8 @@ export function agentRoutes(
     adapterType: string,
     adapterConfig: Record<string, unknown>,
     requestedDesiredSkills: string[] | undefined,
+    mode: AgentSkillAssignmentMode = "replace",
+    options: { keepSavedStaleSkills?: boolean } = {},
   ) {
     if (!requestedDesiredSkills) {
       return {
@@ -898,17 +932,35 @@ export function agentRoutes(
       };
     }
 
+    const savedDesiredSkills = readPaperclipSkillSyncPreference(adapterConfig).desiredSkills;
+    // With keepSavedStaleSkills (skill sync, where adapterConfig is the agent's
+    // saved config), a key the agent already has is kept as saved in every
+    // mode when it no longer matches exactly one library skill, so the agent's
+    // whole list can be sent back and such a key can be removed. A key the
+    // agent does not have must still match.
     const resolvedRequestedSkills = await companySkills.resolveRequestedSkillKeys(
       companyId,
       requestedDesiredSkills,
+      { keepUnresolved: options.keepSavedStaleSkills ? savedDesiredSkills : [] },
     );
+    // "add" and "remove" change the agent's current set; "replace" overwrites it.
+    // Current keys are resolved too, so a key saved in an older form still
+    // matches, and stale keys stay as they are.
+    const currentSkills = mode !== "replace" && savedDesiredSkills.length > 0
+      ? await companySkills.resolveRequestedSkillKeys(companyId, savedDesiredSkills, {
+          keepUnresolved: savedDesiredSkills,
+        })
+      : [];
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(companyId, {
       materializeMissing: shouldMaterializeRuntimeSkillsForAdapter(adapterType),
     });
     const requiredSkills = runtimeSkillEntries
       .filter((entry) => entry.required)
       .map((entry) => entry.key);
-    const desiredSkills = Array.from(new Set([...requiredSkills, ...resolvedRequestedSkills]));
+    const desiredSkills = Array.from(new Set([
+      ...requiredSkills,
+      ...mergeDesiredSkillKeys(currentSkills, resolvedRequestedSkills, mode),
+    ]));
 
     return {
       adapterConfig: writePaperclipSkillSyncPreference(adapterConfig, desiredSkills),
@@ -1113,13 +1165,7 @@ export function agentRoutes(
       }
       await assertCanUpdateAgent(req, agent);
 
-      const requestedSkills = Array.from(
-        new Set(
-          (req.body.desiredSkills as string[])
-            .map((value) => value.trim())
-            .filter(Boolean),
-        ),
-      );
+      const requestedSkills = normalizeDesiredSkillSelections(req.body.desiredSkills) ?? [];
       const {
         adapterConfig: nextAdapterConfig,
         desiredSkills,
@@ -1129,6 +1175,11 @@ export function agentRoutes(
         agent.adapterType,
         agent.adapterConfig as Record<string, unknown>,
         requestedSkills,
+        req.body.mode,
+        // Screens send back the agent's whole list, which can hold a skill
+        // since removed from the library, or a short name two skills now
+        // share. That must not block a save.
+        { keepSavedStaleSkills: true },
       );
       if (!desiredSkills || !runtimeSkillEntries) {
         throw unprocessable("Skill sync requires desiredSkills.");
@@ -1185,6 +1236,7 @@ export function agentRoutes(
         details: {
           adapterType: updated.adapterType,
           desiredSkills,
+          assignmentMode: req.body.mode,
           mode: snapshot.mode,
           supported: snapshot.supported,
           entryCount: snapshot.entries.length,
@@ -1721,7 +1773,9 @@ export function agentRoutes(
       companyId,
       hireInput.adapterType,
       requestedAdapterConfig,
-      Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
+      normalizeDesiredSkillSelections(
+        Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
+      ),
     );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       companyId,
@@ -1905,7 +1959,9 @@ export function agentRoutes(
       companyId,
       createInput.adapterType,
       requestedAdapterConfig,
-      Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
+      normalizeDesiredSkillSelections(
+        Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
+      ),
     );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       companyId,
