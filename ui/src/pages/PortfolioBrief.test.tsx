@@ -92,8 +92,11 @@ vi.mock("../api/auth", () => ({
 vi.mock("../api/dashboard", () => ({
   dashboardApi: { listPortfolio: async () => ({ companies: [PRINT_CO], summaries: [] }) },
 }));
+/** Activity across the portfolio; none unless a test adds some. */
+const mockActivity = { events: [] as Array<Record<string, unknown>> };
+
 vi.mock("../api/activity", () => ({
-  activityApi: { listPortfolio: async () => ({ events: [], companies: [] }) },
+  activityApi: { listPortfolio: async () => ({ events: mockActivity.events, companies: [] }) },
 }));
 vi.mock("../api/attention", () => ({
   attentionApi: { listPortfolio: async () => ({ rows: [], count: 0, setAside: 0, companies: [] }) },
@@ -146,6 +149,7 @@ describe("PortfolioBrief", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     state.emailApi = null;
+    mockActivity.events = [];
   });
 
   afterEach(() => {
@@ -185,6 +189,28 @@ describe("PortfolioBrief", () => {
     });
     await settle();
   }
+
+  it("says outcome, not outcomes, for a single overnight outcome", async () => {
+    mockActivity.events = [
+      {
+        id: "event-1",
+        companyId: PRINT_CO.id,
+        actorType: "user",
+        actorId: "user-1",
+        action: "issue.created",
+        entityType: "issue",
+        entityId: "issue-9",
+        agentId: null,
+        runId: null,
+        details: { title: "Reprint the banner" },
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    await renderPage();
+
+    expect(container.textContent).toContain("1 outcome overnight");
+    expect(container.textContent).not.toContain("1 outcomes");
+  });
 
   it("Dismiss on an email sender marks its mail read and clears it from the triage review queue", async () => {
     const api = emailApi(async () => ({ ok: true, cleared: 1 }));

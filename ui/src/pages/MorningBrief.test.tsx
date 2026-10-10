@@ -79,7 +79,10 @@ vi.mock("../api/auth", () => ({
 vi.mock("../api/dashboard", () => ({
   dashboardApi: { summary: async () => state.summary },
 }));
-vi.mock("../api/activity", () => ({ activityApi: { list: async () => [] } }));
+/** The company's activity; none unless a test adds some. */
+const mockActivity = { events: [] as Array<Record<string, unknown>> };
+
+vi.mock("../api/activity", () => ({ activityApi: { list: async () => mockActivity.events } }));
 vi.mock("../api/attention", () => ({
   attentionApi: {
     // Like the server: set-aside rows are counted either way, and only listed
@@ -162,6 +165,7 @@ describe("MorningBrief", () => {
     state.emailPluginId = null;
     state.emailApi = null;
     state.rulesHomeIssues = [];
+    mockActivity.events = [];
   });
 
   afterEach(() => {
@@ -258,6 +262,28 @@ describe("MorningBrief", () => {
     expect(heroText()).toContain("1 budget incident, 1 approval pending.");
     expect(heroText()).not.toContain("2 approvals");
     expect(container.querySelector('[data-tone="amber"]')).not.toBeNull();
+  });
+
+  it("says outcome, not outcomes, for a single overnight outcome", async () => {
+    mockActivity.events = [
+      {
+        id: "event-1",
+        companyId: "company-1",
+        actorType: "user",
+        actorId: "user-1",
+        action: "issue.created",
+        entityType: "issue",
+        entityId: "issue-9",
+        agentId: null,
+        runId: null,
+        details: { title: "Reprint the banner" },
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    await renderPage();
+
+    expect(heroText()).toContain("1 outcome overnight");
+    expect(heroText()).not.toContain("1 outcomes");
   });
 
   it("stays green, and still offers the Attention link, when nothing is wrong", async () => {
