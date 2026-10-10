@@ -8,7 +8,11 @@ import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
  * Size-capped because the previous single-file target grew unbounded (it had
  * reached 680 MB): pino-roll writes `server.1.log`, `server.2.log`, ...,
  * rotating once a file exceeds `size` and deleting the oldest beyond
- * `limit.count`, so the log directory stays under ~100 MB total. Rolled files
+ * `limit.count`, so the log directory stays under ~100 MB total. That count
+ * covers files left by earlier server runs too (`removeOtherLogFiles`):
+ * without it pino-roll only counts the files the current process wrote, so
+ * every restart left its files behind and one instance reached 46 files and
+ * 1.2 GB. Rolled files
  * hold raw NDJSON lines (pino-roll has no prettifier); the human-readable
  * pretty stream still goes to stdout via the other transport target in
  * logger.ts, which the tray launcher captures to its dated files.
@@ -53,7 +57,7 @@ export function buildFileLogTarget(logDir: string): {
     file: string;
     extension: string;
     size: string;
-    limit: { count: number };
+    limit: { count: number; removeOtherLogFiles: boolean };
     mkdir: boolean;
     // Keeps this options shape assignable to pino's TransportOptions record
     // when it sits in the same targets array as the pino-pretty target.
@@ -67,7 +71,7 @@ export function buildFileLogTarget(logDir: string): {
       file: path.join(logDir, SERVER_LOG_BASENAME),
       extension: SERVER_LOG_EXTENSION,
       size: "25m",
-      limit: { count: 4 },
+      limit: { count: 4, removeOtherLogFiles: true },
       mkdir: true,
     },
   };
