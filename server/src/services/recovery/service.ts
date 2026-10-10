@@ -472,6 +472,17 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return Boolean(budgetBlock);
   }
 
+  // Work still waiting on an unfinished blocker is not stranded. The heartbeat
+  // refuses every system wake for it and records a skipped wake, so sending one
+  // from each sweep only adds a row every 30 seconds. The blocker finishing
+  // wakes it, and once its blockers are done this sweep dispatches it again.
+  async function isWaitingOnBlockers(issue: typeof issues.$inferSelect) {
+    const readiness = await issuesSvc
+      .listDependencyReadiness(issue.companyId, [issue.id])
+      .then((rows) => rows.get(issue.id) ?? null);
+    return Boolean(readiness && !readiness.isDependencyReady);
+  }
+
   async function reconcileUnassignedBlockingIssues() {
     const candidates = await db
       .select({
@@ -1686,6 +1697,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             continue;
           }
 
+          if (await isWaitingOnBlockers(issue)) {
+            result.skipped += 1;
+            continue;
+          }
+
           const queued = await enqueueInitialAssignedTodoDispatch(issue, agentId);
           if (queued) {
             result.assignmentDispatched += 1;
@@ -1722,6 +1738,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         }
 
         if (await isInvocationBudgetBlocked(issue, agentId)) {
+          result.skipped += 1;
+          continue;
+        }
+
+        if (await isWaitingOnBlockers(issue)) {
           result.skipped += 1;
           continue;
         }
@@ -1802,6 +1823,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       if (await isInvocationBudgetBlocked(issue, agentId)) {
+        result.skipped += 1;
+        continue;
+      }
+
+      if (await isWaitingOnBlockers(issue)) {
         result.skipped += 1;
         continue;
       }
