@@ -1,9 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildReviewSenderGroups,
+  clearStoredReviewEntry,
+  isMissingPluginAction,
   isSenderRuled,
   type ReviewMailHeader,
 } from "./email-triage-rules";
+
+describe("clearStoredReviewEntry", () => {
+  const row = { mailbox: "personal", sender: "promo@shop.example.com" };
+
+  it("takes the sender off the triage routine's review queue", async () => {
+    const api = { dismissReviewEntry: vi.fn(async () => ({ ok: true, cleared: 1 })) };
+    await clearStoredReviewEntry(api, row);
+    expect(api.dismissReviewEntry).toHaveBeenCalledWith("personal", "promo@shop.example.com");
+  });
+
+  // An email-tools older than 0.20.0 has no such action. The mail is already
+  // marked read, so the dismissal still stands.
+  it("does not fail the dismissal when the plugin has no review queue", async () => {
+    const api = {
+      dismissReviewEntry: vi.fn(async () =>
+        Promise.reject(new Error('No action handler registered for key "email.dismiss-review-entry"')),
+      ),
+    };
+    await expect(clearStoredReviewEntry(api, row)).resolves.toBeUndefined();
+  });
+
+  it("passes on any other failure, so the Brief can show it", async () => {
+    const api = {
+      dismissReviewEntry: vi.fn(async () => Promise.reject(new Error("Mailbox \"personal\" not configured"))),
+    };
+    await expect(clearStoredReviewEntry(api, row)).rejects.toThrow(/not configured/);
+  });
+
+  it("does nothing without the email-tools plugin", async () => {
+    await expect(clearStoredReviewEntry(null, row)).resolves.toBeUndefined();
+  });
+
+  it("recognises only the missing-action answer as an old plugin", () => {
+    expect(isMissingPluginAction(new Error('No action handler registered for key "x"'))).toBe(true);
+    expect(isMissingPluginAction(new Error("Request failed: 502"))).toBe(false);
+    expect(isMissingPluginAction(new Error("simulated database failure"))).toBe(false);
+    expect(isMissingPluginAction(undefined)).toBe(false);
+  });
+});
 
 describe("buildReviewSenderGroups", () => {
   function msg(uid: number, from: string, date: string): ReviewMailHeader {

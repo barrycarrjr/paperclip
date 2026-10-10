@@ -274,4 +274,18 @@ describe("makeEmailToolsApi", () => {
       );
     });
   });
+
+  describe("dismissReviewEntry", () => {
+    it("asks the plugin to drop the sender from the review queue", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true, cleared: 1 } });
+      const result = await api.dismissReviewEntry("personal", "promo@shop.example.com");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.dismiss-review-entry",
+        { companyId: COMPANY_ID, mailbox: "personal", sender: "promo@shop.example.com" },
+        COMPANY_ID,
+      );
+      expect(result).toEqual({ ok: true, cleared: 1 });
+    });
+  });
 });
