@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentRuntimeState, agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { agentRuntimeState, agentTaskSessions, agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
 import {
   heartbeatService,
   readWakePrompts,
@@ -147,7 +147,10 @@ describeEmbeddedPostgres("wake messages and runs already in progress", () => {
       invocationSource: "automation",
       triggerDetail: "system",
       status,
-      contextSnapshot,
+      // Named the way a wake names it. The wake source decides which
+      // conversation a run with no task belongs to, and so which runs a
+      // later wake merges into.
+      contextSnapshot: { wakeSource: "automation", ...contextSnapshot },
     });
     return runId;
   }
@@ -195,13 +198,22 @@ describeEmbeddedPostgres("wake messages and runs already in progress", () => {
       .then((rows) => rows[0]?.status ?? null);
   }
 
-  /** The session a run with no task of its own would resume next. */
+  /** The session the agent saved last, whichever run saved it. */
   function runtimeSessionId(agentId: string) {
     return db
       .select({ sessionId: agentRuntimeState.sessionId })
       .from(agentRuntimeState)
       .where(eq(agentRuntimeState.agentId, agentId))
       .then((rows) => rows[0]?.sessionId ?? null);
+  }
+
+  /** The session saved for each of the agent's conversations, which its next run resumes. */
+  function conversationSessionIds(agentId: string) {
+    return db
+      .select({ sessionDisplayId: agentTaskSessions.sessionDisplayId })
+      .from(agentTaskSessions)
+      .where(eq(agentTaskSessions.agentId, agentId))
+      .then((rows) => rows.map((row) => row.sessionDisplayId));
   }
 
   async function waitForRunStatus(runId: string, status: string, timeoutMs = 15_000) {
@@ -291,17 +303,17 @@ describeEmbeddedPostgres("wake messages and runs already in progress", () => {
   it("saves a run's session before reporting it finished", async () => {
     const { companyId, agentId } = await createAgent(2);
     mockAdapterExecute.mockImplementationOnce(async () => ({ ...finishedRunResult, sessionId: "session-a" }));
-    let sessionWhenReportedDone: Promise<string | null> | null = null;
+    let sessionWhenReportedDone: Promise<[string | null, Array<string | null>]> | null = null;
     const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
       const payload = (event.payload ?? {}) as Record<string, unknown>;
       if (event.type !== "heartbeat.run.status" || payload.status !== "succeeded" || sessionWhenReportedDone) return;
-      sessionWhenReportedDone = runtimeSessionId(agentId);
+      sessionWhenReportedDone = Promise.all([runtimeSessionId(agentId), conversationSessionIds(agentId)]);
     });
     try {
       const first = await invoke(agentId, "chase the invoices");
       expect(await waitForRunStatus(first!.id, "succeeded")).toBe("succeeded");
       await vi.waitFor(() => expect(sessionWhenReportedDone).not.toBeNull());
-      expect(await sessionWhenReportedDone).toBe("session-a");
+      expect(await sessionWhenReportedDone).toEqual(["session-a", ["session-a"]]);
     } finally {
       unsubscribe();
     }

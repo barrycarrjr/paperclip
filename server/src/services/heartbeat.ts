@@ -944,6 +944,13 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+  /**
+   * An earlier run of the agent whose conversation this wake carries on, when
+   * the wake has no task of its own: the run that drafted an approval being
+   * decided, say. A Retry names the run it repeats as `retryOfRunId` in the
+   * payload instead, since it arrives through the wakeup route.
+   */
+  continuesRunId?: string | null;
 }
 
 type UsageTotals = {
@@ -1362,6 +1369,15 @@ function parseIssueAssigneeAdapterOverrides(
  */
 const HEARTBEAT_TASK_KEY = "__heartbeat__";
 
+/**
+ * Run-context key naming the conversation a run with no task of its own
+ * continues because it carries on an earlier run's work: a decision on an
+ * approval goes back to the run that drafted it, Retry and Resume to the run
+ * they repeat. Holds that run's synthetic task key. It is not a task scope:
+ * these runs still take turns with every other run that has no task.
+ */
+const SESSION_TASK_KEY_CONTEXT_KEY = "sessionTaskKey";
+
 function deriveTaskKey(
   contextSnapshot: Record<string, unknown> | null | undefined,
   payload: Record<string, unknown> | null | undefined,
@@ -1378,13 +1394,31 @@ function deriveTaskKey(
 }
 
 /**
+ * Synthetic task key for the other runs that have no task: started by hand,
+ * by a plugin invoking the agent, or by an approval whose drafting run is not
+ * known. Each kind of wake keeps a conversation of its own, the way timer
+ * wakes do, rather than continuing `agentRuntimeState.sessionId`: that is
+ * whatever session the agent saved last, often a task's, possibly one another
+ * of its runs is still using. Plugins are told apart by plugin key, anything
+ * else by wake source (on-demand when missing, as `enqueueWakeup` defaults to).
+ */
+function deriveNoTaskSessionKey(contextSnapshot: Record<string, unknown> | null | undefined) {
+  const pluginKey = readNonEmptyString(contextSnapshot?.pluginKey);
+  if (pluginKey) return `__plugin__:${pluginKey}`;
+  const wakeSource = readNonEmptyString(contextSnapshot?.wakeSource) ?? "on_demand";
+  return `__${wakeSource}__`;
+}
+
+/**
  * Extended task key derivation that falls back to a stable synthetic key
- * for timer/heartbeat wakes. This ensures timer wakes can resume their
- * previous session via `agentTaskSessions` instead of starting fresh.
+ * when the run has no task. This ensures those runs resume their previous
+ * session via `agentTaskSessions` instead of another task's.
  *
- * The synthetic key is only used when:
- * - No explicit task/issue key exists in the context
- * - The wake source is "timer" (scheduled heartbeat)
+ * The synthetic key is only used when no explicit task/issue key exists in
+ * the context. A run carrying on an earlier run's work uses that run's
+ * conversation (`SESSION_TASK_KEY_CONTEXT_KEY`). Timer wakes (scheduled
+ * heartbeats) use `__heartbeat__`; every other wake uses the key for its kind
+ * (see `deriveNoTaskSessionKey`).
  */
 export function deriveTaskKeyWithHeartbeatFallback(
   contextSnapshot: Record<string, unknown> | null | undefined,
@@ -1393,10 +1427,13 @@ export function deriveTaskKeyWithHeartbeatFallback(
   const explicit = deriveTaskKey(contextSnapshot, payload);
   if (explicit) return explicit;
 
+  const continued = readNonEmptyString(contextSnapshot?.[SESSION_TASK_KEY_CONTEXT_KEY]);
+  if (continued) return continued;
+
   const wakeSource = readNonEmptyString(contextSnapshot?.wakeSource);
   if (wakeSource === "timer") return HEARTBEAT_TASK_KEY;
 
-  return null;
+  return deriveNoTaskSessionKey(contextSnapshot);
 }
 
 export function shouldResetTaskSessionForWake(
@@ -2572,9 +2609,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const resumeContext = parseObject(resumeRun.contextSnapshot);
     const resumeTaskKey = deriveTaskKey(resumeContext, null) ?? taskKey;
-    const resumeTaskSession = resumeTaskKey
-      ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, resumeTaskKey)
-      : null;
+    // A run with no task kept its conversation under a synthetic key. The
+    // resumed run carries on in it, so its result is saved back there rather
+    // than in the conversation for its own kind of wake.
+    const resumeSessionKey = resumeTaskKey ?? deriveTaskKeyWithHeartbeatFallback(resumeContext, null);
+    const resumeTaskSession = await getTaskSession(
+      agent.companyId,
+      agent.id,
+      agent.adapterType,
+      resumeSessionKey,
+    );
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const sessionOverride = buildExplicitResumeSessionOverride({
       resumeFromRunId,
@@ -2588,10 +2632,39 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return {
       resumeFromRunId,
       taskKey: resumeTaskKey,
+      sessionTaskKey: resumeTaskKey ? null : resumeSessionKey,
       issueId: readNonEmptyString(resumeContext.issueId),
       taskId: readNonEmptyString(resumeContext.taskId) ?? readNonEmptyString(resumeContext.issueId),
       sessionDisplayId: sessionOverride.sessionDisplayId,
       sessionParams: sessionOverride.sessionParams,
+    };
+  }
+
+  /**
+   * The conversation an earlier run of this agent took part in: its task's
+   * key when it had a task, otherwise the synthetic key for its kind of wake.
+   * Null when there is no such run of this agent.
+   */
+  async function resolveRunConversation(agent: typeof agents.$inferSelect, runId: string) {
+    const id = runId.trim();
+    if (!isUuidLike(id)) return null;
+    const run = await db
+      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.id, id),
+          eq(heartbeatRuns.companyId, agent.companyId),
+          eq(heartbeatRuns.agentId, agent.id),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!run) return null;
+    const context = parseObject(run.contextSnapshot);
+    const taskKey = deriveTaskKey(context, null);
+    return {
+      taskKey,
+      sessionTaskKey: taskKey ? null : deriveTaskKeyWithHeartbeatFallback(context, null),
     };
   }
 
@@ -5009,6 +5082,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // run side by side, whatever the agent's run limit allows. A queued run
       // whose task already has a run going (the follow-up for a message that
       // arrived mid-run, say) waits; the end of that run starts it.
+      //
+      // Runs with no task share one scope here on purpose, whichever
+      // conversation each continues, so no two of them ever run side by side.
+      // That is deliberately coarser than merging wakes, which keeps those
+      // conversations apart (see enqueueWakeup).
       const busyTaskScopes = runningRuns.map((row) => deriveTaskKey(row, null));
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
       for (const queuedRun of prioritizedRuns) {
@@ -5766,6 +5844,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (executionWorkspace.projectId && !readNonEmptyString(context.projectId)) {
       context.projectId = executionWorkspace.projectId;
     }
+    // A run with no task has a synthetic task key too (see
+    // deriveTaskKeyWithHeartbeatFallback), so no run falls back to the agent's
+    // last session here: that session may belong to another task.
     const runtimeSessionFallback = taskKey || resetTaskSession ? null : runtime.sessionId;
     let previousSessionDisplayId = truncateDisplayId(
       explicitResumeSessionDisplayId ??
@@ -6988,7 +7069,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (!readNonEmptyString(enrichedContextSnapshot.taskKey) && explicitResumeSession.taskKey) {
         enrichedContextSnapshot.taskKey = explicitResumeSession.taskKey;
       }
+      if (!deriveTaskKey(enrichedContextSnapshot, null) && explicitResumeSession.sessionTaskKey) {
+        enrichedContextSnapshot[SESSION_TASK_KEY_CONTEXT_KEY] = explicitResumeSession.sessionTaskKey;
+      }
       issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueId;
+    }
+    // A wake with no task of its own that carries on an earlier run's work
+    // continues that run's conversation, not the one for its own kind of wake:
+    // a decision on an approval goes back to the run that drafted it, a Retry
+    // to the run it repeats. Woken anywhere else the agent no longer knows
+    // what it was doing.
+    const continuedRunId =
+      readNonEmptyString(opts.continuesRunId) ?? readNonEmptyString(payload?.retryOfRunId);
+    if (
+      continuedRunId &&
+      !deriveTaskKey(enrichedContextSnapshot, null) &&
+      !readNonEmptyString(enrichedContextSnapshot[SESSION_TASK_KEY_CONTEXT_KEY])
+    ) {
+      const conversation = await resolveRunConversation(agent, continuedRunId);
+      if (conversation?.taskKey) {
+        enrichedContextSnapshot.taskKey = conversation.taskKey;
+      } else if (conversation?.sessionTaskKey) {
+        enrichedContextSnapshot[SESSION_TASK_KEY_CONTEXT_KEY] = conversation.sessionTaskKey;
+      }
     }
     const effectiveTaskKey = readNonEmptyString(enrichedContextSnapshot.taskKey) ?? taskKey;
     const sessionBefore =
@@ -7533,14 +7636,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES])))
       .orderBy(desc(heartbeatRuns.createdAt));
 
+    // A wake merges only into a run of the same conversation. Runs with no
+    // task have no task key, so comparing task keys alone would let a plugin's
+    // message waiting behind a busy agent absorb a timer tick or another
+    // plugin's message, and then run it in the wrong conversation.
+    const wakeConversationKey = deriveTaskKeyWithHeartbeatFallback(enrichedContextSnapshot, null);
+    const isSameConversation = (candidate: typeof heartbeatRuns.$inferSelect) =>
+      deriveTaskKeyWithHeartbeatFallback(parseObject(candidate.contextSnapshot), null) === wakeConversationKey;
     const sameScopeQueuedRun = activeRuns.find(
-      (candidate) => candidate.status === "queued" && isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "queued" && isSameConversation(candidate),
     );
     const sameScopeScheduledRetryRun = activeRuns.find(
-      (candidate) => candidate.status === "scheduled_retry" && isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "scheduled_retry" && isSameConversation(candidate),
     );
     const sameScopeRunningRun = activeRuns.find(
-      (candidate) => candidate.status === "running" && isSameTaskScope(runTaskKey(candidate), taskKey),
+      (candidate) => candidate.status === "running" && isSameConversation(candidate),
     );
     const shouldQueueFollowupForRunningWake =
       Boolean(sameScopeRunningRun) &&

@@ -249,6 +249,12 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
       }
 
       if (approval.requestedByAgentId) {
+        // The run that drafted the call. With no linked issue to wake the agent
+        // about, the decision goes back to that run's conversation: woken in
+        // any other, the agent no longer knows what it asked for, and has been
+        // seen drafting the same message again (see tool-draft-gate.ts).
+        const approvalPayload = (approval.payload ?? {}) as Record<string, unknown>;
+        const draftRunId = typeof approvalPayload.runId === "string" ? approvalPayload.runId : null;
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
             source: "automation",
@@ -273,6 +279,7 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
               wakeReason: "approval_approved",
               ...(draftExecution ? { draftExecution } : {}),
             },
+            continuesRunId: draftRunId,
           });
 
           await logActivity(db, {

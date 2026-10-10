@@ -377,12 +377,32 @@ describe("deriveTaskKeyWithHeartbeatFallback", () => {
     ).toBe("issue-789");
   });
 
-  it("returns null for non-timer wakes with no explicit key", () => {
-    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "on_demand" }, null)).toBeNull();
+  // Without a key of its own, a run with no task would continue the session
+  // the agent saved last, which can be another task's.
+  it("gives each other kind of wake with no explicit key a key of its own", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "on_demand" }, null)).toBe("__on_demand__");
+    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "automation" }, null)).toBe("__automation__");
+    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "assignment" }, null)).toBe("__assignment__");
   });
 
-  it("returns null for empty context", () => {
-    expect(deriveTaskKeyWithHeartbeatFallback({}, null)).toBeNull();
+  it("keys a plugin's wakes by the plugin, so two plugins do not share one", () => {
+    const invokedBy = (pluginKey: string) =>
+      deriveTaskKeyWithHeartbeatFallback(
+        { wakeSource: "automation", source: "plugin.agents.invoke", pluginId: "plugin-1", pluginKey },
+        null,
+      );
+    expect(invokedBy("slack-tools")).toBe("__plugin__:slack-tools");
+    expect(invokedBy("mail-tools")).toBe("__plugin__:mail-tools");
+  });
+
+  it("prefers an explicit key over a plugin's", () => {
+    expect(
+      deriveTaskKeyWithHeartbeatFallback({ wakeSource: "assignment", pluginKey: "slack-tools", issueId: "issue-1" }, null),
+    ).toBe("issue-1");
+  });
+
+  it("treats a context with no wake source as an on-demand wake", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({}, null)).toBe("__on_demand__");
   });
 });
 

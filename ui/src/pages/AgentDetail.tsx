@@ -53,7 +53,7 @@ import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
-import { describeRunRetryState } from "../lib/runRetryState";
+import { buildRetryWakePayload, describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/ui/tabs";
@@ -3362,18 +3362,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   });
 
   const canRetryRun = run.status === "failed" || run.status === "timed_out";
-  const retryPayload = useMemo(() => {
-    const payload: Record<string, unknown> = {};
-    const context = asRecord(run.contextSnapshot);
-    if (!context) return payload;
-    const issueId = asNonEmptyString(context.issueId);
-    const taskId = asNonEmptyString(context.taskId);
-    const taskKey = asNonEmptyString(context.taskKey);
-    if (issueId) payload.issueId = issueId;
-    if (taskId) payload.taskId = taskId;
-    if (taskKey) payload.taskKey = taskKey;
-    return payload;
-  }, [run.contextSnapshot]);
+  const retryPayload = useMemo(
+    () => buildRetryWakePayload({ id: run.id, contextSnapshot: asRecord(run.contextSnapshot) }),
+    [run.contextSnapshot, run.id],
+  );
   // Stopping the agent is offered next to the failure, not only from the page
   // header. An agent failing on a timer for a reason retrying cannot fix will
   // otherwise keep failing while the operator works out what to do.
