@@ -21,6 +21,8 @@ const mockIssuesApi = vi.hoisted(() => ({
 
 const markdownEditorMockState = vi.hoisted(() => ({
   emitMountEmptyChange: false,
+  // The change handler of the editor rendered last, so a test can type into it.
+  latestOnChange: null as ((value: string) => void) | null,
 }));
 
 vi.mock("../api/issues", () => ({
@@ -56,6 +58,7 @@ vi.mock("./MarkdownEditor", async () => {
       placeholder?: string;
       contentClassName?: string;
     }) => {
+      markdownEditorMockState.latestOnChange = onChange ?? null;
       React.useEffect(() => {
         if (!markdownEditorMockState.emitMountEmptyChange) return;
         onChange?.("");
@@ -163,6 +166,11 @@ async function flush() {
   });
 }
 
+function setInputValue(input: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function createIssueDocument(overrides: Partial<IssueDocument> = {}): IssueDocument {
   return {
     id: "document-1",
@@ -258,6 +266,7 @@ describe("IssueDocumentsSection", () => {
     window.localStorage.clear();
     vi.clearAllMocks();
     markdownEditorMockState.emitMountEmptyChange = false;
+    markdownEditorMockState.latestOnChange = null;
   });
 
   afterEach(() => {
@@ -622,6 +631,219 @@ describe("IssueDocumentsSection", () => {
     expect(heading).toBeTruthy();
     expect(heading?.parentElement?.className).toContain("flex-wrap");
     expect(heading?.nextElementSibling?.className).toContain("flex-wrap");
+
+    await act(async () => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  function findButton(text: string, options: { exact?: boolean } = {}) {
+    return Array.from(container.querySelectorAll("button")).find((button) => {
+      const label = button.textContent?.trim() ?? "";
+      return options.exact ? label === text : label.includes(text);
+    });
+  }
+
+  async function click(button: Element | undefined) {
+    expect(button).toBeTruthy();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  async function deleteTheOnlyDocument() {
+    await click(findButton("Delete document"));
+    await click(findButton("Delete", { exact: true }));
+    await flush();
+  }
+
+  async function createDocument(key: string, body: string) {
+    await click(findButton("New document"));
+    const keyInput = container.querySelector<HTMLInputElement>('input[placeholder="Document key"]');
+    expect(keyInput).toBeTruthy();
+    await act(async () => {
+      setInputValue(keyInput!, key);
+    });
+    await act(async () => {
+      markdownEditorMockState.latestOnChange?.(body);
+    });
+    await click(findButton("Create document"));
+    await flush();
+  }
+
+  it("reads and writes task documents through the task document addresses", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const notes = createIssueDocument({
+      id: "document-notes",
+      key: "notes",
+      title: "Notes",
+      body: "Task notes body",
+      latestRevisionId: "revision-2",
+      latestRevisionNumber: 2,
+    });
+    const summary = createIssueDocument({
+      id: "document-summary",
+      key: "summary",
+      title: null,
+      body: "Fresh summary",
+      latestRevisionId: "revision-9",
+      latestRevisionNumber: 1,
+    });
+    mockIssuesApi.listDocuments.mockResolvedValue([notes]);
+    mockIssuesApi.listDocumentRevisions.mockResolvedValue([]);
+    mockIssuesApi.deleteDocument.mockResolvedValue({ ok: true });
+    mockIssuesApi.upsertDocument.mockResolvedValue(summary);
+    queryClient.setQueryData(queryKeys.issues.detail(issue.id), issue);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection issue={issue} canDeleteDocuments />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    expect(mockIssuesApi.listDocuments).toHaveBeenCalledWith("issue-1");
+    expect(container.textContent).toContain("Task notes body");
+
+    await deleteTheOnlyDocument();
+    expect(mockIssuesApi.deleteDocument).toHaveBeenCalledWith("issue-1", "notes");
+
+    await createDocument("summary", "Fresh summary");
+    expect(mockIssuesApi.upsertDocument).toHaveBeenCalledWith("issue-1", "summary", {
+      title: null,
+      format: "markdown",
+      body: "Fresh summary",
+      baseRevisionId: null,
+    });
+    const cachedIssue = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issue.id));
+    expect(cachedIssue?.documentSummaries?.map((entry) => entry.key)).toContain("summary");
+
+    await click(findButton("View diff"));
+    await flush();
+    expect(mockIssuesApi.listDocumentRevisions).toHaveBeenCalledWith("issue-1", "notes");
+
+    await act(async () => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("reads and writes a case's documents through its subject, not the task addresses", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const caseBody = createIssueDocument({
+      id: "case-document-1",
+      issueId: "case-1",
+      key: "body",
+      title: "Body",
+      body: "Case body v2",
+      latestRevisionId: "case-revision-2",
+      latestRevisionNumber: 2,
+    });
+    const subject = {
+      id: "case-1",
+      detailQueryKey: ["cases", "detail", "PAP-C7"],
+      documentsQueryKey: ["cases", "documents", "case-1"],
+      idleDocumentRevisionsQueryKey: ["cases", "revisions", "case-1", "__idle__"],
+      documentRevisionsQueryKey: (key: string) => ["cases", "revisions", "case-1", key],
+      listDocuments: vi.fn().mockResolvedValue([caseBody]),
+      listDocumentRevisions: vi.fn().mockResolvedValue([]),
+      getDocument: vi.fn().mockResolvedValue(caseBody),
+      upsertDocument: vi.fn().mockResolvedValue(createIssueDocument({
+        id: "case-document-2",
+        issueId: "case-1",
+        key: "notes",
+        title: null,
+        body: "Case notes",
+        latestRevisionId: "case-revision-9",
+        latestRevisionNumber: 1,
+      })),
+      deleteDocument: vi.fn().mockResolvedValue({ ok: true }),
+      restoreDocumentRevision: vi.fn().mockResolvedValue({
+        ...caseBody,
+        body: "Case body v1",
+        latestRevisionId: "case-revision-3",
+        latestRevisionNumber: 3,
+      }),
+      syncDetailCache: vi.fn(),
+      hideSystemDocuments: false,
+      legacyPlanDocument: null,
+    };
+    queryClient.setQueryData(["cases", "revisions", "case-1", "body"], [
+      createRevision({
+        id: "case-revision-2",
+        issueId: "case-1",
+        key: "body",
+        revisionNumber: 2,
+        body: "Case body v2",
+        createdAt: new Date("2026-03-31T12:05:00.000Z"),
+      }),
+      createRevision({
+        id: "case-revision-1",
+        issueId: "case-1",
+        key: "body",
+        revisionNumber: 1,
+        body: "Case body v1",
+        createdAt: new Date("2026-03-31T11:00:00.000Z"),
+      }),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection subject={subject} canDeleteDocuments />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    expect(subject.listDocuments).toHaveBeenCalled();
+    expect(container.textContent).toContain("Case body v2");
+
+    await click(findButton("rev 1"));
+    expect(container.textContent).toContain("Viewing revision 1");
+    await click(findButton("Restore this revision"));
+    await flush();
+    expect(subject.restoreDocumentRevision).toHaveBeenCalledWith("body", "case-revision-1");
+    expect(subject.syncDetailCache).toHaveBeenCalledWith(queryClient, expect.objectContaining({ body: "Case body v1" }));
+
+    await deleteTheOnlyDocument();
+    expect(subject.deleteDocument).toHaveBeenCalledWith("body");
+
+    await createDocument("notes", "Case notes");
+    expect(subject.upsertDocument).toHaveBeenCalledWith("notes", {
+      title: null,
+      format: "markdown",
+      body: "Case notes",
+      baseRevisionId: null,
+    });
+
+    await click(findButton("View diff"));
+    await flush();
+    expect(subject.listDocumentRevisions).toHaveBeenCalledWith("body");
+
+    expect(mockIssuesApi.listDocuments).not.toHaveBeenCalled();
+    expect(mockIssuesApi.listDocumentRevisions).not.toHaveBeenCalled();
+    expect(mockIssuesApi.restoreDocumentRevision).not.toHaveBeenCalled();
+    expect(mockIssuesApi.deleteDocument).not.toHaveBeenCalled();
+    expect(mockIssuesApi.upsertDocument).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();

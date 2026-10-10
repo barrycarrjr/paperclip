@@ -508,8 +508,13 @@ export function CaseDetail() {
       idleDocumentRevisionsQueryKey: ["cases", "revisions", caseData.id, "__idle__"] as const,
       documentRevisionsQueryKey: (key: string) => queryKeys.cases.revisions(caseData.id, key),
       listDocuments: async () => {
-        const cached = queryClient.getQueryData<CaseDetailData>(caseDetailQueryKey);
-        const detail = cached ?? await casesApi.get(caseIdentifier);
+        // On window focus the case and this list reload together. fetchQuery
+        // waits for a case reload already under way instead of reading the
+        // copy it is replacing, which left the list one reload behind.
+        const detail = await queryClient.fetchQuery({
+          queryKey: caseDetailQueryKey,
+          queryFn: () => casesApi.get(caseIdentifier),
+        });
         return detail.documents.map((documentRef) =>
           caseDocumentToIssueDocument(detail.id, documentRef.key, documentRef.document)
         );
@@ -524,9 +529,18 @@ export function CaseDetail() {
       },
       upsertDocument: async (key: string, data: { title: string | null; format: "markdown"; body: string; baseRevisionId: string | null }) => {
         const result = await casesApi.upsertDocument(caseIdentifier, key, data);
-        return caseDocumentToIssueDocument(caseData.id, result.document.key, result.document);
+        // The save response's document carries no key, so use the one it was saved under.
+        return caseDocumentToIssueDocument(caseData.id, key, result.document);
       },
-      deleteDocument: (key: string) => casesApi.deleteDocument(caseIdentifier, key),
+      deleteDocument: async (key: string) => {
+        const result = await casesApi.deleteDocument(caseIdentifier, key);
+        // listDocuments reads the cached case, so drop the document there too, or
+        // the list shows it again until the case is next fetched.
+        queryClient.setQueryData<CaseDetailData | undefined>(caseDetailQueryKey, (current) =>
+          current ? { ...current, documents: current.documents.filter((entry) => entry.key !== key) } : current
+        );
+        return result;
+      },
       restoreDocumentRevision: async (key: string, revisionId: string) => {
         const result = await casesApi.restoreDocumentRevision(caseIdentifier, key, revisionId);
         return caseDocumentToIssueDocument(caseData.id, result.document.key, result.document);
@@ -674,9 +688,9 @@ export function CaseDetail() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
-          {caseData ? (
+          {caseDocumentSubject ? (
             <IssueDocumentsSection
-              issue={caseData as any}
+              subject={caseDocumentSubject}
               canDeleteDocuments
             />
           ) : null}

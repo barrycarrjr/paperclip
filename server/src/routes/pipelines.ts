@@ -322,7 +322,14 @@ function parseCaseEventsQuery(query: Request["query"]) {
   };
 }
 
+// An id in the path that is not a uuid matches no row, and comparing it with a
+// uuid column fails the whole query, which answered 500 instead of 404. The
+// cases router hands on every case identifier it does not know, so a case page
+// for a missing case came here with one.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function resolvePipelineCompanyId(db: Db, pipelineId: string) {
+  if (!UUID_PATTERN.test(pipelineId)) throw notFound("Pipeline not found");
   const row = await db
     .select({ companyId: pipelines.companyId })
     .from(pipelines)
@@ -334,6 +341,7 @@ async function resolvePipelineCompanyId(db: Db, pipelineId: string) {
 }
 
 async function resolveCaseCompanyId(db: Db, caseId: string) {
+  if (!UUID_PATTERN.test(caseId)) throw notFound("Pipeline case not found");
   const row = await db
     .select({ companyId: pipelineCases.companyId })
     .from(pipelineCases)
