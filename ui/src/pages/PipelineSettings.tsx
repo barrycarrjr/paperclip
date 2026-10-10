@@ -89,6 +89,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
 import { buildCompanyUserInlineOptions, isAgentTaskTarget } from "../lib/company-members";
 import { useStandardMarkdownMentionOptions } from "../hooks/useStandardMarkdownMentionOptions";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
 import { formatPipelineItemEvent, INTERNAL_FIELD_KEYS } from "../lib/pipeline-item-detail";
 import { queryKeys } from "../lib/queryKeys";
 import { getRecentAssigneeIds, sortAgentsByRecency } from "../lib/recent-assignees";
@@ -1179,7 +1180,12 @@ function StageSubSidebar({
   const groups = stageNavGroups(stageKind);
   return (
     <>
-      <div className="md:hidden">
+      {/* A picker where the page area is too narrow for the side list, and
+          the side list where it has room (container queries, see
+          PAGE_AREA_CONTAINER_CLASS; the form beside it switches at the same
+          size). Sized by the window, docked Clippy left the form beside the
+          list about 180 pixels, one word to a line. */}
+      <div className="@[40rem]:hidden">
         <label className="sr-only" htmlFor="stage-section-picker">Stage section</label>
         <select
           id="stage-section-picker"
@@ -1198,7 +1204,7 @@ function StageSubSidebar({
       </div>
       <nav
         aria-label="Stage sections"
-        className="sticky top-14 hidden max-h-(--sz-calc-39) w-52 shrink-0 flex-col gap-4 self-start overflow-y-auto border-r border-border bg-sidebar/30 px-3 py-4 md:flex"
+        className="sticky top-14 hidden max-h-(--sz-calc-39) w-52 shrink-0 flex-col gap-4 self-start overflow-y-auto border-r border-border bg-sidebar/30 px-3 py-4 @[40rem]:flex"
       >
         {groups.map((group) => (
           <div key={group.label} className="flex flex-col gap-0.5">
@@ -1278,6 +1284,9 @@ export function PipelineSettings() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
+  // The unsaved-changes bar that sticks to the bottom is the page's bottom
+  // bar: while it shows, the Clippy launcher sits above its Save button.
+  const saveStageBarRef = usePageBottomBarRef<HTMLDivElement>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -2713,13 +2722,13 @@ export function PipelineSettings() {
                 saveStage.mutate();
               }}
             >
-              <div className="flex flex-col gap-5 md:flex-row md:gap-0">
+              <div className="flex flex-col gap-5 @[40rem]:flex-row @[40rem]:gap-0">
                 <StageSubSidebar
                   activeSection={activeStageSection}
                   stageKind={stageKind}
                   onSectionChange={handleStageSectionChange}
                 />
-                <div className="min-w-0 flex-1 md:px-8">
+                <div className="min-w-0 flex-1 @[40rem]:px-8">
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <h2 className="text-lg font-semibold text-foreground">
                       {STAGE_SECTION_TITLES[activeStageSection]}
@@ -2902,7 +2911,7 @@ export function PipelineSettings() {
                   {activeStageSection === "instructions" && !isPipelineTerminalStageKind(stageKind) ? (
                     <div className="mt-8 w-full max-w-3xl space-y-6">
                       <div className="overflow-x-auto overscroll-x-contain">
-                        <div className="inline-flex min-w-full flex-wrap items-center gap-2 text-sm text-muted-foreground sm:min-w-max sm:flex-nowrap">
+                        <div className="inline-flex min-w-full flex-wrap items-center gap-2 text-sm text-muted-foreground @5xl:min-w-max @5xl:flex-nowrap">
                           <span>When an item enters this step</span>
                           <InlineEntitySelector
                             value={stageAssigneeOptionId(stageAssigneeAgentId)}
@@ -3294,7 +3303,7 @@ export function PipelineSettings() {
               {saveStage.error ? <p className="text-sm text-destructive">{saveStage.error.message}</p> : null}
 
               {stageDirty || saveStage.isPending ? (
-                <div className="sticky bottom-0 z-10 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2">
+                <div ref={saveStageBarRef} className="sticky bottom-0 z-10 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2">
                   <span className="text-sm text-muted-foreground">
                     {saveStage.isPending ? "Saving changes…" : "You have unsaved changes."}
                   </span>

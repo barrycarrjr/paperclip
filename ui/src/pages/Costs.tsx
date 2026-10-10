@@ -117,7 +117,7 @@ function FinanceSummaryCard({
           Account-level charges that do not map to a single inference request.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3 px-5 pb-5 pt-2 sm:grid-cols-2 xl:grid-cols-4">
+      <CardContent className="grid gap-3 px-5 pb-5 pt-2 @md:grid-cols-2 @4xl:grid-cols-4">
         <MetricTile
           label="Debits"
           value={formatCents(debitCents)}
@@ -553,8 +553,12 @@ export function Costs() {
 
   return (
     <div className="space-y-6">
+      {/* The page's columns follow the room the page area has, not the
+          window (container queries, see PAGE_AREA_CONTAINER_CLASS). By the
+          window, docked Clippy left four tiles in a row at about 100 pixels
+          each, one word to a line. */}
       <div className="space-y-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col gap-4 @[40rem]:flex-row @[40rem]:items-start @[40rem]:justify-between">
             <div>
                 <h1 className="text-3xl font-semibold tracking-tight">Costs</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -594,7 +598,7 @@ export function Costs() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 lg:grid-cols-4">
+          <div className="grid gap-3 @md:grid-cols-2 @4xl:grid-cols-4">
             <MetricTile
               label="Inference spend"
               value={formatCents(spendData?.summary.spendCents ?? 0)}
@@ -651,7 +655,7 @@ export function Costs() {
           ) : (
             <>
               {activeBudgetIncidents.length > 0 ? (
-                <div className="grid gap-4 xl:grid-cols-2">
+                <div className="grid gap-4 @4xl:grid-cols-2">
                   {activeBudgetIncidents.slice(0, 2).map((incident) => (
                     <BudgetIncidentCard
                       key={incident.id}
@@ -669,7 +673,7 @@ export function Costs() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
+              <div className="grid gap-4 @4xl:grid-cols-[1.3fr,1fr]">
                 <Card>
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
@@ -728,7 +732,7 @@ export function Costs() {
                 />
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-[1.25fr,0.95fr]">
+              <div className="grid gap-4 @4xl:grid-cols-[1.25fr,0.95fr]">
                 <Card>
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">By agent</CardTitle>
@@ -860,7 +864,7 @@ export function Costs() {
                     Hard-stop spend limits for agents and projects. Provider subscription quota stays separate and appears under Providers.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-3 px-5 pb-5 pt-0 md:grid-cols-4">
+                <CardContent className="grid gap-3 px-5 pb-5 pt-0 @md:grid-cols-2 @4xl:grid-cols-4">
                   <MetricTile
                     label="Active incidents"
                     value={String(activeBudgetIncidents.length)}
@@ -896,7 +900,7 @@ export function Costs() {
                       Resolve hard stops here by raising the budget or explicitly keeping the scope paused.
                     </p>
                   </div>
-                  <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-4 @4xl:grid-cols-2">
                     {activeBudgetIncidents.map((incident) => (
                       <BudgetIncidentCard
                         key={incident.id}
@@ -931,7 +935,7 @@ export function Costs() {
                               : "Lifetime spend policies for execution-bound projects."}
                         </p>
                       </div>
-                      <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="grid gap-4 @4xl:grid-cols-2">
                         {rows.map((summary) => (
                           <BudgetPolicyCard
                             key={summary.policyId}
@@ -1089,7 +1093,7 @@ export function Costs() {
                 eventCount={financeData?.summary.eventCount ?? 0}
               />
 
-              <div className="grid gap-4 xl:grid-cols-[1.2fr,0.95fr]">
+              <div className="grid gap-4 @4xl:grid-cols-[1.2fr,0.95fr]">
                 <div className="space-y-4">
                   <Card>
                     <CardHeader className="px-5 pt-5 pb-2">

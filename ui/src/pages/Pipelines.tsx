@@ -1785,7 +1785,11 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
 
   return (
     <div className="w-full space-y-4 px-6 py-8">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+      {/* Side by side only where the page area has room for both (a
+          container query, see PAGE_AREA_CONTAINER_CLASS). By the window, the
+          actions kept their row with Clippy docked and squeezed the name
+          into a narrow column: "Print / orders" on two lines. */}
+      <div className="flex flex-col gap-2 @xl:flex-row @xl:items-start @xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">Pipeline</p>
           <h1 className="text-2xl font-semibold text-foreground">{pipeline.name}</h1>
@@ -1807,7 +1811,7 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 @xl:justify-end">
           <Select value={groupBy} onValueChange={handleGroupByChange}>
             <SelectTrigger className="h-9 w-(--sz-148px)" aria-label="Group by" title="Group by">
               <Layers className="h-4 w-4 text-muted-foreground" />
@@ -4429,7 +4433,10 @@ function DraftItemRow({
       </div>
 
       {row.expanded ? (
-        <div className="grid gap-5 border-t border-border px-4 py-4 lg:grid-cols-(--gtc-50)">
+        // The preview takes 280 pixels beside the fields only where the page
+        // area has room for both. By the window it kept its column with
+        // Clippy docked, and the fields beside it were left about 50 pixels.
+        <div className="grid gap-5 border-t border-border px-4 py-4 @[40rem]:grid-cols-(--gtc-50)">
           <div className="grid gap-4 md:grid-cols-2">
             {fields.map((field) => (
               <GeneratedField

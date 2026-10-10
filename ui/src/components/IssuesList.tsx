@@ -1196,8 +1196,12 @@ export function IssuesList({
         <SubIssueProgressSummaryStrip summary={progressSummary} issueLinkState={issueLinkState} />
       ) : null}
 
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-2 sm:gap-3">
+      {/* Toolbar. Where the page area is too narrow for both halves (below
+          @xl, a container query, see PAGE_AREA_CONTAINER_CLASS) the view
+          buttons take a second line rather than squeezing the search box
+          until its placeholder is cut off, as docked Clippy did. A phone
+          keeps its single line. */}
+      <div className="flex items-center justify-between gap-2 sm:flex-wrap sm:gap-3 @xl:flex-nowrap">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Button size="sm" variant="outline" onClick={() => openCreateIssueDialog()}>
             <Plus className="h-4 w-4 sm:mr-1" />

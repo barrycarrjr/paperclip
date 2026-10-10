@@ -66,7 +66,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkTriageBar } from "./BulkTriageBar";
 import { AUTO_NOISE_LABEL, KEEP_ALWAYS_LABEL, useBulkTriage } from "../hooks/useBulkTriage";
 import { cn } from "../lib/utils";
+import { PAGE_CORNER_RIGHT_CLASS } from "../lib/narrow-layout";
 import { Z_PAGE_NOTICE } from "../lib/z-layers";
+import { PageFloating } from "./PageFloatingLayer";
 import { EmailBodyFrame } from "./email/EmailBodyFrame";
 
 
@@ -1271,10 +1273,13 @@ export function HelpScoutEmailView({
 
       {toast && (
         // The page-notice layer, not z-50 (the dialog layer), where it drew
-        // over the Clippy window. See lib/z-layers.
-        <div className={cn("fixed bottom-4 right-4 bg-foreground text-background text-xs px-3 py-2 rounded shadow-lg", Z_PAGE_NOTICE)}>
-          {toast}
-        </div>
+        // over the Clippy window. See lib/z-layers. Drawn beside the page
+        // area, not inside it (see PageFloating).
+        <PageFloating>
+          <div className={cn("fixed bottom-4 bg-foreground text-background text-xs px-3 py-2 rounded shadow-lg", PAGE_CORNER_RIGHT_CLASS, Z_PAGE_NOTICE)}>
+            {toast}
+          </div>
+        </PageFloating>
       )}
     </div>
   );

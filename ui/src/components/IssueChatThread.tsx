@@ -35,6 +35,7 @@ import type {
 import type { ActiveRunForIssue, LiveRunForIssue } from "../api/heartbeats";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
 import { usePaperclipIssueRuntime, type PaperclipIssueRuntimeReassignment } from "../hooks/usePaperclipIssueRuntime";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
 import {
   buildIssueChatMessages,
   formatDurationWords,
@@ -2238,6 +2239,10 @@ export function IssueChatThread({
   const hasScrolledRef = useRef(false);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
+  // The reply box that sticks to the foot of the thread is the page's bottom
+  // bar: while it is down there, the Clippy launcher, the scroll buttons and
+  // the toasts sit above it rather than on its Send button.
+  const composerDockRef = usePageBottomBarRef(composerViewportAnchorRef);
   const composerViewportSnapshotRef = useRef<ReturnType<typeof captureComposerViewportSnapshot>>(null);
   const preserveComposerViewportRef = useRef(false);
   const pendingSubmitScrollRef = useRef(false);
@@ -2556,7 +2561,7 @@ export function IssueChatThread({
 
         {showComposer ? (
           <div
-            ref={composerViewportAnchorRef}
+            ref={composerDockRef}
             data-testid="issue-chat-composer-dock"
             className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-linear-to-t from-background via-background/95 to-background/0 pt-6"
           >

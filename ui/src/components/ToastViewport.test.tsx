@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider, useToastActions, type ToastInput } from "../context/ToastContext";
+import { TOAST_VIEWPORT_DESKTOP_CLASS } from "../lib/narrow-layout";
 import { ToastViewport } from "./ToastViewport";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,6 +116,22 @@ describe("ToastViewport", () => {
     expect(box?.className).toContain("inset-x-3");
     expect(box?.className).not.toContain("w-full");
     expect(box?.className).toContain("max-w-sm");
+  });
+
+  it("sits beside the navigation on a desktop, not on its account button", () => {
+    // At the left edge of the window a message covered the account button at
+    // the foot of the navigation. On a desktop the box starts at the width
+    // Layout publishes for the rail and the navigation, and sits above a
+    // page's own bottom bar; a phone keeps the box held in from both sides.
+    act(() => {
+      push?.({ title: "Profile saved", tone: "success" });
+    });
+    const box = container.querySelector<HTMLElement>('[data-testid="toast-stack"]')?.parentElement;
+    for (const part of TOAST_VIEWPORT_DESKTOP_CLASS.split(" ")) {
+      expect(box?.classList.contains(part)).toBe(true);
+    }
+    expect(box?.classList.contains("inset-x-3")).toBe(true);
+    expect(box?.classList.contains("bottom-3")).toBe(true);
   });
 
   it("keeps an empty live region on the page before anything is said", () => {

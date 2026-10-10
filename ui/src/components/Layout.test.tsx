@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
+import { PAGE_FLOATING_LAYER_ATTRIBUTE, PageFloating } from "./PageFloatingLayer";
 import {
   ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+  APP_NAV_WIDTH_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
+  PAGE_AREA_CONTAINER_CLASS,
+  PAGE_END_ROOM_CLASS,
 } from "../lib/narrow-layout";
 
 const mockHealthApi = vi.hoisted(() => ({
@@ -55,9 +59,11 @@ const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 const sidebarState = vi.hoisted(() => ({ sidebarOpen: true, isMobile: false }));
 let currentPathname = "/PAP/dashboard";
 let currentCompanyPrefix = "PAP";
+// The page the Outlet draws, when a test needs one of its own.
+const outletState = vi.hoisted(() => ({ page: null as null | (() => ReactNode) }));
 
 vi.mock("@/lib/router", () => ({
-  Outlet: () => <div data-testid="outlet-content">Outlet content</div>,
+  Outlet: () => (outletState.page ? outletState.page() : <div data-testid="outlet-content">Outlet content</div>),
   useLocation: () => ({ pathname: currentPathname, search: "", hash: "", state: null }),
   useNavigate: () => mockNavigate,
   useNavigationType: () => "PUSH",
@@ -251,6 +257,7 @@ describe("Layout", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
+    outletState.page = null;
   });
 
   it("does not render the deployment explainer in the shared layout", async () => {
@@ -783,6 +790,179 @@ describe("Layout", () => {
     // could be dragged 25 pixels sideways, to 367 pixels and nothing to drag.
     expect(pageArea!.classList.contains("overflow-visible")).toBe(false);
 
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("makes the page area a size container, on a desktop and on a phone", async () => {
+    // Pages measured their columns against the window, so docked Clippy,
+    // which takes 420 pixels from the page without the window narrowing,
+    // squeezed four stat cards into columns of about 150 pixels. A container
+    // query measures the page area instead.
+    for (const isMobile of [false, true]) {
+      sidebarState.isMobile = isMobile;
+      const { root } = await renderLayout();
+      const pageArea = container.querySelector("#main-content");
+      expect(pageArea).not.toBeNull();
+      expect(pageArea!.classList.contains(PAGE_AREA_CONTAINER_CLASS)).toBe(true);
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("keeps room at the end of a desktop page that scrolls, under the Clippy launcher, and not on a phone", async () => {
+    // Scrolled to its end, the Pipelines "add items" page put its Submit
+    // button on the launcher. jsdom has no layout, so the page area is given
+    // a page taller than itself by hand, and a stand-in ResizeObserver reports
+    // the change, as it does when a page grows while its data loads.
+    const reportResize: Array<(entries: unknown[]) => void> = [];
+    class FakeResizeObserver {
+      constructor(callback: (entries: unknown[]) => void) {
+        reportResize.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    try {
+      for (const isMobile of [false, true]) {
+        sidebarState.isMobile = isMobile;
+        reportResize.length = 0;
+        const { root } = await renderLayout();
+
+        const pageArea = container.querySelector<HTMLElement>("#main-content")!;
+        for (const part of PAGE_END_ROOM_CLASS.split(" ")) {
+          expect(pageArea.classList.contains(part)).toBe(true);
+        }
+        expect(pageArea.dataset.pageEndRoom, "no room while the page fits").toBeUndefined();
+
+        // The page grows past the bottom of the page area.
+        Object.defineProperty(pageArea, "scrollHeight", { configurable: true, value: 1400 });
+        Object.defineProperty(pageArea, "clientHeight", { configurable: true, value: 800 });
+        await act(async () => {
+          for (const report of reportResize) report([]);
+        });
+
+        // A phone keeps room for its bottom bar and the launcher already.
+        expect(pageArea.dataset.pageEndRoom, isMobile ? "on a phone" : "on a desktop").toBe(
+          isMobile ? undefined : "true",
+        );
+
+        await act(async () => {
+          root.unmount();
+        });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("publishes the width of the rail and the navigation for the toasts to sit beside", async () => {
+    // At the left edge of the window a message covered the account button.
+    sidebarState.isMobile = false;
+    sidebarState.sidebarOpen = true;
+    const { root, render } = await renderLayout();
+    const shell = () => container.firstElementChild as HTMLElement;
+    expect(shell().style.getPropertyValue(APP_NAV_WIDTH_PROPERTY)).toBe("312px");
+
+    sidebarState.sidebarOpen = false;
+    await render();
+    expect(shell().style.getPropertyValue(APP_NAV_WIDTH_PROPERTY)).toBe("72px");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("publishes no navigation width on a phone, where the navigation is a drawer", async () => {
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const { root } = await renderLayout();
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.style.getPropertyValue(APP_NAV_WIDTH_PROPERTY)).toBe("");
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  /**
+   * Safari before 18.4 made a size container, which the page area is, the box
+   * that `position: fixed` elements inside it are placed against, so on an
+   * older iPhone the agent Save bar sat at the end of the page instead of at
+   * the bottom of the screen. A page's own fixed bars and buttons are drawn in
+   * a layer beside the page area (PageFloating) instead.
+   */
+  function pageWithSaveBar() {
+    return (
+      <>
+        <div data-testid="outlet-content">Outlet content</div>
+        <PageFloating>
+          <div data-testid="page-save-bar" className="fixed bottom-6">
+            Save
+          </div>
+        </PageFloating>
+      </>
+    );
+  }
+
+  it("draws a page's own fixed bar beside the page area, not inside it, on a desktop and on a phone", async () => {
+    outletState.page = pageWithSaveBar;
+    for (const isMobile of [false, true]) {
+      sidebarState.isMobile = isMobile;
+      const { root } = await renderLayout();
+
+      const pageArea = container.querySelector("#main-content")!;
+      const layer = container.querySelector(`[${PAGE_FLOATING_LAYER_ATTRIBUTE}]`);
+      const bar = container.querySelector('[data-testid="page-save-bar"]');
+      expect(layer, "Layout draws the layer").not.toBeNull();
+      expect(bar, "the page's bar is drawn").not.toBeNull();
+      expect(layer!.contains(bar)).toBe(true);
+      expect(pageArea.contains(bar)).toBe(false);
+      // Beside the page area, and taking no room of its own there.
+      expect(layer!.parentElement).toBe(pageArea.parentElement);
+      expect(layer!.classList.contains("contents")).toBe(true);
+      // The page itself stays in the page area.
+      expect(pageArea.querySelector('[data-testid="outlet-content"]')).not.toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("keeps a page's fixed bar with the page: out of reach behind full screen Clippy, and given the navigation's width", async () => {
+    outletState.page = pageWithSaveBar;
+    sidebarState.isMobile = false;
+    window.localStorage.setItem("paperclip.clippy.mode", "fullscreen");
+    const { root } = await renderLayout();
+    const bar = container.querySelector('[data-testid="page-save-bar"]')!;
+
+    // Inside the shell that publishes the navigation's width, which the bars
+    // centred along the bottom read (PAGE_BOTTOM_BAR_CENTER_CLASS).
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.style.getPropertyValue(APP_NAV_WIDTH_PROPERTY)).not.toBe("");
+    expect(shell.contains(bar)).toBe(true);
+    expect(bar.closest("[inert]")).toBeNull();
+
+    const launcher = document.querySelector<HTMLButtonElement>('button[aria-label^="Ask Clippy"]')!;
+    await act(async () => {
+      launcher.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    // Out of the keyboard's path together with the page, not left in front.
+    expect(container.querySelector("#main-content")!.closest("[inert]")).not.toBeNull();
+    expect(bar.closest("[inert]")).not.toBeNull();
+
+    window.localStorage.removeItem("paperclip.clippy.mode");
     await act(async () => {
       root.unmount();
     });

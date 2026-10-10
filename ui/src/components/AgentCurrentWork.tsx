@@ -168,8 +168,12 @@ export function AgentCurrentWork({
         />
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+      {/* The side column only where the page area has room for it (a
+          container query, see PAGE_AREA_CONTAINER_CLASS). Sized by the
+          window, docked Clippy left it about 150 pixels, a word or two to a
+          line. */}
+      <div className="grid gap-6 @[40rem]:grid-cols-3">
+        <div className="space-y-6 @[40rem]:col-span-2">
           <AgentActivityStream agent={agent} companyId={companyId} />
           <RecentOutputs
             runs={sortedRuns}
@@ -300,7 +304,7 @@ function CurrentTaskPanel({
         </Link>
       )}
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-xs @xl:grid-cols-4">
         <Fact label="Running for">
           {startedMs !== null && Number.isFinite(startedMs)
             ? formatElapsed(nowMs - startedMs)

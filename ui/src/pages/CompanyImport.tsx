@@ -1321,7 +1321,7 @@ export function CompanyImport() {
           )}
 
           {/* Two-column layout */}
-          <div className="grid h-[calc(100vh-16rem)] gap-0 xl:grid-cols-[19rem_minmax(0,1fr)]">
+          <div className="grid h-[calc(100vh-16rem)] gap-0 @4xl:grid-cols-[19rem_minmax(0,1fr)]">
             <aside className="flex flex-col border-r border-border overflow-hidden">
               <div className="border-b border-border px-4 py-3 shrink-0">
                 <h2 className="text-base font-semibold">Package files</h2>

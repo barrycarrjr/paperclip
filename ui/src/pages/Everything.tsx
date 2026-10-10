@@ -205,7 +205,10 @@ function EverythingSection({
     <div className="mb-8">
       <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
       {description && <p className="mt-1 text-xs text-muted-foreground">{description}</p>}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">{children}</div>
+      {/* Columns follow the room the page area has (container queries, see
+          PAGE_AREA_CONTAINER_CLASS). Sized by the window, docked Clippy left
+          four tiles of about 100 pixels, cut down to "Ov..." and "Att...". */}
+      <div className="mt-3 grid grid-cols-2 gap-2 @xl:grid-cols-3 @3xl:grid-cols-4">{children}</div>
     </div>
   );
 }

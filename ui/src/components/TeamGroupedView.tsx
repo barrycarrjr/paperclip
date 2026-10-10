@@ -219,7 +219,7 @@ function TeamGroupSection({
       </header>
 
       {open && hasMembers && (
-        <div className="grid grid-cols-1 gap-3 border-t border-border/60 p-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 border-t border-border/60 p-3 @md:grid-cols-2 @4xl:grid-cols-3">
           {section.memberRows.map((row) => (
             <TeamMemberCard
               key={row.agent.id}

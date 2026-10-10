@@ -543,10 +543,14 @@ export function MorningBrief() {
         </div>
       </section>
 
-      {/* Metric cards (absorbed from Dashboard) */}
+      {/* Metric cards (absorbed from Dashboard). Four across only where the
+          page area has the room (a container query, see
+          PAGE_AREA_CONTAINER_CLASS): sized by the window, docked Clippy left
+          four columns of about 150 pixels, with each label on two lines and
+          "0 running · 0 paused · 0 errors" cut off. */}
       {summary && (
         <section aria-label="Key metrics">
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 @4xl:grid-cols-4">
             <MetricCard
               icon={Bot}
               value={totalAgents}
@@ -870,7 +874,7 @@ export function MorningBrief() {
             </h2>
             <span className="text-[10px] text-muted-foreground/70">Last 14 days</span>
           </div>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 @[40rem]:grid-cols-4">
             <ChartCard title="Run Activity">
               <RunActivityChart activity={summary.runActivity} />
             </ChartCard>
