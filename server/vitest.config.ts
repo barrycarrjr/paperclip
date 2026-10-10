@@ -31,6 +31,11 @@ export default defineConfig({
       concurrent: false,
       hooks: "list",
     },
-    setupFiles: ["./src/__tests__/setup-supertest.ts", "./src/__tests__/setup-model-discovery.ts"],
+    globalSetup: ["./src/__tests__/global-setup-test-home.ts"],
+    setupFiles: [
+      "./src/__tests__/setup-test-home.ts",
+      "./src/__tests__/setup-supertest.ts",
+      "./src/__tests__/setup-model-discovery.ts",
+    ],
   },
 });
