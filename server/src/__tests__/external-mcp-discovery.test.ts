@@ -169,9 +169,11 @@ describe("external MCP discovery: one slow server must not stall the turn", () =
 
 describe("external MCP discovery: a failing server is not re-paid every turn", () => {
   it("stops asking a server that missed its deadline (cool-off)", async () => {
-    const listTools = vi.fn(async () => {
-      throw new ExternalMcpWarmingError("slow", 5_000);
-    });
+    const listTools = vi.fn(
+      async (_serverId: string, _companyId: string, _opts?: { deadlineMs?: number }) => {
+        throw new ExternalMcpWarmingError("slow", 5_000);
+      },
+    );
     const source = createExternalMcpToolSource(
       fakeDb([makeRow("slow")]),
       fakeManager({ listTools }),
@@ -181,8 +183,12 @@ describe("external MCP discovery: a failing server is not re-paid every turn", (
     await source.listToolsForCompany(COMPANY);
     await source.listToolsForCompany(COMPANY);
 
-    // Three turns, one attempt. The other two skipped the wait entirely.
-    expect(listTools).toHaveBeenCalledTimes(1);
+    // Three turns, one wait. The other two skipped it entirely. The only other
+    // call carries no deadline: it joins the same connect in the background so
+    // the tools are recorded when it lands, and no turn waits on it.
+    const waits = listTools.mock.calls.filter(([, , opts]) => opts?.deadlineMs !== undefined);
+    expect(waits).toHaveLength(1);
+    expect(listTools).toHaveBeenCalledTimes(2);
   });
 
   it("cools off on a hard error too, not just on a warming timeout", async () => {

@@ -20,6 +20,7 @@ import { createExternalMcpToolSource } from "../services/external-mcp-tool-sourc
 import {
   ExternalMcpAuthorizationError,
   ExternalMcpSecretResolutionError,
+  hasCompanyScopedBindings,
 } from "../services/external-mcp-secrets.js";
 
 function makeServer(overrides: Partial<ExternalMcpServerRecord> = {}): ExternalMcpServerRecord {
@@ -125,6 +126,40 @@ describe("ExternalMcpAuthorizationError / SecretResolutionError", () => {
     // the only callers we control build messages from binding name + reason,
     // never from the resolved plaintext.
     expect(err.message).not.toMatch(/super-secret-token/);
+  });
+});
+
+describe("hasCompanyScopedBindings", () => {
+  // Decides whether one company's tool list can stand for every company's,
+  // so a wrong "no" would show a company tools reached with another's secret.
+  it("counts a secret in the headers, not only in the env", () => {
+    const server = makeServer({
+      transport: "http",
+      url: "https://crm.example.test/mcp",
+      headerBindings: { Authorization: { type: "secret_ref", secretName: "CRM_TOKEN" } },
+    });
+    expect(hasCompanyScopedBindings(server)).toBe(true);
+  });
+
+  it("counts a secret in the env", () => {
+    const server = makeServer({ envBindings: { HA_TOKEN: { type: "secret_ref", secretId: "s-1" } } });
+    expect(hasCompanyScopedBindings(server)).toBe(true);
+  });
+
+  it("counts a binding type it does not know, so one added later is safe by default", () => {
+    const server = makeServer({
+      envBindings: { TOKEN: { type: "vault_ref", path: "kv/crm" } as never },
+    });
+    expect(hasCompanyScopedBindings(server)).toBe(true);
+  });
+
+  it("treats plain text as the same for every company", () => {
+    const server = makeServer({
+      envBindings: { MODE: "read-only", REGION: { type: "plain", value: "us-east-1" } },
+      headerBindings: { "X-Client": "paperclip" },
+    });
+    expect(hasCompanyScopedBindings(server)).toBe(false);
+    expect(hasCompanyScopedBindings(makeServer())).toBe(false);
   });
 });
 

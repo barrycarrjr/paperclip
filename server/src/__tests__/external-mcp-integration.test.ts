@@ -23,7 +23,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { companies, createDb, externalMcpServers } from "@paperclipai/db";
@@ -31,13 +31,40 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { createExternalMcpServerManager } from "../services/external-mcp-server-manager.js";
+import {
+  createExternalMcpServerManager,
+  ExternalMcpConfigChangedError,
+} from "../services/external-mcp-server-manager.js";
 import { createExternalMcpToolSource } from "../services/external-mcp-tool-source.js";
 import { secretService } from "../services/secrets.js";
+import { createGracefulShutdown } from "../graceful-shutdown.js";
 
 const FIXTURE_PATH = fileURLToPath(
   new URL("./fixtures/mock-mcp-server.mjs", import.meta.url),
 );
+
+async function waitUntil(done: () => boolean, ms: number): Promise<void> {
+  const by = Date.now() + ms;
+  while (!done() && Date.now() < by) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+function isAlive(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pids the fixture wrote to its spawn log, one per process started. */
+function spawnedPids(spawnLog: string): number[] {
+  if (!existsSync(spawnLog)) return [];
+  return readFileSync(spawnLog, "utf8").trim().split("\n").filter(Boolean).map(Number);
+}
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported
@@ -355,6 +382,149 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
     } finally {
       await generousManager.shutdown();
       await stingyManager.shutdown();
+    }
+  }, 90_000);
+
+  // -----------------------------------------------------------------------
+  // 9. An edit while a server is still starting. The process started with
+  //    the old settings is closed when its connect lands instead of becoming
+  //    the live client, and a call made after the edit starts a new process.
+  // -----------------------------------------------------------------------
+  it("closes a process that finishes starting after its server was edited", async () => {
+    const raceManager = createExternalMcpServerManager(db, { idleTimeoutMs: 60_000 });
+    const spawnLog = path.join(os.tmpdir(), `mcp-race-${randomUUID().slice(0, 8)}.log`);
+    const id = await insertServer({
+      key: `race-${randomUUID().slice(0, 8)}`,
+      allowedCompanies: [companyA],
+      envBindings: {
+        MOCK_MCP_SPAWN_LOG: { type: "plain", value: spawnLog },
+        MOCK_MCP_STARTUP_DELAY_MS: { type: "plain", value: "2000" },
+      },
+    });
+
+    try {
+      const beforeEdit = raceManager.listTools(id, companyA);
+      beforeEdit.catch(() => {});
+      // Spawned and still starting when the operator saves an edit.
+      await waitUntil(() => spawnedPids(spawnLog).length === 1, 15_000);
+      await raceManager.evict(id);
+      const afterEdit = raceManager.listTools(id, companyA);
+
+      await expect(beforeEdit).rejects.toBeInstanceOf(ExternalMcpConfigChangedError);
+      expect((await afterEdit).map((t) => t.name).sort()).toEqual([
+        "create_thing",
+        "echo",
+        "read_secret_env",
+      ]);
+      const [startedBeforeEdit, startedAfterEdit] = spawnedPids(spawnLog);
+      await waitUntil(() => !isAlive(startedBeforeEdit), 15_000);
+      expect(isAlive(startedBeforeEdit)).toBe(false);
+      expect(isAlive(startedAfterEdit)).toBe(true);
+      expect(raceManager.isReady(id, companyA)).toBe(true);
+    } finally {
+      await raceManager.shutdown();
+      rmSync(spawnLog, { force: true });
+    }
+  }, 90_000);
+
+  // -----------------------------------------------------------------------
+  // 10. A graceful stop closes a warmed server's process rather than leaving
+  //     it to outlive Paperclip.
+  // -----------------------------------------------------------------------
+  it("closes a warmed server's process on a graceful stop", async () => {
+    const stopManager = createExternalMcpServerManager(db, { idleTimeoutMs: 60_000 });
+    const spawnLog = path.join(os.tmpdir(), `mcp-stop-${randomUUID().slice(0, 8)}.log`);
+    const id = await insertServer({
+      key: `stop-${randomUUID().slice(0, 8)}`,
+      allowedCompanies: [companyA],
+      envBindings: { MOCK_MCP_SPAWN_LOG: { type: "plain", value: spawnLog } },
+    });
+
+    try {
+      await stopManager.listTools(id, companyA);
+      const [warmed] = spawnedPids(spawnLog);
+      expect(isAlive(warmed)).toBe(true);
+
+      let exitCode: number | undefined;
+      await createGracefulShutdown({
+        externalMcpServerManager: stopManager,
+        stopEmbeddedPostgres: async () => {},
+        exit: (code) => {
+          exitCode = code;
+        },
+      })("SIGTERM");
+
+      expect(exitCode).toBe(0);
+      expect(stopManager.isReady(id, companyA)).toBe(false);
+      await waitUntil(() => !isAlive(warmed), 15_000);
+      expect(isAlive(warmed)).toBe(false);
+    } finally {
+      await stopManager.shutdown();
+      rmSync(spawnLog, { force: true });
+    }
+  }, 90_000);
+
+  // -----------------------------------------------------------------------
+  // 11. Warm-up at start. One connect, as HQ (the migrations seed one),
+  //    records the tools of a server every company runs alike. Once that
+  //    client has idled out and nothing is connected, the other companies'
+  //    turns still list the tools straight away, from the kept list, while
+  //    their own clients start. Before, each of those turns waited 5s and
+  //    dropped them. Runs last: it empties the registry so the warm-up
+  //    covers one server.
+  // -----------------------------------------------------------------------
+  it("warms a portfolio-wide server once at start, and other companies list its tools while their own clients start", async () => {
+    await db.delete(externalMcpServers);
+    const idleManager = createExternalMcpServerManager(db, { idleTimeoutMs: 1_000 });
+    const source = createExternalMcpToolSource(db, idleManager);
+    const key = `warm-${randomUUID().slice(0, 8)}`;
+    const id = await insertServer({
+      key,
+      allowedCompanies: ["*"],
+      // Longer than the 5s discovery deadline, like a cold Docker gateway.
+      envBindings: { MOCK_MCP_STARTUP_DELAY_MS: { type: "plain", value: "6000" } },
+    });
+    const isConnected = (companyId: string) => idleManager.isReady(id, companyId);
+
+    try {
+      await source.warmUp();
+      // One connect, as HQ, for a server every company runs alike.
+      const everyCompany = await db
+        .select({ id: companies.id, isPortfolioRoot: companies.isPortfolioRoot })
+        .from(companies);
+      const warmedAs = everyCompany.filter((company) => isConnected(company.id));
+      expect(warmedAs).toHaveLength(1);
+      expect(warmedAs[0]?.isPortfolioRoot).toBe(true);
+      const hq = warmedAs[0]!.id;
+
+      await waitUntil(() => !isConnected(hq), 10_000);
+      expect(isConnected(hq)).toBe(false);
+
+      // Nothing is connected now, and these two companies never were.
+      for (const companyId of [companyA, companyB]) {
+        const startedAt = Date.now();
+        const names = (await source.listToolsForCompany(companyId))
+          .filter((t) => t.serverKey === key)
+          .map((t) => t.name)
+          .sort();
+        expect(names).toEqual(["create_thing", "echo", "read_secret_env"]);
+        // Not waited for: the deadline alone would be 5s.
+        expect(Date.now() - startedAt).toBeLessThan(2_500);
+      }
+
+      // Their own clients carry on starting in the background and land, so
+      // their tool calls have somewhere to go. Each stays connected only a
+      // second here, so note each one as it is seen.
+      const seen = new Set<string>();
+      await waitUntil(() => {
+        for (const companyId of [companyA, companyB]) {
+          if (isConnected(companyId)) seen.add(companyId);
+        }
+        return seen.size === 2;
+      }, 30_000);
+      expect(seen.size).toBe(2);
+    } finally {
+      await idleManager.shutdown();
     }
   }, 90_000);
 });

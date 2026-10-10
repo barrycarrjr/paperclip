@@ -9,6 +9,7 @@ function recorder() {
       startJobCoordinator: () => calls.push("coordinator"),
       startScheduler: () => calls.push("scheduler"),
       loadPlugins: () => calls.push("load"),
+      warmExternalMcpServers: () => calls.push("warm"),
       onSkipped: () => calls.push("skipped"),
     },
   };
@@ -23,10 +24,10 @@ describe("plugin runtime start-up", () => {
     expect(pluginRuntimeEnabledFromEnv({ PAPERCLIP_PLUGIN_RUNTIME_ENABLED: "false" })).toBe(false);
   });
 
-  it("starts the coordinator, the scheduler and the plugins when enabled", () => {
+  it("starts the coordinator, the scheduler, the plugins and the external MCP warm-up when enabled", () => {
     const { calls, steps } = recorder();
     expect(startPluginRuntime(true, steps)).toBe(true);
-    expect(calls).toEqual(["coordinator", "scheduler", "load"]);
+    expect(calls).toEqual(["coordinator", "scheduler", "load", "warm"]);
   });
 
   it("starts none of them when disabled, as on an update's trial start", () => {

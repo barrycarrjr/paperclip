@@ -62,7 +62,10 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { externalMcpServerRoutes } from "./routes/external-mcp-servers.js";
 import { pipelineRoutes } from "./routes/pipelines.js";
 import { caseRoutes } from "./routes/cases.js";
-import { createExternalMcpServerManager } from "./services/external-mcp-server-manager.js";
+import {
+  createExternalMcpServerManager,
+  type ExternalMcpServerManager,
+} from "./services/external-mcp-server-manager.js";
 import { createExternalMcpToolSource } from "./services/external-mcp-tool-source.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -167,6 +170,8 @@ export async function createApp(
     localPluginDir?: string;
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
+    /** Passed in so the caller can close its clients on a graceful stop. */
+    externalMcpServerManager?: ExternalMcpServerManager;
     heartbeatSchedulerEnabled?: boolean;
     /** False skips starting plugins; see plugin-runtime-startup.ts. Defaults to true. */
     pluginRuntimeEnabled?: boolean;
@@ -326,7 +331,7 @@ export async function createApp(
     jobStore,
     workerManager,
   });
-  const externalMcpManager = createExternalMcpServerManager(db);
+  const externalMcpManager = opts.externalMcpServerManager ?? createExternalMcpServerManager(db);
   const externalMcpSource = createExternalMcpToolSource(db, externalMcpManager);
   // Stops a retried plugin call that sends an email from sending it twice.
   const operationIdempotency = createPluginOperationIdempotencyStore(db);
@@ -589,6 +594,14 @@ export async function createApp(
         }
       }).catch((err) => {
         logger.error({ err }, "Failed to load ready plugins on startup");
+      });
+    },
+    // Connect external MCP servers now rather than on the first turn that
+    // needs them, so that turn is not missing their tools. In the background:
+    // a cold Docker MCP gateway takes most of a minute.
+    warmExternalMcpServers: () => {
+      void externalMcpSource.warmUp().catch((err) => {
+        logger.error({ err }, "Failed to warm up external MCP servers on startup");
       });
     },
     onSkipped: () => {
