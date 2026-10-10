@@ -5,7 +5,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { secretService } from "../services/secrets.js";
+import { normalizeSecretKey, secretService } from "../services/secrets.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -204,5 +204,27 @@ describeEmbeddedPostgres("secretService", () => {
         },
       }),
     ).rejects.toThrow(/Invalid environment binding for key: DOUBLED/);
+  });
+});
+
+describe("normalizeSecretKey", () => {
+  it("builds the same keys as before from ordinary names", () => {
+    expect(normalizeSecretKey("  Stripe Key!  ")).toBe("stripe-key");
+    expect(normalizeSecretKey("--OPENAI_API_KEY--")).toBe("openai_api_key");
+    expect(normalizeSecretKey("!!!")).toBe("");
+    expect(normalizeSecretKey("k".repeat(150))).toBe("k".repeat(120));
+  });
+
+  // The old pattern for the dashes at the end started again from every dash
+  // of a run, so its time grew with the square of the run's length: over ten
+  // seconds for this name, and far longer for the 30 MB a request may carry.
+  it("returns at once for a name with a very long run of dashes", () => {
+    const name = `a${"-".repeat(200_000)}b`;
+
+    const startedAt = performance.now();
+    const key = normalizeSecretKey(name);
+
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(key).toBe("a");
   });
 });

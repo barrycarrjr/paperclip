@@ -27,8 +27,12 @@ export const envBindingSchema = z.union([
 
 export const envConfigSchema = z.record(envBindingSchema);
 
+// Generous on purpose: the longest names Paperclip makes itself, for plugin
+// storage and environment secrets, run to about 100 characters.
+export const SECRET_NAME_MAX_LENGTH = 200;
+
 export const createSecretSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1).max(SECRET_NAME_MAX_LENGTH),
   provider: z.enum(SECRET_PROVIDERS).optional(),
   value: z.string().min(1),
   description: z.string().optional().nullable(),
@@ -45,7 +49,7 @@ export const rotateSecretSchema = z.object({
 export type RotateSecret = z.infer<typeof rotateSecretSchema>;
 
 export const updateSecretSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(SECRET_NAME_MAX_LENGTH).optional(),
   description: z.string().optional().nullable(),
   externalRef: z.string().optional().nullable(),
 });
