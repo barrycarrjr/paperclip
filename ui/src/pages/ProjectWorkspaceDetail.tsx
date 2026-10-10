@@ -14,6 +14,7 @@ import {
 } from "../components/WorkspaceRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { queryKeys } from "../lib/queryKeys";
 import { projectRouteRef, projectWorkspaceUrl } from "../lib/utils";
 
@@ -284,9 +285,10 @@ export function ProjectWorkspaceDetail() {
     }
   };
 
-  const updateWorkspace = useMutation({
+  const updateWorkspace = useSaveMutation({
     mutationFn: (patch: Record<string, unknown>) =>
       projectsApi.updateWorkspace(project!.id, routeWorkspaceId, patch, lookupCompanyId),
+    successMessage: "Workspace saved",
     onSuccess: () => {
       invalidateProject();
       setErrorMessage(null);

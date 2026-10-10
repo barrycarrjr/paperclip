@@ -257,6 +257,10 @@ Standard `<table>` with `text-xs`, header row with `bg-accent/20`, `font-mono` f
 
 Use `InlineEditor` component — click text to edit, Enter saves, Escape cancels.
 
+### Saving
+
+Every save, update or create the person asks for must say that it worked. Build the mutation with `useSaveMutation` (`ui/src/hooks/useSaveMutation.ts`) and give it a short, specific `successMessage` such as "Profile saved"; it shows as a success toast. A failure must be shown too: keep the page's own error display, or set `errorMessage` where there is none. Controls whose result is already visible (a toggle, an inline editor, a dialog that closes) need no extra message. Inside a modal dialog or sheet that stays open, say it in the dialog with an always-present `role="status"` line, not a toast: the dialog hides toasts from screen readers, and clicking one closes the dialog.
+
 ### Popover Selectors
 
 StatusIcon and PriorityIcon use Radix Popover for inline selection. Follow this pattern for any clickable property that opens a picker.
@@ -349,3 +353,4 @@ All components use `cn()` from `@/lib/utils` for className merging. All componen
 - Using `shadow-md` or heavier — keep shadows minimal (xs, sm only)
 - Using `rounded-2xl` or larger — max is `rounded-xl` (except `rounded-full` for pills)
 - Forgetting dark mode — always use semantic tokens, never hardcode light/dark values
+- A Save button that shows nothing when the save works, or a save that fails silently. Use `useSaveMutation` (see Saving above)

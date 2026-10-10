@@ -24,6 +24,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useSaveConfirmation } from "../hooks/useSaveMutation";
 import { queryKeys } from "../lib/queryKeys";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { cn } from "../lib/utils";
@@ -142,6 +143,9 @@ export function InstanceGeneralSettings() {
       setActionError(error instanceof Error ? error.message : "Failed to update general settings.");
     },
   });
+  // The toggles and option buttons on this page show their own new state, so
+  // only the address form, whose inputs look the same after a save, says so.
+  const { confirmSaved, withdrawSaved } = useSaveConfirmation();
 
   // Editable copies of the self-address lists, seeded once from the loaded
   // settings so typing isn't clobbered by query refreshes.
@@ -179,16 +183,22 @@ export function InstanceGeneralSettings() {
     generalQuery.data?.emailHandoffReplyApproval ?? DEFAULT_EMAIL_HANDOFF_REPLY_APPROVAL;
   const selfNotify: SelfNotifySettings = generalQuery.data?.selfNotify ?? DEFAULT_SELF_NOTIFY_SETTINGS;
 
-  const saveSelfNotify = (patch: Partial<SelfNotifySettings>) => {
-    updateGeneralMutation.mutate({
-      selfNotify: {
-        skipApproval: selfNotify.skipApproval,
-        slackUserIds: selfNotify.slackUserIds,
-        emails: selfNotify.emails,
-        phoneNumbers: selfNotify.phoneNumbers,
-        ...patch,
+  const saveSelfNotify = (
+    patch: Partial<SelfNotifySettings>,
+    outcome?: { onSuccess?: () => void; onError?: () => void },
+  ) => {
+    updateGeneralMutation.mutate(
+      {
+        selfNotify: {
+          skipApproval: selfNotify.skipApproval,
+          slackUserIds: selfNotify.slackUserIds,
+          emails: selfNotify.emails,
+          phoneNumbers: selfNotify.phoneNumbers,
+          ...patch,
+        },
       },
-    });
+      outcome,
+    );
   };
 
   return (
@@ -425,11 +435,14 @@ export function InstanceGeneralSettings() {
               disabled={updateGeneralMutation.isPending || selfAddressDraft === null}
               onClick={() => {
                 if (!selfAddressDraft) return;
-                saveSelfNotify({
-                  slackUserIds: parseAddressList(selfAddressDraft.slackUserIds),
-                  emails: parseAddressList(selfAddressDraft.emails),
-                  phoneNumbers: parseAddressList(selfAddressDraft.phoneNumbers),
-                });
+                saveSelfNotify(
+                  {
+                    slackUserIds: parseAddressList(selfAddressDraft.slackUserIds),
+                    emails: parseAddressList(selfAddressDraft.emails),
+                    phoneNumbers: parseAddressList(selfAddressDraft.phoneNumbers),
+                  },
+                  { onSuccess: () => confirmSaved("Your addresses saved"), onError: withdrawSaved },
+                );
               }}
             >
               {updateGeneralMutation.isPending ? "Saving…" : "Save my addresses"}

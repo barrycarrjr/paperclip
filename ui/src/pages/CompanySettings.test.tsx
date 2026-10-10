@@ -42,6 +42,18 @@ const mockSecretsApi = vi.hoisted(() => ({
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
+// One list for every render, as the real context gives. A fresh list each
+// render made the page reset its form fields on every render.
+const mockCompanies = vi.hoisted(() => [
+  {
+    id: "company-1",
+    name: "Paperclip",
+    description: null,
+    brandColor: null,
+    logoUrl: null,
+    issuePrefix: "PAP",
+  },
+]);
 
 vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
@@ -77,19 +89,15 @@ vi.mock("../context/ToastContext", () => ({
   useToast: () => ({
     pushToast: mockPushToast,
   }),
+  useOptionalToastActions: () => ({
+    pushToast: mockPushToast,
+  }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
-    companies: [{ id: "company-1", name: "Paperclip", issuePrefix: "PAP" }],
-    selectedCompany: {
-      id: "company-1",
-      name: "Paperclip",
-      description: null,
-      brandColor: null,
-      logoUrl: null,
-      issuePrefix: "PAP",
-    },
+    companies: mockCompanies,
+    selectedCompany: mockCompanies[0],
     selectedCompanyId: "company-1",
     setSelectedCompanyId: mockSetSelectedCompanyId,
   }),
@@ -114,6 +122,12 @@ async function flushReact() {
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("CompanySettings", () => {
@@ -253,6 +267,58 @@ describe("CompanySettings", () => {
     const templateInput = Array.from(container.querySelectorAll("input"))
       .find((input) => (input as HTMLInputElement).value === "saved-template") as HTMLInputElement | undefined;
     expect(templateInput?.value).toBe("saved-template");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("says the company settings were saved, and does not call a later edit saved", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <CompanySettings />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const nameInput = Array.from(container.querySelectorAll("input"))
+      .find((input) => input.value === "Paperclip") as HTMLInputElement;
+    await act(async () => {
+      setInputValue(nameInput, "Pat Co");
+    });
+    const saveButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Save changes") as HTMLButtonElement;
+    await act(async () => {
+      saveButton.click();
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockCompaniesApi.update.mock.calls[0]?.[1]).toEqual({
+      name: "Pat Co",
+      description: null,
+      brandColor: null,
+    });
+    expect(mockPushToast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Company settings saved", tone: "success" }),
+    );
+
+    // An edit made after the save has not been saved yet, so nothing may say
+    // it has. The old inline "Saved" stayed up for every later edit.
+    await act(async () => {
+      setInputValue(nameInput, "Pat Co 2");
+    });
+    expect(Array.from(container.querySelectorAll("span")).some((span) => span.textContent === "Saved")).toBe(false);
 
     await act(async () => {
       root.unmount();

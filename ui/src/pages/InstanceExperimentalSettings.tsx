@@ -7,6 +7,7 @@ import type {
 } from "@paperclipai/shared";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useSaveConfirmation, useSaveMutation } from "../hooks/useSaveMutation";
 import { queryKeys } from "../lib/queryKeys";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { Button } from "@/components/ui/button";
@@ -152,6 +153,9 @@ export function InstanceExperimentalSettings() {
       setActionError(error instanceof Error ? error.message : "Failed to update experimental settings.");
     },
   });
+  // The toggles show their own new state; "Save hours" only greys out, so it
+  // says so.
+  const { confirmSaved, withdrawSaved } = useSaveConfirmation();
 
   const previewMutation = useMutation({
     mutationFn: async (lookbackHours: number) =>
@@ -166,9 +170,14 @@ export function InstanceExperimentalSettings() {
     },
   });
 
-  const runRecoveryMutation = useMutation({
+  const runRecoveryMutation = useSaveMutation({
     mutationFn: async (lookbackHours: number) =>
       instanceSettingsApi.runIssueGraphLivenessAutoRecovery({ lookbackHours }),
+    // The tasks it creates are not listed on this page, so say how many.
+    successMessage: (result) =>
+      result.escalationsCreated === 0
+        ? "No new recovery tasks created"
+        : `Created ${result.escalationsCreated} recovery ${result.escalationsCreated === 1 ? "task" : "tasks"}`,
     onSuccess: async () => {
       setActionError(null);
       setPreviewDialogOpen(false);
@@ -364,9 +373,10 @@ export function InstanceExperimentalSettings() {
                     setActionError("Lookback hours must be a whole number from 1 to 720.");
                     return;
                   }
-                  toggleMutation.mutate({
-                    issueGraphLivenessAutoRecoveryLookbackHours: parsedLookbackHours,
-                  });
+                  toggleMutation.mutate(
+                    { issueGraphLivenessAutoRecoveryLookbackHours: parsedLookbackHours },
+                    { onSuccess: () => confirmSaved("Lookback hours saved"), onError: withdrawSaved },
+                  );
                 }}
                 disabled={recoveryActionPending || parsedLookbackHours === lookbackHours}
               >

@@ -672,3 +672,74 @@ describe("SkillStudio editor frontmatter", () => {
     expect(staleForkLink).toBeUndefined();
   });
 });
+
+/**
+ * The version sheet is modal, so it hides toasts from screen readers and a
+ * click on one closes it. A restore says what happened inside the sheet.
+ */
+describe("SkillStudio version history", () => {
+  const OLD_VERSION = {
+    id: "version-2",
+    revisionNumber: 2,
+    label: null,
+    createdAt: new Date("2026-01-03T00:00:00Z"),
+    fileInventory: [{ path: "SKILL.md", content: "# Old Demo Skill\n", encoding: "utf8", executable: false }],
+  };
+
+  beforeEach(() => {
+    routeState.pathname = "/skills/studio/source-skill";
+    routeState.search = "";
+    routeState.skillId = "source-skill";
+    mockCompanySkillsApi.versions.mockResolvedValue([OLD_VERSION]);
+  });
+
+  /** Opens the sheet and returns its status line, taken before any restore. */
+  async function openVersionHistory(node: HTMLElement) {
+    let historyButton: HTMLButtonElement | undefined;
+    await waitFor(() => {
+      historyButton = buttonsNamed(node, "Version history")[0];
+      expect(historyButton).toBeTruthy();
+    });
+    await click(historyButton as HTMLButtonElement);
+
+    let restoreButton: HTMLButtonElement | undefined;
+    await waitFor(() => {
+      restoreButton = buttonsNamed(document.body, "Restore as v3")[0];
+      expect(restoreButton).toBeTruthy();
+    });
+    const status = document.querySelector('[role="dialog"] [role="status"]') as HTMLElement | null;
+    expect(status, "the status line is in the sheet before any restore").not.toBeNull();
+    expect(status?.textContent).toBe("");
+    return { restoreButton: restoreButton as HTMLButtonElement, status: status as HTMLElement };
+  }
+
+  it("says inside the sheet which version a restore made", async () => {
+    mockCompanySkillsApi.createVersion.mockResolvedValueOnce({ id: "version-3", revisionNumber: 3 });
+    const node = await renderStudio();
+    const { restoreButton, status } = await openVersionHistory(node);
+
+    await click(restoreButton);
+
+    await waitFor(() => expect(status.textContent).toBe("Restored as v3."));
+    expect(mockCompanySkillsApi.updateFile).toHaveBeenCalledWith(
+      "company-1",
+      "source-skill",
+      "SKILL.md",
+      "# Old Demo Skill\n",
+      { encoding: "utf8", executable: false },
+    );
+  });
+
+  it("says inside the sheet why a restore failed, where it used to say nothing", async () => {
+    mockCompanySkillsApi.updateFile.mockRejectedValueOnce(new Error("The skill folder is read only."));
+    const node = await renderStudio();
+    const { restoreButton, status } = await openVersionHistory(node);
+
+    await click(restoreButton);
+
+    await waitFor(() =>
+      expect(status.textContent).toBe("Couldn't restore version. The skill folder is read only."),
+    );
+    expect(mockCompanySkillsApi.createVersion).not.toHaveBeenCalled();
+  });
+});
