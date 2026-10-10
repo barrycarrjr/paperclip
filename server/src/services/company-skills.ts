@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companySkills } from "@paperclipai/db";
 import { readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
@@ -29,7 +29,7 @@ import type {
 } from "@paperclipai/shared";
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { notFound, unprocessable } from "../errors.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -78,6 +78,8 @@ type CompanySkillReferenceRow = Pick<
   | "slug"
 >;
 type SkillReferenceTarget = Pick<CompanySkill, "id" | "key" | "slug">;
+type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type DbOrTransaction = Db | DbTransaction;
 type SkillSourceInfoTarget = Pick<
   CompanySkill,
   | "companyId"
@@ -1717,8 +1719,8 @@ export function companySkillService(db: Db) {
     return row ? toCompanySkill(row) : null;
   }
 
-  async function getByKey(companyId: string, key: string) {
-    const row = await db
+  async function getByKey(companyId: string, key: string, database: DbOrTransaction = db) {
+    const row = await database
       .select(selectCompanySkillColumns())
       .from(companySkills)
       .where(and(eq(companySkills.companyId, companyId), eq(companySkills.key, key)))
@@ -1852,13 +1854,16 @@ export function companySkillService(db: Db) {
     };
   }
 
-  async function createLocalSkill(companyId: string, input: CompanySkillCreateRequest): Promise<CompanySkill> {
+  async function createLocalSkill(
+    companyId: string,
+    input: CompanySkillCreateRequest,
+    options: { replaceSkillId?: string | null } = {},
+  ): Promise<CompanySkill> {
     const slug = normalizeSkillSlug(input.slug ?? input.name) ?? "skill";
+    const key = `company/${companyId}/${slug}`;
     const managedRoot = resolveManagedSkillsRoot(companyId);
     const skillDir = path.resolve(managedRoot, slug);
     const skillFilePath = path.resolve(skillDir, "SKILL.md");
-
-    await fs.mkdir(skillDir, { recursive: true });
 
     const markdown = (input.markdown?.trim().length
       ? input.markdown
@@ -1873,26 +1878,53 @@ export function companySkillService(db: Db) {
         input.description?.trim() ? input.description.trim() : "Describe what this skill does.",
         "",
       ].join("\n"));
-
-    await fs.writeFile(skillFilePath, markdown, "utf8");
-
     const parsed = parseFrontmatterMarkdown(markdown);
-    const imported = await upsertImportedSkills(companyId, [{
-      key: `company/${companyId}/${slug}`,
-      slug,
-      name: asString(parsed.frontmatter.name) ?? input.name,
-      description: asString(parsed.frontmatter.description) ?? input.description?.trim() ?? null,
-      markdown,
-      sourceType: "local_path",
-      sourceLocator: skillDir,
-      sourceRef: null,
-      trustLevel: "markdown_only",
-      compatibility: "compatible",
-      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
-      metadata: { sourceKind: "managed_local" },
-    }]);
 
-    return imported[0]!;
+    // The checks and the write run in one transaction that first locks this
+    // company and slug, so a second create of the same slug waits, then finds
+    // the skill the first one made instead of writing over it.
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${companyId}:${slug}`}, 0))`);
+
+      // Only the skill named in replaceSkillId (a template redeploy) may be
+      // replaced. A slug that any other skill has is refused.
+      const existing = await getByKey(companyId, key, tx);
+      if (existing && existing.id !== options.replaceSkillId) {
+        throw conflict(`A company skill with slug "${slug}" already exists.`);
+      }
+      // So is a folder already there that is not the replaced skill's own: one
+      // left by a deleted skill would hand its leftover files to agents, and
+      // one another skill was imported from would get its SKILL.md written over.
+      const folderExists = (await statPath(skillDir)) !== null;
+      const ownFolder = existing !== null && normalizeSkillDirectory(existing) === skillDir;
+      if (folderExists && !ownFolder) {
+        throw conflict(`A skill folder named "${slug}" already exists. Choose another slug.`);
+      }
+
+      try {
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(skillFilePath, markdown, "utf8");
+        const imported = await upsertImportedSkills(companyId, [{
+          key,
+          slug,
+          name: asString(parsed.frontmatter.name) ?? input.name,
+          description: asString(parsed.frontmatter.description) ?? input.description?.trim() ?? null,
+          markdown,
+          sourceType: "local_path",
+          sourceLocator: skillDir,
+          sourceRef: null,
+          trustLevel: "markdown_only",
+          compatibility: "compatible",
+          fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+          metadata: { sourceKind: "managed_local" },
+        }], tx);
+        return imported[0]!;
+      } catch (error) {
+        // A folder made here is taken away again, or it would block this slug.
+        if (!folderExists) await fs.rm(skillDir, { recursive: true, force: true }).catch(() => {});
+        throw error;
+      }
+    });
   }
 
   async function updateFile(companyId: string, skillId: string, relativePath: string, content: string): Promise<CompanySkillFileDetail> {
@@ -2337,10 +2369,14 @@ export function companySkillService(db: Db) {
     return out;
   }
 
-  async function upsertImportedSkills(companyId: string, imported: ImportedSkill[]): Promise<CompanySkill[]> {
+  async function upsertImportedSkills(
+    companyId: string,
+    imported: ImportedSkill[],
+    database: DbOrTransaction = db,
+  ): Promise<CompanySkill[]> {
     const out: CompanySkill[] = [];
     for (const skill of imported) {
-      const existing = await getByKey(companyId, skill.key);
+      const existing = await getByKey(companyId, skill.key, database);
       const existingMeta = existing ? getSkillMeta(existing) : {};
       const incomingMeta = skill.metadata && isPlainRecord(skill.metadata) ? skill.metadata : {};
       const incomingOwner = asString(incomingMeta.owner);
@@ -2378,13 +2414,13 @@ export function companySkillService(db: Db) {
         updatedAt: new Date(),
       };
       const row = existing
-        ? await db
+        ? await database
           .update(companySkills)
           .set(values)
           .where(eq(companySkills.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null)
-        : await db
+        : await database
           .insert(companySkills)
           .values(values)
           .returning()
