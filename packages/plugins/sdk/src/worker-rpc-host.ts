@@ -158,6 +158,13 @@ export interface WorkerRpcHostOptions {
    * Defaults to 30 000 ms.
    */
   rpcTimeoutMs?: number;
+
+  /**
+   * Timeout (ms) for the `system.createSnapshot` call, which is much slower
+   * than other host calls. Defaults to the `PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS`
+   * environment variable, then 120 000 ms.
+   */
+  snapshotRpcTimeoutMs?: number;
 }
 
 /**
@@ -198,6 +205,21 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const CHAT_TURN_RPC_TIMEOUT_MS = 15 * 60_000;
 /** An approval decision re-dispatches the drafted outbound call before answering. */
 const APPROVAL_RESPOND_RPC_TIMEOUT_MS = 2 * 60_000;
+/** Default for `system.createSnapshot`: the host archives the whole database, which outgrew 30s. */
+export const DEFAULT_SNAPSHOT_RPC_TIMEOUT_MS = 2 * 60_000;
+/** Environment variable that overrides the snapshot call timeout (milliseconds). */
+export const SNAPSHOT_RPC_TIMEOUT_ENV = "PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS";
+
+/** Resolve the `system.createSnapshot` timeout: explicit option, then env var, then the default. */
+export function resolveSnapshotRpcTimeoutMs(
+  override?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (typeof override === "number" && Number.isFinite(override) && override > 0) return override;
+  const fromEnv = Number(env[SNAPSHOT_RPC_TIMEOUT_ENV]);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return DEFAULT_SNAPSHOT_RPC_TIMEOUT_MS;
+}
 
 // ---------------------------------------------------------------------------
 // startWorkerRpcHost
@@ -279,6 +301,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   const stdinStream = options.stdin ?? process.stdin;
   const stdoutStream = options.stdout ?? process.stdout;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+  const snapshotRpcTimeoutMs = resolveSnapshotRpcTimeoutMs(options.snapshotRpcTimeoutMs);
 
   // -----------------------------------------------------------------------
   // State
@@ -550,7 +573,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
 
       system: {
         async createSnapshot() {
-          return callHost("system.createSnapshot", {} as Record<string, never>);
+          return callHost(
+            "system.createSnapshot",
+            {} as Record<string, never>,
+            snapshotRpcTimeoutMs,
+          );
         },
         async releaseSnapshot(filePath: string): Promise<void> {
           await callHost("system.releaseSnapshot", { filePath });
