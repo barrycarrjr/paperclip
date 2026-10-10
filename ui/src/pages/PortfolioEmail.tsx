@@ -56,6 +56,7 @@ import {
 } from "../lib/mailboxTriageOverrides";
 import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
 import { cn, ellipsize } from "../lib/utils";
+import { Z_PAGE_NOTICE } from "../lib/z-layers";
 
 const MAX_SENDER_CHARS = 60;
 const MAX_SUBJECT_CHARS = 80;
@@ -749,8 +750,11 @@ export function PortfolioEmail() {
       {actionToast && (
         <div
           role={actionToast.failed ? "alert" : "status"}
+          // The page-notice layer, not z-50 (the dialog layer), where it drew
+          // over the Clippy window. See lib/z-layers.
           className={cn(
-            "fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            "fixed bottom-4 right-4 flex items-center gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            Z_PAGE_NOTICE,
             actionToast.failed
               ? "bg-destructive text-destructive-foreground"
               : "bg-foreground text-background",

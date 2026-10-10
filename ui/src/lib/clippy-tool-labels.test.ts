@@ -4,6 +4,7 @@ import {
   draftedApprovalId,
   formatCountdown,
   formatElapsed,
+  summarizeToolStep,
   toolInputSummary,
   toolResultPreview,
 } from "./clippy-tool-labels";
@@ -125,6 +126,56 @@ describe("toolResultPreview", () => {
   });
   it("stringifies objects", () => {
     expect(toolResultPreview({ id: "iss-9" })).toBe('{"id":"iss-9"}');
+  });
+});
+
+describe("summarizeToolStep", () => {
+  it("says what a finished step did, with the issue it made", () => {
+    expect(
+      summarizeToolStep("create_issue", { title: "Send the IRS letter" }, "done", {
+        ok: true,
+        identifier: "HQ-1",
+        title: "Send the IRS letter",
+      }),
+    ).toEqual({ text: "Created issue", issueIdentifier: "HQ-1", detail: "Send the IRS letter" });
+  });
+
+  it("counts what a lookup found", () => {
+    expect(summarizeToolStep("list_issues", {}, "done", [{ id: 1 }, { id: 2 }, { id: 3 }])).toEqual({
+      text: "Looked up issues",
+      detail: "3 found",
+    });
+    expect(summarizeToolStep("list_agents", {}, "done", { agents: [{ id: 1 }] }).detail).toBe("1 found");
+  });
+
+  it("names the memory a memory step was about", () => {
+    expect(summarizeToolStep("remember", { name: "Pat prefers short answers" }, "done", { ok: true })).toEqual({
+      text: "Remembered",
+      detail: "Pat prefers short answers",
+    });
+  });
+
+  it("keeps a short sentence the tool answered with, and leaves raw data out", () => {
+    expect(summarizeToolStep("create_reminder", {}, "done", "Reminder set for Friday 9:00").detail).toBe(
+      "Reminder set for Friday 9:00",
+    );
+    expect(summarizeToolStep("get_issue", {}, "done", { ok: true, internalId: "x" }).detail).toBeUndefined();
+  });
+
+  it("words a failed, denied, interrupted and running step plainly", () => {
+    expect(summarizeToolStep("create_issue", {}, "failed", "[E_FORBIDDEN] Not allowed in this company\nmore")).toEqual({
+      text: "Could not create an issue",
+      detail: "Not allowed in this company",
+    });
+    expect(summarizeToolStep("create_issue", {}, "denied")).toEqual({ text: "Did not create an issue", detail: "you said no" });
+    expect(summarizeToolStep("get_issue", {}, "interrupted")).toEqual({ text: "Look up an issue", detail: "no result" });
+    expect(summarizeToolStep("list_issues", {}, "running")).toEqual({ text: "Look up issues…" });
+  });
+
+  it("uses the plugin tool's own name for a plugin step", () => {
+    expect(summarizeToolStep("3cx-tools__pbx_click_to_call", { number: "555" }, "done", { ok: true }).text).toBe(
+      "Pbx click to call",
+    );
   });
 });
 

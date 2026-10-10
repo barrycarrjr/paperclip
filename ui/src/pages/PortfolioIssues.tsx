@@ -31,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { Z_PAGE_FLOATING } from "../lib/z-layers";
 
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ISSUE_STATUSES.filter(
   (s) => s !== "done" && s !== "cancelled",
@@ -416,7 +417,9 @@ function BulkActionsBar({
   }, [labelRows]);
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5">
+    // Page content, so the page-floating layer: on z-50 (the dialog layer) it
+    // drew over the Clippy window. See lib/z-layers.
+    <div className={cn("fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", Z_PAGE_FLOATING)}>
       <span className="text-sm font-medium text-muted-foreground mr-1">
         {count} selected
       </span>

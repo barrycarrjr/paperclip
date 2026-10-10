@@ -117,4 +117,25 @@ describe("clippyStreamManager", () => {
     expect(globalListener).toHaveBeenCalled();
     unsubscribe();
   });
+
+  it("names a chat with an action waiting, so Clippy can take the person to it", () => {
+    const quiet = freshSession();
+    const waiting = freshSession();
+    clippyStreamManager.startTurn(quiet, "hi", []);
+    clippyStreamManager.startTurn(waiting, "hi", []);
+    expect(clippyStreamManager.firstSessionWithPendingAction()).not.toBe(waiting);
+
+    handles.at(-1)!.onEvent({
+      type: "permission_required",
+      toolUseId: "tu-2",
+      name: "create_issue",
+      input: {},
+      ttlMs: 60_000,
+    });
+    expect(clippyStreamManager.firstSessionWithPendingAction()).toBe(waiting);
+
+    clippyStreamManager.disposeSession(waiting);
+    clippyStreamManager.disposeSession(quiet);
+    expect(clippyStreamManager.firstSessionWithPendingAction()).not.toBe(waiting);
+  });
 });

@@ -162,6 +162,7 @@ import {
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
 } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
+import { Z_PAGE_NOTICE } from "../lib/z-layers";
 import {
   applyImapOverrides,
   imapMailboxScope,
@@ -3488,8 +3489,11 @@ export function Email() {
       {actionToast && (
         <div
           role={actionToast.failed ? "alert" : "status"}
+          // The page-notice layer, not z-50 (the dialog layer), where it drew
+          // over the Clippy window. See lib/z-layers.
           className={cn(
-            "fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            "fixed bottom-4 right-4 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
+            Z_PAGE_NOTICE,
             actionToast.failed
               ? "bg-destructive text-destructive-foreground"
               : "bg-foreground text-background",

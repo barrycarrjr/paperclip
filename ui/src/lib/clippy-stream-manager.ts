@@ -118,6 +118,14 @@ export const clippyStreamManager = {
     return count;
   },
 
+  /** A chat with an action waiting on the person, to take them to it; null when none is. */
+  firstSessionWithPendingAction(): string | null {
+    for (const [sessionId, state] of states) {
+      if (state.pendingPermissions.length > 0) return sessionId;
+    }
+    return null;
+  },
+
   setRefreshCallbacks(sessionId: string, callbacks: RefreshCallbacks) {
     refreshCallbacks.set(sessionId, callbacks);
   },

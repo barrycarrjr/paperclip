@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   chatApi,
   type ChatContentBlock,
@@ -42,6 +42,66 @@ export interface UseChatSessionResult {
 
 const EMPTY_STATE: SessionStreamState = EMPTY_STREAM_STATE;
 
+/**
+ * What the stream manager pokes when the server says something changed: the
+ * chat's messages and its own record (a first turn renames it), and the chat
+ * lists once the turn is over.
+ */
+export function clippyRefreshCallbacks(qc: QueryClient, sessionId: string) {
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["clippy", "messages", sessionId] });
+    qc.invalidateQueries({ queryKey: ["clippy", "session", sessionId] });
+  };
+  return {
+    onMessage: refresh,
+    onDone: () => {
+      refresh();
+      qc.invalidateQueries({ queryKey: ["clippy", "sessions"] });
+    },
+  };
+}
+
+/**
+ * Put the person's message on screen straight away and start the turn.
+ * Resolves as soon as the turn has started, with `done` for when it ends.
+ *
+ * `done` comes back inside an object on purpose. An async function that
+ * returns a promise directly hands back that promise's own result, so
+ * awaiting this would have waited for the whole reply, and a chat made by its
+ * first send only opened once the reply had finished.
+ *
+ * Any fetch of the messages still in flight is cancelled first. A chat made
+ * by its first send is opened while that message goes out, and its first
+ * fetch can answer "no messages yet" after the message was written here,
+ * which wiped it off the screen until the reply arrived.
+ */
+export async function beginClippyTurn(
+  qc: QueryClient,
+  sessionId: string,
+  text: string,
+  attachmentIds: string[],
+): Promise<{ done: Promise<void> }> {
+  const messagesKey = ["clippy", "messages", sessionId];
+  await qc.cancelQueries({ queryKey: messagesKey });
+  // Optimistically add the user message so it renders immediately. The
+  // canonical version replaces it once `message_completed` fires and the
+  // refresh callback re-pulls messages.
+  const optimisticBlocks: ChatContentBlock[] = [];
+  if (text.length > 0) optimisticBlocks.push({ type: "text", text });
+  qc.setQueryData<ChatMessage[] | undefined>(messagesKey, (prev) => [
+    ...(prev ?? []),
+    {
+      id: `optimistic-user-${Date.now()}`,
+      sessionId,
+      role: "user",
+      content: optimisticBlocks,
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const handle = clippyStreamManager.startTurn(sessionId, text, attachmentIds);
+  return { done: handle.done };
+}
+
 export function useChatSession(sessionId: string | null): UseChatSessionResult {
   const qc = useQueryClient();
   const sessionQuery = useQuery({
@@ -55,9 +115,10 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
     enabled: !!sessionId,
   });
 
-  // Subscribe to the cross-window stream manager. The manager owns the SSE
-  // connection so it survives drawer unmounts (e.g. when the user pops out
-  // mid-stream) and is mirrored to other windows over BroadcastChannel.
+  // Subscribe to the stream manager. The manager owns the SSE connection, so
+  // it survives this hook unmounting (closing Clippy, switching its layout).
+  // It is not shared with other browser windows: a pop-out cannot see a turn
+  // this window is streaming, which is why pop-out waits for it to finish.
   const subscribe = useCallback(
     (listener: () => void) => {
       if (!sessionId) return () => {};
@@ -71,28 +132,12 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
   }, [sessionId]);
   const streamState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const refresh = useCallback(() => {
-    if (!sessionId) return;
-    qc.invalidateQueries({ queryKey: ["clippy", "messages", sessionId] });
-    qc.invalidateQueries({ queryKey: ["clippy", "session", sessionId] });
-  }, [qc, sessionId]);
-
-  const refreshSessionsList = useCallback(() => {
-    qc.invalidateQueries({ queryKey: ["clippy", "sessions"] });
-  }, [qc]);
-
   // Register the refresh hooks so the manager can poke react-query when
   // server-side state changes (message persisted, session renamed, etc).
   useEffect(() => {
     if (!sessionId) return;
-    clippyStreamManager.setRefreshCallbacks(sessionId, {
-      onMessage: refresh,
-      onDone: () => {
-        refresh();
-        refreshSessionsList();
-      },
-    });
-  }, [sessionId, refresh, refreshSessionsList]);
+    clippyStreamManager.setRefreshCallbacks(sessionId, clippyRefreshCallbacks(qc, sessionId));
+  }, [qc, sessionId]);
 
   const send = useCallback(
     async (text: string, attachmentIds: string[] = [], opts: { force?: boolean } = {}) => {
@@ -111,27 +156,8 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
       }
       if (opts.force) clippyStreamManager.abortLocal(sessionId);
 
-      // Optimistically add the user message so it renders immediately. The
-      // canonical version replaces it once `message_completed` fires and the
-      // refresh callback re-pulls messages.
-      const optimisticBlocks: ChatContentBlock[] = [];
-      if (text.length > 0) optimisticBlocks.push({ type: "text", text });
-      qc.setQueryData<ChatMessage[] | undefined>(
-        ["clippy", "messages", sessionId],
-        (prev) => [
-          ...(prev ?? []),
-          {
-            id: `optimistic-user-${Date.now()}`,
-            sessionId,
-            role: "user",
-            content: optimisticBlocks,
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      );
-
-      const handle = clippyStreamManager.startTurn(sessionId, text, attachmentIds);
-      await handle.done;
+      const { done } = await beginClippyTurn(qc, sessionId, text, attachmentIds);
+      await done;
     },
     [qc, sessionId],
   );
@@ -142,8 +168,8 @@ export function useChatSession(sessionId: string | null): UseChatSessionResult {
       try {
         await chatApi.decidePermission(sessionId, toolUseId, decision);
         // No optimistic local mutation: the resulting `tool_result_block` or
-        // next stream event clears the pending permission across all windows
-        // via the BroadcastChannel mirror.
+        // next stream event clears the pending permission through the stream
+        // manager.
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Surface as an inline error; the manager doesn't expose a generic

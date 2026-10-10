@@ -1,12 +1,15 @@
 /**
- * Both the full Clippy page and the persistent ClippyDrawer keep their
- * "which chat is open" state in a component that never remounts on a
- * company switch (same route/component instance for the page; the drawer is
- * mounted once for the whole app in Layout.tsx). Left alone, a chat opened
- * under one company stays selected — and its full transcript keeps
- * rendering — after switching to a different company. These pure functions
- * decide what the open chat should become after a switch; the two
+ * Both the full Clippy page and the Clippy window keep their "which chat is
+ * open" state in something that never remounts on a company switch (same
+ * route/component instance for the page; the window's state lives in
+ * ClippyContext, mounted once for the whole app in Layout.tsx). Left alone, a
+ * chat opened under one company stays selected (and its full transcript
+ * keeps rendering) after switching to a different company. These pure
+ * functions decide what the open chat should become after a switch; the two
  * components apply the decision.
+ *
+ * A null session id is a new chat that has not been sent yet. Nothing is
+ * created on the server until its first message goes (lib/clippy-new-chat.ts).
  */
 
 /** Clippy.tsx: which session id (if any) should be active right now. */
@@ -14,8 +17,11 @@ export function resolveActiveClippySessionId(params: {
   companyScope: "current" | "all";
   activeId: string | null;
   sessionIds: string[];
+  /** The person started a new chat: stay on it rather than opening the latest one. */
+  drafting?: boolean;
 }): string | null {
-  const { companyScope, activeId, sessionIds } = params;
+  const { companyScope, activeId, sessionIds, drafting = false } = params;
+  if (drafting) return null;
   if (activeId !== null) {
     // "All companies" scope intentionally spans companies (see Clippy.tsx's
     // apiFilters) — a session id missing from this list means it was
@@ -30,8 +36,9 @@ export function resolveActiveClippySessionId(params: {
 export type ClippyDrawerSessionReconciliation =
   | { action: "keep" }
   | { action: "select"; id: string }
-  | { action: "create" }
-  | { action: "clear" };
+  // Show a new chat. It is created on its first send, not here: creating
+  // one on open is what filled the chat list with empty "New chat" entries.
+  | { action: "draft" };
 
 /**
  * Tracks enough state across renders to decide whether the drawer's
@@ -51,17 +58,22 @@ export const INITIAL_CLIPPY_DRAWER_RECONCILE_GATE: ClippyDrawerReconcileGate = {
 };
 
 /**
- * ClippyDrawer.tsx: should the reconciliation effect run this render?
+ * ClippyContext.tsx: should the reconciliation effect run this render?
  *
- * The drawer's "Recent chats" dropdown deliberately lists sessions from
- * every company (F10's "company... filters" requirement) — picking one for
- * a company other than the current selection is a legitimate action, not a
- * stale session. Naively re-running `reconcileClippyDrawerSession` on every
+ * The window's chat list deliberately lists sessions from every company
+ * (F10's "company... filters" requirement), so picking one for a company
+ * other than the current selection is a legitimate action, not a stale
+ * session. Naively re-running `reconcileClippyDrawerSession` on every
  * `activeSessionId` change (the original bullet-7 fix) undid that pick
  * immediately, since it always forces the session back to the current
- * company. This gate makes reconciliation fire only for its real purpose —
- * a genuine company change, or no valid session yet — not for a deliberate
- * pick or an incidental re-render (e.g. a background sessions refetch).
+ * company. This gate makes reconciliation fire only for its real purpose (a
+ * genuine company change, or an open chat that no longer exists), not for a
+ * deliberate pick or an incidental re-render (e.g. a background sessions
+ * refetch).
+ *
+ * A null session id with no company change is a new chat the person chose
+ * to start ("New chat"), so it is left alone too. Treating it as "nothing
+ * selected yet" put the latest chat straight back on screen.
  */
 export function shouldReconcileClippyDrawerSession(params: {
   gate: ClippyDrawerReconcileGate;
@@ -78,21 +90,21 @@ export function shouldReconcileClippyDrawerSession(params: {
 
   const companyChanged = gate.reconciledForCompanyId !== selectedCompanyId;
   if (!companyChanged) {
-    const activeStillExists = activeSessionId ? sessions.some((s) => s.id === activeSessionId) : false;
+    if (activeSessionId === null) return { run: false, nextGate };
+    const activeStillExists = sessions.some((s) => s.id === activeSessionId);
     if (activeStillExists) return { run: false, nextGate };
   }
 
   return { run: true, nextGate };
 }
 
-/** ClippyDrawer.tsx: what to do with the drawer's active session on open. */
+/** ClippyContext.tsx: what to do with the window's active session on open. */
 export function reconcileClippyDrawerSession(params: {
   activeSessionId: string | null;
   sessions: Array<{ id: string; companyId: string | null }>;
   selectedCompanyId: string | null;
-  isCreating: boolean;
 }): ClippyDrawerSessionReconciliation {
-  const { activeSessionId, sessions, selectedCompanyId, isCreating } = params;
+  const { activeSessionId, sessions, selectedCompanyId } = params;
   const current = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : undefined;
   // A null-companyId session (not bound to any company) is fine to keep or
   // pick under any company.
@@ -101,6 +113,5 @@ export function reconcileClippyDrawerSession(params: {
   }
   const replacement = sessions.find((s) => s.companyId === null || s.companyId === selectedCompanyId);
   if (replacement) return { action: "select", id: replacement.id };
-  if (!isCreating) return { action: "create" };
-  return { action: "clear" };
+  return { action: "draft" };
 }

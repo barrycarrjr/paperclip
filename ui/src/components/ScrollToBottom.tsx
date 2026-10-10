@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { usePanel } from "../context/PanelContext";
+import {
+  PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS,
+  PAGE_SCROLL_BUTTON_RIGHT_CLASS,
+  PAGE_SCROLL_BUTTON_SIZE_CLASS,
+  SCROLL_TO_BOTTOM_OFFSET_CLASS,
+} from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
+import { Z_PAGE_FLOATING } from "../lib/z-layers";
 
 function resolveScrollTarget() {
   const mainContent = document.getElementById("main-content");
@@ -73,9 +80,15 @@ export function ScrollToBottom() {
   return (
     <button
       onClick={scroll}
+      // Stacked above the Clippy launcher (see lib/narrow-layout), which used
+      // to leave room for these to its left before it became a wider pill.
       className={cn(
-        "fixed bottom-[calc(1.5rem+5rem+env(safe-area-inset-bottom))] right-6 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-[background-color,right] duration-200 md:bottom-6 md:right-[5rem]",
-        panelVisible && panelContent && "md:right-[calc(320px+1.5rem)]",
+        "fixed flex items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-[background-color,right] duration-200",
+        Z_PAGE_FLOATING,
+        PAGE_SCROLL_BUTTON_SIZE_CLASS,
+        SCROLL_TO_BOTTOM_OFFSET_CLASS,
+        PAGE_SCROLL_BUTTON_RIGHT_CLASS,
+        panelVisible && panelContent && PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS,
       )}
       aria-label="Scroll to bottom"
     >

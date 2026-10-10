@@ -21,15 +21,28 @@ const READ_SENTENCE = "This looks up information. Nothing is changed.";
 
 type SentenceBuilder = (input: Record<string, unknown>) => string;
 
-const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = {
-  list_companies: { label: "Look up your companies" },
-  get_company: { label: "Look up a company" },
-  list_agents: { label: "Look up agents" },
-  get_agent: { label: "Look up an agent" },
-  list_issues: { label: "Look up issues" },
-  get_issue: { label: "Look up an issue" },
+interface BuiltInTool {
+  label: string;
+  /** What was done, for a finished step: "Created an issue". */
+  done?: string;
+  /** The same, when the result names an issue, which is linked after it: "Created issue". */
+  doneWithIssue?: string;
+  /** The input field worth naming after `done`, such as a memory's name. */
+  detailFromInput?: string;
+  sentence?: SentenceBuilder;
+}
+
+const BUILT_IN: Record<string, BuiltInTool> = {
+  list_companies: { label: "Look up your companies", done: "Looked up your companies" },
+  get_company: { label: "Look up a company", done: "Looked up a company" },
+  list_agents: { label: "Look up agents", done: "Looked up agents" },
+  get_agent: { label: "Look up an agent", done: "Looked up an agent" },
+  list_issues: { label: "Look up issues", done: "Looked up issues" },
+  get_issue: { label: "Look up an issue", done: "Looked up an issue", doneWithIssue: "Looked up issue" },
   create_issue: {
     label: "Create an issue",
+    done: "Created an issue",
+    doneWithIssue: "Created issue",
     sentence: (input) => {
       const title = asString(input.title);
       return title
@@ -39,11 +52,14 @@ const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = 
   },
   add_comment: {
     label: "Comment on an issue",
+    done: "Added a comment",
+    doneWithIssue: "Commented on",
     sentence: () =>
       "This posts a comment on an issue. Agents watching the issue will see it and may act on it.",
   },
   broadcast_directive: {
     label: "Send a directive to companies",
+    done: "Sent a directive to companies",
     sentence: (input) => {
       const intent = asString(input.intent);
       const companyIds = Array.isArray(input.companyIds) ? input.companyIds : null;
@@ -58,14 +74,18 @@ const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = 
   },
   create_reminder: {
     label: "Set a reminder",
+    done: "Set a reminder",
     sentence: () => "This schedules a reminder that will fire on its own later.",
   },
   cancel_reminder: {
     label: "Cancel a reminder",
+    done: "Cancelled a reminder",
     sentence: () => "This cancels a reminder so it stops firing.",
   },
   remember: {
     label: "Remember something",
+    done: "Remembered",
+    detailFromInput: "name",
     sentence: (input) => {
       const name = asString(input.name);
       return name
@@ -73,9 +93,11 @@ const BUILT_IN: Record<string, { label: string; sentence?: SentenceBuilder }> = 
         : "This saves a memory for this company. It is stored encrypted and shared with everyone who has access to the company.";
     },
   },
-  recall_memories: { label: "Look up memories" },
+  recall_memories: { label: "Look up memories", done: "Looked up memories" },
   forget_memory: {
     label: "Forget a memory",
+    done: "Forgot",
+    detailFromInput: "name",
     sentence: (input) => {
       const name = asString(input.name);
       return name
@@ -135,6 +157,105 @@ export function describeChatTool(name: string, input: unknown): ToolPresentation
       ? READ_SENTENCE
       : "This runs the tool shown below. It may make real changes.",
   };
+}
+
+/**
+ * One line saying what a tool step did, for the collapsed step in a
+ * conversation: "Created issue HQ-1 · Send the IRS letter" rather than the
+ * tool's raw input and raw JSON result, which stay behind its details toggle.
+ */
+export interface ToolStepSummary {
+  /** The words, e.g. "Created issue", "Could not look up issues". */
+  text: string;
+  /** An issue the step made or found, shown linked after the words. */
+  issueIdentifier?: string;
+  /** A short, muted detail after that: the issue's title, "3 found", why it failed. */
+  detail?: string;
+}
+
+export type ToolStepState = "running" | "done" | "failed" | "denied" | "interrupted";
+
+const ISSUE_IDENTIFIER_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+
+/** The list a lookup returned, whether bare or under one key such as `issues`. */
+function resultList(data: unknown): unknown[] | null {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object") return null;
+  const lists = Object.values(data as Record<string, unknown>).filter(Array.isArray);
+  return lists.length === 1 ? (lists[0] as unknown[]) : null;
+}
+
+/** The most useful part of a finished step's result. */
+function resultHighlights(data: unknown): { issueIdentifier?: string; detail?: string } {
+  if (typeof data === "string") {
+    const line = data.trim();
+    // A short sentence back ("Reminder set for Friday 9:00") is worth showing;
+    // anything long or multi-line stays in the details.
+    return line && line.length <= 80 && !line.includes("\n") ? { detail: line } : {};
+  }
+  const list = resultList(data);
+  if (list) return { detail: `${list.length} found` };
+  if (!data || typeof data !== "object") return {};
+  const obj = data as Record<string, unknown>;
+  const identifier = asString(obj.identifier);
+  const title = asString(obj.title) ?? asString(obj.name);
+  return {
+    ...(identifier && ISSUE_IDENTIFIER_RE.test(identifier) ? { issueIdentifier: identifier } : {}),
+    ...(title ? { detail: truncate(title, 80) } : {}),
+  };
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/** The first line of an error result, short. */
+function errorLine(data: unknown): string | undefined {
+  const text =
+    typeof data === "string"
+      ? data
+      : data && typeof data === "object" && typeof (data as { error?: unknown }).error === "string"
+        ? (data as { error: string }).error
+        : "";
+  const line = text.replace(/^\[[^\]]*\]\s*/, "").split(/\r?\n/, 1)[0]?.trim();
+  return line ? truncate(line, 80) : undefined;
+}
+
+export function summarizeToolStep(
+  name: string,
+  input: unknown,
+  state: ToolStepState,
+  resultData?: unknown,
+): ToolStepSummary {
+  const presentation = describeChatTool(name, input);
+  const label = presentation.label;
+  switch (state) {
+    case "running":
+      return { text: `${label}…` };
+    case "failed":
+      return { text: `Could not ${lowerFirst(label)}`, detail: errorLine(resultData) };
+    case "denied":
+      return { text: `Did not ${lowerFirst(label)}`, detail: "you said no" };
+    case "interrupted":
+      return { text: label, detail: "no result" };
+    case "done": {
+      const builtIn = BUILT_IN[name];
+      const highlights = resultHighlights(resultData);
+      const inputObj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+      const inputDetail = builtIn?.detailFromInput ? asString(inputObj[builtIn.detailFromInput]) : null;
+      if (highlights.issueIdentifier) {
+        return {
+          text: builtIn?.doneWithIssue ?? builtIn?.done ?? label,
+          issueIdentifier: highlights.issueIdentifier,
+          detail: highlights.detail,
+        };
+      }
+      return {
+        text: builtIn?.done ?? label,
+        detail: inputDetail ? truncate(inputDetail, 80) : highlights.detail,
+      };
+    }
+  }
 }
 
 /** Compact one-line preview of a completed tool result for the card face. */

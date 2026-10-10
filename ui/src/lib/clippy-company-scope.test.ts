@@ -54,6 +54,18 @@ describe("resolveActiveClippySessionId", () => {
     });
     expect(resolved).toBe("session-not-in-list");
   });
+
+  it("stays on a new chat the person started instead of opening the latest one", () => {
+    // "New" on the full page no longer creates a chat; it shows an unsent
+    // one. Picking the first chat in the list here would undo the click.
+    const resolved = resolveActiveClippySessionId({
+      companyScope: "current",
+      activeId: null,
+      sessionIds: ["session-1", "session-2"],
+      drafting: true,
+    });
+    expect(resolved).toBeNull();
+  });
 });
 
 describe("reconcileClippyDrawerSession", () => {
@@ -69,7 +81,6 @@ describe("reconcileClippyDrawerSession", () => {
         { id: "session-b", companyId: "company-b" },
       ],
       selectedCompanyId: "company-b",
-      isCreating: false,
     });
     expect(result).toEqual({ action: "select", id: "session-b" });
   });
@@ -82,7 +93,6 @@ describe("reconcileClippyDrawerSession", () => {
         { id: "session-b", companyId: "company-b" },
       ],
       selectedCompanyId: "company-b",
-      isCreating: false,
     });
     expect(result).toEqual({ action: "keep" });
   });
@@ -92,29 +102,29 @@ describe("reconcileClippyDrawerSession", () => {
       activeSessionId: "session-global",
       sessions: [{ id: "session-global", companyId: null }],
       selectedCompanyId: "company-b",
-      isCreating: false,
     });
     expect(result).toEqual({ action: "keep" });
   });
 
-  it("requests creation when no session matches the current company and none is already being created", () => {
+  it("shows a new, unsent chat when no session matches the current company", () => {
+    // It used to create a chat on the server right here, before anything was
+    // typed. Most of those were never used, and each one stayed in the list
+    // titled "New chat". Now the chat is created on its first send.
     const result = reconcileClippyDrawerSession({
       activeSessionId: "session-a",
       sessions: [{ id: "session-a", companyId: "company-a" }],
       selectedCompanyId: "company-b",
-      isCreating: false,
     });
-    expect(result).toEqual({ action: "create" });
+    expect(result).toEqual({ action: "draft" });
   });
 
-  it("clears rather than double-creating while a create is already in flight", () => {
+  it("shows a new chat for a company with no chats at all", () => {
     const result = reconcileClippyDrawerSession({
-      activeSessionId: "session-a",
-      sessions: [{ id: "session-a", companyId: "company-a" }],
+      activeSessionId: null,
+      sessions: [],
       selectedCompanyId: "company-b",
-      isCreating: true,
     });
-    expect(result).toEqual({ action: "clear" });
+    expect(result).toEqual({ action: "draft" });
   });
 });
 
@@ -149,6 +159,28 @@ describe("shouldReconcileClippyDrawerSession", () => {
       selectedCompanyId: "company-a",
       activeSessionId: "session-deleted",
       sessions: [{ id: "session-a" }],
+    });
+    expect(run).toBe(true);
+  });
+
+  it("leaves a new chat alone when the company has not changed", () => {
+    // "New chat" sets no session id. Reading that as "nothing selected yet"
+    // put the latest chat straight back on screen the moment it was pressed.
+    const { run } = shouldReconcileClippyDrawerSession({
+      gate: { skip: false, reconciledForCompanyId: "company-a" },
+      selectedCompanyId: "company-a",
+      activeSessionId: null,
+      sessions: [{ id: "session-a" }],
+    });
+    expect(run).toBe(false);
+  });
+
+  it("still settles a new chat when the company changes", () => {
+    const { run } = shouldReconcileClippyDrawerSession({
+      gate: { skip: false, reconciledForCompanyId: "company-a" },
+      selectedCompanyId: "company-b",
+      activeSessionId: null,
+      sessions: [{ id: "session-b" }],
     });
     expect(run).toBe(true);
   });

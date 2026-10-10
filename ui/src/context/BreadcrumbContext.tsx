@@ -60,3 +60,11 @@ export function useBreadcrumbs() {
   }
   return ctx;
 }
+
+/**
+ * The breadcrumbs, or null outside a BreadcrumbProvider (e.g. a unit test that
+ * mounts one component). For readers that only want to name the current page.
+ */
+export function useBreadcrumbsOptional(): BreadcrumbContextValue | null {
+  return useContext(BreadcrumbContext);
+}
