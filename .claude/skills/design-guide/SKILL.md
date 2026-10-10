@@ -261,6 +261,10 @@ Use `InlineEditor` component — click text to edit, Enter saves, Escape cancels
 
 Every save, update or create the person asks for must say that it worked. Build the mutation with `useSaveMutation` (`ui/src/hooks/useSaveMutation.ts`) and give it a short, specific `successMessage` such as "Profile saved"; it shows as a success toast. A failure must be shown too: keep the page's own error display, or set `errorMessage` where there is none. Controls whose result is already visible (a toggle, an inline editor, a dialog that closes) need no extra message. Inside a modal dialog or sheet that stays open, say it in the dialog with an always-present `role="status"` line, not a toast: the dialog hides toasts from screen readers, and clicking one closes the dialog.
 
+### Notices
+
+A note that changes what the person's next action does, or where it lands, uses the warning colours, never muted grey text. Example: a Clippy chat that belongs to a different company than the page being viewed. Clippy works in the chat's company, so that note is a one-line strip in `brandBanner.warning` (`ui/src/lib/status-colors.ts`) with a warning icon, inside an always-present `role="status"` container so a screen reader announces it when it appears. For a full-width block that is on the page from the start, use `InlineBanner` with `tone="warning"`. Muted text is for secondary information that is safe to miss.
+
 ### Popover Selectors
 
 StatusIcon and PriorityIcon use Radix Popover for inline selection. Follow this pattern for any clickable property that opens a picker.
@@ -354,3 +358,4 @@ All components use `cn()` from `@/lib/utils` for className merging. All componen
 - Using `rounded-2xl` or larger — max is `rounded-xl` (except `rounded-full` for pills)
 - Forgetting dark mode — always use semantic tokens, never hardcode light/dark values
 - A Save button that shows nothing when the save works, or a save that fails silently. Use `useSaveMutation` (see Saving above)
+- A warning styled as secondary text, such as a "this chat is in another company" note in muted grey. Use the warning colours (see Notices above)

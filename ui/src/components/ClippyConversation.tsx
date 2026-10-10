@@ -1,8 +1,10 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { PanelLeft } from "lucide-react";
+import { AlertTriangle, PanelLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useParams } from "@/lib/router";
+import { brandBanner } from "@/lib/status-colors";
+import { cn } from "@/lib/utils";
 import { chatApi, type ChatSession } from "../api/chat";
 import { useCompanyOptional } from "../context/CompanyContext";
 import { resolveRouteCompanyId } from "../hooks/useRouteCompany";
@@ -103,6 +105,14 @@ export function ClippyConversation({
     session?.companyId &&
     activeCompany.id !== session.companyId
   );
+  // After a company switch, ClippyContext swaps in that company's own chat in
+  // an effect, so for one frame the old chat sits against the new page. Only a
+  // mismatch that outlasts that frame counts, or every switch flashes the note.
+  const [mismatchSettled, setMismatchSettled] = useState(false);
+  useEffect(() => {
+    setMismatchSettled(isCompanyMismatch);
+  }, [isCompanyMismatch]);
+  const companyMismatchShown = isCompanyMismatch && mismatchSettled;
 
   /**
    * A new chat's first send: create it with the choices made so far. The
@@ -138,9 +148,15 @@ export function ClippyConversation({
     await done;
   };
 
+  // A chat from another company works in that company, so the page's own
+  // suggestions ("Summarize this issue", the open issues of the page's
+  // company) would point at what it cannot see. Suggest for its company.
   const shownSuggestions = useMemo(
-    () => suggestions ?? suggestedClippyPrompts({ pathname: "", companyName: activeCompany?.name ?? null }),
-    [suggestions, activeCompany?.name],
+    () =>
+      companyMismatchShown
+        ? suggestedClippyPrompts({ pathname: "", companyName: sessionCompany?.name ?? null })
+        : suggestions ?? suggestedClippyPrompts({ pathname: "", companyName: activeCompany?.name ?? null }),
+    [companyMismatchShown, sessionCompany?.name, suggestions, activeCompany?.name],
   );
 
   const title = session?.title ?? (sessionId ? "Loading…" : "New chat");
@@ -188,8 +204,37 @@ export function ClippyConversation({
           ) : null}
         </div>
       ) : null}
-      {/* One quiet line, not a warning banner: looking at a chat from another
-          company is allowed and often deliberate. */}
+      {/* Looking at a chat from another company is allowed and often
+          deliberate, but Clippy then works in that company, so the note is one
+          line in the warning colours. A muted grey line was too easy to miss.
+          The status region stays mounted, so a screen reader announces the
+          note when it appears instead of skipping a region that arrived full. */}
+      <div role="status" data-testid="company-mismatch-status">
+        {companyMismatchShown && sessionCompany && activeCompany && (
+          <div
+            data-testid="company-mismatch-note"
+            className={cn("flex items-center gap-2 border-b px-4 py-1.5 text-xs", brandBanner.warning)}
+          >
+            <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">
+              This chat is in <strong className="font-semibold">{sessionCompany.name}</strong>.
+            </span>
+            {onNewSessionForCurrentCompany && (
+              // Capped, so a long company name truncates here instead of
+              // squeezing out the note or running past the window's edge.
+              <button
+                type="button"
+                title={`Start one in ${activeCompany.name}`}
+                className="min-w-0 max-w-[45%] shrink-0 rounded-md border border-current/40 px-2 py-0.5 font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+                onClick={onNewSessionForCurrentCompany}
+              >
+                <span className="block truncate">Start one in {activeCompany.name}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {/* The muted line it replaced, kept as an undo path:
       {isCompanyMismatch && sessionCompany && activeCompany && (
         <div
           data-testid="company-mismatch-note"
@@ -206,7 +251,7 @@ export function ClippyConversation({
             </button>
           )}
         </div>
-      )}
+      )} */}
       <ClippyMessageList
         transcript={transcript}
         pendingPermissions={pendingPermissions}
