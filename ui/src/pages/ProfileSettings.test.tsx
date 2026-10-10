@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "../context/ToastContext";
+import { ToastViewport } from "../components/ToastViewport";
 import { ProfileSettings } from "./ProfileSettings";
 
 const mockAuthApi = vi.hoisted(() => ({
@@ -55,6 +57,12 @@ async function flushReact() {
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("ProfileSettings", () => {
@@ -132,6 +140,85 @@ describe("ProfileSettings", () => {
 
     await act(async () => {
       root.unmount();
+    });
+  });
+
+  // The form keeps showing what was typed, so a save that worked looks exactly
+  // like a save that never happened unless something says so.
+  describe("saving the profile", () => {
+    async function renderWithToasts() {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <ProfileSettings />
+              <ToastViewport />
+            </ToastProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      return root;
+    }
+
+    async function saveName(value: string) {
+      const nameInput = container.querySelector("#profile-name") as HTMLInputElement;
+      await act(async () => {
+        setInputValue(nameInput, value);
+      });
+      await act(async () => {
+        nameInput.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      });
+      await flushReact();
+      await flushReact();
+    }
+
+    /**
+     * The live region, taken before the save. It has to be on the page
+     * already: a screen reader often misses a region that appears together
+     * with its first message.
+     */
+    function liveRegion() {
+      const region = container.querySelector('aside[aria-live="polite"]');
+      expect(region, "the live region is on the page before the save").not.toBeNull();
+      return region as HTMLElement;
+    }
+
+    it("says the profile was saved once the save goes through", async () => {
+      const root = await renderWithToasts();
+      const region = liveRegion();
+
+      await saveName("Pat Example");
+
+      expect(mockAuthApi.updateProfile).toHaveBeenCalledWith({
+        name: "Pat Example",
+        image: "https://example.com/jane.png",
+      });
+      expect(region.textContent).toContain("Profile saved");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("does not say it was saved when the save fails, and shows why", async () => {
+      mockAuthApi.updateProfile.mockRejectedValueOnce(new Error("Display name is not allowed."));
+      const root = await renderWithToasts();
+      const region = liveRegion();
+
+      await saveName("Pat Example");
+
+      expect(container.textContent).toContain("Display name is not allowed.");
+      expect(region.textContent).not.toContain("Profile saved");
+
+      await act(async () => {
+        root.unmount();
+      });
     });
   });
 });

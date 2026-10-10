@@ -117,6 +117,47 @@ describe("ToastViewport", () => {
     expect(box?.className).toContain("max-w-sm");
   });
 
+  it("keeps an empty live region on the page before anything is said", () => {
+    // A screen reader listens for changes to a region it already knows about,
+    // so a region that appears together with its first message is often not
+    // read out. Empty, the region takes no space and no clicks.
+    const region = container.querySelector<HTMLElement>('[aria-live="polite"]');
+    expect(region).not.toBeNull();
+    expect(region?.textContent).toBe("");
+    expect(region?.className).toContain("pointer-events-none");
+    expect(container.querySelector('[data-testid="toast-stack"]')).toBeNull();
+
+    act(() => {
+      push?.({ title: "Profile saved", tone: "success" });
+    });
+    expect(container.querySelector('[aria-live="polite"]')).toBe(region);
+    expect(region?.textContent).toContain("Profile saved");
+  });
+
+  it("shows a message pushed again with the same id as a new message", () => {
+    // Left as the same item, a repeat changed nothing on screen and gave a
+    // screen reader nothing to read: only its timer restarted.
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000);
+      act(() => {
+        push?.({ id: "saved:Profile saved", title: "Profile saved", tone: "success" });
+      });
+      const first = container.querySelector('[data-testid="toast-stack"] > li');
+
+      now.mockReturnValue(2_000);
+      act(() => {
+        push?.({ id: "saved:Profile saved", title: "Profile saved", tone: "success" });
+      });
+
+      const items = container.querySelectorAll('[data-testid="toast-stack"] > li');
+      expect(items).toHaveLength(1);
+      expect(items[0]).not.toBe(first);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("closes a failure when the close button is pressed", () => {
     act(() => {
       push?.({ title: "Delete failed", tone: "error" });

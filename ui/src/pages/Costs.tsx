@@ -27,6 +27,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { queryKeys } from "../lib/queryKeys";
 import { billingTypeDisplayName, cn, formatCents, formatTokens, providerDisplayName } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -210,7 +211,7 @@ export function Costs() {
     queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(selectedCompanyId) });
   };
 
-  const policyMutation = useMutation({
+  const policyMutation = useSaveMutation({
     mutationFn: (input: {
       scopeType: BudgetPolicySummary["scopeType"];
       scopeId: string;
@@ -223,6 +224,9 @@ export function Costs() {
         amount: input.amount,
         windowKind: input.windowKind,
       }),
+    successMessage: "Budget saved",
+    // The budget cards have nowhere to show a failure.
+    errorMessage: "Could not save the budget",
     onSuccess: invalidateBudgetViews,
   });
 

@@ -94,8 +94,11 @@ export function ToastViewport() {
   const toasts = useToastState();
   const { dismissToast } = useToastActions();
 
-  if (toasts.length === 0) return null;
-
+  // The live region stays on the page while it is empty. A screen reader
+  // listens for changes to a region it already knows about, so a region that
+  // first appeared together with its message was often not read out at all,
+  // and a lone "Profile saved" went unheard. Empty, it takes no space and
+  // lets every click through.
   return (
     <aside
       aria-live="polite"
@@ -107,29 +110,36 @@ export function ToastViewport() {
       // on a narrower phone that took part of the close button with it.
       className={cn("pointer-events-none fixed inset-x-3 bottom-3 max-w-sm", Z_TOAST)}
     >
-      <ol
-        data-testid="toast-stack"
-        // Failures stay on screen until they are closed, so they pile up, and
-        // the pile used to grow straight off the top of a short window: the
-        // oldest message, the one carrying a reason that is written nowhere
-        // else in the app, ended up above the top edge with its close button
-        // out of reach. The list now stops at the height of the window and
-        // scrolls inside itself, so every message can still be reached.
-        //
-        // Scrolling needs pointer events, so the list takes them back, and the
-        // box around it stays see-through to clicks. The list is only as big
-        // as the messages it holds plus the thin gaps between them, so it
-        // catches no more of the page than the messages themselves do.
-        className="pointer-events-auto flex max-h-[calc(100dvh-1.5rem)] w-full flex-col-reverse gap-2 overflow-y-auto overscroll-contain px-1"
-      >
-        {toasts.map((toast) => (
-          <AnimatedToast
-            key={toast.id}
-            toast={toast}
-            onDismiss={dismissToast}
-          />
-        ))}
-      </ol>
+      {toasts.length > 0 ? (
+        <ol
+          data-testid="toast-stack"
+          // Failures stay on screen until they are closed, so they pile up, and
+          // the pile used to grow straight off the top of a short window: the
+          // oldest message, the one carrying a reason that is written nowhere
+          // else in the app, ended up above the top edge with its close button
+          // out of reach. The list now stops at the height of the window and
+          // scrolls inside itself, so every message can still be reached.
+          //
+          // Scrolling needs pointer events, so the list takes them back, and the
+          // box around it stays see-through to clicks. The list is only as big
+          // as the messages it holds plus the thin gaps between them, so it
+          // catches no more of the page than the messages themselves do.
+          className="pointer-events-auto flex max-h-[calc(100dvh-1.5rem)] w-full flex-col-reverse gap-2 overflow-y-auto overscroll-contain px-1"
+        >
+          {toasts.map((toast) => (
+            <AnimatedToast
+              // The id and when it was pushed, not the id alone. Pushing the
+              // same message again, as a second save does, has to arrive as a
+              // new message: keyed on the id, the item stayed exactly as it
+              // was, so nothing moved and nothing was read out, and only its
+              // timer started again.
+              key={`${toast.id}:${toast.createdAt}`}
+              toast={toast}
+              onDismiss={dismissToast}
+            />
+          ))}
+        </ol>
+      ) : null}
     </aside>
   );
 }
