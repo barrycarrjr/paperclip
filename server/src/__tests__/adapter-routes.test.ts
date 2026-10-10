@@ -224,6 +224,22 @@ describe("adapter routes", () => {
     });
   });
 
+  // These built-in adapters draw their settings form from the config schema
+  // (ui/src/adapters/schema-config-fields.tsx), so without one the form is empty.
+  it.each([
+    ["cursor_cloud", "repoUrl"],
+    ["hermes_local", "provider"],
+  ])("serves the config schema that draws the %s settings form", async (type, expectedKey) => {
+    const app = createApp();
+
+    const res = await request(app).get(`/api/adapters/${type}/config-schema`);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.fields).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: expectedKey })]),
+    );
+  });
+
   it("rejects signed-in users without org access", async () => {
     const app = createApp({
       userId: "outsider-1",
