@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Shield, ShieldCheck } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
@@ -7,13 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
-import { useToast } from "@/context/ToastContext";
+import { useSaveMutation } from "@/hooks/useSaveMutation";
 import { queryKeys } from "@/lib/queryKeys";
 
 export function InstanceAccess() {
   const { companies } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
-  const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -59,29 +58,44 @@ export function InstanceAccess() {
     );
   }, [userAccessQuery.data]);
 
-  const updateCompanyAccessMutation = useMutation({
-    mutationFn: () => accessApi.setUserCompanyAccess(selectedUserId!, [...selectedCompanyIds]),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.access.userCompanyAccess(selectedUserId!) });
+  // Both said when they worked and nothing at all when they failed, so a
+  // refused change looked like a click that did nothing.
+  //
+  // Each one saves for whichever user is picked, so the user goes with the
+  // save. A failure names that user and stays until a save for that same user
+  // works, even after leaving the page and coming back: picking someone else
+  // and saving them used to take it back, and the first user looked saved.
+  const updateCompanyAccessMutation = useSaveMutation({
+    mutationFn: (input: { userId: string; userLabel: string; companyIds: string[] }) =>
+      accessApi.setUserCompanyAccess(input.userId, input.companyIds),
+    successMessage: "Company access updated",
+    errorMessage: (_error, input) => `Could not save company access for ${input.userLabel}`,
+    saveName: "instance-company-access",
+    saveKey: (input) => input.userId,
+    onSuccess: async (_result, input) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.userCompanyAccess(input.userId) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.access.adminUsers(search) });
-      pushToast({ title: "Company access updated", tone: "success" });
     },
   });
 
-  const setAdminMutation = useMutation({
-    mutationFn: async (makeAdmin: boolean) => {
-      if (!selectedUserId) throw new Error("No user selected");
-      if (makeAdmin) return accessApi.promoteInstanceAdmin(selectedUserId);
-      return accessApi.demoteInstanceAdmin(selectedUserId);
+  const setAdminMutation = useSaveMutation({
+    mutationFn: async (input: { userId: string; userLabel: string; makeAdmin: boolean }) => {
+      if (!input.userId) throw new Error("No user selected");
+      if (input.makeAdmin) return accessApi.promoteInstanceAdmin(input.userId);
+      return accessApi.demoteInstanceAdmin(input.userId);
     },
-    onSuccess: async () => {
+    successMessage: "Instance role updated",
+    errorMessage: (_error, input) => `Could not change the instance role for ${input.userLabel}`,
+    saveName: "instance-role",
+    saveKey: (input) => input.userId,
+    onSuccess: async (_result, input) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.access.adminUsers(search) });
-      if (selectedUserId) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.access.userCompanyAccess(selectedUserId) });
-      }
-      pushToast({ title: "Instance role updated", tone: "success" });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.userCompanyAccess(input.userId) });
     },
   });
+
+  // How the picked user is named on the page, and in a failure about them.
+  const selectedUserLabel = selectedUser?.name || selectedUser?.email || selectedUserId || "";
 
   if (usersQuery.isLoading) {
     return <div className="text-sm text-muted-foreground">Loading instance users…</div>;
@@ -171,7 +185,12 @@ export function InstanceAccess() {
                 </div>
                 <Button
                   variant={selectedUser?.isInstanceAdmin ? "outline" : "default"}
-                  onClick={() => setAdminMutation.mutate(!(selectedUser?.isInstanceAdmin ?? false))}
+                  onClick={() =>
+                    setAdminMutation.mutate({
+                      userId: selectedUserId,
+                      userLabel: selectedUserLabel,
+                      makeAdmin: !(selectedUser?.isInstanceAdmin ?? false),
+                    })}
                   disabled={setAdminMutation.isPending}
                 >
                   {selectedUser?.isInstanceAdmin ? "Remove instance admin" : "Promote to instance admin"}
@@ -211,7 +230,12 @@ export function InstanceAccess() {
                 </div>
                 <div className="flex justify-end">
                   <Button
-                    onClick={() => updateCompanyAccessMutation.mutate()}
+                    onClick={() =>
+                      updateCompanyAccessMutation.mutate({
+                        userId: selectedUserId,
+                        userLabel: selectedUserLabel,
+                        companyIds: [...selectedCompanyIds],
+                      })}
                     disabled={updateCompanyAccessMutation.isPending}
                   >
                     {updateCompanyAccessMutation.isPending ? "Saving…" : "Save company access"}

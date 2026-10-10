@@ -12,6 +12,7 @@ import type {
 } from "@paperclipai/shared";
 import { Link, useNavigate, useParams } from "@/lib/router";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
+import { useToastActions } from "@/context/ToastContext";
 import { templatesApi } from "@/api/templates";
 import { queryKeys } from "@/lib/queryKeys";
 import { useSaveMutation } from "@/hooks/useSaveMutation";
@@ -72,6 +73,7 @@ function BackLink() {
 function RoutineEditor({ id }: { id: string | null }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { pushToast } = useToastActions();
   const [deployOpen, setDeployOpen] = useState(false);
 
   const detailQuery = useQuery({
@@ -142,6 +144,15 @@ function RoutineEditor({ id }: { id: string | null }) {
       // await stall onSuccess and stranded the user on the now-stale editor.
       navigate("/instance/settings/templates");
       void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("routine") });
+    },
+    // A delete that works leaves this page. One that failed used to stay on
+    // it with nothing said, as if the click had not happened.
+    onError: (error) => {
+      pushToast({
+        title: "Could not delete the template",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
     },
   });
 
@@ -387,6 +398,7 @@ function TriggerRow({
 function SkillEditor({ id }: { id: string | null }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { pushToast } = useToastActions();
   const [deployOpen, setDeployOpen] = useState(false);
 
   const detailQuery = useQuery({
@@ -444,6 +456,14 @@ function SkillEditor({ id }: { id: string | null }) {
     onSuccess: () => {
       navigate("/instance/settings/templates");
       void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("skill") });
+    },
+    // Said for the same reason as the routine template's delete.
+    onError: (error) => {
+      pushToast({
+        title: "Could not delete the template",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
     },
   });
 
@@ -547,6 +567,7 @@ function SkillEditor({ id }: { id: string | null }) {
 function AgentEditor({ id }: { id: string | null }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { pushToast } = useToastActions();
   const [deployOpen, setDeployOpen] = useState(false);
 
   const detailQuery = useQuery({
@@ -615,6 +636,14 @@ function AgentEditor({ id }: { id: string | null }) {
     onSuccess: () => {
       navigate("/instance/settings/templates");
       void queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("agent") });
+    },
+    // Said for the same reason as the routine template's delete.
+    onError: (error) => {
+      pushToast({
+        title: "Could not delete the template",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
     },
   });
 

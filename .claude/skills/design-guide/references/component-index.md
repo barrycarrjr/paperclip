@@ -471,8 +471,8 @@ import { cn } from "@/lib/utils";
 ### useSaveMutation
 
 **File:** `ui/src/hooks/useSaveMutation.ts`
-**Props:** every `useMutation` option, plus `successMessage` (required: a string, or `(data, variables) => string | null`) and `errorMessage?`
-**Usage:** Use it instead of `useMutation` for any save, update or create the person asks for with a button or a form. A form keeps showing what was typed, so a save that worked looks the same as one that never happened; this shows `successMessage` ("Profile saved", "Settings saved") as a success toast once the request and the page's own `onSuccess` have finished, so await a reload inside `onSuccess` and the message comes after it. A repeat save shows the message again as a new one rather than stacking a second, and a failed save takes back its earlier "saved" message. If the wording function throws, the message falls back to "Saved". Failures stay with the page. Set `errorMessage` ("Could not save settings") only where the page shows failures nowhere else; the server's reason goes underneath. Not needed where the result is already visible: a toggle that flips, an inline editor, a dialog that closes, a row that appears. Inside a modal dialog or sheet that stays open, say it with a `role="status"` line inside the dialog instead: the dialog hides toasts from screen readers, and a click on a toast closes the dialog.
+**Props:** every `useMutation` option, plus `successMessage` (required: a string, or `(data, variables) => string | null`), `errorMessage?` (a string, or `(error, variables) => string`), `saveName?` (a fixed string) and `saveKey?` (`(variables) => string`)
+**Usage:** Use it instead of `useMutation` for any save, update or create the person asks for with a button or a form. A form keeps showing what was typed, so a save that worked looks the same as one that never happened; this shows `successMessage` ("Profile saved", "Settings saved") as a success toast once the request and the page's own `onSuccess` have finished, so await a reload inside `onSuccess` and the message comes after it. A repeat save shows the message again as a new one rather than stacking a second, and a failed save takes back its earlier "saved" message. If the wording function throws, the message falls back to "Saved". Failures stay with the page. Set `errorMessage` ("Could not save settings") only where the page shows failures nowhere else; the server's reason goes underneath. A failure message stays until it is closed, the same failure again replaces it as a new message (it is never dropped as a duplicate), and a save of the same item that then works takes it back, even one whose `successMessage` returns null. Each failure message belongs to the save that said it, so the same words from another page or another save ("Could not save the budget") never replace or take it back. Give the save a `saveName` ("costs-budget"), the same on every visit to its page and different from every other save's, and its failure is still taken back or replaced after the page is left and come back to; without one, a failure belongs to the one visit, and a save that works after coming back leaves it on screen. Where one hook saves several items (a card each, or whichever user is picked), pass `saveKey` to name the item a save is for: each item keeps its own failure until a save of that item works, and word `errorMessage` from the variables so it names the item. Not needed where the result is already visible: a toggle that flips, an inline editor, a dialog that closes, a row that appears. Inside a modal dialog or sheet that stays open, say it with a `role="status"` line inside the dialog instead: the dialog hides toasts from screen readers, and a click on a toast closes the dialog.
 
 ```tsx
 const save = useSaveMutation({
@@ -482,7 +482,33 @@ const save = useSaveMutation({
 });
 ```
 
-`useSaveConfirmation()` from the same file returns `{ confirmSaved, withdrawSaved }` for a save `useSaveMutation` cannot wrap. One case is a single button on a mutation that toggles also use: pass `() => confirmSaved("...")` as that call's `onSuccess` and `withdrawSaved` as its `onError`. The other is a save made of several requests: confirm once after the last one, and withdraw if any fails.
+`useSaveConfirmation()` from the same file returns `{ confirmSaved, withdrawSaved, reportFailed, withdrawFailed }` for a save `useSaveMutation` cannot wrap. One case is a single button on a mutation that toggles also use: pass `() => confirmSaved("...")` as that call's `onSuccess` and `withdrawSaved` as its `onError`. The other is a save made of several requests: confirm once after the last one, and if any fails, call `reportFailed("Could not save ...", error)` where the page shows the failure nowhere else, or `withdrawSaved()` where it does. Say a failure through `reportFailed` rather than a toast of your own: it takes back the "saved" message, replaces the same failure rather than being dropped as a duplicate, and is taken back by the next `confirmSaved`. Where one of these serves several items (a tab that stays on the page as you move from one agent to the next), pass the item's key as the last argument of `confirmSaved`, `reportFailed` and `withdrawFailed`, as `saveKey` does above, and give it a fixed name with `useSaveConfirmation({ saveName: "agent-instructions" })`, as `saveName` does.
+
+### useDialogOpening
+
+**File:** `ui/src/hooks/useDialogOpening.ts`
+**Usage:** For a dialog or sheet that sends a request and says its outcome inside itself. Hold it open for as long as the request is pending, with no timer and no letting go while it waits for a connection: its `onOpenChange` ignores a close while `isPending`, Cancel is disabled and the corner close button hidden, and its status line says what is happening ("Creating the file…") with the button saying "Creating…". The component holding the dialog can still go before the answer comes (browser Back, a pane rebuilt). `useDialogOpening(open)` gives `current()`, to send with the request, and `isShowing(opening)`, to ask when the answer comes back: the `onSuccess` and `onError` given to `useMutation` still run after the component has unmounted, so when the opening is no longer showing, say a failure with a toast (`useMutationErrorToast` in Skill Studio, or `pushToast`), and let a success change nothing on screen: leave a later opening alone rather than closing, resetting or filling it in, and leave a selection or default the person has moved on from as it is.
+
+```tsx
+const opening = useDialogOpening(open);
+const save = useMutation({
+  mutationFn: (sent: { name: string; opening: DialogOpening | null }) => api.save(sent.name),
+  onError: (error, sent) => {
+    if (opening.isShowing(sent.opening)) setFailure(error.message);
+    else onError("Couldn't save")(error);
+  },
+});
+
+<Dialog
+  open={open}
+  onOpenChange={(next) => {
+    if (!next && save.isPending) return;
+    onOpenChange(next);
+  }}
+>
+  <DialogContent showCloseButton={!save.isPending}>…</DialogContent>
+</Dialog>
+```
 
 ### Query Keys
 

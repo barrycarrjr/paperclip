@@ -2,7 +2,9 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { useOptionalToastActions } from "../context/ToastContext";
 import { useDialogCompanyId } from "../hooks/useDialogCompany";
+import { useDialogOpening } from "../hooks/useDialogOpening";
 import { accessApi } from "../api/access";
 import { projectsApi } from "../api/projects";
 import { agentsApi } from "../api/agents";
@@ -13,6 +15,7 @@ import { queryKeys } from "../lib/queryKeys";
 import {
   Dialog,
   DialogContent,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +51,14 @@ const projectStatuses = [
   { value: "cancelled", label: "Cancelled" },
 ];
 
+/**
+ * The project was made, but adding its workspace failed. Told apart from a
+ * failure to make the project at all, so that a failure said after the dialog
+ * has gone (when the dialog's own note of the project has gone with it) still
+ * says the project exists.
+ */
+class WorkspaceNotAddedError extends Error {}
+
 export function NewProjectDialog() {
   const { newProjectOpen, closeNewProject } = useDialog();
   const { companies, selectedCompanyId } = useCompany();
@@ -59,6 +70,7 @@ export function NewProjectDialog() {
   const movedCompanyWhileOpen =
     newProjectOpen && !!companyId && !!selectedCompanyId && companyId !== selectedCompanyId;
   const queryClient = useQueryClient();
+  const toast = useOptionalToastActions();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("planned");
@@ -98,9 +110,37 @@ export function NewProjectDialog() {
     });
   }, [agents, companyMembers?.users]);
 
+  // The project this dialog has made so far. Adding its workspace can fail
+  // after the project itself was made, and trying again then adds the
+  // workspace to that project instead of making a second one.
+  const [createdProject, setCreatedProject] = useState<{ id: string } | null>(null);
+
+  // Which opening of the dialog a create was sent from (see
+  // hooks/useDialogOpening.ts). The dialog stays open while a create runs,
+  // but the layout holding it can go first (browser Back to a page outside
+  // it), and the dialog can be opened again in the next one.
+  const createOpening = useDialogOpening(newProjectOpen);
+
+  // Both steps are one mutation, so Create stays disabled until the workspace
+  // is added too. It used to come back on in between, and a second click made
+  // a second project.
   const createProject = useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      projectsApi.create(companyId!, data),
+    mutationFn: async ({
+      project,
+      workspace,
+    }: {
+      project: Record<string, unknown>;
+      workspace: Record<string, unknown> | null;
+    }) => {
+      const made = createdProject ?? (await projectsApi.create(companyId!, project));
+      setCreatedProject(made);
+      if (workspace) {
+        await projectsApi.createWorkspace(made.id, workspace).catch((error: unknown) => {
+          throw new WorkspaceNotAddedError(error instanceof Error ? error.message : "", { cause: error });
+        });
+      }
+      return made;
+    },
   });
 
   const uploadDescriptionImage = useMutation({
@@ -120,6 +160,8 @@ export function NewProjectDialog() {
     setWorkspaceLocalPath("");
     setWorkspaceRepoUrl("");
     setWorkspaceError(null);
+    setCreatedProject(null);
+    createProject.reset();
   }
 
   const isAbsolutePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
@@ -153,7 +195,8 @@ export function NewProjectDialog() {
   };
 
   async function handleSubmit() {
-    if (!companyId || !name.trim()) return;
+    // Ctrl+Enter reaches here even while Create is disabled.
+    if (!companyId || !name.trim() || createProject.isPending) return;
     const localPath = workspaceLocalPath.trim();
     const repoUrl = workspaceRepoUrl.trim();
 
@@ -168,33 +211,51 @@ export function NewProjectDialog() {
 
     setWorkspaceError(null);
 
+    const opening = createOpening.current();
     try {
       const created = await createProject.mutateAsync({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        status,
-        color: PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)],
-        ...(goalIds.length > 0 ? { goalIds } : {}),
-        ...(targetDate ? { targetDate } : {}),
+        project: {
+          name: name.trim(),
+          description: description.trim() || undefined,
+          status,
+          color: PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)],
+          ...(goalIds.length > 0 ? { goalIds } : {}),
+          ...(targetDate ? { targetDate } : {}),
+        },
+        workspace: localPath || repoUrl
+          ? {
+              name: localPath
+                ? deriveWorkspaceNameFromPath(localPath)
+                : deriveWorkspaceNameFromRepo(repoUrl),
+              ...(localPath ? { cwd: localPath } : {}),
+              ...(repoUrl ? { repoUrl } : {}),
+            }
+          : null,
       });
-
-      if (localPath || repoUrl) {
-        const workspacePayload: Record<string, unknown> = {
-          name: localPath
-            ? deriveWorkspaceNameFromPath(localPath)
-            : deriveWorkspaceNameFromRepo(repoUrl),
-          ...(localPath ? { cwd: localPath } : {}),
-          ...(repoUrl ? { repoUrl } : {}),
-        };
-        await projectsApi.createWorkspace(created.id, workspacePayload);
-      }
 
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(created.id) });
+      // Made after the dialog it came from had gone: a later opening is the
+      // next project, and is not reset or closed by this one.
+      if (!createOpening.isShowing(opening)) return;
       reset();
       closeNewProject();
-    } catch {
-      // surface through createProject.isError
+    } catch (error) {
+      // The dialog stays open with what was typed, and says what went wrong
+      // (createFailure below). A project that was made before its workspace
+      // failed belongs in the list already.
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(companyId) });
+      // Once the dialog it came from has gone with the layout holding it, a
+      // toast is the only place left to say it.
+      if (!createOpening.isShowing(opening)) {
+        toast?.pushToast({
+          tone: "error",
+          title: error instanceof WorkspaceNotAddedError
+            ? "The project was created, but its workspace was not added"
+            : "Could not create the project",
+          body: error instanceof Error && error.message ? error.message : "Please try again.",
+        });
+      }
     }
   }
 
@@ -207,6 +268,32 @@ export function NewProjectDialog() {
 
   const selectedGoals = (goals ?? []).filter((g) => goalIds.includes(g.id));
   const availableGoals = (goals ?? []).filter((g) => !goalIds.includes(g.id));
+  const createFailureReason =
+    createProject.error instanceof Error && createProject.error.message
+      ? createProject.error.message
+      : "Please try again.";
+  const createFailure = !createProject.isError
+    ? null
+    : createdProject
+      ? `The project was created, but its workspace was not added. ${createFailureReason}`
+      : `Could not create the project. ${createFailureReason}`;
+  // Once the project exists, trying again only adds its workspace, so its own
+  // fields are locked and the button says what it will do. Left open, an edit
+  // to the name, description, status, goals or date was dropped without a word.
+  const projectMade = createdProject !== null;
+  const hasWorkspace = Boolean(workspaceLocalPath.trim() || workspaceRepoUrl.trim());
+  const submitLabel = createProject.isPending
+    ? projectMade ? "Adding workspace…" : "Creating…"
+    : !projectMade
+      ? "Create project"
+      // With the workspace fields emptied, the button just finishes, leaving
+      // the project without a workspace.
+      : hasWorkspace ? "Add workspace" : "Done";
+  // While the create holds the dialog open, Escape and the × do nothing, so
+  // the dialog says what it is doing.
+  const progress = createProject.isPending
+    ? (projectMade ? "Adding the workspace…" : "Creating the project…")
+    : null;
 
   return (
     <Dialog
@@ -215,8 +302,11 @@ export function NewProjectDialog() {
       // started it in (see hooks/useDialogCompany.ts) while you switch
       // company on the rail behind it, so the rail has to stay clickable.
       modal={false}
+      // Held open until the project is made or fails, however long that
+      // takes, as NewIssueDialog is, so the dialog is never reset under a
+      // create that is still running.
       onOpenChange={(open) => {
-        if (!open) {
+        if (!open && !createProject.isPending) {
           reset();
           closeNewProject();
         }
@@ -224,6 +314,9 @@ export function NewProjectDialog() {
     >
       <DialogContent
         showCloseButton={false}
+        // Nothing here describes the dialog beyond its title, as in
+        // NewIssueDialog. Without this the dialog library warns about it.
+        aria-describedby={undefined}
         className={cn("p-0 gap-0", expanded ? "sm:max-w-2xl" : "sm:max-w-lg")}
         onKeyDown={handleKeyDown}
         // Radix still treats a click on the rail as an "outside" interaction
@@ -233,6 +326,10 @@ export function NewProjectDialog() {
         // was typed. Escape and the × button are untouched.
         onPointerDownOutside={(event) => event.preventDefault()}
       >
+        {/* The dialog's name for screen readers. Hidden, since the header
+            below already shows "New project". Without a title the dialog had
+            no name, and the dialog library warned about it. */}
+        <DialogTitle className="sr-only">New project</DialogTitle>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -249,6 +346,7 @@ export function NewProjectDialog() {
               variant="ghost"
               size="icon-xs"
               className="text-muted-foreground"
+              aria-label={expanded ? "Make smaller" : "Make bigger"}
               onClick={() => setExpanded(!expanded)}
             >
               {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
@@ -257,7 +355,9 @@ export function NewProjectDialog() {
               variant="ghost"
               size="icon-xs"
               className="text-muted-foreground"
+              aria-label="Close"
               onClick={() => { reset(); closeNewProject(); }}
+              disabled={createProject.isPending}
             >
               <span className="text-lg leading-none">&times;</span>
             </Button>
@@ -278,6 +378,7 @@ export function NewProjectDialog() {
             className="w-full text-lg font-semibold bg-transparent outline-none placeholder:text-muted-foreground/50"
             placeholder="Project name"
             value={name}
+            readOnly={projectMade}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Tab" && !e.shiftKey) {
@@ -295,6 +396,7 @@ export function NewProjectDialog() {
             ref={descriptionEditorRef}
             value={description}
             onChange={setDescription}
+            readOnly={projectMade}
             placeholder="Add description..."
             bordered={false}
             mentions={mentionOptions}
@@ -362,7 +464,10 @@ export function NewProjectDialog() {
           {/* Status */}
           <Popover open={statusOpen} onOpenChange={setStatusOpen}>
             <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors">
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors disabled:opacity-60"
+                disabled={projectMade}
+              >
                 <StatusBadge status={status} />
               </button>
             </PopoverTrigger>
@@ -390,10 +495,11 @@ export function NewProjectDialog() {
               <Target className="h-3 w-3 text-muted-foreground" />
               <span className="max-w-[160px] truncate">{goal.title}</span>
               <button
-                className="text-muted-foreground hover:text-foreground"
+                className="text-muted-foreground hover:text-foreground disabled:opacity-60"
                 onClick={() => setGoalIds((prev) => prev.filter((id) => id !== goal.id))}
                 aria-label={`Remove goal ${goal.title}`}
                 type="button"
+                disabled={projectMade}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -404,7 +510,7 @@ export function NewProjectDialog() {
             <PopoverTrigger asChild>
               <button
                 className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors disabled:opacity-60"
-                disabled={selectedGoals.length > 0 && availableGoals.length === 0}
+                disabled={projectMade || (selectedGoals.length > 0 && availableGoals.length === 0)}
               >
                 {selectedGoals.length > 0 ? <Plus className="h-3 w-3 text-muted-foreground" /> : <Target className="h-3 w-3 text-muted-foreground" />}
                 {selectedGoals.length > 0 ? "+ Goal" : "Goal"}
@@ -444,27 +550,31 @@ export function NewProjectDialog() {
             <Calendar className="h-3 w-3 text-muted-foreground" />
             <input
               type="date"
-              className="bg-transparent outline-none text-xs w-24"
+              className="bg-transparent outline-none text-xs w-24 disabled:opacity-60"
               value={targetDate}
               onChange={(e) => setTargetDate(e.target.value)}
               placeholder="Target date"
+              disabled={projectMade}
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-t border-border">
-          {createProject.isError ? (
-            <p className="text-xs text-destructive">Failed to create project.</p>
-          ) : (
-            <span />
-          )}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-border">
+          {/* On the page even while empty, so a screen reader hears a failure
+              when it appears, and how a create is getting on. It used to say
+              only "Failed to create project." and nothing at all when the
+              workspace step failed. */}
+          <p role="status" className={cn("text-xs", progress ? "text-muted-foreground" : "text-destructive")}>
+            {progress ?? createFailure}
+          </p>
           <Button
             size="sm"
             disabled={!name.trim() || createProject.isPending}
             onClick={handleSubmit}
           >
-            {createProject.isPending ? "Creating…" : "Create project"}
+            {/* {createProject.isPending ? "Creating…" : "Create project"} */}
+            {submitLabel}
           </Button>
         </div>
       </DialogContent>

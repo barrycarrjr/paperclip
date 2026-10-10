@@ -89,8 +89,12 @@ vi.mock("../context/ToastContext", () => ({
   useToast: () => ({
     pushToast: mockPushToast,
   }),
+  // All of the real actions: a save that works takes back an earlier failure
+  // message by its id, through dismissToast.
   useOptionalToastActions: () => ({
     pushToast: mockPushToast,
+    dismissToast: vi.fn(),
+    clearToasts: vi.fn(),
   }),
 }));
 

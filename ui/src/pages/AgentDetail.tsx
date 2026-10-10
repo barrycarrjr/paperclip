@@ -1904,7 +1904,9 @@ export function PromptsTab({
 }) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
-  const { confirmSaved, withdrawSaved } = useSaveConfirmation();
+  // Named, so a failure said before the agent page was left is taken back or
+  // replaced by a save of the same agent's instructions after coming back.
+  const { confirmSaved, reportFailed } = useSaveConfirmation({ saveName: "agent-instructions" });
   const { isMobile } = useSidebar();
   const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
@@ -1924,6 +1926,12 @@ export function PromptsTab({
   const containerRef = useRef<HTMLDivElement>(null);
   const [awaitingRefresh, setAwaitingRefresh] = useState(false);
   const lastFileVersionRef = useRef<string | null>(null);
+  // The file the version above is for.
+  const lastFileVersionPathRef = useRef<string | null>(null);
+  // The version of the file the last save sent. The reload after that save
+  // brings it back, and that is the save landing, not a newer version from
+  // somewhere else, so it must not throw away what is in the editor.
+  const savedFileVersionRef = useRef<string | null>(null);
   const externalBundleRef = useRef<{
     rootPath: string;
     entryFile: string;
@@ -1941,6 +1949,8 @@ export function PromptsTab({
     setExpandedDirs(new Set());
     setAwaitingRefresh(false);
     lastFileVersionRef.current = null;
+    lastFileVersionPathRef.current = null;
+    savedFileVersionRef.current = null;
     externalBundleRef.current = null;
   }, [agent.id]);
 
@@ -2011,7 +2021,10 @@ export function PromptsTab({
   const saveFile = useMutation({
     mutationFn: (data: { path: string; content: string; clearLegacyPromptTemplate?: boolean }) =>
       agentsApi.saveInstructionsFile(agent.id, data, companyId),
-    onMutate: () => setAwaitingRefresh(true),
+    onMutate: (data) => {
+      savedFileVersionRef.current = `${data.path}:${data.content}`;
+      setAwaitingRefresh(true);
+    },
     // Waits for the reload for the same reason as updateBundle above.
     onSuccess: async (_, variables) => {
       setPendingFiles((prev) => prev.filter((f) => f !== variables.path));
@@ -2034,7 +2047,15 @@ export function PromptsTab({
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
     },
-    onError: () => setAwaitingRefresh(false),
+    // A delete that failed used to say nothing, and the file just stayed.
+    onError: (error, relativePath) => {
+      setAwaitingRefresh(false);
+      pushToast({
+        title: `Could not delete ${relativePath}`,
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
+    },
   });
 
   const uploadMarkdownImage = useMutation({
@@ -2102,15 +2123,24 @@ export function PromptsTab({
     const versionKey = selectedFileExists && selectedFileDetail
       ? `${selectedFileDetail.path}:${selectedFileDetail.content}`
       : `draft:${currentMode}:${currentRootPath}:${selectedOrEntryFile}`;
+    const sameFile = lastFileVersionPathRef.current === selectedOrEntryFile;
+    lastFileVersionPathRef.current = selectedOrEntryFile;
     if (awaitingRefresh) {
       setAwaitingRefresh(false);
-      setBundleDraft(null);
-      setDraft(null);
+      // These cleared the drafts the moment Save was pressed, before the save
+      // had gone through, so a save that failed lost the edit. The save clears
+      // them itself once it has worked (see onSaveActionChange below).
+      // setBundleDraft(null);
+      // setDraft(null);
       lastFileVersionRef.current = versionKey;
       return;
     }
     if (lastFileVersionRef.current !== versionKey) {
-      setDraft(null);
+      // The reload after a save brings back what was saved, and that keeps the
+      // editor as it is (the save clears its own draft once it has worked).
+      // Any other new version, or another file, starts from what is saved.
+      const saveLanded = sameFile && versionKey === savedFileVersionRef.current;
+      if (!saveLanded) setDraft(null);
       lastFileVersionRef.current = versionKey;
     }
   }, [awaitingRefresh, currentMode, currentRootPath, selectedFileDetail, selectedFileExists, selectedOrEntryFile]);
@@ -2176,19 +2206,31 @@ export function PromptsTab({
       // One message once every part has gone through, rather than one per
       // request. A failure used to be dropped here, so it looked exactly like
       // a save that worked.
+      //
+      // This tab stays on the page when you move to another agent, so each
+      // message is filed under the agent it is about: a save for the next
+      // agent that works used to take back this agent's failure.
       void save().then(
-        () => confirmSaved("Instructions saved"),
+        () => {
+          // Saved, so the drafts that were saved go. Anything typed while the
+          // save ran is newer than what was saved, and stays.
+          setDraft((current) => (current === displayValue ? null : current));
+          setBundleDraft((current) => (current === bundleDraft ? null : current));
+          // confirmSaved("Instructions saved");
+          confirmSaved("Instructions saved", agent.id);
+        },
         (error: unknown) => {
-          withdrawSaved();
-          pushToast({
-            title: "Could not save instructions",
-            body: error instanceof Error ? error.message : undefined,
-            tone: "error",
-          });
+          // The drafts stay, so the edit is still there to save again. Said
+          // through reportFailed rather than a toast of its own, so a save
+          // that then works takes this message back, and the same failure
+          // again replaces it rather than being dropped as a duplicate.
+          reportFailed(`Could not save instructions for ${agent.name}`, error, agent.id);
         },
       );
     } : null);
   }, [
+    agent.id,
+    agent.name,
     bundle,
     bundleDirty,
     bundleDraft,
@@ -2197,11 +2239,10 @@ export function PromptsTab({
     fileDirty,
     isDirty,
     onSaveActionChange,
-    pushToast,
+    reportFailed,
     saveFile,
     selectedOrEntryFile,
     updateBundle,
-    withdrawSaved,
   ]);
 
   useEffect(() => {
