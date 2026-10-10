@@ -24,7 +24,7 @@ describeEmbeddedPostgres("environmentService leases", () => {
 
   beforeAll(async () => {
     const started = await startEmbeddedPostgresTestDatabase("environment-service");
-    stopDb = started.stop;
+    stopDb = started.cleanup;
     db = createDb(started.connectionString);
     svc = environmentService(db);
   });
