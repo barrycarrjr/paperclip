@@ -159,10 +159,12 @@ import {
 import { followOpenRow, type ListRow, revealRowInList, sameListRow } from "../lib/reveal-in-list";
 import {
   FILLS_OR_KEEPS_HEIGHT_CLASS,
+  PAGE_CORNER_RIGHT_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
 } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
 import { Z_PAGE_NOTICE } from "../lib/z-layers";
+import { PageFloating } from "../components/PageFloatingLayer";
 import {
   applyImapOverrides,
   imapMailboxScope,
@@ -3487,35 +3489,39 @@ export function Email() {
 
       {/* ── Toast ──────────────────────────────────────────────────────────── */}
       {actionToast && (
-        <div
-          role={actionToast.failed ? "alert" : "status"}
-          // The page-notice layer, not z-50 (the dialog layer), where it drew
-          // over the Clippy window. See lib/z-layers.
-          className={cn(
-            "fixed bottom-4 right-4 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
-            Z_PAGE_NOTICE,
-            actionToast.failed
-              ? "bg-destructive text-destructive-foreground"
-              : "bg-foreground text-background",
-          )}
-        >
-          {actionToast.failed ? (
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          ) : (
-            <Check className="mt-0.5 h-4 w-4 shrink-0" />
-          )}
-          <span>
-            {actionToast.text}
-            {actionToast.issueId && (
-              <>
-                {" — "}
-                <Link to={`/issues/${actionToast.issueId}`} className="underline underline-offset-2">
-                  View issue
-                </Link>
-              </>
+        // Drawn beside the page area, not inside it (see PageFloating).
+        <PageFloating>
+          <div
+            role={actionToast.failed ? "alert" : "status"}
+            // The page-notice layer, not z-50 (the dialog layer), where it drew
+            // over the Clippy window. See lib/z-layers.
+            className={cn(
+              "fixed bottom-4 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
+              PAGE_CORNER_RIGHT_CLASS,
+              Z_PAGE_NOTICE,
+              actionToast.failed
+                ? "bg-destructive text-destructive-foreground"
+                : "bg-foreground text-background",
             )}
-          </span>
-        </div>
+          >
+            {actionToast.failed ? (
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <Check className="mt-0.5 h-4 w-4 shrink-0" />
+            )}
+            <span>
+              {actionToast.text}
+              {actionToast.issueId && (
+                <>
+                  {" — "}
+                  <Link to={`/issues/${actionToast.issueId}`} className="underline underline-offset-2">
+                    View issue
+                  </Link>
+                </>
+              )}
+            </span>
+          </div>
+        </PageFloating>
       )}
 
       {/* ── Compose dialog ───────────────────────────────────────────────── */}

@@ -96,4 +96,95 @@ describeEmbeddedPostgres("companySkillService.list", () => {
       message: "Company not found",
     });
   });
+
+  it("resolves skill entries the same as plain keys", async () => {
+    const companyId = randomUUID();
+    const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-review-skill-"));
+    cleanupDirs.add(skillDir);
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Review Coach\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: randomUUID(),
+      companyId,
+      key: `company/${companyId}/review-coach`,
+      slug: "review-coach",
+      name: "Review Coach",
+      description: null,
+      markdown: "# Review Coach\n",
+      sourceType: "local_path",
+      sourceLocator: skillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: { sourceKind: "local_path" },
+    });
+
+    await expect(
+      svc.resolveRequestedSkillKeys(companyId, [
+        { key: " review-coach ", versionId: "33333333-3333-4333-8333-333333333333" },
+        "review-coach",
+      ]),
+    ).resolves.toEqual([`company/${companyId}/review-coach`]);
+    await expect(
+      svc.resolveRequestedSkillKeys(companyId, [{ key: "retired-coach", versionId: null }]),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("keeps references an agent already has that no longer match one skill", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    // Two skills share the short name "review-coach".
+    for (const key of [`company/${companyId}/review-coach`, "local/abc123/review-coach"]) {
+      const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-review-skill-"));
+      cleanupDirs.add(skillDir);
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Review Coach\n", "utf8");
+      await db.insert(companySkills).values({
+        id: randomUUID(),
+        companyId,
+        key,
+        slug: "review-coach",
+        name: "Review Coach",
+        description: null,
+        markdown: "# Review Coach\n",
+        sourceType: "local_path",
+        sourceLocator: skillDir,
+        trustLevel: "markdown_only",
+        compatibility: "compatible",
+        fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+        metadata: { sourceKind: "local_path" },
+      });
+    }
+    const saved = ["review-coach", "Retired-Coach"];
+
+    await expect(
+      svc.resolveRequestedSkillKeys(
+        companyId,
+        ["review-coach", { key: "retired-coach", versionId: null }, "local/abc123/review-coach"],
+        { keepUnresolved: saved },
+      ),
+    ).resolves.toEqual(["review-coach", "Retired-Coach", "local/abc123/review-coach"]);
+    await expect(
+      svc.resolveRequestedSkillKeys(companyId, ["review-coach"]),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "Invalid company skill selection (ambiguous references: review-coach).",
+    });
+    await expect(
+      svc.resolveRequestedSkillKeys(companyId, ["retired-coach", "missing-coach"], { keepUnresolved: saved }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "Invalid company skill selection (unknown references: missing-coach).",
+    });
+  });
 });

@@ -31,6 +31,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS } from "../lib/narrow-layout";
+import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 
 const DEFAULT_STATUS_FILTER: IssueStatus[] = ISSUE_STATUSES.filter(
@@ -389,6 +392,8 @@ function BulkActionsBar({
   onToggleLabel,
 }: BulkActionsBarProps) {
   const [labelOpen, setLabelOpen] = useState(false);
+  // A page bottom bar: the Clippy launcher and the toasts sit above it.
+  const barRef = usePageBottomBarRef<HTMLDivElement>();
 
   const labelRows = useMemo(() => {
     const rows: Array<{ label: IssueLabel; company: Company; state: "all" | "some" | "none" }> = [];
@@ -418,117 +423,120 @@ function BulkActionsBar({
 
   return (
     // Page content, so the page-floating layer: on z-50 (the dialog layer) it
-    // drew over the Clippy window. See lib/z-layers.
-    <div className={cn("fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", Z_PAGE_FLOATING)}>
-      <span className="text-sm font-medium text-muted-foreground mr-1">
-        {count} selected
-      </span>
+    // drew over the Clippy window. See lib/z-layers. Drawn beside the page
+    // area, not inside it (see PageFloating).
+    <PageFloating>
+      <div ref={barRef} className={cn("fixed bottom-6 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
+        <span className="text-sm font-medium text-muted-foreground mr-1">
+          {count} selected
+        </span>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
-            Status
-            <ChevronDown className="h-3 w-3 opacity-50" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" side="top" className="mb-1">
-          {ISSUE_STATUSES.map((s) => (
-            <DropdownMenuItem key={s} onSelect={() => onStatusChange(s)}>
-              {statusLabel(s)}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+              Status
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" side="top" className="mb-1">
+            {ISSUE_STATUSES.map((s) => (
+              <DropdownMenuItem key={s} onSelect={() => onStatusChange(s)}>
+                {statusLabel(s)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      <Popover open={labelOpen} onOpenChange={setLabelOpen}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
-            <Tag className="h-3 w-3 opacity-70" />
-            Add Label
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="center" side="top" className="w-56 mb-1 p-1">
-          {labelRows.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-2 py-1.5">No labels found</p>
-          ) : (
-            <div className="flex flex-col">
-              {(() => {
-                const elements: React.ReactNode[] = [];
-                let lastCompanyId: string | null = null;
-                for (const { label, company, state } of labelRows) {
-                  if (multiCompany && company.id !== lastCompanyId) {
-                    lastCompanyId = company.id;
+        <Popover open={labelOpen} onOpenChange={setLabelOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+              <Tag className="h-3 w-3 opacity-70" />
+              Add Label
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="center" side="top" className="w-56 mb-1 p-1">
+            {labelRows.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-2 py-1.5">No labels found</p>
+            ) : (
+              <div className="flex flex-col">
+                {(() => {
+                  const elements: React.ReactNode[] = [];
+                  let lastCompanyId: string | null = null;
+                  for (const { label, company, state } of labelRows) {
+                    if (multiCompany && company.id !== lastCompanyId) {
+                      lastCompanyId = company.id;
+                      elements.push(
+                        <p key={`hdr-${company.id}`} className="text-[10px] font-medium text-muted-foreground px-2 pt-2 pb-0.5 first:pt-1">
+                          {company.name}
+                        </p>,
+                      );
+                    }
                     elements.push(
-                      <p key={`hdr-${company.id}`} className="text-[10px] font-medium text-muted-foreground px-2 pt-2 pb-0.5 first:pt-1">
-                        {company.name}
-                      </p>,
+                      <button
+                        key={label.id}
+                        type="button"
+                        className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-sm hover:bg-accent text-left"
+                        onClick={() => onToggleLabel(label.id, company.id)}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: label.color }}
+                        />
+                        <span className="flex-1 truncate">{label.name}</span>
+                        {state === "all" && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                        {state === "some" && <span className="h-1.5 w-1.5 rounded-full bg-primary/50 shrink-0" />}
+                      </button>,
                     );
                   }
-                  elements.push(
-                    <button
-                      key={label.id}
-                      type="button"
-                      className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-sm hover:bg-accent text-left"
-                      onClick={() => onToggleLabel(label.id, company.id)}
-                    >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: label.color }}
-                      />
-                      <span className="flex-1 truncate">{label.name}</span>
-                      {state === "all" && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
-                      {state === "some" && <span className="h-1.5 w-1.5 rounded-full bg-primary/50 shrink-0" />}
-                    </button>,
-                  );
-                }
-                return elements;
-              })()}
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
+                  return elements;
+                })()}
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
 
-      <Popover open={commentOpen} onOpenChange={setCommentOpen}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onComment}>
-            Add Comment
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="center" side="top" className="w-72 mb-1">
-          <div className="flex flex-col gap-2">
-            <p className="text-xs text-muted-foreground">
-              Add a comment to {count} issue{count !== 1 ? "s" : ""}
-            </p>
-            <Textarea
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="Write a comment…"
-              className="text-sm resize-none"
-              rows={3}
-              autoFocus
-            />
-            <Button
-              size="sm"
-              onClick={onSubmitComment}
-              disabled={!commentText.trim() || isPending}
-              className="self-end"
-            >
-              <Check className="h-3.5 w-3.5 mr-1" />
-              Submit
+        <Popover open={commentOpen} onOpenChange={setCommentOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onComment}>
+              Add Comment
             </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
+          </PopoverTrigger>
+          <PopoverContent align="center" side="top" className="w-72 mb-1">
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Add a comment to {count} issue{count !== 1 ? "s" : ""}
+              </p>
+              <Textarea
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Write a comment…"
+                className="text-sm resize-none"
+                rows={3}
+                autoFocus
+              />
+              <Button
+                size="sm"
+                onClick={onSubmitComment}
+                disabled={!commentText.trim() || isPending}
+                className="self-end"
+              >
+                <Check className="h-3.5 w-3.5 mr-1" />
+                Submit
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
 
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 text-xs text-muted-foreground"
-        onClick={onClear}
-      >
-        ✕ Deselect
-      </Button>
-    </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
+          onClick={onClear}
+        >
+          ✕ Deselect
+        </Button>
+      </div>
+    </PageFloating>
   );
 }
 

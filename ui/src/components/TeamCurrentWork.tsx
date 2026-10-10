@@ -295,7 +295,11 @@ export function TeamCurrentWork({ companyId }: { companyId: string }) {
         onPick={setScopeId}
       />
 
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+      {/* On one line only where the page area has room for the filters, the
+          search and the view switch together (a container query, see
+          PAGE_AREA_CONTAINER_CLASS). Sized by the window, docked Clippy
+          pushed the view switch past the edge of the page. */}
+      <div className="flex flex-col gap-2 @[40rem]:flex-row @[40rem]:items-center @[40rem]:justify-between">
         <div className="flex flex-wrap items-center gap-1.5" data-testid="team-state-filters">
           <FilterChip
             label="Everyone"
@@ -322,7 +326,7 @@ export function TeamCurrentWork({ companyId }: { companyId: string }) {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="relative min-w-0 flex-1 lg:w-64 lg:flex-none">
+          <div className="relative min-w-0 flex-1 @[40rem]:w-64 @[40rem]:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
               type="search"
@@ -364,7 +368,7 @@ export function TeamCurrentWork({ companyId }: { companyId: string }) {
           onShowOrg={setScopeId}
         />
       ) : view === "cards" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 @md:grid-cols-2 @4xl:grid-cols-3 @6xl:grid-cols-4">
           {visible.map((row) => (
             <TeamMemberCard
               key={row.agent.id}

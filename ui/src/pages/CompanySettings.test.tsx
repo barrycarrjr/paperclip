@@ -54,6 +54,10 @@ const mockCompanies = vi.hoisted(() => [
     issuePrefix: "PAP",
   },
 ]);
+// The real context has no companies until its list loads. Tests see the loaded
+// list unless they set `loading`.
+const mockCompanyListState = vi.hoisted(() => ({ loading: false }));
+const mockNoCompanies = vi.hoisted((): typeof mockCompanies => []);
 
 vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
@@ -99,12 +103,15 @@ vi.mock("../context/ToastContext", () => ({
 }));
 
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({
-    companies: mockCompanies,
-    selectedCompany: mockCompanies[0],
-    selectedCompanyId: "company-1",
-    setSelectedCompanyId: mockSetSelectedCompanyId,
-  }),
+  useCompany: () => {
+    const companies = mockCompanyListState.loading ? mockNoCompanies : mockCompanies;
+    return {
+      companies,
+      selectedCompany: companies[0] ?? null,
+      selectedCompanyId: "company-1",
+      setSelectedCompanyId: mockSetSelectedCompanyId,
+    };
+  },
 }));
 
 // useActiveCompanyId (P4 sweep, 2026-09-03) reads useParams from @/lib/router;
@@ -163,6 +170,50 @@ describe("CompanySettings", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
+    mockCompanyListState.loading = false;
+  });
+
+  // Opening the page by its address renders it first while the company list is
+  // still loading, then again once the list arrives. A hook placed after the
+  // page's "no company" early return made that second render call more hooks
+  // than the first, and React threw "Rendered more hooks than during the
+  // previous render".
+  it("shows the settings once the company list finishes loading", async () => {
+    mockCompanyListState.loading = true;
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const renderPage = () =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <CompanySettings />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+
+    await act(async () => {
+      renderPage();
+    });
+    await flushReact();
+    expect(container.textContent).toContain("No company selected");
+
+    mockCompanyListState.loading = false;
+    await act(async () => {
+      renderPage();
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Company Settings");
+    const nameInput = Array.from(container.querySelectorAll("input"))
+      .find((input) => input.value === "Paperclip");
+    expect(nameInput).toBeTruthy();
+
+    await act(async () => {
+      root.unmount();
+    });
   });
 
   it("hides sandbox creation when no run-capable sandbox provider plugins are installed", async () => {

@@ -11,7 +11,9 @@ export type DialogOpening = object;
  * answer comes back. A dialog that sends a request stays open until the answer
  * comes (closing it does nothing until then), but the component holding it can
  * still go first: browser Back leaves the page, and Skill Studio rebuilds its
- * panes when the window crosses 900 px. TanStack Query still runs the
+ * panes when it switches between side by side panes and tabs (the window
+ * crossing 900 px, or the studio's own width changing as Clippy docks or the
+ * navigation opens). TanStack Query still runs the
  * onSuccess and onError given to useMutation after that, with the values from
  * the last render, and state set by them on a component that has gone goes
  * nowhere. So when the opening is no longer showing, a failure goes to a

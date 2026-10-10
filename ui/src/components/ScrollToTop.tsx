@@ -9,6 +9,7 @@ import {
 } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
+import { PageFloating } from "./PageFloatingLayer";
 
 function resolveScrollTarget() {
   const mainContent = document.getElementById("main-content");
@@ -76,21 +77,24 @@ export function ScrollToTop() {
   if (!visible) return null;
 
   return (
-    <button
-      onClick={scroll}
-      // Stacked above ScrollToBottom, which is above the Clippy launcher
-      // (see lib/narrow-layout).
-      className={cn(
-        "fixed flex items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-[background-color,right] duration-200",
-        Z_PAGE_FLOATING,
-        PAGE_SCROLL_BUTTON_SIZE_CLASS,
-        SCROLL_TO_TOP_OFFSET_CLASS,
-        PAGE_SCROLL_BUTTON_RIGHT_CLASS,
-        panelVisible && panelContent && PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS,
-      )}
-      aria-label="Scroll to top"
-    >
-      <ArrowUp className="h-4 w-4" />
-    </button>
+    // Beside the page area, not inside it (see PageFloating).
+    <PageFloating>
+      <button
+        onClick={scroll}
+        // Stacked above ScrollToBottom, which is above the Clippy launcher
+        // (see lib/narrow-layout).
+        className={cn(
+          "fixed flex items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-[background-color,right] duration-200",
+          Z_PAGE_FLOATING,
+          PAGE_SCROLL_BUTTON_SIZE_CLASS,
+          SCROLL_TO_TOP_OFFSET_CLASS,
+          PAGE_SCROLL_BUTTON_RIGHT_CLASS,
+          panelVisible && panelContent && PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS,
+        )}
+        aria-label="Scroll to top"
+      >
+        <ArrowUp className="h-4 w-4" />
+      </button>
+    </PageFloating>
   );
 }

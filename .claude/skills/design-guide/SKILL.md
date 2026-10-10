@@ -207,11 +207,13 @@ Label is always `text-xs text-muted-foreground`, value on the right. Wrap in a c
 Dashboard metrics in a responsive grid:
 
 ```tsx
-<div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+<div className="grid @md:grid-cols-2 @4xl:grid-cols-4 gap-4">
   <MetricCard icon={Bot} value={12} label="Active Agents" description="+3 this week" />
   ...
 </div>
 ```
+
+The columns are container queries, sized by the page area rather than the window (see Layout System).
 
 ### Progress Bar (Budget)
 
@@ -289,6 +291,25 @@ Three-zone layout defined in `Layout.tsx`:
 - Properties panel: `w-80`, shown on detail views, hidden on lists
 - Main content: scrollable, `flex-1`
 
+### Page Layouts Follow the Page Area, Not the Window
+
+The page area (`main`) is a size container (`PAGE_AREA_CONTAINER_CLASS`, `ui/src/lib/narrow-layout.ts`). Docked Clippy, the navigation and the properties panel all take width from the page without the window getting any narrower, so a breakpoint that shapes a page's content (how many columns, whether a side column or a header's buttons sit beside the rest) is a container query: `@md:`, `@[40rem]:`, `@4xl:`. Keep `sm:` and `md:` for what depends on the device itself: phone or desktop, icon-only buttons, touch sizes.
+
+- Pick the size where the content still fits. A starting point is the page width the window breakpoint gave with the navigation open: `lg:` is `@[40rem]:`, `xl:` about `@4xl:`, `2xl:` about `@6xl:`. Not `@2xl:` for `lg:`: at 1024 wide with the navigation open the page area is 664 pixels, about 650 under a scrollbar, just short of the 672 `@2xl:` needs, so the 1024 layout would change.
+- Check the page at 1440 and 1280 wide with Clippy docked as a sidebar, and that it looks the same as before at 1440, and at 1024 with the navigation open, without Clippy.
+- For a choice CSS cannot make, such as panes or tabs, measure the element with `useElementWidth` (`ui/src/hooks/useElementWidth.ts`).
+- A query answers to the nearest container: inside a component that is one itself (`@container/card-header`, the agent run panels) it measures that component instead.
+
+### Bottom Bars and Floating Buttons
+
+The bottom of the window is shared: the Clippy launcher and the page's scroll buttons sit in the right corner, the toasts at the left of the page, and a page may pin a bar there too.
+
+- Anything a page fixes to the screen (a bar, a corner notice, the scroll buttons, a hand built overlay) is drawn through `<PageFloating>` (`ui/src/components/PageFloatingLayer.tsx`), which puts it in a layer beside the page area. Never inside the page area: Safari before 18.4 placed a fixed element inside a size container against the container, so a Save bar sat at the end of the page. `ui/src/fixed-elements.test.ts` fails on a fixed class list that is not drawn this way or through a portal.
+- A bar a page pins along the bottom (fixed, or sticky to the bottom) takes `usePageBottomBarRef` (`ui/src/hooks/usePageBottomBar.ts`). While it shows, the launcher, the scroll buttons and the toasts sit above it. On a phone they sit at the higher of their usual place and just above the bar, not both added up.
+- The row that ends a page needs nothing: the page area keeps room under a page that scrolls (`PAGE_END_ROOM_CLASS`), so its last row ends above the launcher.
+- Anything a page fixes to the right adds docked Clippy's width, `var(--clippy-dock-width,0px)` (`PAGE_CORNER_RIGHT_CLASS` at the corner offset), or the docked panel covers it.
+- Floating layers stay off the app's own columns: toasts start beside the navigation, not over its account button, and the launcher moves beside the properties panel. The launcher never covers the scroll buttons, which stack above it.
+
 ---
 
 ## 10. The /design-guide Page
@@ -361,3 +382,6 @@ All components use `cn()` from `@/lib/utils` for className merging. All componen
 - Forgetting dark mode — always use semantic tokens, never hardcode light/dark values
 - A Save button that shows nothing when the save works, or a save that fails silently. Use `useSaveMutation` (see Saving above)
 - A warning styled as secondary text, such as a "this chat is in another company" note in muted grey. Use the warning colours (see Notices above)
+- A page layout sized by the window (`lg:grid-cols-4`, `xl:grid-cols-[19rem_1fr]`), which squeezes when Clippy is docked. Use a container query (see Page Layouts Follow the Page Area)
+- A bar pinned to the bottom without `usePageBottomBarRef`, or a fixed element placed with a plain `right-4`: the launcher sits on the bar, or docked Clippy hides it (see Bottom Bars and Floating Buttons)
+- A fixed bar, notice or button drawn inside the page instead of through `<PageFloating>`: an older Safari pins it to the page area, not the screen (see Bottom Bars and Floating Buttons)
