@@ -54,7 +54,7 @@ jobs:
       - name: Validate launchers
         run: |
           for script in scripts/launchers/unix/*.sh scripts/launchers/macos/*.command; do bash -n "$script"; done
-          node --test scripts/launchers/unix/install-metadata.test.mjs scripts/launchers/unix/common.test.mjs scripts/launchers/unix/desktop-reminders.test.mjs scripts/check-upstream-security.test.mjs
+          node --test scripts/launchers/unix/install-metadata.test.mjs scripts/launchers/unix/common.test.mjs scripts/launchers/unix/desktop-reminders.test.mjs scripts/launchers/unix/login-item.test.mjs scripts/check-upstream-security.test.mjs
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build runtime including runner
