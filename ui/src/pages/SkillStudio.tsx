@@ -2,7 +2,7 @@ import { AgentIdentity } from "@/components/AgentIdentity";
 import { SkillCardIcon, type DiscoveryCard } from "@/components/SkillCardIcon";
 import { SkillBinaryFile } from "../components/SkillBinaryFile";
 import { SkillSourceProvenance } from "../components/SkillSourceProvenance";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -54,6 +54,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useOptionalToastActions } from "../context/ToastContext";
 import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useDialogOpening, type DialogOpening } from "../hooks/useDialogOpening";
+import { useElementWidth } from "../hooks/useElementWidth";
 import { classifySkillDenial } from "@/lib/skill-policy-denial";
 import { agentsApi } from "@/api/agents";
 import { companySkillsApi } from "@/api/companySkills";
@@ -182,6 +183,14 @@ import {
 const PANE_STORAGE_KEY = "skillStudio.paneSizes";
 const RUN_TEMPLATE_STORAGE_KEY_PREFIX = "skillStudio.runTemplate";
 const MOBILE_BREAKPOINT = 900;
+/**
+ * The narrowest the three panes fit at their own minimums (280, 240 and 360
+ * pixels, see StudioShell) with the two 8 pixel handles between them. Below
+ * this the studio shows them as tabs, measured against the room the studio
+ * has rather than the window: with Clippy docked at 1440 wide the middle pane
+ * was squeezed to about 30 pixels, its text one letter to a line.
+ */
+const STUDIO_PANES_MIN_WIDTH = 280 + 240 + 360 + 2 * 8;
 const POLL_MS = 2000;
 const EMPTY_RUN_TEMPLATES: CompanySkillTestRunTemplate[] = [];
 
@@ -990,6 +999,9 @@ function StudioShell({
 }) {
   const skillId = skill.id;
   const isMobile = useIsMobile();
+  // The studio's own width, for whether the three panes fit side by side.
+  const [shellRef, shellWidth] = useElementWidth<HTMLDivElement>();
+  const showTabs = isMobile || (shellWidth !== null && shellWidth < STUDIO_PANES_MIN_WIDTH);
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -1007,6 +1019,22 @@ function StudioShell({
   const [skillDirty, setSkillDirty] = useState(false);
   const [versionSheetOpen, setVersionSheetOpen] = useState(false);
   const [forkDialogOpen, setForkDialogOpen] = useState(false);
+
+  // The file open in the Skill pane with its unsaved draft, and unsaved
+  // changes to a saved input, are kept here rather than in the panes:
+  // switching between side by side panes and tabs builds the panes again,
+  // and in tabs so does picking another tab (see useSkillFileEditor).
+  const skillFile = useSkillFileEditor(companyId, skill);
+  const [savedInputDraft, setSavedInputDraft] = useState<SavedInputDraftState>(
+    EMPTY_SAVED_INPUT_DRAFT_STATE,
+  );
+  // For the header's marker and the Run button, kept right here whichever
+  // pane is on screen. SkillPane used to say it, and while that pane was not
+  // on screen nobody did.
+  const skillFileDirty = skillFile.draft !== skillFile.savedContent;
+  useEffect(() => {
+    setSkillDirty(skillFileDirty);
+  }, [skillFileDirty]);
 
   const layoutRef = useRef<PaneLayout>(loadPaneLayout());
 
@@ -1050,7 +1078,8 @@ function StudioShell({
     <SkillPane
       companyId={companyId}
       skill={skill}
-      onDirtyChange={setSkillDirty}
+      editor={skillFile}
+      // onDirtyChange={setSkillDirty}
       onEditACopy={() => setForkDialogOpen(true)}
     />
   );
@@ -1065,6 +1094,8 @@ function StudioShell({
       adHocMode={adHocMode}
       adHocContent={adHocContent}
       onAdHocChange={setAdHocContent}
+      savedInputDraft={savedInputDraft}
+      onSavedInputDraftChange={setSavedInputDraft}
       onSelectInput={(id) => {
         setSelectedInputId(id);
         setAdHocMode(false);
@@ -1096,7 +1127,7 @@ function StudioShell({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div ref={shellRef} className="flex h-full min-h-0 flex-col">
         <StudioHeader
           companyId={companyId}
           skill={skill}
@@ -1109,7 +1140,7 @@ function StudioShell({
         {projectScan ? (
           <ProjectScanNotice skill={skill} onEditACopy={() => setForkDialogOpen(true)} />
         ) : null}
-        {isMobile ? (
+        {showTabs ? (
           <MobileTabs skill={leftPane} input={middlePane} runs={rightPane} />
         ) : (
           <ResizablePanelGroup
@@ -1199,7 +1230,9 @@ function StudioHeader({
   }, [toast]);
 
   return (
-    <header className="flex items-center gap-3 border-b border-border px-3 py-2">
+    // Wraps where the studio is too narrow for everything on one line, as
+    // with Clippy docked, where "Version history" ran past the edge.
+    <header className="flex flex-wrap items-center gap-3 gap-y-1 border-b border-border px-3 py-2">
       <SkillSwitcher
         skill={skill}
         skills={skills}
@@ -1285,7 +1318,7 @@ function SkillSwitcher({
       onValueChange={(value) => {
         if (value !== skill?.id) onSelectSkill(value);
       }}
-      triggerClassName="h-8 w-64 border-0 bg-transparent px-0 text-base font-semibold shadow-none hover:bg-accent md:w-80"
+      triggerClassName="h-8 w-64 border-0 bg-transparent px-0 text-base font-semibold shadow-none hover:bg-accent @4xl:w-80"
       contentClassName="w-80"
       contentWidth="auto"
       renderValue={(option) => option?.label ?? skill?.name ?? emptyLabel}
@@ -1313,15 +1346,70 @@ function withCurrentSkill(
 // Left — Skill files + editor
 // ---------------------------------------------------------------------------
 
+/**
+ * The Skill pane's editor: the file open in it, the folders open in its file
+ * tree, and the file's text as edited (draft) and as last loaded or saved
+ * (savedContent). StudioShell keeps it and hands it to SkillPane, so it
+ * outlasts the pane. The pane is built again whenever the studio switches
+ * between side by side panes and tabs, and in tabs each time another tab is
+ * picked. Kept in the pane, an unsaved edit went with it: the file loaded
+ * again over the edit and its Unsaved marker cleared, without a word. Docking
+ * Clippy, dragging its edge and opening the navigation all make that switch.
+ *
+ * The file is loaded here too, so a pane built again does not load it over
+ * the draft. Its text goes into the draft only when the request brings text
+ * the draft has not had: another file, or this one changed and fetched again.
+ */
+function useSkillFileEditor(companyId: string, skill: CompanySkillDetail) {
+  const skillId = skill.id;
+  const [selectedFile, setSelectedFile] = useState<string>(() => {
+    const paths = skill.fileInventory.map((f) => f.path);
+    return paths.find((p) => /skill\.md$/i.test(p)) ?? paths[0] ?? "SKILL.md";
+  });
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [draft, setDraft] = useState<string>("");
+  const [savedContent, setSavedContent] = useState<string>("");
+
+  const fileQuery = useQuery({
+    queryKey: queryKeys.companySkills.file(companyId, skillId, selectedFile),
+    queryFn: () => companySkillsApi.file(companyId, skillId, selectedFile),
+    enabled: Boolean(companyId && skillId && selectedFile),
+  });
+
+  useEffect(() => {
+    if (fileQuery.data) {
+      setDraft(fileQuery.data.content);
+      setSavedContent(fileQuery.data.content);
+    }
+  }, [fileQuery.data]);
+
+  return {
+    selectedFile,
+    setSelectedFile,
+    expandedDirs,
+    setExpandedDirs,
+    draft,
+    setDraft,
+    savedContent,
+    setSavedContent,
+    fileQuery,
+  };
+}
+
+type SkillFileEditor = ReturnType<typeof useSkillFileEditor>;
+
 function SkillPane({
   companyId,
   skill,
-  onDirtyChange,
+  editor,
+  // onDirtyChange,
   onEditACopy,
 }: {
   companyId: string;
   skill: CompanySkillDetail;
-  onDirtyChange: (dirty: boolean) => void;
+  /** The file open here and its draft, kept by StudioShell (useSkillFileEditor). */
+  editor: SkillFileEditor;
+  // onDirtyChange: (dirty: boolean) => void;
   onEditACopy: () => void;
 }) {
   const skillId = skill.id;
@@ -1331,12 +1419,24 @@ function SkillPane({
     () => skill.fileInventory.map((f) => f.path),
     [skill.fileInventory],
   );
-  const [selectedFile, setSelectedFile] = useState<string>(
-    () => paths.find((p) => /skill\.md$/i.test(p)) ?? paths[0] ?? "SKILL.md",
-  );
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
-  const [draft, setDraft] = useState<string>("");
-  const [savedContent, setSavedContent] = useState<string>("");
+  // Kept by StudioShell now, so a pane built again still has them.
+  // const [selectedFile, setSelectedFile] = useState<string>(
+  //   () => paths.find((p) => /skill\.md$/i.test(p)) ?? paths[0] ?? "SKILL.md",
+  // );
+  // const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  // const [draft, setDraft] = useState<string>("");
+  // const [savedContent, setSavedContent] = useState<string>("");
+  const {
+    selectedFile,
+    setSelectedFile,
+    expandedDirs,
+    setExpandedDirs,
+    draft,
+    setDraft,
+    savedContent,
+    setSavedContent,
+    fileQuery,
+  } = editor;
   const [createDialog, setCreateDialog] = useState<"file" | "folder" | null>(null);
   const [deleteFolderOpen, setDeleteFolderOpen] = useState(false);
   // Why the last create or folder delete failed, said inside the dialog it
@@ -1344,11 +1444,22 @@ function SkillPane({
   const [createFailure, setCreateFailure] = useState<string | null>(null);
   const [deleteFolderFailure, setDeleteFolderFailure] = useState<string | null>(null);
   // Which opening of each dialog a request was sent from (see
-  // useDialogOpening). This pane is rebuilt when the window crosses
-  // MOBILE_BREAKPOINT, and gone when the page is left, so an answer can come
-  // back after the dialog that asked for it has.
+  // useDialogOpening). This pane is rebuilt when the studio switches between
+  // side by side panes and tabs (the window crossing MOBILE_BREAKPOINT, or the
+  // studio's own width crossing STUDIO_PANES_MIN_WIDTH), and gone when the
+  // page is left, so an answer can come back after the dialog that asked for
+  // it has.
   const createOpening = useDialogOpening(createDialog !== null);
   const deleteFolderOpening = useDialogOpening(deleteFolderOpen);
+  // Whether this pane is still the one on screen, for a delete that comes
+  // back after the panes were built again (see deleteMutation).
+  const paneShowingRef = useRef(true);
+  useEffect(() => {
+    paneShowingRef.current = true;
+    return () => {
+      paneShowingRef.current = false;
+    };
+  }, []);
   // Gate rich-editor onChange until the user actually interacts with the body.
   // MDXEditor can emit a normalizing onChange on mount, which would otherwise
   // dirty the file on open and break the byte-identity guarantee (PAP-13156).
@@ -1362,27 +1473,37 @@ function SkillPane({
     [paths],
   );
 
-  const fileQuery = useQuery({
-    queryKey: queryKeys.companySkills.file(companyId, skillId, selectedFile),
-    queryFn: () => companySkillsApi.file(companyId, skillId, selectedFile),
-    enabled: Boolean(companyId && skillId && selectedFile),
-  });
-
+  // Loaded in useSkillFileEditor now, so a pane built again does not load the
+  // file over an unsaved edit.
+  // const fileQuery = useQuery({
+  //   queryKey: queryKeys.companySkills.file(companyId, skillId, selectedFile),
+  //   queryFn: () => companySkillsApi.file(companyId, skillId, selectedFile),
+  //   enabled: Boolean(companyId && skillId && selectedFile),
+  // });
+  //
+  // useEffect(() => {
+  //   if (fileQuery.data) {
+  //     bodyInteractedRef.current = false;
+  //     setDraft(fileQuery.data.content);
+  //     setSavedContent(fileQuery.data.content);
+  //   }
+  // }, [fileQuery.data]);
+  // Text that useSkillFileEditor takes into the draft is new to the editor
+  // too, so the editor's on-mount tidy-up is ignored again until the person
+  // touches it. A pane built again starts with this off as well.
   useEffect(() => {
-    if (fileQuery.data) {
-      bodyInteractedRef.current = false;
-      setDraft(fileQuery.data.content);
-      setSavedContent(fileQuery.data.content);
-    }
+    if (fileQuery.data) bodyInteractedRef.current = false;
   }, [fileQuery.data]);
 
   const dirty = draft !== savedContent;
   const currentFolder = parentFolder(selectedFile);
   const pathSet = useMemo(() => new Set(paths), [paths]);
 
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
+  // Said by StudioShell now, which keeps the draft, so the header's marker
+  // stays right while this pane is not on screen.
+  // useEffect(() => {
+  //   onDirtyChange(dirty);
+  // }, [dirty, onDirtyChange]);
 
   const selectFile = useCallback((path: string) => {
     if (path === selectedFile) return;
@@ -1427,11 +1548,21 @@ function SkillPane({
     }) =>
       companySkillsApi.updateFile(companyId, skillId, path, content),
     onMutate: () => setCreateFailure(null),
-    onSuccess: (created) => {
-      setSelectedFile(created.path);
-      setDraft(created.content);
-      setSavedContent(created.content);
-      setCreateDialog(null);
+    onSuccess: (created, sent) => {
+      // The open file is kept by StudioShell, which outlasts this pane. Made
+      // after its dialog had gone with the pane, the file is in the tree, but
+      // it is not opened over what the person has moved on to (see
+      // useDialogOpening), just as it was not while the pane kept the file.
+      // setSelectedFile(created.path);
+      // setDraft(created.content);
+      // setSavedContent(created.content);
+      // setCreateDialog(null);
+      if (createOpening.isShowing(sent.opening)) {
+        setSelectedFile(created.path);
+        setDraft(created.content);
+        setSavedContent(created.content);
+        setCreateDialog(null);
+      }
       queryClient.invalidateQueries({
         queryKey: queryKeys.companySkills.detail(companyId, skillId),
       });
@@ -1479,7 +1610,17 @@ function SkillPane({
     onSuccess: (result) => {
       const deleted = new Set(result.deletedPaths);
       const remaining = paths.filter((path) => !deleted.has(path));
-      setSelectedFile(remaining.find((path) => /skill\.md$/i.test(path)) ?? remaining[0] ?? "SKILL.md");
+      const fallback = remaining.find((path) => /skill\.md$/i.test(path)) ?? remaining[0] ?? "SKILL.md";
+      // setSelectedFile(remaining.find((path) => /skill\.md$/i.test(path)) ?? remaining[0] ?? "SKILL.md");
+      // The open file is kept by StudioShell, which outlasts this pane. While
+      // this pane is on screen a delete goes back to the main file, as it
+      // always did. Once the panes have been built again, the person may have
+      // opened another file since, so it only changes if it was deleted.
+      if (paneShowingRef.current) {
+        setSelectedFile(fallback);
+      } else {
+        setSelectedFile((current) => (deleted.has(current) ? fallback : current));
+      }
       setDeleteFolderOpen(false);
       queryClient.invalidateQueries({
         queryKey: queryKeys.companySkills.detail(companyId, skillId),
@@ -2043,6 +2184,8 @@ function InputPane({
   adHocMode,
   adHocContent,
   onAdHocChange,
+  savedInputDraft,
+  onSavedInputDraftChange,
   onSelectInput,
   onSelectAdHoc,
 }: {
@@ -2054,6 +2197,9 @@ function InputPane({
   adHocMode: boolean;
   adHocContent: string;
   onAdHocChange: (value: string) => void;
+  /** Unsaved changes to the selected saved input, kept by StudioShell so they outlast this pane. */
+  savedInputDraft: SavedInputDraftState;
+  onSavedInputDraftChange: Dispatch<SetStateAction<SavedInputDraftState>>;
   onSelectInput: (id: string) => void;
   onSelectAdHoc: () => void;
 }) {
@@ -2062,9 +2208,12 @@ function InputPane({
   // The row's menu closes on click, so its copy confirmation goes to a toast.
   const copyWithToast = useCopyToast();
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
-  const [savedInputDraft, setSavedInputDraft] = useState<SavedInputDraftState>(
-    EMPTY_SAVED_INPUT_DRAFT_STATE,
-  );
+  // Kept by StudioShell now, as the Skill pane's draft is: a pane built again
+  // lost an unsaved change to the input, with no warning.
+  // const [savedInputDraft, setSavedInputDraft] = useState<SavedInputDraftState>(
+  //   EMPTY_SAVED_INPUT_DRAFT_STATE,
+  // );
+  const setSavedInputDraft = onSavedInputDraftChange;
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 

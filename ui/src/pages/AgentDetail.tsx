@@ -22,6 +22,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
 import { useSaveConfirmation, useSaveMutation } from "../hooks/useSaveMutation";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -51,6 +52,7 @@ import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
+import { PageFloating } from "../components/PageFloatingLayer";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
 import { buildRetryWakePayload, describeRunRetryState } from "../lib/runRetryState";
@@ -960,6 +962,10 @@ export function AgentDetail() {
     }, [configDirty]),
   );
 
+  // The Save and Cancel bar is the page's bottom bar: while it shows, the
+  // Clippy launcher, the scroll buttons and the toasts sit above it.
+  const configActionBarRef = usePageBottomBarRef<HTMLDivElement>();
+
   if (isLoading) return <PageSkeleton variant="detail" />;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
   if (!agent) return null;
@@ -971,9 +977,14 @@ export function AgentDetail() {
 
   return (
     <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
+      {/* Header. The buttons move to a line of their own when the page area
+          is too narrow for them beside the name: they keep their width, so
+          with Clippy docked the name used to be squeezed out of sight
+          entirely. The name keeps 16rem before that happens (8rem on a
+          phone, where the buttons are icons only), and takes the rest of the
+          line when there is more. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-[1_1_8rem] items-center gap-3 sm:flex-[1_1_16rem]">
           <AgentIconPicker
             value={agent.icon}
             onChange={(icon) => updateIcon.mutate(icon)}
@@ -1194,53 +1205,67 @@ export function AgentDetail() {
         </div>
       )}
 
-      {/* Floating Save/Cancel (desktop) */}
+      {/* Floating Save/Cancel (desktop). Moved in by docked Clippy's width:
+          at `right-6` it sat under the docked panel and could not be seen or
+          pressed (lib/narrow-layout, PAGE_CORNER_RIGHT_CLASS). Drawn beside
+          the page area, not inside it (PageFloating): an older Safari pinned
+          it to the end of the page. */}
       {!isMobile && showConfigActionBar && (
-        <div className="fixed bottom-6 right-6 z-30">
-          <div className="flex items-center gap-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-3 py-1.5 shadow-lg">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => cancelConfigActionRef.current?.()}
-              disabled={configSaving}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => saveConfigActionRef.current?.()}
-              disabled={configSaving}
-            >
-              {configSaving ? "Saving…" : "Save"}
-            </Button>
+        <PageFloating>
+          <div
+            ref={configActionBarRef}
+            className="fixed bottom-6 right-[calc(var(--clippy-dock-width,0px)+1.5rem)] z-30"
+          >
+            <div className="flex items-center gap-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-3 py-1.5 shadow-lg">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => cancelConfigActionRef.current?.()}
+                disabled={configSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => saveConfigActionRef.current?.()}
+                disabled={configSaving}
+              >
+                {configSaving ? "Saving…" : "Save"}
+              </Button>
+            </div>
           </div>
-        </div>
+        </PageFloating>
       )}
 
-      {/* Mobile bottom Save/Cancel bar */}
+      {/* Mobile bottom Save/Cancel bar, beside the page area too. */}
       {isMobile && showConfigActionBar && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm">
+        <PageFloating>
           <div
-            className="flex items-center justify-end gap-2 px-3 py-2"
-            style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
+            ref={configActionBarRef}
+            className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm"
           >
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => cancelConfigActionRef.current?.()}
-              disabled={configSaving}
+            <div
+              className="flex items-center justify-end gap-2 px-3 py-2"
+              style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
             >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => saveConfigActionRef.current?.()}
-              disabled={configSaving}
-            >
-              {configSaving ? "Saving…" : "Save"}
-            </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => cancelConfigActionRef.current?.()}
+                disabled={configSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => saveConfigActionRef.current?.()}
+                disabled={configSaving}
+              >
+                {configSaving ? "Saving…" : "Save"}
+              </Button>
+            </div>
           </div>
-        </div>
+        </PageFloating>
       )}
 
       {/* View content */}
@@ -1461,8 +1486,9 @@ function AgentOverview({
         <LatestRunCard runs={runs} agentId={agentRouteId} />
       )}
 
-      {/* Charts */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Charts, four across only where the page area has the room (a
+          container query, see PAGE_AREA_CONTAINER_CLASS). */}
+      <div className="grid grid-cols-2 @[40rem]:grid-cols-4 gap-4">
         <ChartCard title="Run Activity" subtitle="Last 14 days">
           <RunActivityChart runs={runs} />
         </ChartCard>

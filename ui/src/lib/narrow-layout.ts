@@ -25,9 +25,21 @@ export const MOBILE_BOTTOM_NAV_HEIGHT_CLASS = "h-16";
  * The round Clippy launcher was pinned at `bottom-4` on a higher layer than the
  * bar, so on a phone it sat exactly on top of the last button in the bar and
  * that button could not be tapped at all: every tap opened Clippy instead.
+ *
+ * Both halves also make room for `--page-bottom-bar-room`, how far up from
+ * the bottom of the window a bar a page pins there reaches (lib/page-bottom-bar),
+ * so the control sits above that bar rather than on it: the pill sat on the
+ * agent Save bar. On a desktop that is the ordinary 1rem above the bar.
+ *
+ * On a phone it is the higher of the two places, 1rem above the bar or clear
+ * of the bottom bar and the safe area, not both added up. The 5rem already
+ * keeps the launcher clear of the phone's bottom bar, and the bar's room is
+ * measured from the bottom of the window, so it holds the safe area already.
+ * Added up, the launcher rose from about 114 to about 330 pixels on the issue
+ * chat, and scroll-to-top landed over the messages.
  */
 export const ABOVE_MOBILE_BOTTOM_NAV_CLASS =
-  "bottom-[calc(5rem+env(safe-area-inset-bottom))] md:bottom-4";
+  "bottom-[max(calc(5rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+1rem))] md:bottom-[calc(1rem+var(--page-bottom-bar-room,0px))]";
 
 /**
  * Size of the Clippy launcher: a round 48 pixel button on a phone, and from
@@ -43,14 +55,17 @@ export const PAGE_SCROLL_BUTTON_SIZE_CLASS = "size-9";
  * Where the page's scroll buttons sit: in a column above the Clippy
  * launcher, never beside it. The round launcher left room for them to its
  * left, 80 pixels in from the edge; the pill is wider than that, so they move
- * up instead. Each value is one rem length so the test can add them up:
- * on a phone the launcher's top is 5rem + 3rem, on a desktop 1rem + 2.5rem,
- * and each button is 2.25rem tall with a small gap above what it clears.
+ * up instead. Each value starts with one rem length so the test can add them
+ * up: on a phone the launcher's top is 5rem + 3rem, on a desktop 1rem + 2.5rem,
+ * and each button is 2.25rem tall with a small gap above what it clears. They
+ * make room for a page's bottom bar the same way the launcher does, the higher
+ * of the two on a phone, so the whole column moves up together above the bar
+ * and keeps its spacing.
  */
 export const SCROLL_TO_BOTTOM_OFFSET_CLASS =
-  "bottom-[calc(8.75rem+env(safe-area-inset-bottom))] md:bottom-[4.25rem]";
+  "bottom-[max(calc(8.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+4.75rem))] md:bottom-[calc(4.25rem+var(--page-bottom-bar-room,0px))]";
 export const SCROLL_TO_TOP_OFFSET_CLASS =
-  "bottom-[calc(11.5rem+env(safe-area-inset-bottom))] md:bottom-[7rem]";
+  "bottom-[max(calc(11.5rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+7.5rem))] md:bottom-[calc(7rem+var(--page-bottom-bar-room,0px))]";
 
 /**
  * How far in from the right the scroll buttons sit: centred over the round
@@ -65,6 +80,42 @@ export const PAGE_SCROLL_BUTTON_RIGHT_CLASS =
 /** The same, while the 320 pixel properties panel is also showing on the right. */
 export const PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS =
   "md:right-[calc(var(--clippy-dock-width,0px)+320px+1rem)]";
+
+/**
+ * How far in from the right a page's own floating element sits when it is
+ * meant for the bottom right corner, such as the Email page's short
+ * "Archived" notice. A page's fixed elements are placed against the window,
+ * so a plain `right-4` put them under Clippy whenever Clippy was docked as a
+ * side panel, on a higher layer: the agent Save and Cancel bar, at `right-6`,
+ * could not be seen or pressed at all. Anything a page fixes to the right
+ * adds the docked width the same way the scroll buttons do; this is the
+ * version at the ordinary corner offset.
+ */
+export const PAGE_CORNER_RIGHT_CLASS = "right-[calc(var(--clippy-dock-width,0px)+1rem)]";
+
+/**
+ * Centres a page's own bar along the bottom, such as the action bar that comes
+ * up when rows are selected. Centred on the window, it ran under docked
+ * Clippy: at 1280 wide the portfolio issues bar lost its Deselect button
+ * under the panel. With Clippy docked it centres on the page area instead,
+ * between the navigation (`--app-nav-width`) and the panel; without Clippy
+ * `min` keeps it in the middle of the window, where it always was.
+ */
+export const PAGE_BOTTOM_BAR_CENTER_CLASS =
+  "left-[min(50%,calc(var(--app-nav-width,0px)+(100%-var(--app-nav-width,0px)-var(--clippy-dock-width,0px))/2))] -translate-x-1/2";
+
+/**
+ * Where the toasts sit on a desktop: beside the company rail and the
+ * navigation rather than on top of them, and above a page's own bottom bar.
+ * At the left edge of the window they covered the account button at the
+ * bottom of the navigation and the add-company button under the rail.
+ * `--app-nav-width` is the width of those two columns, set by Layout
+ * (APP_NAV_WIDTH_PROPERTY). On a phone the navigation is a drawer, so the
+ * toasts keep their place there.
+ */
+export const APP_NAV_WIDTH_PROPERTY = "--app-nav-width";
+export const TOAST_VIEWPORT_DESKTOP_CLASS =
+  "md:left-[calc(var(--app-nav-width,0px)+0.75rem)] md:bottom-[calc(0.75rem+var(--page-bottom-bar-room,0px))]";
 
 /**
  * Stops one page making the whole app slide sideways on a phone.
@@ -96,6 +147,73 @@ export const PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS =
  * the shell around it never moves.
  */
 export const PAGE_AREA_CLIPS_SIDEWAYS_CLASS = "overflow-x-clip overflow-y-visible";
+
+/**
+ * Makes the page area a size container, so a page can shape itself to the
+ * room it actually has with container queries (`@md:`, `@2xl:`, `@4xl:`)
+ * instead of to the browser window (`md:`, `lg:`, `xl:`).
+ *
+ * The window is the wrong measure whenever something beside the page takes
+ * part of it. Docked as a side panel, Clippy takes 420 pixels: at 1440 wide
+ * the page has about 660 pixels left, the width it has at 1024 without
+ * Clippy, yet every `xl:` rule still fired, so the Overview's four stat cards
+ * sat in four columns of 150 pixels with their labels on two lines and their
+ * second line cut off. The properties panel and the navigation take room the
+ * same way. Measured against the page area, a layout changes where the page
+ * runs out of room, whatever took it.
+ *
+ * `inline-size` measures the width only, so the page area still grows to its
+ * content's height.
+ *
+ * In Chromium it does not make the page area the box that `fixed` elements
+ * inside it are placed against: a fixed element inside it stayed where it was
+ * against the window. Safari before 18.4 did (WebKit bugs 277122 and 284945),
+ * so there a fixed element inside the page area was pinned to the page area,
+ * not the screen: the agent Save bar sat at the end of the page. A page
+ * therefore never fixes anything inside the page area. Its fixed bars, notices
+ * and buttons go through PageFloating (components/PageFloatingLayer), which
+ * draws them in a layer beside the page area, whatever the browser.
+ */
+export const PAGE_AREA_CONTAINER_CLASS = "@container";
+
+/**
+ * Room at the end of a page that scrolls, so its last row ends above the
+ * Clippy launcher instead of under it. Scrolled to the end, the Pipelines "add
+ * items" page put its Submit button exactly on the launcher's top edge: the
+ * page area's 1.5rem of padding plus the page's own 2rem came to the 3.5rem
+ * the launcher reaches up to. A 3rem block after the page brings the end to
+ * at least 4.5rem up, clear of the launcher by a rem whatever the page's own
+ * padding is.
+ *
+ * A block after the page rather than more padding: a bar that sticks to the
+ * bottom of the page area stops at the area's padding, so more padding lifted
+ * the Pipelines "unsaved changes" bar 72 pixels off the bottom of the window,
+ * with the page showing underneath it.
+ *
+ * Only while the page is longer than the page area: Layout sets
+ * `data-page-end-room` then (hooks/usePageEndRoom, pageNeedsEndRoom below). A
+ * page that fills the area exactly, such as Skill Studio or the org chart,
+ * keeps its full height, and a short page has room to spare already. On a
+ * phone the page area already keeps room for the bottom bar and the launcher.
+ */
+export const PAGE_END_ROOM_CLASS =
+  "md:data-[page-end-room=true]:after:block md:data-[page-end-room=true]:after:h-12";
+
+/** The height PAGE_END_ROOM_CLASS adds after the page: `h-12`, 3rem. */
+export const PAGE_END_ROOM_EXTRA_PX = 48;
+
+/**
+ * Whether a page area needs the room at its end: whether its page would still
+ * scroll without it. Measured without the room so that adding it cannot change
+ * the answer, which would switch it on and off for ever.
+ */
+export function pageNeedsEndRoom(
+  pageArea: { scrollHeight: number; clientHeight: number },
+  roomIsOn: boolean,
+): boolean {
+  const withoutRoom = roomIsOn ? pageArea.scrollHeight - PAGE_END_ROOM_EXTRA_PX : pageArea.scrollHeight;
+  return withoutRoom > pageArea.clientHeight + 1;
+}
 
 /**
  * A row whose contents are allowed to move onto a second line. Pair it with

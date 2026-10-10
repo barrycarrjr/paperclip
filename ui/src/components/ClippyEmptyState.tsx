@@ -24,11 +24,14 @@ export function ClippyEmptyState({ greetingName, suggestions, onPickSuggestion, 
         <ul aria-label="Suggested questions" className="flex w-full max-w-sm flex-col gap-0.5 text-left">
           {suggestions.map((suggestion) => (
             <li key={suggestion}>
+              {/* text-left: a button centres its text, so a question that
+                  wrapped in the narrow docked panel sat centred under the
+                  others. */}
               <button
                 type="button"
                 disabled={disabled}
                 onClick={() => onPickSuggestion(suggestion)}
-                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:ring-[3px] focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:ring-[3px] focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               >
                 <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0">{suggestion}</span>

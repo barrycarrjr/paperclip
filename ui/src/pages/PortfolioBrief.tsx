@@ -757,7 +757,11 @@ export function PortfolioBrief() {
                       {companies.length} compan{companies.length === 1 ? "y" : "ies"}
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {/* Three across only where the page area has the room (a
+                      container query, see PAGE_AREA_CONTAINER_CLASS). Sized
+                      by the window, docked Clippy left each card too narrow
+                      for its counts, which fell into one column. */}
+                  <div className="grid grid-cols-1 @md:grid-cols-2 @[40rem]:grid-cols-3 gap-3">
                     {companies.map((company) => {
                       const summary = summariesByCompanyId.get(company.id);
                       if (!summary) return null;
@@ -1002,7 +1006,7 @@ export function PortfolioBrief() {
                       </span>
                     </div>
                     {visible.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-3">
+                    <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-3 p-3">
                       {groupRunsByIssue(visible).map((entry) =>
                         entry.kind === "group" ? (
                           <GroupedRunsCard

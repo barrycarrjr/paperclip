@@ -21,6 +21,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS } from "../lib/narrow-layout";
+import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
 
@@ -629,30 +632,35 @@ interface BulkActionsBarProps {
 
 function BulkActionsBar({ count, selectedNonArchivedCount, onRun, onPause, onResume, onArchive, onClear }: BulkActionsBarProps) {
   const disabled = selectedNonArchivedCount === 0;
+  // A page bottom bar: the Clippy launcher and the toasts sit above it.
+  const barRef = usePageBottomBarRef<HTMLDivElement>();
   return (
     // Page content, so the page-floating layer: on z-50 (the dialog layer) it
-    // drew over the Clippy window. See lib/z-layers.
-    <div className={cn("fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", Z_PAGE_FLOATING)}>
-      <span className="text-sm font-medium text-muted-foreground mr-1">
-        {count} selected
-      </span>
-      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onRun} disabled={disabled}>
-        <Play className="h-3 w-3" /> Run
-      </Button>
-      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onPause} disabled={disabled}>
-        <Pause className="h-3 w-3" /> Pause
-      </Button>
-      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onResume} disabled={disabled}>
-        <Play className="h-3 w-3" /> Resume
-      </Button>
-      <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-red-600 hover:text-red-700" onClick={onArchive} disabled={disabled}>
-        <ArchiveIcon className="h-3 w-3" /> Archive
-      </Button>
-      <span className="text-[11px] text-muted-foreground/70 mx-1">·</span>
-      <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground" onClick={onClear}>
-        <X className="h-3 w-3" /> Clear
-      </Button>
-    </div>
+    // drew over the Clippy window. See lib/z-layers. Drawn beside the page
+    // area, not inside it (see PageFloating).
+    <PageFloating>
+      <div ref={barRef} className={cn("fixed bottom-6 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
+        <span className="text-sm font-medium text-muted-foreground mr-1">
+          {count} selected
+        </span>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onRun} disabled={disabled}>
+          <Play className="h-3 w-3" /> Run
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onPause} disabled={disabled}>
+          <Pause className="h-3 w-3" /> Pause
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onResume} disabled={disabled}>
+          <Play className="h-3 w-3" /> Resume
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-red-600 hover:text-red-700" onClick={onArchive} disabled={disabled}>
+          <ArchiveIcon className="h-3 w-3" /> Archive
+        </Button>
+        <span className="text-[11px] text-muted-foreground/70 mx-1">·</span>
+        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground" onClick={onClear}>
+          <X className="h-3 w-3" /> Clear
+        </Button>
+      </div>
+    </PageFloating>
   );
 }
 
@@ -664,27 +672,31 @@ interface ArchiveConfirmDialogProps {
 
 function ArchiveConfirmDialog({ count, onCancel, onConfirm }: ArchiveConfirmDialogProps) {
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onClick={onCancel}
-    >
+    // Drawn beside the page area, not inside it (see PageFloating): an older
+    // Safari confined a fixed cover inside the page area to the page area.
+    <PageFloating>
       <div
-        className="bg-background border border-border rounded-lg shadow-xl p-5 max-w-md w-[90vw]"
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        onClick={onCancel}
       >
-        <h2 className="text-base font-semibold mb-2">Archive {count} routine{count === 1 ? "" : "s"}?</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Archived routines won't run on their schedule. You can unarchive them later from this page.
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-          <Button variant="default" size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={onConfirm}>
-            Archive
-          </Button>
+        <div
+          className="bg-background border border-border rounded-lg shadow-xl p-5 max-w-md w-[90vw]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 className="text-base font-semibold mb-2">Archive {count} routine{count === 1 ? "" : "s"}?</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            Archived routines won't run on their schedule. You can unarchive them later from this page.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+            <Button variant="default" size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={onConfirm}>
+              Archive
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </PageFloating>
   );
 }

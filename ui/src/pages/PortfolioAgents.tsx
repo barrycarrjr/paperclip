@@ -33,6 +33,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
+import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS } from "../lib/narrow-layout";
+import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
 import { Tabs } from "@/components/ui/tabs";
@@ -426,47 +429,52 @@ interface BulkActionsBarProps {
 }
 
 function BulkActionsBar({ count, onPause, onResume, onClear, isPending }: BulkActionsBarProps) {
+  // A page bottom bar: the Clippy launcher and the toasts sit above it.
+  const barRef = usePageBottomBarRef<HTMLDivElement>();
   return (
     // Page content, so the page-floating layer: on z-50 (the dialog layer) it
-    // drew over the Clippy window. See lib/z-layers.
-    <div className={cn("fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", Z_PAGE_FLOATING)}>
-      <span className="text-sm font-medium text-muted-foreground mr-1">
-        {count} selected
-      </span>
+    // drew over the Clippy window. See lib/z-layers. Drawn beside the page
+    // area, not inside it (see PageFloating).
+    <PageFloating>
+      <div ref={barRef} className={cn("fixed bottom-6 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
+        <span className="text-sm font-medium text-muted-foreground mr-1">
+          {count} selected
+        </span>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" disabled={isPending}>
-            Pause
-            <ChevronDown className="h-3 w-3 opacity-50" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" side="top" className="mb-1">
-          <DropdownMenuItem onSelect={onPause}>Pause selected</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs gap-1" disabled={isPending}>
+              Pause
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" side="top" className="mb-1">
+            <DropdownMenuItem onSelect={onPause}>Pause selected</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" disabled={isPending}>
-            Resume
-            <ChevronDown className="h-3 w-3 opacity-50" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" side="top" className="mb-1">
-          <DropdownMenuItem onSelect={onResume}>Resume selected</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs gap-1" disabled={isPending}>
+              Resume
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" side="top" className="mb-1">
+            <DropdownMenuItem onSelect={onResume}>Resume selected</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 text-xs text-muted-foreground"
-        onClick={onClear}
-      >
-        ✕ Deselect
-      </Button>
-    </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
+          onClick={onClear}
+        >
+          ✕ Deselect
+        </Button>
+      </div>
+    </PageFloating>
   );
 }
 

@@ -3281,19 +3281,25 @@ export function IssueDetail() {
 
       <PageSection flush>
       {/* The tab strip is full-bleed so its underline reads as the section's
-          own header band; the padding lives on the panels instead. */}
+          own header band; the padding lives on the panels instead.
+
+          Where the page area is narrower than 20rem (a container query, see
+          PAGE_AREA_CONTAINER_CLASS) the icons go and the strip's padding
+          halves, so the three names still fit. With Clippy docked beside the
+          properties panel at 1280 wide the page has about 280 pixels, and
+          "Related work" was cut off. */}
       <Tabs value={detailTab} onValueChange={setDetailTab}>
-        <TabsList variant="line" className="w-full justify-start gap-1 px-4">
+        <TabsList variant="line" className="w-full justify-start gap-1 px-2 @xs:px-4">
           <TabsTrigger value="chat" className="gap-1.5">
-            <MessageSquare className="h-3.5 w-3.5" />
+            <MessageSquare className="hidden h-3.5 w-3.5 @xs:block" />
             Chat
           </TabsTrigger>
           <TabsTrigger value="activity" className="gap-1.5">
-            <ActivityIcon className="h-3.5 w-3.5" />
+            <ActivityIcon className="hidden h-3.5 w-3.5 @xs:block" />
             Activity
           </TabsTrigger>
           <TabsTrigger value="related-work" className="gap-1.5">
-            <ListTree className="h-3.5 w-3.5" />
+            <ListTree className="hidden h-3.5 w-3.5 @xs:block" />
             Related work
           </TabsTrigger>
           {issuePluginTabItems.map((item) => (

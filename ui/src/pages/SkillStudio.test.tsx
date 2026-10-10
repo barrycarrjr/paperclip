@@ -323,6 +323,13 @@ function buttonsNamed(node: ParentNode, name: string) {
   );
 }
 
+/** The skill body editor (a plain text box in these tests) holding this text. */
+function bodyEditorWith(node: ParentNode, text: string) {
+  return Array.from(node.querySelectorAll<HTMLTextAreaElement>('[data-testid="markdown-editor"]')).find(
+    (editor) => editor.value.includes(text),
+  );
+}
+
 beforeEach(() => {
   routeState.pathname = "/skills/studio/new";
   routeState.search = "";
@@ -743,6 +750,181 @@ describe("SkillStudio editor frontmatter", () => {
       link.getAttribute("href")?.includes("/skills/studio/new?forkFrom"),
     );
     expect(staleForkLink).toBeUndefined();
+  });
+});
+
+describe("SkillStudio panes in a narrow page area", () => {
+  /** Every element the studio asked to have its width watched, and how to tell it a width. */
+  let watching: Array<{ target: Element; report: (width: number) => void }> = [];
+
+  beforeEach(() => {
+    routeState.pathname = "/skills/studio/source-skill";
+    routeState.search = "";
+    routeState.skillId = "source-skill";
+    watching = [];
+    class FakeResizeObserver {
+      private readonly callback: (entries: Array<{ contentRect: { width: number } }>) => void;
+      constructor(callback: (entries: Array<{ contentRect: { width: number } }>) => void) {
+        this.callback = callback;
+      }
+      observe(target: Element) {
+        watching.push({ target, report: (width) => this.callback([{ contentRect: { width } }]) });
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Gives the studio this much room, as docking Clippy, dragging its edge or
+   * opening the navigation does. The window stays 1024 wide, wide enough for
+   * the panes by the window's measure. Only the observer watching the studio
+   * itself (the element holding its header) is told.
+   */
+  async function setStudioWidth(width: number) {
+    const studio = () =>
+      watching.filter(({ target }) => Array.from(target.children).some((child) => child.tagName === "HEADER"));
+    await waitFor(() => expect(studio().length).toBeGreaterThan(0));
+    await act(async () => {
+      for (const { report } of studio()) report(width);
+    });
+  }
+
+  /** The tabs on screen. The skill's own frontmatter editor has tabs too, so look for the panes'. */
+  function tabNames(node: ParentNode) {
+    return Array.from(node.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim());
+  }
+
+  async function expectTabs(node: ParentNode) {
+    await waitFor(() => expect(tabNames(node)).toEqual(expect.arrayContaining(["Skill", "Input", "Runs"])));
+  }
+
+  async function expectPanes(node: ParentNode) {
+    await waitFor(() => {
+      expect(tabNames(node)).not.toContain("Input");
+      expect(tabNames(node)).not.toContain("Runs");
+    });
+  }
+
+  /** Picks one of the panes' tabs, as a click does. */
+  async function pickTab(node: ParentNode, name: string) {
+    const tab = Array.from(node.querySelectorAll<HTMLElement>('[role="tab"]')).find(
+      (candidate) => candidate.textContent?.trim() === name,
+    );
+    expect(tab, `the ${name} tab is on screen`).toBeTruthy();
+    await act(async () => {
+      tab!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+  }
+
+  function badgeTexts(node: ParentNode) {
+    return Array.from(node.querySelectorAll('[data-slot="badge"]')).map((badge) => badge.textContent?.trim());
+  }
+
+  function skillBodyEditor(node: ParentNode) {
+    return bodyEditorWith(node, "# Demo Skill");
+  }
+
+  /** Types into the skill's body, once its file has loaded, and waits for it to count as unsaved. */
+  async function editSkillBody(node: ParentNode) {
+    await waitFor(() => expect(skillBodyEditor(node)).toBeTruthy());
+    await keyDown(skillBodyEditor(node)!, "E");
+    await waitFor(() => expectSkillEditKept(node));
+  }
+
+  /** The edit is still in the editor, and the pane and the header both still say it is unsaved. */
+  function expectSkillEditKept(node: ParentNode) {
+    expect(skillBodyEditor(node)?.value, "the edit is still in the editor").toContain("Edited body");
+    expect(badgeTexts(node), "the pane and the header say it is unsaved").toEqual(
+      expect.arrayContaining(["Unsaved", "Unsaved edits"]),
+    );
+  }
+
+  it("shows the panes as tabs when the studio is too narrow for all three, whatever the window", async () => {
+    // Docked Clippy takes 420 pixels from the page without the window getting
+    // narrower, and the middle pane was squeezed to about 30 pixels, one letter
+    // to a line. The studio now measures its own width.
+    const node = await renderStudio();
+
+    await setStudioWidth(612);
+    await expectTabs(node);
+
+    await setStudioWidth(1080);
+    await expectPanes(node);
+  });
+
+  /*
+   * Switching between side by side panes and tabs builds the panes again, and
+   * in tabs so does picking another tab. The Skill pane kept the file being
+   * edited, so the file loaded again over an unsaved edit and its Unsaved
+   * marker cleared, without a word. Only resizing the window across 900
+   * pixels did that before the studio measured its own width; docking Clippy,
+   * dragging its edge and opening the navigation all do it now.
+   */
+
+  it("keeps an unsaved edit to the skill, and says it is unsaved, when the panes turn into tabs and back", async () => {
+    const node = await renderStudio();
+    await editSkillBody(node);
+
+    await setStudioWidth(612);
+    await expectTabs(node);
+    expectSkillEditKept(node);
+
+    await setStudioWidth(1080);
+    await expectPanes(node);
+    expectSkillEditKept(node);
+    // Loaded once, and not again over the edit.
+    expect(mockCompanySkillsApi.file).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unsaved edit to the skill when another tab is picked and then the Skill tab again", async () => {
+    const node = await renderStudio();
+    await setStudioWidth(612);
+    await expectTabs(node);
+    await editSkillBody(node);
+
+    await pickTab(node, "Runs");
+    expect(skillBodyEditor(node), "the Skill tab is off screen").toBeUndefined();
+    expect(badgeTexts(node)).toContain("Unsaved edits");
+
+    await pickTab(node, "Skill");
+    expectSkillEditKept(node);
+  });
+
+  it("keeps an unsaved change to a saved test input when the panes turn into tabs and back", async () => {
+    routeState.search = "?input=input-1";
+    mockCompanySkillsApi.testInputs.mockResolvedValue([
+      {
+        id: "input-1",
+        companyId: "company-1",
+        skillId: "source-skill",
+        name: "printer/jammed",
+        content: "The printer is jammed.",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    ]);
+    const node = await renderStudio();
+    const inputBox = () => node.querySelector<HTMLTextAreaElement>('textarea[aria-label="Skill test input"]');
+    await waitFor(() => expect(inputBox()?.value).toBe("The printer is jammed."));
+    await inputValue(inputBox()!, "The printer is jammed again.");
+    await waitFor(() => expect(buttonsNamed(node, "Save changes")).toHaveLength(1));
+
+    await setStudioWidth(612);
+    await expectTabs(node);
+    await pickTab(node, "Input");
+    expect(inputBox()?.value, "the change is still in the box").toBe("The printer is jammed again.");
+    expect(buttonsNamed(node, "Save changes"), "it can still be saved").toHaveLength(1);
+
+    await setStudioWidth(1080);
+    await expectPanes(node);
+    expect(inputBox()?.value).toBe("The printer is jammed again.");
+    expect(buttonsNamed(node, "Save changes")).toHaveLength(1);
   });
 });
 
@@ -1231,6 +1413,102 @@ describe("SkillStudio dialogs, a failed save", () => {
     const region = messageRegion(node);
     await waitFor(() => expect(region.textContent).toContain("Couldn't create file"));
     expect(region.textContent).toContain("The skill folder is read only.");
+  });
+
+  /*
+   * The open file and its draft are kept by the studio, not the pane, so they
+   * outlast the panes being built again. A request sent from the old pane
+   * must not then open something over what the person has moved on to.
+   */
+
+  it("leaves the open file and an edit made since alone when a file is made after the panes were rebuilt", async () => {
+    const made = deferred<unknown>();
+    mockCompanySkillsApi.updateFile.mockReturnValueOnce(made.promise);
+    const node = await renderStudio({ toasts: true });
+    await clickLabelled(node, "Add file");
+    await waitFor(() => expect(document.querySelector("#skill-path-input")).toBeTruthy());
+    await click(buttonsNamed(openDialog()!, "Create")[0] as HTMLButtonElement);
+    await waitFor(() => expect(mockCompanySkillsApi.updateFile).toHaveBeenCalled());
+
+    // The panes are built again, the dialog goes with the old ones, and the
+    // person carries on with SKILL.md.
+    await setWindowWidth(800);
+    await waitFor(() => expect(openDialog()).toBeNull());
+    await waitFor(() => expect(bodyEditorWith(node, "# Demo Skill")).toBeTruthy());
+    await keyDown(bodyEditorWith(node, "# Demo Skill")!, "E");
+    await waitFor(() => expect(bodyEditorWith(node, "Edited body")).toBeTruthy());
+
+    await act(async () => {
+      made.resolve({ path: "notes.md", content: "", markdown: true, editable: true, editableReason: null });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(bodyEditorWith(node, "# Demo Skill")?.value, "SKILL.md is still open, with the edit").toContain(
+      "Edited body",
+    );
+    expect(mockCompanySkillsApi.file).not.toHaveBeenCalledWith("company-1", "source-skill", "notes.md");
+  });
+
+  it("leaves a file opened since alone when a delete comes back after the panes were rebuilt", async () => {
+    mockCompanySkillsApi.detail.mockResolvedValue(makeSkill({
+      fileInventory: [
+        { path: "SKILL.md", kind: "skill" },
+        { path: "references/a.md", kind: "reference" },
+        { path: "references/b.md", kind: "reference" },
+      ],
+    } as Partial<CompanySkillDetail>));
+    mockCompanySkillsApi.file.mockImplementation((_companyId: string, _skillId: string, path: string) =>
+      Promise.resolve({ path, content: `# ${path}\n`, markdown: true, editable: true, editableReason: null }),
+    );
+    const deleted = deferred<unknown>();
+    mockCompanySkillsApi.deleteFile.mockReturnValueOnce(deleted.promise);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const node = await renderStudio({ toasts: true });
+      const row = (path: string) =>
+        node.querySelector<HTMLElement>(`[role="tree"][aria-label="Skill files"] [data-file-tree-path="${path}"]`);
+      /** Opens a file from the tree, opening its folder first if it is shut. */
+      const openFile = async (path: string) => {
+        await waitFor(() => expect(row("references")).toBeTruthy());
+        if (!row(path)) {
+          await act(async () => {
+            row("references")!.click();
+          });
+        }
+        await act(async () => {
+          row(path)!.click();
+        });
+        await waitFor(() => expect(bodyEditorWith(node, `# ${path}`)).toBeTruthy());
+      };
+
+      await openFile("references/a.md");
+      await clickLabelled(node, "Delete file");
+      await waitFor(() => expect(mockCompanySkillsApi.deleteFile).toHaveBeenCalled());
+
+      // The panes are built again while the delete runs, and the person opens
+      // another file and starts on it.
+      await setWindowWidth(800);
+      await openFile("references/b.md");
+      await keyDown(bodyEditorWith(node, "# references/b.md")!, "E");
+      await waitFor(() => expect(bodyEditorWith(node, "Edited body")).toBeTruthy());
+
+      await act(async () => {
+        deleted.resolve({
+          skillId: "source-skill",
+          path: "references/a.md",
+          target: "file",
+          deletedPaths: ["references/a.md"],
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // It used to go back to SKILL.md, over the edit.
+      const stillOpen = bodyEditorWith(node, "# references/b.md");
+      expect(stillOpen, "b.md is still open").toBeTruthy();
+      expect(stillOpen!.value, "with the edit").toContain("Edited body");
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it("says in a message why a run template could not be saved when the page is left while it is saved", async () => {

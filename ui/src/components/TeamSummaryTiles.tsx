@@ -63,8 +63,12 @@ export function TeamSummaryTiles({
   const pick = (group: TeamSummaryGroup) => () =>
     onPick(active === group ? "all" : group);
 
+  // Columns follow the room the page area has (container queries, see
+  // PAGE_AREA_CONTAINER_CLASS). Five across needs about 900 pixels: sized by
+  // the window, docked Clippy left five tiles of about 120 pixels, with the
+  // labels running into the icons and the descriptions cut to one word.
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 @xl:grid-cols-3 @4xl:grid-cols-5">
       <MetricCard
         icon={AlertCircle}
         value={attention}

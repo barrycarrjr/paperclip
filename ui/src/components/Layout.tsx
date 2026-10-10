@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
@@ -20,6 +20,7 @@ import { ClippyWindow } from "./ClippyWindow";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
+import { PageFloatingLayerProvider } from "./PageFloatingLayer";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { ClippyProvider, useClippyCoversPage } from "../context/ClippyContext";
@@ -44,7 +45,13 @@ import {
   resetNavigationScroll,
   shouldResetScrollOnNavigation,
 } from "../lib/navigation-scroll";
-import { PAGE_AREA_CLIPS_SIDEWAYS_CLASS } from "../lib/narrow-layout";
+import {
+  APP_NAV_WIDTH_PROPERTY,
+  PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
+  PAGE_AREA_CONTAINER_CLASS,
+  PAGE_END_ROOM_CLASS,
+} from "../lib/narrow-layout";
+import { usePageEndRoom } from "../hooks/usePageEndRoom";
 import { queryKeys } from "../lib/queryKeys";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
@@ -123,6 +130,10 @@ function LayoutShell() {
   const mainContentRef = useRef<HTMLElement | null>(null);
   const sidebarSheetRef = useRef<HTMLDivElement | null>(null);
   const sidebarOpenerRef = useRef<HTMLElement | null>(null);
+  // The layer beside the page area that a page's own fixed bars and buttons
+  // are drawn into (components/PageFloatingLayer). Kept in state, so the
+  // pages draw into it once it is there.
+  const [pageFloatingLayer, setPageFloatingLayer] = useState<HTMLElement | null>(null);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -374,6 +385,10 @@ function LayoutShell() {
     return scheduleMainContentFocus(mainContent);
   }, [location.pathname]);
 
+  // Room under the last row of a page that scrolls, for the Clippy launcher
+  // (PAGE_END_ROOM_CLASS). A phone keeps room for its bottom bar already.
+  usePageEndRoom(mainContentRef, !isMobile);
+
   useEffect(() => {
     const shouldResetScroll = shouldResetScrollOnNavigation({
       previousPathname: previousPathname.current,
@@ -388,8 +403,18 @@ function LayoutShell() {
     resetNavigationScroll(mainContentRef.current);
   }, [location.pathname, navigationType]);
 
+  // The company rail and the navigation beside the page on a desktop. The
+  // toasts start beside them rather than on top of them (lib/narrow-layout);
+  // on a phone the navigation is a drawer, so nothing is published there.
+  const appNavStyle = isMobile
+    ? undefined
+    : ({
+        [APP_NAV_WIDTH_PROPERTY]: `${COMPANY_RAIL_WIDTH + (sidebarOpen ? NAV_SIDEBAR_WIDTH : 0)}px`,
+      } as CSSProperties);
+
   return (
     <GeneralSettingsProvider value={{ keyboardShortcutsEnabled }}>
+      <PageFloatingLayerProvider value={pageFloatingLayer}>
       <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
@@ -398,6 +423,7 @@ function LayoutShell() {
         "pr-[var(--clippy-dock-width,0px)]",
         isMobile ? "min-h-dvh" : "flex h-dvh flex-col overflow-hidden",
       )}
+      style={appNavStyle}
       >
       {/* Full screen Clippy is a modal window: everything behind it, the skip
           link and the banners included, is out of the keyboard's reach until
@@ -540,13 +566,22 @@ function LayoutShell() {
                 and on a desktop it scrolls itself, so either way the top bar,
                 the menu and the bottom bar around it stay where they are. A
                 plugin page can be as wide as it likes and only its own square
-                of the screen is affected. */}
+                of the screen is affected.
+
+                It is also the size container pages measure themselves
+                against (PAGE_AREA_CONTAINER_CLASS): docked Clippy, the
+                navigation and the properties panel all take room from the
+                page without the window getting any narrower. And a page
+                that scrolls ends above the Clippy launcher, not under it
+                (PAGE_END_ROOM_CLASS). */}
             <main
               id="main-content"
               ref={mainContentRef}
               tabIndex={-1}
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
+                PAGE_AREA_CONTAINER_CLASS,
+                PAGE_END_ROOM_CLASS,
                 isMobile
                   ? `${PAGE_AREA_CLIPS_SIDEWAYS_CLASS} pb-[calc(5rem+env(safe-area-inset-bottom))]`
                   : "overflow-auto",
@@ -581,6 +616,12 @@ function LayoutShell() {
                 <Outlet key={companyPrefix ? companyPrefix.toUpperCase() : "no-company"} />
               )}
             </main>
+            {/* A page's own fixed bars and buttons are drawn here, beside the
+                page area rather than inside it (PageFloating): an older Safari
+                pinned anything fixed inside the page area to the page area,
+                not the screen. Inside the same inert wrapper as the page, and
+                `contents`, so it takes no room of its own. */}
+            <div ref={setPageFloatingLayer} data-page-floating-layer="" className="contents" />
             <PropertiesPanel />
           </div>
         </div>
@@ -600,6 +641,7 @@ function LayoutShell() {
       <ClippyWindow />
       <ToastViewport />
       </div>
+      </PageFloatingLayerProvider>
     </GeneralSettingsProvider>
   );
 }
