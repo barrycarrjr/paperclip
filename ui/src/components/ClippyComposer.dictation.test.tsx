@@ -37,6 +37,7 @@ class FakeRecognition {
 
 let container: HTMLDivElement;
 let root: Root;
+const secureContextDescriptor = Object.getOwnPropertyDescriptor(window, "isSecureContext");
 
 function render() {
   act(() => {
@@ -73,6 +74,12 @@ describe("dictating into Clippy", () => {
     container.remove();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).webkitSpeechRecognition;
+    if (secureContextDescriptor) {
+      Object.defineProperty(window, "isSecureContext", secureContextDescriptor);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any).isSecureContext;
+    }
   });
 
   it("shows no microphone in a browser that cannot dictate", () => {
@@ -127,5 +134,42 @@ describe("dictating into Clippy", () => {
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("blocked the microphone");
     expect(micButton()?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("says why on an address that is not secure, where the browser turns the microphone off without asking", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).webkitSpeechRecognition = FakeRecognition;
+    Object.defineProperty(window, "isSecureContext", { value: false, configurable: true });
+    render();
+
+    await act(async () => {
+      micButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // No attempt: the browser would refuse it, and call that a block.
+    expect(FakeRecognition.instances).toHaveLength(0);
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert).toContain("only allows the microphone on secure (https) addresses");
+    expect(alert).toContain("Open Paperclip over https");
+    expect(alert).not.toContain("blocked the microphone");
+    expect(micButton()?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("tells a speech service that is off apart from a blocked microphone", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).webkitSpeechRecognition = FakeRecognition;
+    render();
+
+    await act(async () => {
+      micButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      FakeRecognition.instances[0]!.onerror?.({ error: "service-not-allowed" });
+      FakeRecognition.instances[0]!.onend?.();
+    });
+
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert).toContain("speech service is turned off or not available");
+    expect(alert).not.toContain("blocked the microphone");
   });
 });
