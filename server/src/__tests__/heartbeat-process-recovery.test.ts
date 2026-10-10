@@ -27,6 +27,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+import { waitForHeartbeatRunsToFinish } from "./helpers/heartbeat-runs.js";
 import { runningProcesses } from "../adapters/index.ts";
 const mockAdapterExecute = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -262,7 +263,21 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       }
     }
     cleanupPids.clear();
+    // Runs a test set off keep writing after their rows turn terminal, and the
+    // cancel below would hide one still executing without stopping it. Let them
+    // finish first, so only seeded rows nothing will pick up are left to cancel.
+    // If the wait gives up, clean up anyway and fail the test afterwards: rows
+    // left behind would make every later test's wait give up too.
+    let unfinishedRunsError: unknown = null;
+    try {
+      await waitForHeartbeatRunsToFinish(db);
+    } catch (error) {
+      unfinishedRunsError = error;
+    }
     await cancelActiveRunsForCleanup(db, 5_000);
+    // The polls and pauses below, about 250 ms in all, stay as the margin for
+    // writes the wait above cannot see, chiefly a run that fails in setup before
+    // it takes its environment lease and still writes its continuation summary.
     let idlePolls = 0;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const runs = await db
@@ -344,6 +359,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
+    if (unfinishedRunsError) throw unfinishedRunsError;
   });
 
   afterAll(async () => {
