@@ -342,6 +342,24 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       );
       return extract(result);
     },
+
+    /**
+     * Take a sender off the triage routine's review queue without a rule. A
+     * rule clears the sender's entry on its own, so only Dismiss needs this.
+     * Needs email-tools 0.20.0 or later; older versions have no queue.
+     */
+    dismissReviewEntry: async (
+      mailbox: string,
+      sender: string,
+    ): Promise<{ ok: boolean; cleared: number }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.dismiss-review-entry",
+        { companyId, mailbox, sender },
+        companyId,
+      );
+      return extract(result);
+    },
   };
 }
 

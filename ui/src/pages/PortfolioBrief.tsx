@@ -53,7 +53,7 @@ import {
 import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout";
 import { nextWakeAtMs } from "../lib/next-wake";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
-import { buildReviewSenderGroups } from "../lib/email-triage-rules";
+import { buildReviewSenderGroups, clearStoredReviewEntry } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { pluginsApi } from "../api/plugins";
@@ -629,6 +629,10 @@ export function PortfolioBrief() {
       // sender from the brief. Next time they email, the new (unread) mail
       // will resurface here.
       await markRowUidsRead(row);
+      await clearStoredReviewEntry(
+        emailPluginId ? makeEmailToolsApi(emailPluginId, row.companyId) : null,
+        row,
+      );
     },
     ...reviewMutationOptions,
   });
