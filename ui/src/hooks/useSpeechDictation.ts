@@ -43,11 +43,31 @@ export function speechRecognitionConstructor(): SpeechRecognitionConstructor | n
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * Browsers let a page use the microphone only from a secure address (https,
+ * or localhost on the same computer). Anywhere else, such as
+ * http://paperclip.local, they turn it off at once without asking, and report
+ * the same "not-allowed" a click on Block gives, so "allow it" is advice
+ * nobody can follow there. No other address is offered: one on the same
+ * computer can refuse sign-in or have nothing listening, and a proxy in front
+ * changes the port.
+ */
+const INSECURE_ADDRESS_MESSAGE =
+  "The browser only allows the microphone on secure (https) addresses, so it turned it off here without asking. Open Paperclip over https to dictate.";
+
 function describeDictationError(code: string | undefined): string | null {
   // Silence is not a fault worth a message; the button just turns off.
   if (!code || code === "no-speech" || code === "aborted") return null;
-  if (code === "not-allowed" || code === "service-not-allowed") {
-    return "The browser blocked the microphone. Allow it for this site to dictate.";
+  // if (code === "not-allowed" || code === "service-not-allowed") {
+  //   return "The browser blocked the microphone. Allow it for this site to dictate.";
+  // }
+  if (code === "not-allowed") {
+    return "The browser blocked the microphone for this site. Allow it in the browser's settings for this site, then try again.";
+  }
+  // The browser's own speech service is off or refused (Dictation turned off
+  // on a Mac, say), which no site setting changes.
+  if (code === "service-not-allowed") {
+    return "The browser's speech service is turned off or not available, so dictation cannot start.";
   }
   if (code === "audio-capture") return "No microphone was found.";
   return "Dictation stopped because the browser reported a problem. Try again.";
@@ -79,6 +99,10 @@ export function useSpeechDictation(onText: (text: string) => void): SpeechDictat
   const start = useCallback(() => {
     const Recognition = speechRecognitionConstructor();
     if (!Recognition || recognitionRef.current) return;
+    if (window.isSecureContext === false) {
+      setError(INSECURE_ADDRESS_MESSAGE);
+      return;
+    }
     const recognition = new Recognition();
     recognition.lang = typeof navigator !== "undefined" && navigator.language ? navigator.language : "en-US";
     recognition.continuous = true;
