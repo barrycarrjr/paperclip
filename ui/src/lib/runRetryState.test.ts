@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { describeRunRetryState, formatRetryReason } from "./runRetryState";
+import { buildRetryWakePayload, describeRunRetryState, formatRetryReason } from "./runRetryState";
+
+describe("buildRetryWakePayload", () => {
+  // The server reads the run back to put the retry in that run's
+  // conversation; without it a retried Slack or scheduled run starts over.
+  it("names the run being retried even when it had no task", () => {
+    expect(
+      buildRetryWakePayload({
+        id: "run-1",
+        contextSnapshot: { wakeSource: "automation", pluginKey: "slack-tools" },
+      }),
+    ).toEqual({ retryOfRunId: "run-1" });
+    expect(buildRetryWakePayload({ id: "run-2", contextSnapshot: null })).toEqual({ retryOfRunId: "run-2" });
+  });
+
+  it("keeps the run's task", () => {
+    expect(
+      buildRetryWakePayload({
+        id: "run-1",
+        contextSnapshot: { issueId: "issue-1", taskId: "issue-1", taskKey: "issue-1", wakeReason: "issue_commented" },
+      }),
+    ).toEqual({ retryOfRunId: "run-1", issueId: "issue-1", taskId: "issue-1", taskKey: "issue-1" });
+  });
+});
 
 describe("runRetryState", () => {
   it("formats internal retry reasons for operators", () => {

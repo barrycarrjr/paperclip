@@ -31,6 +31,7 @@ import {
   type IssueFilterState,
 } from "../lib/issue-filters";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
+import { buildRetryWakePayload } from "../lib/runRetryState";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { buildCompanyUserLabelMap, buildCompanyUserProfileMap } from "../lib/company-members";
 import {
@@ -1520,18 +1521,11 @@ export function Inbox() {
 
   const retryRunMutation = useMutation({
     mutationFn: async (run: HeartbeatRun) => {
-      const payload: Record<string, unknown> = {};
-      const context = run.contextSnapshot as Record<string, unknown> | null;
-      if (context) {
-        if (typeof context.issueId === "string" && context.issueId) payload.issueId = context.issueId;
-        if (typeof context.taskId === "string" && context.taskId) payload.taskId = context.taskId;
-        if (typeof context.taskKey === "string" && context.taskKey) payload.taskKey = context.taskKey;
-      }
       const result = await agentsApi.wakeup(run.agentId, {
         source: "on_demand",
         triggerDetail: "manual",
         reason: "retry_failed_run",
-        payload,
+        payload: buildRetryWakePayload(run),
       });
       if (!("id" in result)) {
         throw new Error(result.message ?? "Retry was skipped.");

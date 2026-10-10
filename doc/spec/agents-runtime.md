@@ -72,6 +72,14 @@ Templates support variables like `{{agent.id}}`, `{{agent.name}}`, and run conte
 
 Paperclip stores resumable session state per `(agent, taskKey, adapterType)`.
 `taskKey` is derived from wakeup context (`taskKey`, `taskId`, or `issueId`).
+A run with no task gets a key for its kind of wake instead, so it continues a
+conversation of its own rather than whichever session the agent saved last:
+`__heartbeat__` for a scheduled run, `__plugin__:<plugin key>` for a plugin
+invoking the agent, and `__<wake source>__` otherwise (`__on_demand__` for a run
+started by hand). A run that carries on an earlier run's work continues that
+run's conversation instead: a decision on an approval goes back to the run that
+drafted it, and Retry, Resume and automatic retries go back to the run they
+repeat. Wakes waiting for the agent are merged only within one conversation.
 
 - A heartbeat for the same task key reuses the previous session for that task.
 - Different task keys for the same agent keep separate session state.
