@@ -113,6 +113,7 @@ import {
 } from "@paperclipai/adapter-pi-local";
 import {
   execute as cursorCloudExecute,
+  getConfigSchema as getCursorCloudConfigSchema,
   testEnvironment as cursorCloudTestEnvironment,
   sessionCodec as cursorCloudSessionCodec,
 } from "@paperclipai/adapter-cursor-cloud/server";
@@ -839,6 +840,7 @@ const cursorCloudAdapter: ServerAdapterModule = {
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: cursorCloudAgentConfigurationDoc,
+  getConfigSchema: getCursorCloudConfigSchema,
 };
 
 const grokLocalAdapter: ServerAdapterModule = {
