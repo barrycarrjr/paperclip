@@ -190,6 +190,91 @@
   --code: oklch(0.19 0 0);
 }
 
+/*
+ * Layout and type tokens left behind by the October 2026 port from upstream
+ * Paperclip (PR #12). The components it brought in name these through
+ * Tailwind's `(--name)` syntax, as in `grid-cols-(--gtc-45)` and
+ * `text-(length:--text-micro)`, but the stylesheet block that defines them did
+ * not come across with them. The browser ignores a style whose variable is not
+ * defined, so grids fell back to a single column, and widths, heights, small
+ * text and letter spacing fell back to their defaults.
+ *
+ * Copied from the :root token blocks of upstream's ui/src/index.css together
+ * with upstream's comments, so the file names in those comments are upstream's.
+ * Only the tokens this app uses are here. src/css-variables.test.ts fails when
+ * a component names a variable that nothing defines.
+ */
+:root {
+  /* Colour */
+  --project-seed: #6366f1; /* Semantic rename of --hex-6366f1 (DECISION-SHEET.md A3, value unchanged). Project-color-fallback indigo seed default (ProjectDetail/PipelineSettings/IssueProperties/NewIssueDialog), new-project-color-picker-seed family per TOKEN-AUDIT.md 1.3. */
+
+  /* Type, from upstream's named type ladder:
+       9px + 10px    -> --text-nano   (9 -> 10 bump per locked ladder)
+       11px + 0.7rem -> --text-micro  (0.7rem = 11.2px -> 11px)
+       13px          -> --text-compact (PRIOR-ART named this tier "sm 13",
+                        but that collides with Tailwind text-sm = 14px,
+                        hence "compact")
+     Letter-spacing, nearest-step mapping:
+       0.12em, 0.14em, 0.16em        -> --tracking-eyebrow
+       0.18em, 0.2em, 0.22em, 0.24em -> --tracking-caps */
+  --text-nano: 10px;
+  --text-micro: 11px;
+  --text-compact: 13px;
+  --tracking-eyebrow: 0.14em;
+  --tracking-caps: 0.2em;
+
+  /* Sizes */
+  --sz-320px: 320px; /* Extracted from ui/src/components/ActiveAgentsPanel.tsx (h-[320px]). */
+  --sz-3px: 3px; /* Extracted from ui/src/components/ActivityCharts.tsx (gap-[3px]). */
+  --sz-240px: 240px; /* Extracted from ui/src/components/AgentConfigForm.tsx (max-h-[240px]). */
+  --sz-220px: 220px; /* Extracted from ui/src/components/CompanySwitcher.tsx (w-[220px]). */
+  --sz-85vh: 85vh; /* Extracted from ui/src/components/DocumentDiffModal.tsx (max-h-[85vh]). */
+  --sz-60vh: 60vh; /* Used by ui/src/pages/SkillStudio.tsx and others (min-h/max-h-[60vh]). */
+  --sz-300px: 300px; /* Extracted from ui/src/components/IssueColumns.tsx (w-[300px]). */
+  --sz-260px: 260px; /* Extracted from ui/src/components/KanbanBoard.tsx (min-w-[260px]). */
+  --sz-120px: 120px; /* Extracted from ui/src/components/KanbanBoard.tsx (min-h-[120px]). */
+  --sz-160px: 160px; /* Extracted from ui/src/components/NewProjectDialog.tsx (max-w-[160px]). */
+  --sz-calc-23: min(32rem,calc(100vw - 2rem)); /* Extracted from ui/src/components/SearchableSelect.tsx (max-w-[min(32rem,calc(100vw-2rem))]). */
+  --sz-32px: 32px; /* Extracted from ui/src/components/WorkspaceFileBrowser.tsx (min-h-[32px]). */
+  --sz-30px: 30px; /* Extracted from ui/src/components/WorkspaceFileBrowser.tsx (min-h-[30px]). */
+  --sz-22rem: 22rem; /* Extracted from ui/src/pages/CompanyEnvironments.tsx (h-[22rem]). */
+  --sz-560px: 560px; /* Extracted from ui/src/pages/CompanyExport.tsx (min-h-[560px]). */
+  --sz-11_75rem: 11.75rem; /* SkillStudio.tsx file/input browser cap: five min-h-9 rows plus p-1 vertical padding. */
+  --sz-calc-39: calc(100dvh - 3.5rem); /* Extracted from ui/src/pages/PipelineSettings.tsx (max-h-[calc(100dvh-3.5rem)]). */
+  --sz-calc-40: min(24rem,calc(100vw - 2rem)); /* Extracted from ui/src/pages/PipelineSettings.tsx (w-[min(24rem,calc(100vw-2rem))]). */
+  --sz-780px: 780px; /* Extracted from ui/src/pages/Pipelines.tsx (min-w-[780px]). */
+  --sz-148px: 148px; /* Extracted from ui/src/pages/Pipelines.tsx (w-[148px]). */
+  --sz-11px: 11px; /* Extracted from ui/src/pages/Pipelines.tsx (h-[11px]). */
+  --sz-9px: 9px; /* Extracted from ui/src/pages/Pipelines.tsx (h-[9px]). */
+  --pct-90: 90%; /* Extracted from ui/src/components/DocumentDiffModal.tsx (max-w-[90%]). */
+  --pct-50: 50%; /* Extracted from ui/src/components/ImageGalleryModal.tsx (max-w-[50%]). */
+  --pct-70: 70%; /* Extracted from ui/src/components/CaseFieldsPanel.tsx (max-w-[70%]). */
+
+  /* Grid tracks, transitions, stacking and scale */
+  --gtc-1: 56px 56px 24px minmax(0,1fr); /* Extracted from ui/src/components/DocumentDiffModal.tsx (grid-cols-[56px_56px_24px_minmax(0,1fr)]). */
+  --gtc-case-revisions: 16rem 1fr; /* Extracted from ui/src/components/CaseRevisionRail.tsx (grid-cols-[16rem_1fr]). */
+  --gtc-2: auto minmax(0,1fr) 2.25rem; /* Extracted from ui/src/components/FileTree.tsx (grid-cols-[auto_minmax(0,1fr)_2.25rem]). */
+  --gtc-3: minmax(0,1fr) 2.25rem; /* Extracted from ui/src/components/FileTree.tsx (grid-cols-[minmax(0,1fr)_2.25rem]). */
+  --gtc-4: minmax(0,1fr); /* Extracted from ui/src/components/FileTree.tsx (grid-cols-[minmax(0,1fr)]). */
+  --gtc-13: minmax(0,1fr) auto; /* Extracted from ui/src/components/environment-variables-editor/Row.tsx (grid-cols-[minmax(0,1fr)_auto]). */
+  --gtc-15: 6rem 1fr; /* Extracted from ui/src/components/issue-properties/IssueProperties.tsx (grid-cols-[6rem_1fr]). */
+  --gtc-17: 1fr auto; /* Extracted from ui/src/components/ui/card.tsx (grid-cols-[1fr_auto]). */
+  --gtc-41: 10rem minmax(0,1fr); /* Extracted from ui/src/pages/PipelineSettings.tsx (grid-cols-[10rem_minmax(0,1fr)]). */
+  --gtc-42: minmax(0,1fr) 240px; /* Extracted from ui/src/pages/PipelineSettings.tsx (grid-cols-[minmax(0,1fr)_240px]). */
+  --gtc-43: minmax(0,1fr) minmax(0,1fr); /* Extracted from ui/src/pages/PipelineSettings.tsx (grid-cols-[minmax(0,1fr)_minmax(0,1fr)]). */
+  --gtc-44: 5rem 240px; /* Extracted from ui/src/pages/PipelineSettings.tsx (grid-cols-[5rem_240px]). */
+  --gtc-45: minmax(0,1fr) 340px; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[minmax(0,1fr)_340px]). */
+  --gtc-46: 18px minmax(0,1fr); /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[18px_minmax(0,1fr)]). */
+  --gtc-47: 120px 1fr; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[120px_1fr]). */
+  --gtc-48: 18px minmax(0,1fr) auto; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[18px_minmax(0,1fr)_auto]). */
+  --gtc-49: 18px 1fr auto; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[18px_1fr_auto]). */
+  --gtc-50: 1fr 280px; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[1fr_280px]). */
+  --gtc-51: 160px 1fr; /* Extracted from ui/src/pages/Pipelines.tsx (grid-cols-[160px_1fr]). */
+  --tp-background-color-color-opacity: background-color,color,opacity; /* Extracted from ui/src/components/FileTree.tsx (transition-[background-color,color,opacity]). */
+  --z-1: 1; /* Extracted from ui/src/components/IssueDocumentAnnotations.tsx (z-[1]). */
+  --s-1_02: 1.02; /* Extracted from ui/src/components/CaseAttachmentsGallery.tsx (scale-[1.02]). */
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -226,6 +311,21 @@
 }
 
 @media (pointer: coarse) {
+  /* iOS Safari zooms when focusing text smaller than 16px. Floor the small
+     typography tokens on editable controls, preserving larger title sizes. */
+  input,
+  select,
+  textarea,
+  [contenteditable=""],
+  [contenteditable="true"],
+  [contenteditable="plaintext-only"] {
+    --text-nano: var(--text-base);
+    --text-micro: var(--text-base);
+    --text-xs: var(--text-base);
+    --text-compact: var(--text-base);
+    --text-sm: var(--text-base);
+  }
+
   button,
   [role="button"],
   input,
