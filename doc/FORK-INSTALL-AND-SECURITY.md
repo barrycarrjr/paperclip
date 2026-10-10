@@ -39,7 +39,7 @@ bash scripts/launchers/unix/launch-paperclip.sh
 
 On either platform, `stop-paperclip`, `restart-paperclip`, `update-paperclip`,
 and `rebuild-paperclip` are in `scripts/launchers/unix/`; macOS also has Finder
-entry points for install, launch, stop, update, and rebuild. Stop targets the
+entry points for install, launch, stop, update, rebuild, and start at login. Stop targets the
 managed process for this checkout and config, rather than killing processes
 by port. Ctrl-C in the launch terminal stops the managed server.
 
@@ -48,6 +48,19 @@ desktop channel (the Windows tray does this on Windows). On macOS each one
 opens a dialog: Dismiss or Open marks it as seen, and Open goes to the page in
 Paperclip. A dialog left unanswered closes after ten minutes and the reminder
 comes back. On Linux reminders go through `notify-send` when it is installed.
+
+To start Paperclip when you log in on macOS, double-click
+`scripts/launchers/macos/start-at-login-on.command` (or run
+`bash scripts/launchers/unix/login-item.sh on`). It adds a per-user
+LaunchAgent in `~/Library/LaunchAgents` that runs the launch script once at
+login, in the background, with its output in
+`$PAPERCLIP_HOME/logs/login-item.log`. It is not kept alive: `stop-paperclip`
+stops the server until the next login, and update, rebuild, and restart stop
+and start it as usual. `start-at-login-off.command` (or `login-item.sh off`)
+turns it off, and `login-item.sh status` shows whether it is on. Turning it on
+or off does not start or stop a running server. The login item keeps the
+`PATH` (and any `PORT`) from when it was turned on, so turn it on again after moving Node or
+pnpm, and each `PAPERCLIP_CONFIG` gets its own login item.
 
 Data defaults to `~/.paperclip/instances/default`. `PAPERCLIP_HOME`,
 `PAPERCLIP_INSTANCE_ID`, and `PAPERCLIP_CONFIG` can select another installation.
