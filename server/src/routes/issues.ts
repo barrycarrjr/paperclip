@@ -7,6 +7,7 @@ import type { Db } from "@paperclipai/db";
 import { issueExecutionDecisions, pipelineCaseIssueLinks, pipelineCases, pipelines, pipelineStages } from "@paperclipai/db";
 import {
   addIssueCommentSchema,
+  redactIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
   createIssueAttachmentMetadataSchema,
   createIssueThreadInteractionSchema,
@@ -57,6 +58,8 @@ import {
   workProductService,
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
+import { redactIssueCommentEverywhere } from "../services/comment-redaction.js";
+import { runLogBaseDir } from "../services/run-log-store.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
@@ -3630,6 +3633,75 @@ export function issueRoutes(
       });
 
       res.json(interaction);
+    },
+  );
+
+  // Board only: hide text (for example a full account number) in a comment
+  // and in every copy Paperclip keeps of it in this company. The activity
+  // entry records how many places changed, never the hidden text.
+  router.post(
+    "/issues/:id/comments/:commentId/redact",
+    validate(redactIssueCommentSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const commentId = req.params.commentId as string;
+      const issue = await svc.getById(id);
+      if (!issue) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      assertCompanyAccess(req, issue.companyId);
+      assertBoard(req);
+      const comment = await svc.getComment(commentId);
+      if (!comment || comment.issueId !== id) {
+        res.status(404).json({ error: "Comment not found" });
+        return;
+      }
+      const { targets, keepLast4 } = req.body as { targets: string[]; keepLast4: boolean };
+      const result = await redactIssueCommentEverywhere(db, {
+        companyId: issue.companyId,
+        commentId,
+        targets,
+        keepLast4,
+        runLogBaseDir: runLogBaseDir(),
+      });
+      if (!result) {
+        res.status(404).json({ error: "Comment not found" });
+        return;
+      }
+      if (result.replaced === 0) {
+        res.status(422).json({ error: "None of that text appears in this comment. Copy it exactly as it is written." });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.comment_redacted",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          commentId,
+          identifier: issue.identifier,
+          issueTitle: issue.title,
+          textsHidden: targets.length,
+          replacements: result.replaced,
+          keepLast4,
+          placesChanged: result.counts,
+        },
+      });
+
+      res.json({
+        comment: result.comment,
+        replaced: result.replaced,
+        placesChanged: result.counts,
+        otherCommentsWithText: result.otherCommentsWithText,
+        notReachable: result.notReachable,
+      });
     },
   );
 

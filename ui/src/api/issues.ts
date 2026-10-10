@@ -332,6 +332,14 @@ export const issuesApi = {
     ),
   cancelComment: (id: string, commentId: string) =>
     api.delete<IssueComment>(`/issues/${id}/comments/${commentId}`),
+  redactComment: (id: string, commentId: string, data: { targets: string[]; keepLast4: boolean }) =>
+    api.post<{
+      comment: IssueComment;
+      replaced: number;
+      placesChanged: Record<string, number>;
+      otherCommentsWithText: number;
+      notReachable: string[];
+    }>(`/issues/${id}/comments/${commentId}/redact`, data),
   listDocuments: (id: string, options?: { includeSystem?: boolean }) =>
     api.get<IssueDocument[]>(
       `/issues/${id}/documents${options?.includeSystem ? "?includeSystem=true" : ""}`,

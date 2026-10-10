@@ -108,6 +108,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { formatIssueActivityAction } from "@/lib/activity-format";
 import { buildIssuePropertiesPanelKey } from "../lib/issue-properties-panel-key";
+import { RedactCommentDialog } from "../components/RedactCommentDialog";
 import { shouldRenderRichSubIssuesSection } from "../lib/issue-detail-subissues";
 import { filterIssueDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
@@ -537,6 +538,7 @@ type IssueDetailChatTabProps = {
   onAttachImage: (file: File) => Promise<IssueAttachment | void>;
   onInterruptQueued: (runId: string) => Promise<void>;
   onCancelQueued: (commentId: string) => void;
+  onRedactComment: (commentId: string, body: string) => void;
   interruptingQueuedRunId: string | null;
   onImageClick: (src: string) => void;
   onAcceptInteraction: (
@@ -582,6 +584,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   onAttachImage,
   onInterruptQueued,
   onCancelQueued,
+  onRedactComment,
   interruptingQueuedRunId,
   onImageClick,
   onAcceptInteraction,
@@ -766,6 +769,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         onAttachImage={onAttachImage}
         onInterruptQueued={onInterruptQueued}
         onCancelQueued={onCancelQueued}
+        onRedactComment={onRedactComment}
         interruptingQueuedRunId={interruptingQueuedRunId}
         stoppingRunId={interruptingQueuedRunId}
         onStopRun={onInterruptQueued}
@@ -1996,6 +2000,36 @@ export function IssueDetail() {
       pushToast({
         title: "Interrupt failed",
         body: err instanceof Error ? err.message : "Unable to interrupt the active run",
+        tone: "error",
+      });
+    },
+  });
+
+  // Board only: hide text in a comment (and in Paperclip's stored copies of it).
+  const [redactTarget, setRedactTarget] = useState<{ commentId: string; body: string } | null>(null);
+  const handleRedactComment = useCallback((commentId: string, body: string) => setRedactTarget({ commentId, body }), []);
+  const redactComment = useMutation({
+    mutationFn: async ({ commentId, targets, keepLast4 }: { commentId: string; targets: string[]; keepLast4: boolean }) =>
+      issuesApi.redactComment(issueId!, commentId, { targets, keepLast4 }),
+    onSuccess: (result) => {
+      setRedactTarget(null);
+      invalidateIssueDetail();
+      invalidateIssueThreadLazily();
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueId!) });
+      const places = Object.values(result.placesChanged).reduce((a, b) => a + b, 0);
+      const others = result.otherCommentsWithText;
+      pushToast({
+        title: "Comment redacted",
+        body:
+          `${result.replaced} ${result.replaced === 1 ? "place" : "places"} hidden in the comment; ${places} stored ${places === 1 ? "copy" : "copies"} cleaned in total.` +
+          (others ? ` The same text still appears in ${others} other ${others === 1 ? "comment" : "comments"} in this company.` : ""),
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Redact failed",
+        body: err instanceof Error ? err.message : "Unable to redact the comment",
         tone: "error",
       });
     },
@@ -3343,6 +3377,7 @@ export function IssueDetail() {
               onAttachImage={handleCommentAttachImage}
               onInterruptQueued={handleInterruptQueuedRun}
               onCancelQueued={handleCancelQueuedComment}
+              onRedactComment={handleRedactComment}
               interruptingQueuedRunId={interruptQueuedComment.isPending ? interruptQueuedComment.variables ?? null : null}
               onImageClick={handleChatImageClick}
               onAcceptInteraction={handleAcceptInteraction}
@@ -3393,6 +3428,17 @@ export function IssueDetail() {
       </Tabs>
       </PageSection>
 
+      <RedactCommentDialog
+        open={redactTarget !== null}
+        body={redactTarget?.body ?? ""}
+        pending={redactComment.isPending}
+        onOpenChange={(open) => {
+          if (!open && !redactComment.isPending) setRedactTarget(null);
+        }}
+        onConfirm={(targets, keepLast4) => {
+          if (redactTarget) redactComment.mutate({ commentId: redactTarget.commentId, targets, keepLast4 });
+        }}
+      />
       <Dialog open={treeControlOpen} onOpenChange={setTreeControlOpen}>
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
           <DialogHeader className="border-b border-border/60 px-6 pb-4 pr-12 pt-6">

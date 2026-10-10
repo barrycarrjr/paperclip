@@ -144,6 +144,7 @@ const NOISE_ACTIONS = new Set<string>([
   "issue.checkout_lock_adopted",
   "issue.child_created",
   "issue.comment_cancelled",
+  "issue.comment_redacted",
   "issue.document_deleted",
   "issue.document_restored",
   "issue.document_upserted",

@@ -1433,3 +1433,4 @@ export type { NativeFinalizationResult, NativeFinalizationResultV1 } from "./typ
 export { nativeFinalizationResultSchema, type NativeFinalizationResultInput } from "./validators/native-finalization.js";
 export { WORKSPACE_RESTORE_FAILURE_CODES, hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, isNativeWorkspaceExportRepairCause } from "./workspace-restore.js";
 
+export * from "./comment-redaction.js";
