@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, companySecrets, companySecretVersions } from "@paperclipai/db";
 import type { AgentEnvConfig, EnvBinding, SecretProvider } from "@paperclipai/shared";
-import { envBindingSchema } from "@paperclipai/shared";
+import { envBindingSchema, SECRET_NAME_MAX_LENGTH } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { getSecretProvider, listSecretProviders } from "../secrets/provider-registry.js";
 
@@ -10,6 +11,8 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SENSITIVE_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
 const REDACTED_SENTINEL = "***REDACTED***";
+const SECRET_KEY_MAX_LENGTH = 120;
+const SECRET_KEY_UNIQUE_INDEX = "company_secrets_company_key_uq";
 
 type CanonicalEnvBinding =
   | { type: "plain"; value: string }
@@ -27,6 +30,29 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function isSensitiveEnvKey(key: string) {
   return SENSITIVE_ENV_KEY_RE.test(key);
+}
+
+// Takes the same short time however long the name. The name is cut before any
+// pattern runs on it (no name the API accepts is longer, so their keys are
+// unchanged), and the dashes at either end are counted off instead of being
+// matched by /-+$/, which starts again from every dash of a long run.
+export function normalizeSecretKey(input: string) {
+  const key = input
+    .slice(0, SECRET_NAME_MAX_LENGTH)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-");
+  let start = 0;
+  let end = key.length;
+  while (start < end && key[start] === "-") start += 1;
+  while (end > start && key[end - 1] === "-") end -= 1;
+  return key.slice(start, end).slice(0, SECRET_KEY_MAX_LENGTH);
+}
+
+function isSecretKeyConflict(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const err = error as { code?: string; constraint?: string; constraint_name?: string };
+  return err.code === "23505" && (err.constraint ?? err.constraint_name) === SECRET_KEY_UNIQUE_INDEX;
 }
 
 function canonicalizeBinding(binding: EnvBinding): CanonicalEnvBinding {
@@ -81,6 +107,28 @@ export function secretService(db: Db) {
       .from(companySecrets)
       .where(and(eq(companySecrets.companyId, companyId), eq(companySecrets.name, name)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function getByKey(companyId: string, key: string) {
+    return db
+      .select()
+      .from(companySecrets)
+      .where(and(eq(companySecrets.companyId, companyId), eq(companySecrets.key, key)))
+      .then((rows) => rows[0] ?? null);
+  }
+
+  // A secret's key must be unique in its company, but nothing here shows it,
+  // lets anyone set it, or reads it, so it must never be the reason a create
+  // fails. The key a name maps to can already be held: a renamed secret keeps
+  // the key it was created with, and migration 0102 gave older secrets keys
+  // built from their names. The new secret's own id then makes its key unique.
+  // keyWithId is that form, for when the key is taken after this check.
+  async function deriveSecretKey(companyId: string, name: string, secretId: string) {
+    const base = normalizeSecretKey(name);
+    const keyWithId = base ? `${base}-${secretId}` : secretId;
+    if (!base) return { key: keyWithId, keyWithId };
+    const holder = await getByKey(companyId, base);
+    return { key: holder ? keyWithId : base, keyWithId };
   }
 
   async function getSecretVersion(secretId: string, version: number) {
@@ -278,6 +326,8 @@ export function secretService(db: Db) {
     ) => {
       const existing = await getByName(companyId, input.name);
       if (existing) throw conflict(`Secret already exists: ${input.name}`);
+      const secretId = randomUUID();
+      const { key, keyWithId } = await deriveSecretKey(companyId, input.name, secretId);
 
       const provider = getSecretProvider(input.provider);
       const prepared = await provider.createVersion({
@@ -285,12 +335,13 @@ export function secretService(db: Db) {
         externalRef: input.externalRef ?? null,
       });
 
-      return db.transaction(async (tx) => {
+      const insertSecret = (secretKey: string) => db.transaction(async (tx) => {
         const secret = await tx
           .insert(companySecrets)
           .values({
+            id: secretId,
             companyId,
-            key: input.name,
+            key: secretKey,
             name: input.name,
             provider: input.provider,
             externalRef: prepared.externalRef,
@@ -313,6 +364,17 @@ export function secretService(db: Db) {
 
         return secret;
       });
+
+      try {
+        return await insertSecret(key);
+      } catch (error) {
+        // Two names that map to the same free key, created at the same moment,
+        // both pass the check in deriveSecretKey, and the second insert breaks
+        // the unique key index. No other secret can hold a key ending in this
+        // secret's id, so one retry is enough.
+        if (key === keyWithId || !isSecretKeyConflict(error)) throw error;
+        return insertSecret(keyWithId);
+      }
     },
 
     rotate: async (
