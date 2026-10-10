@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OUTBOUND_TOOL_DRAFT_GATE } from "@paperclipai/shared";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
 
 const mockApprovalService = vi.hoisted(() => ({
@@ -758,5 +759,434 @@ describe("tool draft gate — operator-required approvals", () => {
     const result = await gate.intercept("acme.ops:send-invoice", {}, ctx({}));
 
     expect(result.intercepted).toBe(false);
+  });
+});
+
+/**
+ * The summary is the one line that describes a draft wherever it is listed:
+ * the Inbox, the agent's own tool result, and the Approve and Reject card in
+ * Slack, where it is all the approver is shown. It used to read the recipient
+ * from one fixed list of field names, which missed the field most messaging
+ * tools actually use (a Slack DM's `userId`, a channel's `channelId`, a 3CX
+ * call's `toNumber`) and named the sending `account` instead when there was
+ * one. It also has to stay short enough for a Slack card, and must never be
+ * the reason a draft fails.
+ */
+describe("tool draft gate: the summary names who a draft goes to", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApprovalService.create.mockResolvedValue({ id: "approval-summary" });
+    mockApprovalService.list.mockResolvedValue([]);
+    // Off, so a message with no named recipient is drafted rather than sent
+    // as a note to the operator.
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ skipApproval: false }),
+    );
+  });
+
+  async function summarise(
+    tool: string,
+    params: Record<string, unknown>,
+    gate?: Awaited<ReturnType<typeof loadDraftGate>>,
+  ): Promise<string> {
+    const draftGate = gate ?? (await loadDraftGate());
+    const result = await draftGate.intercept(tool, params, ctx({}));
+    expect(result.intercepted).toBe(true);
+    const createArgs = mockApprovalService.create.mock.lastCall![1];
+    return String((createArgs.payload as Record<string, unknown>).summary);
+  }
+
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // One call per held tool, shaped like that plugin's manifest, and who the
+  // summary has to name first (null where the call itself names no one).
+  // Several carry an `account` on purpose: it is the sending account, and it
+  // was what the summary named for the 3CX and Help Scout calls.
+  const CASES: Array<[tool: string, params: Record<string, unknown>, recipient: string | null]> = [
+    ["slack-tools:slack_send_dm", { workspace: "main", userId: "U0123ABCD", text: "Your order shipped." }, "U0123ABCD"],
+    ["slack-tools:slack_send_channel", { workspace: "main", channelId: "C0123ABCD", text: "Deploy finished." }, "C0123ABCD"],
+    [
+      "email-tools:email_send",
+      { mailbox: "personal", to: ["pat@example.com", "sam@example.com"], subject: "Your quote", body: "Attached." },
+      "pat@example.com, sam@example.com",
+    ],
+    // The reply goes to whoever sent the original message, which the call
+    // does not name.
+    [
+      "email-tools:email_reply",
+      { mailbox: "personal", folder: "INBOX", uid: 42, body: "Thanks, Pat." },
+      "the sender of the original message",
+    ],
+    [
+      "help-scout:helpscout_send_reply",
+      { account: "main", conversationId: "2913724936", body: "Your refund is on its way." },
+      "the customer on conversation 2913724936",
+    ],
+    [
+      "help-scout:helpscout_create_conversation",
+      {
+        account: "main",
+        mailboxId: "1001",
+        subject: "Your renewal",
+        customer: { email: "pat@example.com", firstName: "Pat" },
+        threads: [{ type: "reply", body: "We noticed your renewal did not go through." }],
+      },
+      "pat@example.com",
+    ],
+    ["phone-tools:phone_call_make", { account: "main", to: "+15551234567", assistant: "assistant-1" }, "+15551234567"],
+    ["3cx-tools:pbx_click_to_call", { account: "main", fromExtension: "101", toNumber: "+15557654321" }, "+15557654321"],
+    // Public posts name where the post appears.
+    [
+      "gbp-reviews:gbp_reply_to_review",
+      { reviewName: "accounts/1/locations/2/reviews/3", locationKey: "main-st", replyText: "Thank you, Pat." },
+      "main-st",
+    ],
+    [
+      "review-tools:gbp_reply_to_review",
+      { reviewName: "accounts/1/locations/2/reviews/3", locationKey: "main-st", replyText: "Thank you, Pat." },
+      "main-st",
+    ],
+    ["social-poster:post_to_facebook", { page: "acme-shop", message: "Open late this Friday." }, "acme-shop"],
+    ["social-poster:post_to_instagram", { account: "acme", image_url: "https://example.com/a.jpg", caption: "New stock." }, "acme"],
+    ["social-poster:post_to_x", { account: "acme", text: "Open late this Friday." }, "acme"],
+    ["social-poster:post_to_tiktok", { account: "acme", video_url: "https://example.com/a.mp4", text: "Behind the scenes." }, "acme"],
+    ["social-poster:post_to_threads", { account: "acme", text: "Open late this Friday." }, "acme"],
+    ["instagram-tools:instagram_post_photo", { account: "acme", imageUrl: "https://example.com/a.jpg", caption: "New stock." }, "acme"],
+    [
+      "instagram-tools:instagram_post_carousel",
+      { account: "acme", items: [{ mediaUrl: "https://example.com/a.jpg" }], caption: "New stock." },
+      "acme",
+    ],
+    ["instagram-tools:instagram_post_reel", { account: "acme", videoUrl: "https://example.com/a.mp4", caption: "Behind the scenes." }, "acme"],
+    ["instagram-tools:instagram_post_story", { account: "acme", mediaUrl: "https://example.com/a.jpg" }, "acme"],
+    [
+      "youtube-tools:youtube_upload",
+      { account: "main", filePath: "/videos/driveway.mp4", title: "How we resurface a driveway", description: "Start to finish." },
+      "main",
+    ],
+    // A comment appears on the video; the account is only who posts it.
+    ["youtube-tools:youtube_post_comment", { account: "main", videoId: "abc123", text: "Thanks for watching." }, "video abc123"],
+    // Publishing a book addresses no one.
+    ["kdp-tools:kdp_publish", { filePath: "/books/driveways.epub", contentType: "books" }, null],
+  ];
+
+  it("has a case for every tool the gate holds", () => {
+    // A tool added to the gate without deciding where its recipient is read
+    // from is how a Slack DM came to be approved without naming anyone.
+    expect(CASES.map(([tool]) => tool).sort()).toEqual([...OUTBOUND_TOOL_DRAFT_GATE].sort());
+  });
+
+  it.each(CASES)("%s names its recipient first", async (tool, params, recipient) => {
+    const summary = await summarise(tool, params);
+    if (recipient === null) {
+      expect(summary).not.toMatch(/^to /);
+    } else {
+      expect(summary).toMatch(new RegExp(`^to ${escapeRegExp(recipient)}( |$)`));
+    }
+  });
+
+  it.each(CASES)("%s reads only its own recipient fields", async (tool, params) => {
+    // The shared list for tools without a reader of their own would pick
+    // these up, so an unchanged summary shows the tool has its own reader.
+    const gate = await loadDraftGate();
+    const plain = await summarise(tool, params, gate);
+    const withStrayFields = await summarise(
+      tool,
+      { ...params, recipient: "stray@example.com", channel: "stray-channel" },
+      gate,
+    );
+    expect(withStrayFields).toBe(plain);
+  });
+
+  it("names the default DM target when a Slack DM leaves out userId", async () => {
+    // The plugin sends it to the workspace's default DM target then.
+    const summary = await summarise("slack-tools:slack_send_dm", { workspace: "main", text: "Done." });
+    expect(summary).toMatch(/^to the default DM target /);
+  });
+
+  it("names a Slack channel given by name, and the default channel when none is given", async () => {
+    const gate = await loadDraftGate();
+    expect(await summarise("slack-tools:slack_send_channel", { channelName: "ops", text: "Done." }, gate)).toMatch(
+      /^to #ops /,
+    );
+    // channelId wins when both are given, as it does in the plugin.
+    expect(
+      await summarise("slack-tools:slack_send_channel", { channelId: "C0123ABCD", channelName: "ops", text: "Done." }, gate),
+    ).toMatch(/^to C0123ABCD /);
+    expect(await summarise("slack-tools:slack_send_channel", { text: "Done." }, gate)).toMatch(
+      /^to the default channel /,
+    );
+  });
+
+  it("names everyone an email is copied to", async () => {
+    const summary = await summarise("email-tools:email_send", {
+      mailbox: "personal",
+      to: "Pat Example <pat@example.com>",
+      cc: "sam@example.com",
+      bcc: ["audit@example.com", "records@example.com"],
+      subject: "Your quote",
+      body: "Attached.",
+    });
+    expect(summary).toMatch(/^to Pat Example <pat@example\.com> /);
+    expect(summary).toContain("cc sam@example.com");
+    expect(summary).toContain("bcc audit@example.com, records@example.com");
+  });
+
+  it("says when an email reply goes to everyone on the original message", async () => {
+    // The plugin copies everyone on the original for any truthy replyAll.
+    const gate = await loadDraftGate();
+    const base = { mailbox: "personal", uid: 42, body: "Thanks, all." };
+    expect(await summarise("email-tools:email_reply", { ...base, replyAll: true }, gate)).toMatch(
+      /^reply-all to the sender and everyone on the original message /,
+    );
+    expect(await summarise("email-tools:email_reply", { ...base, replyAll: "yes" }, gate)).toMatch(/^reply-all /);
+    expect(await summarise("email-tools:email_reply", { ...base, replyAll: false }, gate)).toMatch(
+      /^to the sender of the original message /,
+    );
+  });
+
+  it("names who a Help Scout reply is addressed to, and who it is copied to", async () => {
+    const gate = await loadDraftGate();
+    const base = { account: "main", conversationId: "2913724936", body: "Your refund is on its way." };
+    expect(await summarise("help-scout:helpscout_send_reply", { ...base, customerEmail: "pat@example.com" }, gate)).toMatch(
+      /^to pat@example\.com /,
+    );
+    // The plugin uses customerId over customerEmail when both are given.
+    expect(
+      await summarise("help-scout:helpscout_send_reply", { ...base, customerId: 77, customerEmail: "pat@example.com" }, gate),
+    ).toMatch(/^to Help Scout customer 77 /);
+    const copied = await summarise(
+      "help-scout:helpscout_send_reply",
+      { ...base, cc: ["sam@example.com"], bcc: ["audit@example.com"] },
+      gate,
+    );
+    expect(copied).toContain("cc sam@example.com");
+    expect(copied).toContain("bcc audit@example.com");
+  });
+
+  it("says so, instead of naming anyone, when a Help Scout call sends nothing", async () => {
+    const gate = await loadDraftGate();
+    // An imported reply is only recorded in Help Scout.
+    const imported = await summarise(
+      "help-scout:helpscout_send_reply",
+      {
+        conversationId: "2913724936",
+        customerEmail: "pat@example.com",
+        cc: ["sam@example.com"],
+        body: "Logged from the phone call.",
+        imported: true,
+      },
+      gate,
+    );
+    expect(imported).toMatch(/^recorded in Help Scout only, nothing is sent /);
+    expect(imported).not.toContain("pat@example.com");
+    expect(imported).not.toContain("sam@example.com");
+
+    // A conversation of internal notes reaches no customer.
+    const notes = await summarise(
+      "help-scout:helpscout_create_conversation",
+      {
+        subject: "Call log",
+        customer: { email: "pat@example.com" },
+        threads: [{ type: "note", body: "Called Pat back." }],
+      },
+      gate,
+    );
+    expect(notes).toMatch(/^internal notes only, nothing is sent /);
+    expect(notes).not.toContain("pat@example.com");
+  });
+
+  it("names who each Help Scout thread goes to", async () => {
+    // A thread's own customerEmail replaces the conversation's customer for
+    // that thread, and a note goes to no one.
+    const summary = await summarise("help-scout:helpscout_create_conversation", {
+      subject: "Your renewal",
+      customer: { email: "pat@example.com" },
+      threads: [
+        { type: "note", body: "Spoke to Sam first.", customerEmail: "note@example.com" },
+        { type: "reply", body: "Hi Sam.", customerEmail: "sam@example.com" },
+        { type: "reply", body: "Hi Pat." },
+      ],
+    });
+    expect(summary).toMatch(/^to sam@example\.com, pat@example\.com /);
+    expect(summary).not.toContain("note@example.com");
+  });
+
+  it("does not read a field as the recipient where the tool uses it for something else", async () => {
+    // email_reply ignores `to`: the reply goes to the original sender, so a
+    // stray `to` must not be shown as where it is going.
+    const reply = await summarise("email-tools:email_reply", {
+      mailbox: "personal",
+      uid: 42,
+      to: "someone-else@example.com",
+      body: "Thanks, Pat.",
+    });
+    expect(reply).not.toContain("someone-else@example.com");
+
+    // On a Help Scout note `userId` is who the note is attributed to, so an
+    // operator asking to approve notes must not be told it goes to them.
+    const gate = await loadDraftGateWithOperatorRule(["help-scout:helpscout_add_note"]);
+    const note = await summarise(
+      "help-scout:helpscout_add_note",
+      { account: "main", conversationId: "2913724936", userId: "555", body: "Called the customer back." },
+      gate,
+    );
+    expect(note).not.toContain("555");
+  });
+
+  it("does not name the account a call goes out from, or the thing it changes, as its recipient", async () => {
+    // An operator can ask to approve any operation. In these, `account` picks
+    // the account to act as, `conversationId` the conversation being changed
+    // and `locationKey` the location being synced; none of them is sent anything.
+    const gate = await loadDraftGateWithOperatorRule([
+      "3cx-tools:pbx_park_call",
+      "help-scout:helpscout_update_customer_properties",
+      "help-scout:helpscout_change_status",
+      "review-tools:gbp_sync_location",
+    ]);
+    expect(await summarise("3cx-tools:pbx_park_call", { account: "main", callId: "call-1" }, gate)).not.toMatch(/^to /);
+    expect(
+      await summarise(
+        "help-scout:helpscout_update_customer_properties",
+        { account: "main", customerId: "77", properties: { plan: "pro" } },
+        gate,
+      ),
+    ).not.toMatch(/^to /);
+    expect(
+      await summarise(
+        "help-scout:helpscout_change_status",
+        { account: "main", conversationId: "2913724936", status: "closed" },
+        gate,
+      ),
+    ).not.toMatch(/^to /);
+    expect(await summarise("review-tools:gbp_sync_location", { locationKey: "main-st" }, gate)).not.toMatch(/^to /);
+  });
+
+  describe("odd parameter shapes", () => {
+    it("Slack: names a default only when the field is left out", async () => {
+      const gate = await loadDraftGate();
+      const dm = (userId: unknown) => summarise("slack-tools:slack_send_dm", { userId, text: "Hi." }, gate);
+      expect(await dm(null)).toMatch(/^to the default DM target /);
+      expect(await dm(12345)).toMatch(/^to 12345 /);
+      // The plugin sends to whatever userId holds, so an object is neither
+      // the default target nor a readable id.
+      for (const userId of [{ id: "U0123ABCD" }, [{ id: "U0123ABCD" }]]) {
+        const summary = await dm(userId);
+        expect(summary).not.toMatch(/^to /);
+        expect(summary).not.toContain("[object Object]");
+      }
+
+      const channel = (params: Record<string, unknown>) =>
+        summarise("slack-tools:slack_send_channel", { ...params, text: "Hi." }, gate);
+      expect(await channel({ channelId: null, channelName: null })).toMatch(/^to the default channel /);
+      expect(await channel({ channelId: { id: "C0123ABCD" } })).not.toMatch(/^to /);
+    });
+
+    it("email: reads an address object the mail library sends to, and nothing that is not an address", async () => {
+      const gate = await loadDraftGate();
+      const send = (params: Record<string, unknown>) =>
+        summarise("email-tools:email_send", { mailbox: "personal", subject: "Hello", body: "Hi.", ...params }, gate);
+      expect(await send({ to: { name: "Pat Example", address: "pat@example.com" } })).toMatch(
+        /^to Pat Example <pat@example\.com> re: /,
+      );
+      // Inside a list the plugin turns an object into text that is not an
+      // address, so only the real one is sent anything.
+      expect(await send({ to: [{ address: "lee@example.com" }, "sam@example.com"] })).toMatch(
+        /^to sam@example\.com re: /,
+      );
+      expect(await send({ to: "pat@example.com", cc: null, bcc: [null, {}] })).toMatch(/^to pat@example\.com re: /);
+      expect(await send({ to: null })).toMatch(/^re: Hello /);
+    });
+
+    it("Help Scout: copes with numbers, nested objects and lists of objects", async () => {
+      const gate = await loadDraftGate();
+      const reply = (params: Record<string, unknown>) =>
+        summarise("help-scout:helpscout_send_reply", { body: "Hi.", ...params }, gate);
+      expect(await reply({ conversationId: 2913724936 })).toMatch(/^to the customer on conversation 2913724936 /);
+      const copied = await reply({
+        conversationId: "2913724936",
+        cc: "sam@example.com",
+        bcc: [{ email: "lee@example.com" }],
+      });
+      expect(copied).toContain("cc sam@example.com");
+      expect(copied).not.toContain("bcc");
+      expect(await reply({ conversationId: "2913724936", customerId: { id: 77 } })).not.toContain("[object Object]");
+
+      const conversation = (params: Record<string, unknown>) =>
+        summarise("help-scout:helpscout_create_conversation", { subject: "Your renewal", ...params }, gate);
+      // A thread that is not an object still goes to the conversation's customer.
+      expect(await conversation({ customer: { email: "pat@example.com" }, threads: [null, "reply"] })).toMatch(
+        /^to pat@example\.com re: /,
+      );
+      expect(await conversation({ customer: "pat@example.com", threads: { type: "reply" } })).toBe("re: Your renewal");
+    });
+  });
+
+  describe("staying short, and never being the reason a draft fails", () => {
+    it("shows three names from a long list and counts the rest", async () => {
+      const everyone = Array.from({ length: 10 }, (_, index) => `person${index + 1}@example.com`);
+      const summary = await summarise("email-tools:email_send", {
+        mailbox: "personal",
+        to: everyone,
+        // One string can carry several addresses too.
+        cc: everyone.slice(0, 5).join(", "),
+        subject: "Team update",
+        body: "Hi all.",
+      });
+      expect(summary).toMatch(
+        /^to person1@example\.com, person2@example\.com, person3@example\.com and 7 more cc person1@example\.com, person2@example\.com, person3@example\.com and 2 more re: Team update /,
+      );
+    });
+
+    it("keeps a long display name's address when it has to shorten it", async () => {
+      const summary = await summarise("email-tools:email_send", {
+        mailbox: "personal",
+        to: `${"Pat Example of the Very Long Department Name ".repeat(3)}<pat@example.com>`,
+        subject: "Hello",
+        body: "Hi.",
+      });
+      expect(summary).toMatch(/^to pat@example\.com re: /);
+    });
+
+    it("keeps the whole summary short however long the call is", async () => {
+      // Slack refuses a card over 3000 characters, and with it the reply and
+      // any later approvals in that turn.
+      const long = (label: string) => `${label}-${"x".repeat(5000)}@example.com`;
+      const summary = await summarise("email-tools:email_send", {
+        mailbox: "personal",
+        to: [long("a"), long("b"), long("c"), long("d")],
+        cc: [long("e")],
+        bcc: [long("f")],
+        subject: "s".repeat(5000),
+        body: "b".repeat(5000),
+      });
+      expect(Array.from(summary).length).toBeLessThanOrEqual(500);
+      expect(summary).toMatch(/^to a-x+…, b-x+…, c-x+… and 1 more cc e-x+… bcc f-x+… re: s+…/);
+    });
+
+    it("never cuts a character in half, which the database refuses to store", async () => {
+      // Postgres will not store JSON holding half of an emoji, so a summary
+      // cut there failed the draft, and the agent's tool call with it.
+      // A run of emoji across the cut, so a cut that counts code units splits one.
+      const caption = `${"a".repeat(130)}${"\u{1F600}".repeat(20)} and a few more words after the cut`;
+      const summary = await summarise("social-poster:post_to_x", { account: "acme", text: caption });
+      expect(summary).toContain("…");
+      expect(() => encodeURIComponent(summary)).not.toThrow();
+    });
+
+    it("falls back to the tool name when the parameters cannot be read", async () => {
+      // A field that throws when read stands in for anything unexpected. The
+      // summary only describes the call; it must not stop the draft.
+      const params = Object.defineProperty({ text: "Hi." }, "userId", {
+        get() {
+          throw new Error("unreadable");
+        },
+      });
+      const gate = await loadDraftGate();
+      const result = await gate.intercept("slack-tools:slack_send_dm", params, ctx({}));
+      expect(result.intercepted).toBe(true);
+      const createArgs = mockApprovalService.create.mock.lastCall![1];
+      expect((createArgs.payload as Record<string, unknown>).summary).toBe("slack-tools:slack_send_dm");
+    });
   });
 });

@@ -362,35 +362,263 @@ function isSelfAddressed(
   });
 }
 
+/** A string field's trimmed value, or null when it is missing or blank. */
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** An id given as a string or as a number (Help Scout's ids are numeric). */
+function idString(value: unknown): string | null {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : nonEmptyString(value);
+}
+
+/** Whether a call left a field out, the only time a plugin uses its default. */
+function isMissing(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+/** A nested object's fields, or none when the value is not an object. */
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Names from a field that takes one string or id, or a list of them.
+ * Anything else (an object, null, true) names no one. Email fields also split
+ * a string on commas, since one string can carry several addresses.
+ */
+function readNames(value: unknown, splitCommas = false): string[] {
+  const names: string[] = [];
+  for (const entry of Array.isArray(value) ? value : [value]) {
+    const text = idString(entry);
+    if (!text) continue;
+    for (const part of splitCommas ? text.split(",") : [text]) {
+      const name = part.trim();
+      if (name) names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Addresses from an email to, cc or bcc field. A lone { name, address }
+ * object counts, because the mail library sends to one. Inside a list the
+ * email plugin turns an object into text that is not an address, so there it
+ * does not.
+ */
+function emailAddresses(value: unknown): string[] {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const entry = value as Record<string, unknown>;
+    const address = nonEmptyString(entry.address);
+    if (!address) return [];
+    const name = nonEmptyString(entry.name);
+    return [name ? `${name} <${address}>` : address];
+  }
+  return readNames(value, true);
+}
+
+interface SummaryRecipients {
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  /**
+   * Said instead of a list of names when the call is not simply sent to
+   * them: a reply-all, or a call that sends nothing to anyone.
+   */
+  description?: string;
+}
+
+/** A public post, which names where it appears in a single field. */
+function postedTo(field: string): (p: Record<string, unknown>) => SummaryRecipients {
+  return (p) => ({ to: readNames(p[field]) });
+}
+
+/**
+ * Who each held tool sends to, read from the fields that tool itself reads,
+ * including where it sends when they are left out.
+ *
+ * One list of field names cannot be right for every tool, because the same
+ * name means different things in different plugins: `userId` is who a Slack
+ * DM goes to but who a Help Scout note is attributed to, and `account` is
+ * where a social post appears but only which account a call or a Help Scout
+ * message goes out from. The server does not check a call against the
+ * plugin's schema either, so a draft can carry a field its tool ignores.
+ * Naming the wrong person to someone deciding whether to send is worse than
+ * naming no one, so every tool in OUTBOUND_TOOL_DRAFT_GATE has its own entry
+ * here, and fallbackRecipients is left for operations an operator has asked
+ * to approve.
+ *
+ * The web approval card does not use these. It reads recipients itself
+ * (RECIPIENT_READERS in ui/src/components/ApprovalPayload.tsx), for fewer
+ * tools, so a change here does not change what that card shows.
+ */
+const SUMMARY_RECIPIENT_READERS: Record<string, (p: Record<string, unknown>) => SummaryRecipients> = {
+  // The plugin uses the workspace's default DM target only when userId is
+  // left out, and sends to whatever else it holds. The call carries only the
+  // Slack user id; a name would need a Slack lookup.
+  "slack-tools:slack_send_dm": (p) =>
+    isMissing(p.userId) ? { to: ["the default DM target"] } : { to: readNames(p.userId) },
+  // channelId wins over channelName, and with neither the plugin posts to the
+  // workspace's default channel.
+  "slack-tools:slack_send_channel": (p) => {
+    const channelId = readNames(p.channelId);
+    if (channelId.length > 0) return { to: channelId };
+    const channelName = nonEmptyString(p.channelName);
+    if (channelName) return { to: [`#${channelName.replace(/^#/, "")}`] };
+    return isMissing(p.channelId) && !p.channelName ? { to: ["the default channel"] } : {};
+  },
+  "email-tools:email_send": (p) => ({
+    to: emailAddresses(p.to),
+    cc: emailAddresses(p.cc),
+    bcc: emailAddresses(p.bcc),
+  }),
+  // The plugin sends a reply to the original message's sender and ignores any
+  // `to` it is given. With replyAll (any truthy value, as the plugin reads it)
+  // it also copies everyone else who was on that message.
+  "email-tools:email_reply": (p) =>
+    p.replyAll
+      ? { description: "reply-all to the sender and everyone on the original message" }
+      : { to: ["the sender of the original message"] },
+  // An imported reply is only recorded in Help Scout and reaches no one.
+  // Otherwise customerId wins over customerEmail, and with neither the reply
+  // goes to the conversation's own customer.
+  "help-scout:helpscout_send_reply": (p) => {
+    if (p.imported) return { description: "recorded in Help Scout only, nothing is sent" };
+    const copies = { cc: emailAddresses(p.cc), bcc: emailAddresses(p.bcc) };
+    const customerId = idString(p.customerId);
+    if (customerId) return { to: [`Help Scout customer ${customerId}`], ...copies };
+    const conversationId = idString(p.conversationId);
+    const conversationCustomer = conversationId
+      ? `the customer on conversation ${conversationId}`
+      : "the conversation's customer";
+    return { to: [nonEmptyString(p.customerEmail) ?? conversationCustomer], ...copies };
+  },
+  // Each thread that is not an internal note goes to the conversation's
+  // customer, or to the thread's own customerEmail when it names one. A
+  // conversation of notes alone reaches no one.
+  "help-scout:helpscout_create_conversation": (p) => {
+    const customerEmail = nonEmptyString(asRecord(p.customer).email);
+    const threads = Array.isArray(p.threads) ? p.threads.map(asRecord) : [];
+    const sent = threads.filter((thread) => thread.type !== "note");
+    if (threads.length > 0 && sent.length === 0) {
+      return { description: "internal notes only, nothing is sent" };
+    }
+    const to =
+      sent.length > 0
+        ? sent.map((thread) => nonEmptyString(thread.customerEmail) ?? customerEmail)
+        : [customerEmail];
+    return { to: to.filter((name): name is string => name !== null) };
+  },
+  "phone-tools:phone_call_make": (p) => ({ to: readNames(p.to) }),
+  // The from* fields pick the extension that rings first, not who is called.
+  "3cx-tools:pbx_click_to_call": (p) => ({ to: readNames(p.toNumber) }),
+  // The public posts name where the post appears.
+  "gbp-reviews:gbp_reply_to_review": postedTo("locationKey"),
+  "review-tools:gbp_reply_to_review": postedTo("locationKey"),
+  "social-poster:post_to_facebook": postedTo("page"),
+  "social-poster:post_to_instagram": postedTo("account"),
+  "social-poster:post_to_x": postedTo("account"),
+  "social-poster:post_to_tiktok": postedTo("account"),
+  "social-poster:post_to_threads": postedTo("account"),
+  "instagram-tools:instagram_post_photo": postedTo("account"),
+  "instagram-tools:instagram_post_carousel": postedTo("account"),
+  "instagram-tools:instagram_post_reel": postedTo("account"),
+  "instagram-tools:instagram_post_story": postedTo("account"),
+  "youtube-tools:youtube_upload": postedTo("account"),
+  // A comment appears on the video; the account only says who posts it.
+  "youtube-tools:youtube_post_comment": (p) => ({
+    to: readNames(p.videoId).map((videoId) => `video ${videoId}`),
+  }),
+  // Publishing a book addresses no one.
+  "kdp-tools:kdp_publish": () => ({}),
+};
+
+/**
+ * Recipients for an operation with no reader of its own, which leaves the
+ * ones an operator has asked to approve. Only names that are the recipient in
+ * the tools that send with them (`to` is also the end of a date range in two
+ * report tools, where the date speaks for itself). `account`, `page`,
+ * `locationKey` and `conversationId` are left to the readers above: each is
+ * where one held tool sends but something else in its plugin's other tools,
+ * such as the account a call is placed from, a page number, the key a review
+ * sync signs in with, or the conversation being closed or tagged.
+ */
+function fallbackRecipients(p: Record<string, unknown>): SummaryRecipients {
+  const to = readNames(p.to);
+  if (to.length > 0) return { to };
+  const named =
+    nonEmptyString(p.recipient) ??
+    nonEmptyString(p.channel) ??
+    nonEmptyString(p.user) ??
+    nonEmptyString(p.phoneNumber);
+  return { to: named ? [named] : [] };
+}
+
+/** At most this many names are shown in each of to, cc and bcc; the rest are counted. */
+const MAX_NAMES_SHOWN = 3;
+const MAX_NAME_LENGTH = 60;
+const MAX_SUBJECT_LENGTH = 100;
+const MAX_BODY_LENGTH = 140;
+/**
+ * The whole summary. Slack refuses an approval card past 3000 characters, and
+ * a refused card loses the reply and any later approvals in that turn.
+ */
+const MAX_SUMMARY_LENGTH = 500;
+
+/**
+ * Text cut to at most `max` characters, ending in an ellipsis. Counts whole
+ * characters: half of an emoji left at the cut is something Postgres will not
+ * store as JSON, which would fail the draft and the agent's tool call with it.
+ */
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const characters: string[] = [];
+  for (const character of text) {
+    characters.push(character);
+    if (characters.length > max) return `${characters.slice(0, max - 1).join("")}…`;
+  }
+  return text;
+}
+
+/** One name, shortened; a long "Name <address>" keeps just the address. */
+function shortName(name: string): string {
+  if (name.length <= MAX_NAME_LENGTH) return name;
+  const address = /<([^<>]+)>/.exec(name)?.[1]?.trim();
+  return clip(address || name, MAX_NAME_LENGTH);
+}
+
+/** "a, b, c and 4 more". */
+function formatNames(names: string[]): string {
+  const unique = [...new Set(names)];
+  const shown = unique.slice(0, MAX_NAMES_SHOWN).map(shortName).join(", ");
+  const more = unique.length - MAX_NAMES_SHOWN;
+  return more > 0 ? `${shown} and ${more} more` : shown;
+}
+
 /**
  * Generate a short human-readable summary from the call parameters, used as
  * the approval payload `summary` so it renders without requiring the user
- * to expand the full args. Best-effort: pulls common fields like `to`,
- * `subject`, `text`, `body`, `channel`, `phoneNumber`.
+ * to expand the full args. It is all the approver sees on the Approve and
+ * Reject card in Slack, so it says who the call goes to (see
+ * SUMMARY_RECIPIENT_READERS) and is kept short.
  */
 function buildSummary(toolName: string, params: unknown): string {
   if (!params || typeof params !== "object") return toolName;
   const p = params as Record<string, unknown>;
-  const candidate = (k: string): string | null => {
-    const v = p[k];
-    return typeof v === "string" && v.trim() ? v.trim() : null;
-  };
+  const candidate = (k: string): string | null => nonEmptyString(p[k]);
+  const readRecipients = Object.hasOwn(SUMMARY_RECIPIENT_READERS, toolName)
+    ? SUMMARY_RECIPIENT_READERS[toolName]
+    : fallbackRecipients;
+  const recipients = readRecipients(p);
 
   // The public-posting tools (social posts, Instagram, YouTube, KDP, Google
-  // review replies) name their target and content differently from the
-  // messaging tools this was written for. Without their field names here,
-  // every one of them summarised to the bare tool name, and the operator was
-  // asked to approve a public post without being shown a word of it.
-  const recipient =
-    candidate("to") ??
-    candidate("recipient") ??
-    candidate("channel") ??
-    candidate("user") ??
-    candidate("phoneNumber") ??
-    candidate("conversationId") ??
-    candidate("page") ??
-    candidate("locationKey") ??
-    candidate("account");
+  // review replies) name their content differently from the messaging tools
+  // this was written for; where they appear is read with the recipients
+  // above. Without their field names here, every one of them summarised to
+  // the bare tool name, and the operator was asked to approve a public post
+  // without being shown a word of it.
   const subject = candidate("subject") ?? candidate("title");
   const body =
     candidate("body") ??
@@ -405,14 +633,22 @@ function buildSummary(toolName: string, params: unknown): string {
     candidate("filePath");
 
   const parts: string[] = [];
-  if (recipient) parts.push(`to ${recipient}`);
-  if (subject) parts.push(`re: ${subject}`);
+  if (recipients.description) parts.push(recipients.description);
+  const lists: Array<[label: string, names: string[] | undefined]> = [
+    ["to", recipients.to],
+    ["cc", recipients.cc],
+    ["bcc", recipients.bcc],
+  ];
+  for (const [label, names] of lists) {
+    if (names && names.length > 0) parts.push(`${label} ${formatNames(names)}`);
+  }
+  if (subject) parts.push(`re: ${clip(subject, MAX_SUBJECT_LENGTH)}`);
   if (body) {
-    const trimmed = body.length > 140 ? `${body.slice(0, 137)}…` : body;
+    const trimmed = clip(body, MAX_BODY_LENGTH);
     parts.push(`— "${trimmed}"`);
   }
 
-  return parts.length > 0 ? parts.join(" ") : toolName;
+  return parts.length > 0 ? clip(parts.join(" "), MAX_SUMMARY_LENGTH) : toolName;
 }
 
 export function createDraftGate(opts: DraftGateOptions): DraftGate {
@@ -518,7 +754,17 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         return { intercepted: false };
       }
 
-      const summary = buildSummary(namespacedName, parameters);
+      // The summary only describes the call. If reading the parameters for it
+      // goes wrong, the call is still drafted under its tool name: a throw
+      // here would fail the agent's tool call with nothing sent and nothing
+      // left to approve.
+      let summary: string;
+      try {
+        summary = buildSummary(namespacedName, parameters);
+      } catch (err) {
+        log.warn({ err, tool: namespacedName }, "could not summarise the draft; using the tool name");
+        summary = namespacedName;
+      }
       const actor = resolveRunActor(runContext);
 
       // An identical call that is already waiting is the same request, not a
