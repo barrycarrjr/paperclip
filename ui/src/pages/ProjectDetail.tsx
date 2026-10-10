@@ -13,6 +13,7 @@ import { assetsApi } from "../api/assets";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
@@ -482,7 +483,7 @@ export function ProjectDetail() {
     } satisfies BudgetPolicySummary;
   }, [budgetOverview?.policies, project, resolvedCompanyId, routeProjectRef]);
 
-  const budgetMutation = useMutation({
+  const budgetMutation = useSaveMutation({
     mutationFn: (amount: number) =>
       budgetsApi.upsertPolicy(resolvedCompanyId!, {
         scopeType: "project",
@@ -490,6 +491,9 @@ export function ProjectDetail() {
         amount,
         windowKind: "lifetime",
       }),
+    successMessage: "Budget saved",
+    // The budget card has nowhere to show a failure.
+    errorMessage: "Could not save the budget",
     onSuccess: () => {
       if (!resolvedCompanyId) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.budgets.overview(resolvedCompanyId) });

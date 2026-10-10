@@ -37,6 +37,25 @@ function joinFragments(parts: Array<string | null>) {
   return filtered.length > 0 ? filtered.join(" · ") : null;
 }
 
+/**
+ * What a Retry button sends to wake the agent for a failed run again: the
+ * run's task when it had one, and always the run itself. A run with no task
+ * then goes back to that run's conversation (a plugin's, an approval's, the
+ * scheduled one) instead of the one for runs started by hand.
+ */
+export function buildRetryWakePayload(run: { id: string; contextSnapshot?: Record<string, unknown> | null }) {
+  const payload: Record<string, unknown> = { retryOfRunId: run.id };
+  const context = run.contextSnapshot ?? null;
+  if (!context) return payload;
+  const issueId = readNonEmptyString(context.issueId);
+  const taskId = readNonEmptyString(context.taskId);
+  const taskKey = readNonEmptyString(context.taskKey);
+  if (issueId) payload.issueId = issueId;
+  if (taskId) payload.taskId = taskId;
+  if (taskKey) payload.taskKey = taskKey;
+  return payload;
+}
+
 export function formatRetryReason(reason: string | null | undefined) {
   const normalized = readNonEmptyString(reason);
   if (!normalized) return null;

@@ -21,6 +21,7 @@ import { usePanel } from "../context/PanelContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
+import { useSaveConfirmation, useSaveMutation } from "../hooks/useSaveMutation";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -52,7 +53,7 @@ import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
-import { describeRunRetryState } from "../lib/runRetryState";
+import { buildRetryWakePayload, describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/ui/tabs";
@@ -852,7 +853,7 @@ export function AgentDetail() {
     },
   });
 
-  const budgetMutation = useMutation({
+  const budgetMutation = useSaveMutation({
     mutationFn: (amount: number) =>
       budgetsApi.upsertPolicy(resolvedCompanyId!, {
         scopeType: "agent",
@@ -860,6 +861,9 @@ export function AgentDetail() {
         amount,
         windowKind: "calendar_month_utc",
       }),
+    successMessage: "Budget saved",
+    // The budget card has nowhere to show a failure.
+    errorMessage: "Could not save the budget",
     onSuccess: () => {
       if (!resolvedCompanyId) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.budgets.overview(resolvedCompanyId) });
@@ -881,9 +885,11 @@ export function AgentDetail() {
     },
   });
 
-  const resetTaskSession = useMutation({
+  const resetTaskSession = useSaveMutation({
     mutationFn: (taskKey: string | null) =>
       agentsApi.resetSession(agentLookupRef, taskKey, resolvedCompanyId ?? undefined),
+    // Nothing on the page shows sessions, so this is the only sign it worked.
+    successMessage: (_result, taskKey) => (taskKey ? "Session reset" : "Sessions reset"),
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(agentLookupRef) });
@@ -1620,8 +1626,12 @@ function AgentConfigurePage({
     queryFn: () => agentsApi.listConfigRevisions(agent.id, companyId),
   });
 
-  const rollbackConfig = useMutation({
+  const rollbackConfig = useSaveMutation({
     mutationFn: (revisionId: string) => agentsApi.rollbackConfigRevision(agent.id, revisionId, companyId),
+    // The restored settings land in the form above, usually off screen, and a
+    // refusal (a revision holding redacted secrets, say) had nowhere to show.
+    successMessage: "Configuration restored",
+    errorMessage: "Could not restore that revision",
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
@@ -1738,16 +1748,21 @@ function ConfigurationTab({
     enabled: Boolean(companyId),
   });
 
-  const updateAgent = useMutation({
+  const updateAgent = useSaveMutation({
     mutationFn: (data: Record<string, unknown>) => agentsApi.update(agent.id, data, companyId),
+    successMessage: "Configuration saved",
     onMutate: () => {
       setAwaitingRefreshAfterSave(true);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.configRevisions(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(agent.companyId) });
+      // The Save bar says "Saving..." until the agent reloads, so the
+      // confirmation waits for that reload too rather than appearing beside it.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) }),
+      ]);
     },
     onError: (err) => {
       setAwaitingRefreshAfterSave(false);
@@ -1871,7 +1886,8 @@ function ConfigurationTab({
 
 /* ---- Prompts Tab ---- */
 
-function PromptsTab({
+// Exported for its tests.
+export function PromptsTab({
   agent,
   companyId,
   onDirtyChange,
@@ -1887,6 +1903,8 @@ function PromptsTab({
   onSavingChange: (saving: boolean) => void;
 }) {
   const queryClient = useQueryClient();
+  const { pushToast } = useToastActions();
+  const { confirmSaved, withdrawSaved } = useSaveConfirmation();
   const { isMobile } = useSidebar();
   const [selectedFile, setSelectedFile] = useState<string>("AGENTS.md");
   const [showFilePanel, setShowFilePanel] = useState(false);
@@ -1980,10 +1998,12 @@ function PromptsTab({
       clearLegacyPromptTemplate?: boolean;
     }) => agentsApi.updateInstructionsBundle(agent.id, data, companyId),
     onMutate: () => setAwaitingRefresh(true),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsBundle(agent.id) });
+    // Waits for the reload, so the Save bar stays on "Saving..." until the
+    // tab shows what was saved and "Instructions saved" comes after it.
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsBundle(agent.id) });
     },
     onError: () => setAwaitingRefresh(false),
   });
@@ -1992,12 +2012,15 @@ function PromptsTab({
     mutationFn: (data: { path: string; content: string; clearLegacyPromptTemplate?: boolean }) =>
       agentsApi.saveInstructionsFile(agent.id, data, companyId),
     onMutate: () => setAwaitingRefresh(true),
-    onSuccess: (_, variables) => {
+    // Waits for the reload for the same reason as updateBundle above.
+    onSuccess: async (_, variables) => {
       setPendingFiles((prev) => prev.filter((f) => f !== variables.path));
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsBundle(agent.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsFile(agent.id, variables.path) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsBundle(agent.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsFile(agent.id, variables.path) }),
+      ]);
     },
     onError: () => setAwaitingRefresh(false),
   });
@@ -2150,19 +2173,35 @@ function PromptsTab({
           });
         }
       };
-      void save().catch(() => undefined);
+      // One message once every part has gone through, rather than one per
+      // request. A failure used to be dropped here, so it looked exactly like
+      // a save that worked.
+      void save().then(
+        () => confirmSaved("Instructions saved"),
+        (error: unknown) => {
+          withdrawSaved();
+          pushToast({
+            title: "Could not save instructions",
+            body: error instanceof Error ? error.message : undefined,
+            tone: "error",
+          });
+        },
+      );
     } : null);
   }, [
     bundle,
     bundleDirty,
     bundleDraft,
+    confirmSaved,
     displayValue,
     fileDirty,
     isDirty,
     onSaveActionChange,
+    pushToast,
     saveFile,
     selectedOrEntryFile,
     updateBundle,
+    withdrawSaved,
   ]);
 
   useEffect(() => {
@@ -3323,18 +3362,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   });
 
   const canRetryRun = run.status === "failed" || run.status === "timed_out";
-  const retryPayload = useMemo(() => {
-    const payload: Record<string, unknown> = {};
-    const context = asRecord(run.contextSnapshot);
-    if (!context) return payload;
-    const issueId = asNonEmptyString(context.issueId);
-    const taskId = asNonEmptyString(context.taskId);
-    const taskKey = asNonEmptyString(context.taskKey);
-    if (issueId) payload.issueId = issueId;
-    if (taskId) payload.taskId = taskId;
-    if (taskKey) payload.taskKey = taskKey;
-    return payload;
-  }, [run.contextSnapshot]);
+  const retryPayload = useMemo(
+    () => buildRetryWakePayload({ id: run.id, contextSnapshot: asRecord(run.contextSnapshot) }),
+    [run.contextSnapshot, run.id],
+  );
   // Stopping the agent is offered next to the failure, not only from the page
   // header. An agent failing on a timer for a reason retrying cannot fix will
   // otherwise keep failing while the operator works out what to do.
@@ -3374,12 +3405,15 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     [touchedIssues],
   );
 
-  const clearSessionsForTouchedIssues = useMutation({
+  const clearSessionsForTouchedIssues = useSaveMutation({
     mutationFn: async () => {
       if (touchedIssueIds.length === 0) return 0;
       await Promise.all(touchedIssueIds.map((issueId) => agentsApi.resetSession(run.agentId, issueId, run.companyId)));
       return touchedIssueIds.length;
     },
+    // The link goes back to its normal text either way, so say what happened.
+    successMessage: (cleared) =>
+      cleared === 0 ? null : `Session cleared for ${cleared} ${cleared === 1 ? "issue" : "issues"}`,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.taskSessions(run.agentId) });

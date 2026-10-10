@@ -12,6 +12,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { assetsApi } from "../api/assets";
@@ -237,12 +238,13 @@ export function CompanySettings() {
       description !== (selectedCompany.description ?? "") ||
       brandColor !== (selectedCompany.brandColor ?? ""));
 
-  const generalMutation = useMutation({
+  const generalMutation = useSaveMutation({
     mutationFn: (data: {
       name: string;
       description: string | null;
       brandColor: string | null;
     }) => companiesApi.update(selectedCompanyId!, data),
+    successMessage: "Company settings saved",
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     }
@@ -763,9 +765,13 @@ export function CompanySettings() {
           >
             {generalMutation.isPending ? "Saving..." : "Save changes"}
           </Button>
+          {/* The save now says "Company settings saved" itself. This label
+              lived inside the unsaved-changes row, which disappears as soon as
+              the saved values load, so it showed for a moment at most, and it
+              came back the next time the form was edited, before any save.
           {generalMutation.isSuccess && (
             <span className="text-xs text-muted-foreground">Saved</span>
-          )}
+          )} */}
           {generalMutation.isError && (
             <span className="text-xs text-destructive">
               {generalMutation.error instanceof Error

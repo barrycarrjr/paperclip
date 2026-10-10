@@ -23,6 +23,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
   externalMcpSecretsService,
   type ExternalMcpSecretsService,
@@ -78,6 +79,37 @@ export class ExternalMcpWarmingError extends Error {
     this.name = "ExternalMcpWarmingError";
     this.serverKey = serverKey;
   }
+}
+
+/**
+ * Thrown to callers of a connect that finished after an operator edited or
+ * deleted the server. That process was started with the old command, URL,
+ * env or credentials, so it is closed instead of being kept. Calling again
+ * connects with the current settings.
+ */
+export class ExternalMcpConfigChangedError extends Error {
+  readonly code = "ECONFIG_CHANGED" as const;
+  readonly serverKey: string;
+
+  constructor(serverKey: string) {
+    super(
+      `MCP server "${serverKey}" was edited while it was connecting; that connection ` +
+        `used the old settings and was closed, so call it again`,
+    );
+    this.name = "ExternalMcpConfigChangedError";
+    this.serverKey = serverKey;
+  }
+}
+
+/**
+ * True when a failed call means the connection itself is gone or stuck, so
+ * the client should be rebuilt. A server that answered with an error (an
+ * unknown tool, bad arguments, its own failure) is still connected: closing
+ * it would throw away a process that can take most of a minute to start.
+ */
+function isConnectionError(err: unknown): boolean {
+  if (!(err instanceof McpError)) return true;
+  return err.code === ErrorCode.ConnectionClosed || err.code === ErrorCode.RequestTimeout;
 }
 
 interface PooledClient {
@@ -152,11 +184,12 @@ export interface ExternalMcpServerManager {
    */
   isReady(serverId: string, companyId: string): boolean;
   /**
-   * Incremented whenever an operator config change evicts a client. Callers
-   * that cache discovery results key off this so an edit takes effect at once
-   * instead of waiting for a cache TTL.
+   * Incremented for a server whenever an operator edit or delete evicts its
+   * clients. Callers that cache discovery results key off this so an edit
+   * takes effect at once instead of waiting for a cache TTL, without
+   * discarding what they know about every other server.
    */
-  configGeneration(): number;
+  configGeneration(serverId: string): number;
   /** Call a tool by its bare name (not namespaced). Mutation gating happens here. */
   callTool(
     serverId: string,
@@ -164,9 +197,18 @@ export interface ExternalMcpServerManager {
     toolName: string,
     args: unknown,
   ): Promise<ExternalMcpCallResult>;
-  /** Tear down a (server, company) client. Used after config update or delete. */
+  /**
+   * Without a company: the server's settings changed (edit or delete). Its
+   * clients are closed, its config generation moves on, and a connect still
+   * starting with the old settings is closed when it lands. With a company:
+   * just that one client is closed (the test-connect probe), which changes
+   * no settings.
+   */
   evict(serverId: string, companyId?: string): Promise<void>;
-  /** Tear down everything. Called during graceful shutdown. */
+  /**
+   * Tear down everything, including clients still starting. Called during
+   * graceful shutdown.
+   */
   shutdown(): Promise<void>;
 }
 
@@ -193,12 +235,28 @@ export function createExternalMcpServerManager(
   // each one competing for the same Docker daemon makes the start-up slower
   // still.
   const connecting = new Map<string, Promise<PooledClient>>();
-  // Bumped on explicit eviction (config edit / delete) so downstream discovery
-  // caches can drop everything at once.
-  let generation = 0;
+  // Per server, bumped when an operator edit or delete evicts it, so
+  // downstream discovery caches drop that server's entries at once. Per
+  // server so that editing one does not wipe what is known about the rest.
+  const generations = new Map<string, number>();
+  // Clients whose connect has not finished yet, so shutdown can stop them too.
+  const starting = new Set<Client>();
+  let shuttingDown = false;
 
   function poolKey(serverId: string, companyId: string): string {
     return `${serverId}::${companyId}`;
+  }
+
+  function generationOf(serverId: string): number {
+    return generations.get(serverId) ?? 0;
+  }
+
+  async function closeClient(client: Client, key: string, reason: string): Promise<void> {
+    try {
+      await client.close();
+    } catch (err) {
+      log.warn({ key, reason, err: err instanceof Error ? err.message : String(err) }, "client close failed");
+    }
   }
 
   function scheduleIdleEviction(key: string, pooled: PooledClient): void {
@@ -220,11 +278,7 @@ export function createExternalMcpServerManager(
       pooled.idleTimer = null;
     }
     pool.delete(key);
-    try {
-      await pooled.client.close();
-    } catch (err) {
-      log.warn({ key, reason, err: err instanceof Error ? err.message : String(err) }, "client close failed");
-    }
+    await closeClient(pooled.client, key, reason);
     log.debug({ key, reason }, "external mcp client evicted");
   }
 
@@ -312,6 +366,7 @@ export function createExternalMcpServerManager(
     // "MCP error -32001: Request timed out" no matter how generous our budget
     // was. That is what stopped Docker MCP Gateway ever finishing a cold
     // start, since it enumerates every enabled server before answering.
+    starting.add(client);
     const connectPromise = client.connect(transport, { timeout: connectTimeoutMs });
     // Belt-and-braces for transports that hang before `initialize` is even
     // sent (a stdio child that never execs never gets an SDK-side timeout).
@@ -343,6 +398,8 @@ export function createExternalMcpServerManager(
       const enriched = new Error(`${baseMessage}\n\n[diag-v2]\n${diag}${stderrBlock}`);
       enriched.stack = err instanceof Error ? err.stack : undefined;
       throw enriched;
+    } finally {
+      starting.delete(client);
     }
 
     const serverInfo = client.getServerVersion();
@@ -374,8 +431,24 @@ export function createExternalMcpServerManager(
     if (inFlight) return inFlight;
 
     const startedAt = Date.now();
-    const promise = connect(server, companyId)
+    // The settings this connect starts with are current as of this count.
+    const startedGeneration = generationOf(server.id);
+    const promise: Promise<PooledClient> = connect(server, companyId)
       .then((pooled) => {
+        if (shuttingDown || generationOf(server.id) !== startedGeneration) {
+          // Edited or deleted while it connected, or Paperclip is stopping.
+          // This process runs the old command, URL, env or credentials, so it
+          // must not become the live client. Closed in the background so the
+          // callers hear about it at once.
+          const reason = shuttingDown ? "shutdown" : "edited-while-connecting";
+          void closeClient(pooled.client, key, reason);
+          log.info(
+            { serverKey: server.key, companyId, reason },
+            "external mcp client closed as soon as it connected",
+          );
+          if (shuttingDown) throw new Error("External MCP connections are shutting down");
+          throw new ExternalMcpConfigChangedError(server.key);
+        }
         pool.set(key, pooled);
         scheduleIdleEviction(key, pooled);
         log.info(
@@ -385,7 +458,9 @@ export function createExternalMcpServerManager(
         return pooled;
       })
       .finally(() => {
-        connecting.delete(key);
+        // An edit takes a connect still starting out of this map so later
+        // callers start afresh, so only remove the entry if it is this one.
+        if (connecting.get(key) === promise) connecting.delete(key);
       });
 
     connecting.set(key, promise);
@@ -472,8 +547,8 @@ export function createExternalMcpServerManager(
       return Boolean(pooled && !pooled.closing);
     },
 
-    configGeneration() {
-      return generation;
+    configGeneration(serverId) {
+      return generationOf(serverId);
     },
 
     async listTools(serverId, companyId, options) {
@@ -522,40 +597,57 @@ export function createExternalMcpServerManager(
           isError: Boolean(result.isError),
         };
       } catch (err) {
-        // On certain transport-level errors, evict and retry once on next call.
+        // Rebuild the client on the next call only when the connection is
+        // broken. A server that answered with an error, for instance about a
+        // tool it no longer has, is still connected and stays pooled.
+        const connectionLost = isConnectionError(err);
         log.warn(
           {
             serverKey: server.key,
             companyId,
             toolName,
+            connectionLost,
             err: err instanceof Error ? err.message : String(err),
           },
           "external mcp tool call failed",
         );
-        await evictByKey(poolKey(serverId, companyId), "call-error");
+        if (connectionLost) await evictByKey(poolKey(serverId, companyId), "call-error");
         throw err;
       }
     },
 
     async evict(serverId, companyId) {
-      // Config changed under us, so invalidate downstream discovery caches too.
-      generation += 1;
       if (companyId) {
+        // One client (the test-connect probe). No settings changed, so what
+        // callers know about the server stays valid.
         await evictByKey(poolKey(serverId, companyId), "explicit-evict");
         return;
       }
+      // Settings changed: invalidate downstream discovery caches for this
+      // server only. A connect still starting with the old settings leaves
+      // the in-flight map, so later callers start afresh, and is closed
+      // when it lands (see beginConnect).
+      generations.set(serverId, generationOf(serverId) + 1);
       const prefix = `${serverId}::`;
-      const keys = Array.from(pool.keys()).filter((k) => k.startsWith(prefix));
-      for (const k of keys) {
-        await evictByKey(k, "explicit-evict-all");
+      for (const key of Array.from(connecting.keys())) {
+        if (key.startsWith(prefix)) connecting.delete(key);
       }
+      const keys = Array.from(pool.keys()).filter((k) => k.startsWith(prefix));
+      await Promise.all(keys.map((k) => evictByKey(k, "explicit-evict-all")));
     },
 
     async shutdown() {
-      const keys = Array.from(pool.keys());
-      for (const k of keys) {
-        await evictByKey(k, "shutdown");
-      }
+      shuttingDown = true;
+      // Clients still starting too: a warm-up begun at boot can still be
+      // bringing a gateway up when Paperclip is asked to stop. A connect
+      // that lands after this is closed by beginConnect.
+      const stillStarting = Array.from(starting);
+      starting.clear();
+      // Side by side: closing a stdio child can take several seconds.
+      await Promise.all([
+        ...Array.from(pool.keys()).map((k) => evictByKey(k, "shutdown")),
+        ...stillStarting.map((client) => closeClient(client, "starting", "shutdown")),
+      ]);
     },
   };
 }

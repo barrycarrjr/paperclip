@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttentionRow as AttentionRowData, DashboardSummary } from "@paperclipai/shared";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { MorningBrief } from "./MorningBrief";
 
 vi.mock("@/lib/router", () => ({
@@ -29,7 +30,10 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
 }));
 vi.mock("../hooks/useEmailToolsPlugin", () => ({
-  useEmailToolsPlugin: () => ({ pluginId: null }),
+  useEmailToolsPlugin: () => ({ pluginId: state.emailPluginId }),
+}));
+vi.mock("../api/emailTools", () => ({
+  makeEmailToolsApi: () => state.emailApi,
 }));
 vi.mock("../hooks/useAttentionRowActions", () => ({
   useAttentionRowActions: () => ({ snooze: vi.fn(), dismiss: vi.fn() }),
@@ -54,11 +58,19 @@ const state: {
   /** Rows that have gone quiet, only returned when asked for. */
   setAsideRows: AttentionRowData[];
   agents: Array<{ id: string; name: string; urlKey: string; status: string }>;
+  /** No email-tools plugin unless a test installs one. */
+  emailPluginId: string | null;
+  emailApi: Record<string, unknown> | null;
+  /** Issues the page lists to learn which mailboxes are triaged. */
+  rulesHomeIssues: Array<{ id: string; title: string }>;
 } = {
   summary: summary(),
   rows: [],
   setAsideRows: [],
   agents: [],
+  emailPluginId: null,
+  emailApi: null,
+  rulesHomeIssues: [],
 };
 
 vi.mock("../api/auth", () => ({
@@ -79,7 +91,11 @@ vi.mock("../api/attention", () => ({
     }),
   },
 }));
-vi.mock("../api/issues", () => ({ issuesApi: { list: async () => [] } }));
+vi.mock("../api/issues", () => ({
+  issuesApi: {
+    list: async (_companyId: string, filters?: { q?: string }) => (filters?.q ? state.rulesHomeIssues : []),
+  },
+}));
 vi.mock("../api/agents", () => ({ agentsApi: { list: async () => state.agents } }));
 vi.mock("../api/access", () => ({ accessApi: { listUserDirectory: async () => ({ users: [] }) } }));
 
@@ -143,6 +159,9 @@ describe("MorningBrief", () => {
     state.rows = [];
     state.setAsideRows = [];
     state.agents = [];
+    state.emailPluginId = null;
+    state.emailApi = null;
+    state.rulesHomeIssues = [];
   });
 
   afterEach(() => {
@@ -163,7 +182,9 @@ describe("MorningBrief", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <MorningBrief />
+          <TooltipProvider>
+            <MorningBrief />
+          </TooltipProvider>
         </QueryClientProvider>,
       );
     });
@@ -246,5 +267,62 @@ describe("MorningBrief", () => {
     expect(container.querySelector('[data-tone="green"]')).not.toBeNull();
     expect(link(/^See all in Attention/)?.textContent).toBe("See all in Attention");
     expect(container.textContent).toContain("Nothing waiting on you.");
+  });
+
+  function installEmail(dismissReviewEntry: () => Promise<unknown>) {
+    const api = {
+      listMessages: vi.fn(async () => ({
+        messages: [
+          {
+            uid: 7,
+            from: "Shop Example <promo@shop.example.com>",
+            subject: "Autumn sale",
+            date: "2026-10-09T08:00:00.000Z",
+          },
+        ],
+        uidValidity: 1,
+      })),
+      listRules: vi.fn(async () => ({ rules: [] })),
+      fetchMessage: vi.fn(async () => ({ text: "" })),
+      markRead: vi.fn(async () => ({ ok: true })),
+      setRule: vi.fn(async () => ({ ok: true })),
+      dismissReviewEntry: vi.fn(dismissReviewEntry),
+    };
+    state.emailPluginId = "email-plugin";
+    state.emailApi = api;
+    state.rulesHomeIssues = [{ id: "issue-1", title: "Email triage rules - personal" }];
+    return api;
+  }
+
+  async function clickDismiss() {
+    const dismiss = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Dismiss",
+    );
+    expect(dismiss).toBeDefined();
+    await act(async () => {
+      dismiss!.click();
+    });
+    await settle();
+  }
+
+  // The triage routine keeps its own review queue in email-tools. Dismissing a
+  // sender here only marked the mail read, so the routine kept reporting a
+  // sender the operator had already dealt with.
+  it("Dismiss on an email sender also clears it from the triage review queue", async () => {
+    const api = installEmail(async () => ({ ok: true, cleared: 1 }));
+    await renderPage();
+    await clickDismiss();
+
+    expect(api.markRead).toHaveBeenCalledWith("personal", 7, "INBOX");
+    expect(api.dismissReviewEntry).toHaveBeenCalledWith("personal", "promo@shop.example.com");
+    expect(api.setRule).not.toHaveBeenCalled();
+  });
+
+  it("says so when the review queue entry could not be cleared", async () => {
+    installEmail(async () => Promise.reject(new Error("Review queue unavailable")));
+    await renderPage();
+    await clickDismiss();
+
+    expect(container.textContent).toContain("Review queue unavailable");
   });
 });

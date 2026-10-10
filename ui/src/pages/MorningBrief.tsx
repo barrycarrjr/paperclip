@@ -56,7 +56,7 @@ import { OWN_LINE_ACTIONS_CLASS, WRAPPING_ROW_CLASS } from "../lib/narrow-layout
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { summarizeOutcome, isOutcomeAction } from "../lib/outcomes";
 import { PluginSlotOutlet } from "@/plugins/slots";
-import { buildReviewSenderGroups } from "../lib/email-triage-rules";
+import { buildReviewSenderGroups, clearStoredReviewEntry } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -326,6 +326,7 @@ export function MorningBrief() {
       // thing that clears the row. Next time this sender writes, the new
       // unread mail brings them back.
       await markRowUidsRead(row);
+      await clearStoredReviewEntry(emailApi, row);
     },
     ...reviewMutationOptions,
   });

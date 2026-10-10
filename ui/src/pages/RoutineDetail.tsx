@@ -21,6 +21,7 @@ import { LiveRunWidget } from "../components/LiveRunWidget";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -424,10 +425,11 @@ export function RoutineDetail() {
     );
   };
 
-  const saveRoutine = useMutation({
+  const saveRoutine = useSaveMutation({
     mutationFn: () => {
       return routinesApi.update(routineId!, buildRoutineMutationPayload(editDraft));
     },
+    successMessage: "Routine saved",
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.routines.detail(routineId!) }),

@@ -52,6 +52,7 @@ import {
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useOptionalToastActions } from "../context/ToastContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { classifySkillDenial } from "@/lib/skill-policy-denial";
 import { agentsApi } from "@/api/agents";
 import { companySkillsApi } from "@/api/companySkills";
@@ -1334,8 +1335,9 @@ function SkillPane({
     setSelectedFile(path);
   }, [dirty, selectedFile]);
 
-  const saveMutation = useMutation({
+  const saveMutation = useSaveMutation({
     mutationFn: () => companySkillsApi.updateFile(companyId, skillId, selectedFile, draft),
+    successMessage: (updated) => `${updated.path} saved`,
     onSuccess: (updated) => {
       setSavedContent(updated.content);
       queryClient.invalidateQueries({
@@ -1977,9 +1979,10 @@ function InputPane({
     onSelectAdHoc();
   }, [adHocMode, confirmDiscardDirtyInput, onSelectAdHoc]);
 
-  const updateMutation = useMutation({
+  const updateMutation = useSaveMutation({
     mutationFn: (payload: { content: string }) =>
       companySkillsApi.updateTestInput(companyId, skillId, selectedInput!.id, payload),
+    successMessage: (updated) => `${updated.name} saved`,
     onSuccess: (updated) => {
       setSavedInputDraft({
         inputId: updated.id,
@@ -3441,6 +3444,14 @@ function VersionHistorySheet({
   const versions = versionsQuery.data ?? [];
   const [leftId, setLeftId] = useState<string | null>(null);
   const [rightId, setRightId] = useState<string | null>(null);
+  // What the last restore did, said inside the sheet. A toast does not work
+  // here: the sheet is modal, so it hides the toast from screen readers, the
+  // toast sits over the sheet, and clicking the toast closes the sheet.
+  const [restoreOutcome, setRestoreOutcome] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!open) setRestoreOutcome(null);
+  }, [open]);
 
   const restore = useMutation({
     mutationFn: async (version: CompanySkillVersion) => {
@@ -3453,9 +3464,20 @@ function VersionHistorySheet({
         label: `Restore of v${version.revisionNumber}`,
       });
     },
-    onSuccess: () => {
+    onMutate: () => setRestoreOutcome(null),
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.versions(companyId, skillId) });
       onRestored();
+      setRestoreOutcome({ tone: "success", text: `Restored as v${created.revisionNumber}.` });
+    },
+    // A restore that failed part way through used to say nothing at all.
+    onError: (error) => {
+      const denial = classifySkillDenial(error);
+      const reason = error instanceof Error && error.message ? error.message : "Please try again.";
+      setRestoreOutcome({
+        tone: "error",
+        text: denial ? `${denial.title} ${denial.remediation}` : `Couldn't restore version. ${reason}`,
+      });
     },
   });
 
@@ -3471,6 +3493,20 @@ function VersionHistorySheet({
       <SheetContent side="left" className="w-full sm:max-w-(--sz-560px)">
         <SheetHeader>
           <SheetTitle>Version history</SheetTitle>
+          {/* On the page even while empty, so a screen reader hears each
+              restore's outcome; it stays in view while the list scrolls. */}
+          <div
+            role="status"
+            className={cn(
+              "text-sm",
+              restoreOutcome && "rounded-md border px-3 py-2",
+              restoreOutcome?.tone === "success" &&
+                "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+              restoreOutcome?.tone === "error" && "border-destructive/40 bg-destructive/5 text-destructive",
+            )}
+          >
+            {restoreOutcome?.text}
+          </div>
         </SheetHeader>
         <div className="mt-3 space-y-2 overflow-auto">
           {versionsQuery.isLoading ? (

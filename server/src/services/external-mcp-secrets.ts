@@ -83,6 +83,30 @@ function collectSecretRefKeys(rec: Record<string, unknown>): Set<string> {
   return out;
 }
 
+function isPlainTextBinding(binding: unknown): boolean {
+  if (typeof binding === "string") return true;
+  return (
+    binding !== null &&
+    typeof binding === "object" &&
+    (binding as { type?: unknown }).type === "plain"
+  );
+}
+
+/**
+ * True when what a server is started with may depend on the calling company.
+ * Only plain text is known to resolve the same for everyone, so any other
+ * env or header binding counts: a secret ref today, and any binding type
+ * added later until someone decides otherwise. Without one, every company
+ * spawns the same process and gets the same tool list.
+ */
+export function hasCompanyScopedBindings(
+  server: Pick<ExternalMcpServerRecord, "envBindings" | "headerBindings">,
+): boolean {
+  return [server.envBindings, server.headerBindings].some((bindings) =>
+    Object.values(bindings ?? {}).some((binding) => !isPlainTextBinding(binding)),
+  );
+}
+
 export function externalMcpSecretsService(db: Db) {
   const secrets = secretService(db);
 

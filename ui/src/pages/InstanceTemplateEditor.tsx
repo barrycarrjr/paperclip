@@ -14,6 +14,7 @@ import { Link, useNavigate, useParams } from "@/lib/router";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { templatesApi } from "@/api/templates";
 import { queryKeys } from "@/lib/queryKeys";
+import { useSaveMutation } from "@/hooks/useSaveMutation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -124,8 +125,9 @@ function RoutineEditor({ id }: { id: string | null }) {
     },
   });
 
-  const updateMutation = useMutation({
+  const updateMutation = useSaveMutation({
     mutationFn: () => templatesApi.updateRoutine(id!, buildBody()),
+    successMessage: "Routine template saved",
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("routine") });
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.detail("routine", id!) });
@@ -428,8 +430,9 @@ function SkillEditor({ id }: { id: string | null }) {
     },
   });
 
-  const updateMutation = useMutation({
+  const updateMutation = useSaveMutation({
     mutationFn: () => templatesApi.updateSkill(id!, buildBody()),
+    successMessage: "Skill template saved",
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("skill") });
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.detail("skill", id!) });
@@ -598,8 +601,9 @@ function AgentEditor({ id }: { id: string | null }) {
     },
   });
 
-  const updateMutation = useMutation({
+  const updateMutation = useSaveMutation({
     mutationFn: () => templatesApi.updateAgent(id!, buildBody()),
+    successMessage: "Agent template saved",
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.list("agent") });
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates.detail("agent", id!) });

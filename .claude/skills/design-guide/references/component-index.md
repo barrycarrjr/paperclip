@@ -468,6 +468,22 @@ import { cn } from "@/lib/utils";
 **File:** `ui/src/hooks/useKeyboardShortcuts.ts`
 **Usage:** Global keyboard shortcut handler. Registers Cmd+K, C, [, ], Cmd+Enter.
 
+### useSaveMutation
+
+**File:** `ui/src/hooks/useSaveMutation.ts`
+**Props:** every `useMutation` option, plus `successMessage` (required: a string, or `(data, variables) => string | null`) and `errorMessage?`
+**Usage:** Use it instead of `useMutation` for any save, update or create the person asks for with a button or a form. A form keeps showing what was typed, so a save that worked looks the same as one that never happened; this shows `successMessage` ("Profile saved", "Settings saved") as a success toast once the request and the page's own `onSuccess` have finished, so await a reload inside `onSuccess` and the message comes after it. A repeat save shows the message again as a new one rather than stacking a second, and a failed save takes back its earlier "saved" message. If the wording function throws, the message falls back to "Saved". Failures stay with the page. Set `errorMessage` ("Could not save settings") only where the page shows failures nowhere else; the server's reason goes underneath. Not needed where the result is already visible: a toggle that flips, an inline editor, a dialog that closes, a row that appears. Inside a modal dialog or sheet that stays open, say it with a `role="status"` line inside the dialog instead: the dialog hides toasts from screen readers, and a click on a toast closes the dialog.
+
+```tsx
+const save = useSaveMutation({
+  mutationFn: (input: UpdateSettings) => settingsApi.update(input),
+  successMessage: "Settings saved",
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+});
+```
+
+`useSaveConfirmation()` from the same file returns `{ confirmSaved, withdrawSaved }` for a save `useSaveMutation` cannot wrap. One case is a single button on a mutation that toggles also use: pass `() => confirmSaved("...")` as that call's `onSuccess` and `withdrawSaved` as its `onError`. The other is a save made of several requests: confirm once after the last one, and withdraw if any fails.
+
 ### Query Keys
 
 **File:** `ui/src/lib/queryKeys.ts`

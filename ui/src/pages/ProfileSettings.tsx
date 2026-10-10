@@ -7,6 +7,7 @@ import { assetsApi } from "@/api/assets";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,8 +72,9 @@ export function ProfileSettings() {
     return name.trim() || sessionQuery.data?.user.name || "Board";
   }
 
-  const updateMutation = useMutation({
+  const updateMutation = useSaveMutation({
     mutationFn: (input: UpdateCurrentUserProfile) => persistProfile(input),
+    successMessage: "Profile saved",
     onSuccess: (profile) => {
       setActionError(null);
       setName(profile.name ?? "");

@@ -30,6 +30,7 @@ import {
 } from "../components/WorkspaceRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, formatDateTime, issueUrl, projectRouteRef, projectWorkspaceUrl } from "../lib/utils";
@@ -402,8 +403,9 @@ export function ExecutionWorkspaceDetail() {
     setBreadcrumbs(crumbs);
   }, [setBreadcrumbs, workspace, project, projectRef]);
 
-  const updateWorkspace = useMutation({
+  const updateWorkspace = useSaveMutation({
     mutationFn: (patch: Record<string, unknown>) => executionWorkspacesApi.update(workspace!.id, patch),
+    successMessage: "Workspace saved",
     onSuccess: (nextWorkspace) => {
       queryClient.setQueryData(queryKeys.executionWorkspaces.detail(nextWorkspace.id), nextWorkspace);
       queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.closeReadiness(nextWorkspace.id) });

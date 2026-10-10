@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "@/lib/router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Bot, Check, Loader2, X, Phone, Mail, Calendar, MessageSquare, Play, Square, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { authApi } from "../api/auth";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
+import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { agentRouteRef } from "../lib/utils";
@@ -291,15 +292,22 @@ export function AssistantWizard() {
     enabled: !!selectedCompanyId && step === 8 && !!name.trim(),
   });
 
-  const saveOperatorPhone = useMutation({
+  const saveOperatorPhone = useSaveMutation({
     mutationFn: (e164: string) =>
       pluginFetch<OperatorPhone>("/operator-phone", {
         method: "POST",
         companyId: selectedCompanyId!,
         body: JSON.stringify({ e164 }),
       }),
+    successMessage: "Phone number saved",
     onSuccess: () => {
+      setError(null);
       queryClient.invalidateQueries({ queryKey: ["phone-tools", "operator-phone", selectedCompanyId] });
+    },
+    // A failed save used to show nothing at all; the wizard's own error line
+    // sits just under this box.
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Could not save your phone number.");
     },
   });
 
