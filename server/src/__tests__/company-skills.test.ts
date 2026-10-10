@@ -147,6 +147,23 @@ describe("project workspace skill discovery", () => {
     expect(imported.metadata?.sourceKind).toBe("project_scan");
   });
 
+  it("leaves hidden files and node_modules out of a skill folder's file list", async () => {
+    const skillDir = await makeTempDir("paperclip-hidden-files-skill-");
+    await writeSkillDir(skillDir, "Hidden Files Skill");
+    for (const relativePath of [".env", ".cache/data.json", "scripts/.local.sh", "node_modules/pkg/index.js", "scripts/run.sh"]) {
+      await fs.mkdir(path.dirname(path.join(skillDir, relativePath)), { recursive: true });
+      await fs.writeFile(path.join(skillDir, relativePath), "x\n", "utf8");
+    }
+
+    const imported = await readLocalSkillImportFromDirectory(
+      "33333333-3333-4333-8333-333333333333",
+      skillDir,
+      { inventoryMode: "full", metadata: { sourceKind: "project_scan" } },
+    );
+
+    expect(imported.fileInventory.map((entry) => entry.path)).toEqual(["scripts/run.sh", "SKILL.md"]);
+  });
+
   it("parses inline object array items in skill frontmatter metadata", async () => {
     const workspace = await makeTempDir("paperclip-inline-skill-yaml-");
     await fs.mkdir(workspace, { recursive: true });

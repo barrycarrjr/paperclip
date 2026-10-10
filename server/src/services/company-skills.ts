@@ -861,6 +861,15 @@ async function statPath(targetPath: string) {
   return fs.stat(targetPath).catch(() => null);
 }
 
+// Hidden files and folders (a name that starts with a dot, such as .env or
+// .git) and node_modules are left out of a skill's file list. Only listed
+// files can be read in Studio and go into company exports.
+function isListableSkillFilePath(relativePath: string) {
+  return normalizePortablePath(relativePath)
+    .split("/")
+    .every((segment) => !segment.startsWith(".") && segment !== "node_modules");
+}
+
 async function collectLocalSkillInventory(
   skillDir: string,
   mode: LocalSkillInventoryMode = "full",
@@ -892,6 +901,7 @@ async function collectLocalSkillInventory(
   }
 
   return Array.from(allFiles)
+    .filter(isListableSkillFilePath)
     .map((relativePath) => ({
       path: normalizePortablePath(relativePath),
       kind: classifyInventoryKind(relativePath),
@@ -1036,6 +1046,7 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
           kind: classifyInventoryKind(relative),
         };
       })
+      .filter((entry) => isListableSkillFilePath(entry.path))
       .sort((left, right) => left.path.localeCompare(right.path));
     const imported = await readLocalSkillImportFromDirectory(companyId, path.join(root, skillDir));
     imported.fileInventory = inventory;
@@ -1357,6 +1368,21 @@ function normalizeSourceLocatorDirectory(sourceLocator: string | null) {
   if (!sourceLocator) return null;
   const resolved = path.resolve(sourceLocator);
   return path.basename(resolved).toLowerCase() === "skill.md" ? path.dirname(resolved) : resolved;
+}
+
+// A skill found at a project's root lists only SKILL.md and its references,
+// scripts and assets folders, not the whole project.
+function inferLocalSkillInventoryMode(skill: SkillSourceInfoTarget): LocalSkillInventoryMode {
+  const metadata = getSkillMeta(skill);
+  const workspaceCwd = asString(metadata.workspaceCwd);
+  if (
+    metadata.sourceKind === "project_scan"
+    && workspaceCwd
+    && normalizeSkillDirectory(skill) === path.resolve(workspaceCwd)
+  ) {
+    return "project_root";
+  }
+  return "full";
 }
 
 export async function findMissingLocalSkillIds(
@@ -1875,6 +1901,21 @@ export function companySkillService(db: Db) {
     return imported[0]!;
   }
 
+  // The stored file list is rebuilt from disk after an edit, so a file that
+  // was just added is listed and can be read back.
+  async function refreshEditedSkillInventory(skill: CompanySkill) {
+    const skillDir = normalizeSkillDirectory(skill);
+    if (!skillDir) return;
+    const inventory = await collectLocalSkillInventory(skillDir, inferLocalSkillInventoryMode(skill));
+    await db
+      .update(companySkills)
+      .set({
+        fileInventory: serializeFileInventory(inventory),
+        trustLevel: deriveTrustLevel(inventory),
+      })
+      .where(and(eq(companySkills.companyId, skill.companyId), eq(companySkills.id, skill.id)));
+  }
+
   async function updateFile(companyId: string, skillId: string, relativePath: string, content: string): Promise<CompanySkillFileDetail> {
     await ensureSkillInventoryCurrent(companyId);
     const skill = await getById(companyId, skillId);
@@ -1889,8 +1930,32 @@ export function companySkillService(db: Db) {
     const absolutePath = resolveLocalSkillFilePath(skill, normalizedPath);
     if (!absolutePath) throw notFound("Skill file not found");
 
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, content, "utf8");
+    // The file list leaves these out, so the file would be written but could
+    // never be read back.
+    if (!isListableSkillFilePath(normalizedPath)) {
+      throw unprocessable("File and folder names in a skill can't start with a dot or be node_modules.");
+    }
+
+    // Anything else written into a project-root skill would land in the
+    // project but never show in the skill's file list.
+    if (
+      inferLocalSkillInventoryMode(skill) === "project_root"
+      && normalizedPath !== "SKILL.md"
+      && !PROJECT_ROOT_SKILL_SUBDIRECTORIES.some((dir) => normalizedPath.startsWith(`${dir}/`))
+    ) {
+      throw unprocessable("Files in this skill go in the references, scripts or assets folder.");
+    }
+
+    // A path missing from the file list is a new file: Add file sends no text,
+    // and Add folder sends a README.md seed. A file already on disk there (not
+    // listed yet, say beside a skill imported by its SKILL.md path) is kept as
+    // it is, whatever the text, and is listed and returned so Studio opens it.
+    const listed = skill.fileInventory.some((entry) => entry.path === normalizedPath);
+    const keepExistingFile = !listed && Boolean((await statPath(absolutePath))?.isFile());
+    if (!keepExistingFile) {
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, content, "utf8");
+    }
 
     if (normalizedPath === "SKILL.md") {
       const parsed = parseFrontmatterMarkdown(content);
@@ -1909,6 +1974,8 @@ export function companySkillService(db: Db) {
         .set({ updatedAt: new Date() })
         .where(eq(companySkills.id, skill.id));
     }
+
+    await refreshEditedSkillInventory(skill);
 
     const detail = await readFile(companyId, skillId, normalizedPath);
     if (!detail) throw notFound("Skill file not found");
