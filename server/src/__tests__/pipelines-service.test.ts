@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { randomBytes, randomUUID } from "node:crypto";
+import { asc, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
   agents,
   companies,
+  companySecrets,
   createDb,
   executionWorkspaces,
   heartbeatRuns,
@@ -22,6 +23,7 @@ import {
   pipelines,
   projectWorkspaces,
   projects,
+  routineRevisions,
   routineRuns,
   routines,
 } from "@paperclipai/db";
@@ -36,6 +38,7 @@ import {
 } from "../services/pipelines.ts";
 import { routineService } from "../services/routines.ts";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { secretService } from "../services/secrets.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -79,6 +82,7 @@ describeEmbeddedPostgres("pipelineService", () => {
     await db.delete(routines);
     await db.delete(projectWorkspaces);
     await db.delete(projects);
+    await db.delete(companySecrets);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
@@ -132,6 +136,19 @@ describeEmbeddedPostgres("pipelineService", () => {
       concurrencyPolicy: "always_enqueue",
       catchUpPolicy: "skip_missed",
     }, {});
+  }
+
+  async function seedSecret(companyId: string, name: string, value: string) {
+    // A key in the environment keeps the local provider from writing a key
+    // file under the working directory.
+    const previousKey = process.env.PAPERCLIP_SECRETS_MASTER_KEY;
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY = randomBytes(32).toString("hex");
+    try {
+      return await secretService(db).create(companyId, { name, provider: "local_encrypted", value });
+    } finally {
+      if (previousKey === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
+      else process.env.PAPERCLIP_SECRETS_MASTER_KEY = previousKey;
+    }
   }
 
   async function eventCount(caseId: string) {
@@ -1575,6 +1592,130 @@ describeEmbeddedPostgres("pipelineService", () => {
       .from(issues)
       .where(eq(issues.id, executionIssueId!));
     expect(issue!.title).toBe("Content / In progress: Pulpit opinion piece");
+  });
+
+  it("stores stage secrets on the automation routine and records each change as a routine revision", async () => {
+    const { company, pipeline, byKey } = await seedPipeline();
+    const routineSeed = await seedRoutine(company.id, "Secrets seed");
+    const stageId = byKey.get("in_progress")!.id;
+    const secretValue = `value-${randomUUID()}`;
+
+    const savedStage = await svc.updateStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      patch: {
+        config: {
+          automation: {
+            assigneeAgentId: routineSeed.assigneeAgentId,
+            instructionsBody: "Deploy {{case_title}}.",
+          },
+        },
+      },
+      actor: userActor,
+    });
+    const routineId = (savedStage.config as { onEnter?: { routineId?: string } }).onEnter?.routineId;
+    expect(routineId).toBeTruthy();
+    const [createdRoutine] = await db.select().from(routines).where(eq(routines.id, routineId!));
+    expect(createdRoutine!.latestRevisionId).toBeTruthy();
+    expect(createdRoutine!.latestRevisionNumber).toBe(1);
+
+    const secret = await seedSecret(company.id, "deploy_token", secretValue);
+    const saved = await svc.updateStageAutomationEnv({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      env: {
+        DEPLOY_TOKEN: { type: "secret_ref", secretId: secret.id },
+        REGION: "eu-west-1",
+      },
+      baseRoutineRevisionId: createdRoutine!.latestRevisionId,
+      actor: userActor,
+    });
+    const expectedEnv = {
+      DEPLOY_TOKEN: { type: "secret_ref", secretId: secret.id, version: "latest" },
+      REGION: { type: "plain", value: "eu-west-1" },
+    };
+    expect(saved.env).toEqual(expectedEnv);
+    expect(saved.latestRoutineRevisionNumber).toBe(2);
+
+    const [storedRoutine] = await db.select().from(routines).where(eq(routines.id, routineId!));
+    expect(storedRoutine!.env).toEqual(expectedEnv);
+    expect(storedRoutine!.latestRevisionId).toBe(saved.latestRoutineRevisionId);
+    expect(storedRoutine!.latestRevisionNumber).toBe(2);
+
+    const revisions = await db
+      .select()
+      .from(routineRevisions)
+      .where(eq(routineRevisions.routineId, routineId!))
+      .orderBy(asc(routineRevisions.revisionNumber));
+    expect(revisions.map((revision) => [revision.revisionNumber, revision.changeSummary])).toEqual([
+      [1, "Created pipeline automation"],
+      [2, "Updated pipeline stage secrets"],
+    ]);
+    expect(revisions[0]!.snapshot.routine.env).toBeNull();
+    expect(revisions[1]!.id).toBe(saved.latestRoutineRevisionId);
+    expect(revisions[1]!.snapshot.routine.env).toEqual(expectedEnv);
+    expect(revisions[1]!.createdByUserId).toBe("board-user");
+
+    const activity = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "pipeline.stage_automation_env_updated"));
+    expect(activity).toHaveLength(1);
+    expect(activity[0]!.details).toMatchObject({
+      routineId,
+      envKeys: ["DEPLOY_TOKEN", "REGION"],
+      bindingRefIds: [secret.id],
+      routineRevisionId: saved.latestRoutineRevisionId,
+      routineRevisionNumber: 2,
+    });
+
+    // Only references and plain values are stored; the secret's value is in
+    // none of what the save returns, stores or logs.
+    expect(JSON.stringify([saved, storedRoutine, revisions, activity])).not.toContain(secretValue);
+
+    // A save based on an older revision is refused instead of overwriting.
+    await expect(svc.updateStageAutomationEnv({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      env: null,
+      baseRoutineRevisionId: createdRoutine!.latestRevisionId,
+      actor: userActor,
+    })).rejects.toMatchObject({ status: 409 });
+
+    // Saving the stage's instructions again keeps its secrets.
+    await svc.updateStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      patch: {
+        config: {
+          automation: {
+            assigneeAgentId: routineSeed.assigneeAgentId,
+            instructionsBody: "Deploy {{case_title}} carefully.",
+          },
+        },
+      },
+      actor: userActor,
+    });
+    const [afterInstructions] = await db.select().from(routines).where(eq(routines.id, routineId!));
+    expect(afterInstructions!.env).toEqual(expectedEnv);
+    expect(afterInstructions!.latestRevisionNumber).toBe(3);
+
+    const cleared = await svc.updateStageAutomationEnv({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      env: null,
+      baseRoutineRevisionId: afterInstructions!.latestRevisionId,
+      actor: userActor,
+    });
+    expect(cleared.env).toBeNull();
+    expect(cleared.latestRoutineRevisionNumber).toBe(4);
+    const [clearedRoutine] = await db.select().from(routines).where(eq(routines.id, routineId!));
+    expect(clearedRoutine!.env).toBeNull();
   });
 
   it("rejects cross-company stage automation routines at save and execution", async () => {

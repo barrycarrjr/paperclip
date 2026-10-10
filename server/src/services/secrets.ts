@@ -14,6 +14,9 @@ const REDACTED_SENTINEL = "***REDACTED***";
 const SECRET_KEY_MAX_LENGTH = 120;
 const SECRET_KEY_UNIQUE_INDEX = "company_secrets_company_key_uq";
 
+type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type SecretReadDb = Pick<Db | DbTransaction, "select">;
+
 type CanonicalEnvBinding =
   | { type: "plain"; value: string }
   | {
@@ -93,8 +96,8 @@ export function secretService(db: Db) {
     fieldPath?: string;
   };
 
-  async function getById(id: string) {
-    return db
+  async function getById(id: string, source: SecretReadDb = db) {
+    return source
       .select()
       .from(companySecrets)
       .where(eq(companySecrets.id, id))
@@ -144,8 +147,8 @@ export function secretService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
-  async function assertSecretInCompany(companyId: string, secretId: string) {
-    const secret = await getById(secretId);
+  async function assertSecretInCompany(companyId: string, secretId: string, source: SecretReadDb = db) {
+    const secret = await getById(secretId, source);
     if (!secret) throw notFound("Secret not found");
     if (secret.companyId !== companyId) throw unprocessable("Secret must belong to same company");
     return secret;
@@ -482,7 +485,30 @@ export function secretService(db: Db) {
       return normalized;
     },
 
-    syncEnvBindingsForTarget: async (...args: any[]) => {},
+    // Upstream also writes each reference to company_secret_bindings here. No
+    // migration creates that table in this fork and nothing reads it, so only
+    // upstream's check is kept: every secret the env references must belong
+    // to the company, read through the caller's transaction when given one.
+    syncEnvBindingsForTarget: async (
+      companyId: string,
+      target: { targetType: string; targetId: string; pathPrefix?: string },
+      envValue: unknown,
+      options?: { db?: SecretReadDb },
+    ) => {
+      const record = asRecord(envValue) ?? {};
+      const pathPrefix = target.pathPrefix ?? "env";
+      const refs: Array<{ secretId: string; configPath: string; versionSelector: number | "latest" }> = [];
+      for (const [key, rawBinding] of Object.entries(record)) {
+        const parsed = envBindingSchema.safeParse(rawBinding);
+        if (!parsed.success) continue;
+        const binding = canonicalizeBinding(parsed.data as EnvBinding);
+        if (binding.type !== "secret_ref") continue;
+        const secretId = await resolveSecretIdForBinding(companyId, binding);
+        await assertSecretInCompany(companyId, secretId, options?.db ?? db);
+        refs.push({ secretId, configPath: `${pathPrefix}.${key}`, versionSelector: binding.version });
+      }
+      return refs;
+    },
     resolveEnvBindings: async (companyId: string, envValue: unknown): Promise<{ env: Record<string, string>; secretKeys: Set<string> }> => {
       const record = asRecord(envValue);
       if (!record) return { env: {} as Record<string, string>, secretKeys: new Set<string>() };

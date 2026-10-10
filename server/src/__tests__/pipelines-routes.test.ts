@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
@@ -8,6 +8,7 @@ import {
   agents,
   companies,
   companyMemberships,
+  companySecrets,
   createDb,
   documents,
   documentRevisions,
@@ -44,6 +45,7 @@ import {
   PIPELINE_CONTEXT_PACK_EVENT_LIMIT,
 } from "../services/pipelines.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { secretService } from "../services/secrets.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe.sequential : describe.skip;
@@ -87,6 +89,7 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await db.delete(projects);
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
+    await db.delete(companySecrets);
     await db.delete(agents);
     await db.delete(companies);
     await db.delete(instanceSettings);
@@ -128,6 +131,19 @@ describeEmbeddedPostgres("pipeline routes", () => {
       permissions: {},
     }).returning();
     return agent!;
+  }
+
+  async function seedSecret(companyId: string, name: string, value: string) {
+    // A key in the environment keeps the local provider from writing a key
+    // file under the working directory.
+    const previousKey = process.env.PAPERCLIP_SECRETS_MASTER_KEY;
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY = randomBytes(32).toString("hex");
+    try {
+      return await secretService(db).create(companyId, { name, provider: "local_encrypted", value });
+    } finally {
+      if (previousKey === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
+      else process.env.PAPERCLIP_SECRETS_MASTER_KEY = previousKey;
+    }
   }
 
   async function seedProjectWorkspaceFixture(companyId: string, name = "Automation") {
@@ -722,6 +738,62 @@ describeEmbeddedPostgres("pipeline routes", () => {
       executionWorkspaceId: null,
       executionWorkspaceSettings: null,
     });
+  });
+
+  it("saves stage secrets through the automation-env route and returns them when the pipeline is read again", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const agent = await seedAutomationAgent(company.id);
+    const secretValue = `value-${randomUUID()}`;
+    const secret = await seedSecret(company.id, "deploy_token", secretValue);
+
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "stage-secrets", name: "Stage secrets" })
+      .expect(201);
+    const stageId = pipeline.body.stages.find((stage: { key: string }) => stage.key === "in_progress").id as string;
+    await http
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}`)
+      .send({ config: { automation: { assigneeAgentId: agent.id, instructionsBody: "Deploy the item." } } })
+      .expect(200);
+
+    const automationOf = (body: { stages: Array<{ id: string; config: { automation?: Record<string, unknown> } }> }) =>
+      body.stages.find((stage) => stage.id === stageId)!.config.automation!;
+    const before = await http.get(`/api/pipelines/${pipeline.body.id}`).expect(200);
+    expect(automationOf(before.body)).toMatchObject({ env: null, latestRoutineRevisionNumber: 1 });
+    const baseRoutineRevisionId = automationOf(before.body).latestRoutineRevisionId as string;
+    expect(baseRoutineRevisionId).toBeTruthy();
+
+    const env = {
+      DEPLOY_TOKEN: { type: "secret_ref", secretId: secret.id, version: "latest" },
+      REGION: { type: "plain", value: "eu-west-1" },
+    };
+    const saved = await http
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}/automation-env`)
+      .send({ env, baseRoutineRevisionId })
+      .expect(200);
+    expect(saved.body).toMatchObject({ env, latestRoutineRevisionNumber: 2 });
+
+    const after = await http.get(`/api/pipelines/${pipeline.body.id}`).expect(200);
+    expect(automationOf(after.body)).toMatchObject({
+      env,
+      latestRoutineRevisionId: saved.body.latestRoutineRevisionId,
+      latestRoutineRevisionNumber: 2,
+    });
+    expect(JSON.stringify([saved.body, after.body])).not.toContain(secretValue);
+
+    await http
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}/automation-env`)
+      .send({ env: null, baseRoutineRevisionId })
+      .expect(409);
+    const cleared = await http
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}/automation-env`)
+      .send({ env: null, baseRoutineRevisionId: saved.body.latestRoutineRevisionId })
+      .expect(200);
+    expect(cleared.body.env).toBeNull();
+    const afterClear = await http.get(`/api/pipelines/${pipeline.body.id}`).expect(200);
+    expect(automationOf(afterClear.body)).toMatchObject({ env: null, latestRoutineRevisionNumber: 3 });
+    await http.get(`/api/pipelines/${pipeline.body.id}/health`).expect(200);
   });
 
   it("paginates and caps case event responses", async () => {

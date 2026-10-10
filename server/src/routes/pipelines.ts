@@ -883,9 +883,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
             assigneeAgentId: routines.assigneeAgentId,
             title: routines.title,
             description: routines.description,
-            env: sql<Record<string, unknown> | null>`null`.as("env"),
-            latestRevisionId: sql<string | null>`null`.as("latest_revision_id"),
-            latestRevisionNumber: sql<number>`1`.as("latest_revision_number"),
+            env: routines.env,
+            latestRevisionId: routines.latestRevisionId,
+            latestRevisionNumber: routines.latestRevisionNumber,
           })
           .from(routines)
           .where(and(eq(routines.companyId, companyId), inArray(routines.id, automationRoutineIds)))
@@ -975,9 +975,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
             assigneeAgentId: routines.assigneeAgentId,
             title: routines.title,
             description: routines.description,
-            env: sql<Record<string, unknown> | null>`null`.as("env"),
-            latestRevisionId: sql<string | null>`null`.as("latest_revision_id"),
-            latestRevisionNumber: sql<number>`1`.as("latest_revision_number"),
+            env: routines.env,
+            latestRevisionId: routines.latestRevisionId,
+            latestRevisionNumber: routines.latestRevisionNumber,
           })
           .from(routines)
           .where(and(eq(routines.companyId, companyId), inArray(routines.id, automationRoutineIds)))
