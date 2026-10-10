@@ -723,7 +723,9 @@ export function PortfolioBrief() {
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
               <BriefHealthLine health={health} erroredAgents={erroredAgents} />
-              <span className="text-muted-foreground">{overnightTotal} outcomes overnight</span>
+              <span className="text-muted-foreground">
+                {overnightTotal} outcome{overnightTotal === 1 ? "" : "s"} overnight
+              </span>
               {/* "N waiting on you" is part of the health line now, which also
                   keeps a bare "0 waiting on you" from reading as all clear. */}
               <span className="text-muted-foreground/60">·</span>

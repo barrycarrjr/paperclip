@@ -535,7 +535,9 @@ export function MorningBrief() {
                 erroredAgents={erroredAgents}
                 moreAgentsHref="/agents/error"
               />
-              <span className="text-muted-foreground">{overnightCount} outcomes overnight</span>
+              <span className="text-muted-foreground">
+                {overnightCount} outcome{overnightCount === 1 ? "" : "s"} overnight
+              </span>
             </div>
           </div>
         </div>
