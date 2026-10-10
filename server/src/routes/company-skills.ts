@@ -8,8 +8,9 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
+import { isLocalSkillImportSource } from "../services/company-skills.js";
 import { forbidden } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, getActorInfo, hasInstanceAdminAccess } from "./authz.js";
 
 type SkillTelemetryInput = {
   key: string;
@@ -77,6 +78,17 @@ export function companySkillRoutes(db: Db) {
     }
 
     throw forbidden("Missing permission: can create agents");
+  }
+
+  // Reading folders on this computer is for the people who run it, so a local
+  // path import or a project scan needs an instance admin. URL, GitHub and
+  // skills.sh imports keep the permissions above.
+  function assertCanImportFromLocalFolders(req: Request) {
+    if (hasInstanceAdminAccess(req)) return;
+    throw forbidden("Only an instance admin can import skills from folders on this computer.", {
+      code: "skill_local_import_admin_required",
+      remediation: "Import from a URL, GitHub or skills.sh instead, or ask an instance admin.",
+    });
   }
 
   router.get("/companies/:companyId/skills", async (req, res) => {
@@ -192,6 +204,9 @@ export function companySkillRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
       const source = String(req.body.source ?? "");
+      if (isLocalSkillImportSource(source)) {
+        assertCanImportFromLocalFolders(req);
+      }
       const result = await svc.importFromSource(companyId, source);
 
       const actor = getActorInfo(req);
@@ -221,6 +236,7 @@ export function companySkillRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
+      assertCanImportFromLocalFolders(req);
       const result = await svc.scanProjectWorkspaces(companyId, req.body);
 
       const actor = getActorInfo(req);

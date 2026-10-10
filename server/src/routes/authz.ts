@@ -46,9 +46,18 @@ export function assertBoardOrgAccess(req: Request) {
   throw forbidden("Company membership or instance admin access required");
 }
 
+/**
+ * True for an instance admin: a board user with the admin role, or the local
+ * board in local_trusted mode. An agent or tool session never is one.
+ */
+export function hasInstanceAdminAccess(req: Request) {
+  return req.actor.type === "board"
+    && (req.actor.source === "local_implicit" || Boolean(req.actor.isInstanceAdmin));
+}
+
 export function assertInstanceAdmin(req: Request) {
   assertBoard(req);
-  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+  if (hasInstanceAdminAccess(req)) {
     return;
   }
   throw forbidden("Instance admin access required");

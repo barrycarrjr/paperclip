@@ -28,7 +28,7 @@ import type {
 } from "@paperclipai/shared";
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { notFound, unprocessable } from "../errors.js";
+import { forbidden, notFound, unprocessable } from "../errors.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -708,6 +708,16 @@ export function parseSkillImportSourceInput(rawInput: string): ParsedSkillImport
   };
 }
 
+function resolvesToLocalPath(parsed: ParsedSkillImportSource) {
+  return !/^https?:\/\//i.test(parsed.resolvedSource);
+}
+
+// True when an import source is read from this computer rather than fetched.
+// GitHub shorthand and skills.sh keys resolve to web addresses, so they are not.
+export function isLocalSkillImportSource(source: string) {
+  return resolvesToLocalPath(parseSkillImportSourceInput(source));
+}
+
 function resolveBundledSkillsRoot() {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   return [
@@ -861,6 +871,79 @@ async function statPath(targetPath: string) {
   return fs.stat(targetPath).catch(() => null);
 }
 
+function pathIsContained(rootPath: string, candidatePath: string) {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return relativePath === ""
+    || (!path.isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`));
+}
+
+// A UNC path (\\server\share) or a device path (\\?\ or \\.\). Even looking one
+// up reaches out to the share, so these are refused before any disk access.
+function isUncOrDevicePath(value: string) {
+  return /^[\\/]{2}/.test(value.trim());
+}
+
+// A skill file path sent by a caller must stay inside the skill folder. "..",
+// a drive letter, and a UNC or device path can each leave it, so they are
+// refused rather than quietly rewritten.
+function isUnsafeSkillFilePath(value: string) {
+  const unified = value.trim().replace(/\\/g, "/");
+  return isUncOrDevicePath(unified)
+    || /^[a-zA-Z]:/.test(unified)
+    || unified.split("/").some((segment) => segment.trim() === "..");
+}
+
+// Resolves a file path inside a folder, or returns null when it would land
+// outside it. On Windows a drive letter in the file path is enough for that.
+function resolvePathInsideFolder(folder: string, relativePath: string) {
+  const root = path.resolve(folder);
+  const target = path.resolve(root, relativePath);
+  return target !== root && pathIsContained(root, target) ? target : null;
+}
+
+// Where a path really is once symlinks and junctions are followed. For a path
+// not made yet, the part that exists is resolved and the rest added back. A
+// broken link gives null, since writing through one can create its target.
+async function resolveRealPath(target: string) {
+  let existing = path.resolve(target);
+  const missing: string[] = [];
+  while (!(await fs.lstat(existing).catch(() => null))) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return null;
+    missing.unshift(path.basename(existing));
+    existing = parent;
+  }
+  const realExisting = await fs.realpath(existing).catch(() => null);
+  return realExisting === null ? null : path.join(realExisting, ...missing);
+}
+
+// Symlinks and junctions inside a folder can still lead out of it, so this
+// compares where the folder and the target really are.
+async function realPathStaysInside(folder: string, target: string) {
+  const [realFolder, realTarget] = await Promise.all([resolveRealPath(folder), resolveRealPath(target)]);
+  return realFolder !== null && realTarget !== null && pathIsContained(realFolder, realTarget);
+}
+
+function skillFileBoundaryDenied() {
+  return forbidden("Skill file paths must stay inside the skill folder.", {
+    code: "skill_file_boundary_denied",
+  });
+}
+
+// A skill must really be inside the folder it was found in: a project
+// workspace, or the folder an import names. A linked scan folder, skill folder
+// or SKILL.md can point somewhere else. The caller resolves the folder's real
+// path once, up front, so a link swapped in later cannot move it.
+async function assertSkillInsideFolder(skillFile: string, folder: { realPath: string; name: string }) {
+  const [realSkillDir, realSkillFile] = await Promise.all([
+    fs.realpath(path.dirname(skillFile)),
+    fs.realpath(skillFile),
+  ]);
+  if (!pathIsContained(folder.realPath, realSkillDir) || !pathIsContained(folder.realPath, realSkillFile)) {
+    throw unprocessable(`The skill links to files outside ${folder.name}.`);
+  }
+}
+
 async function collectLocalSkillInventory(
   skillDir: string,
   mode: LocalSkillInventoryMode = "full",
@@ -881,7 +964,9 @@ async function collectLocalSkillInventory(
   } else {
     for (const relativeDir of PROJECT_ROOT_SKILL_SUBDIRECTORIES) {
       const absoluteDir = path.join(skillDir, relativeDir);
-      const dirStat = await statPath(absoluteDir);
+      // lstat, so a linked support folder is skipped like any link in the walk
+      // below. Followed, it could list files from outside the workspace.
+      const dirStat = await fs.lstat(absoluteDir).catch(() => null);
       if (!dirStat?.isDirectory()) continue;
       const discoveredFiles: string[] = [];
       await walkLocalFiles(skillDir, absoluteDir, discoveredFiles);
@@ -905,10 +990,18 @@ export async function readLocalSkillImportFromDirectory(
   options?: {
     inventoryMode?: LocalSkillInventoryMode;
     metadata?: Record<string, unknown> | null;
+    // Where the files are read, when that is not the path the skill records.
+    readFrom?: string;
+    // The folder the skill was found in, which it must really be inside.
+    insideFolder?: { realPath: string; name: string };
   },
 ): Promise<ImportedSkill> {
   const resolvedSkillDir = path.resolve(skillDir);
-  const skillFilePath = path.join(resolvedSkillDir, "SKILL.md");
+  const readDir = path.resolve(options?.readFrom ?? skillDir);
+  const skillFilePath = path.join(readDir, "SKILL.md");
+  if (options?.insideFolder) {
+    await assertSkillInsideFolder(skillFilePath, options.insideFolder);
+  }
   const markdown = await fs.readFile(skillFilePath, "utf8");
   const parsed = parseFrontmatterMarkdown(markdown);
   const slug = deriveImportedSkillSlug(parsed.frontmatter, path.basename(resolvedSkillDir));
@@ -920,7 +1013,7 @@ export async function readLocalSkillImportFromDirectory(
     sourceKind: "local_path",
     ...(options?.metadata ?? {}),
   };
-  const inventory = await collectLocalSkillInventory(resolvedSkillDir, options?.inventoryMode ?? "full");
+  const inventory = await collectLocalSkillInventory(readDir, options?.inventoryMode ?? "full");
 
   return {
     key: deriveCanonicalSkillKey(companyId, {
@@ -973,15 +1066,29 @@ export async function discoverProjectWorkspaceSkillDirectories(target: ProjectSk
     .sort((left, right) => left.skillDir.localeCompare(right.skillDir));
 }
 
-async function readLocalSkillImports(companyId: string, sourcePath: string): Promise<ImportedSkill[]> {
+// realSourcePath, when given, is where the source really is, resolved once
+// before the import. Files are read through it, so a link changed while the
+// import runs cannot change what is read, and every SKILL.md must really be
+// inside it. Skills still record sourcePath, which their keys come from.
+async function readLocalSkillImports(
+  companyId: string,
+  sourcePath: string,
+  realSourcePath?: string,
+): Promise<ImportedSkill[]> {
   const resolvedPath = path.resolve(sourcePath);
-  const stat = await fs.stat(resolvedPath).catch(() => null);
+  const readPath = realSourcePath ?? resolvedPath;
+  const stat = await fs.stat(readPath).catch(() => null);
   if (!stat) {
     throw unprocessable(`Skill source path does not exist: ${sourcePath}`);
   }
 
   if (stat.isFile()) {
-    const markdown = await fs.readFile(resolvedPath, "utf8");
+    if (realSourcePath) {
+      // The skill records the file's folder, so the file must really be in it.
+      const realFolder = await fs.realpath(path.dirname(resolvedPath));
+      await assertSkillInsideFolder(readPath, { realPath: realFolder, name: "its folder" });
+    }
+    const markdown = await fs.readFile(readPath, "utf8");
     const parsed = parseFrontmatterMarkdown(markdown);
     const slug = deriveImportedSkillSlug(parsed.frontmatter, path.basename(path.dirname(resolvedPath)));
     const parsedMetadata = isPlainRecord(parsed.frontmatter.metadata) ? parsed.frontmatter.metadata : null;
@@ -1018,7 +1125,7 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
 
   const root = resolvedPath;
   const allFiles: string[] = [];
-  await walkLocalFiles(root, root, allFiles);
+  await walkLocalFiles(readPath, readPath, allFiles);
   const skillPaths = allFiles.filter((entry) => path.posix.basename(entry).toLowerCase() === "skill.md");
   if (skillPaths.length === 0) {
     throw unprocessable("No SKILL.md files were found in the provided path.");
@@ -1037,13 +1144,34 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
         };
       })
       .sort((left, right) => left.path.localeCompare(right.path));
-    const imported = await readLocalSkillImportFromDirectory(companyId, path.join(root, skillDir));
+    const imported = await readLocalSkillImportFromDirectory(companyId, path.join(root, skillDir), {
+      readFrom: path.join(readPath, skillDir),
+      ...(realSourcePath ? { insideFolder: { realPath: realSourcePath, name: "the folder being imported" } } : {}),
+    });
     imported.fileInventory = inventory;
     imported.trustLevel = deriveTrustLevel(inventory);
     imports.push(imported);
   }
 
   return imports;
+}
+
+// A local path import. The routes let only an instance admin do this, and an
+// admin may import from any folder on this computer. A network share or device
+// path is still refused, before anything touches the disk: opening a share
+// makes this computer sign in to the other machine, and a device is not a
+// folder.
+async function readLocalImportSource(companyId: string, source: string) {
+  if (isUncOrDevicePath(source)) {
+    throw unprocessable("Skills cannot be imported from a network share or a device path.", {
+      code: "skill_source_path_not_supported",
+    });
+  }
+  const realSource = await fs.realpath(path.resolve(source)).catch(() => null);
+  if (!realSource) {
+    throw unprocessable(`Skill source path does not exist: ${source}`);
+  }
+  return readLocalSkillImports(companyId, source, realSource);
 }
 
 async function readUrlSkillImports(
@@ -1397,6 +1525,18 @@ function resolveLocalSkillFilePath(skill: CompanySkill, relativePath: string) {
   const fallbackRoot = path.resolve(skill.sourceLocator);
   const directPath = path.resolve(fallbackRoot, normalized);
   return directPath;
+}
+
+// A skill file has to stay inside its skill folder, also once symlinks and
+// junctions are followed. A stored file path can come from a company package
+// or a GitHub tree, so it is checked as well as one sent by a caller.
+async function assertSkillFileInsideFolder(skill: SkillSourceInfoTarget, absolutePath: string) {
+  const skillDir = normalizeSkillDirectory(skill);
+  const inside = skillDir !== null
+    && absolutePath !== skillDir
+    && pathIsContained(skillDir, absolutePath)
+    && await realPathStaysInside(skillDir, absolutePath);
+  if (!inside) throw skillFileBoundaryDenied();
 }
 
 function inferLanguageFromPath(filePath: string) {
@@ -1794,6 +1934,7 @@ export function companySkillService(db: Db) {
     if (skill.sourceType === "local_path" || skill.sourceType === "catalog") {
       const absolutePath = resolveLocalSkillFilePath(skill, normalizedPath);
       if (absolutePath) {
+        await assertSkillFileInsideFolder(skill, absolutePath);
         content = await fs.readFile(absolutePath, "utf8");
       } else if (normalizedPath === "SKILL.md") {
         content = skill.markdown;
@@ -1885,9 +2026,11 @@ export function companySkillService(db: Db) {
       throw unprocessable(source.editableReason ?? "This skill cannot be edited.");
     }
 
+    if (isUnsafeSkillFilePath(relativePath)) throw skillFileBoundaryDenied();
     const normalizedPath = normalizePortablePath(relativePath);
     const absolutePath = resolveLocalSkillFilePath(skill, normalizedPath);
     if (!absolutePath) throw notFound("Skill file not found");
+    await assertSkillFileInsideFolder(skill, absolutePath);
 
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, content, "utf8");
@@ -2011,6 +2154,11 @@ export function companySkillService(db: Db) {
 
     for (const target of scanTargets) {
       scannedProjectIds.add(target.projectId);
+      // Resolved once, so every skill found here is checked against the same place.
+      const workspaceFolder = {
+        realPath: await fs.realpath(target.workspaceCwd).catch(() => path.resolve(target.workspaceCwd)),
+        name: "the project workspace",
+      };
       const directories = await discoverProjectWorkspaceSkillDirectories(target);
 
       for (const directory of directories) {
@@ -2020,6 +2168,7 @@ export function companySkillService(db: Db) {
         try {
           nextSkill = await readLocalSkillImportFromDirectory(companyId, directory.skillDir, {
             inventoryMode: directory.inventoryMode,
+            insideFolder: workspaceFolder,
             metadata: {
               sourceKind: "project_scan",
               projectId: target.projectId,
@@ -2133,7 +2282,9 @@ export function companySkillService(db: Db) {
         : `${packageDir}/${entry.path}`;
       const content = normalizedFiles[sourcePath];
       if (typeof content !== "string") continue;
-      const targetPath = path.resolve(skillDir, entry.path);
+      // Package file paths come from the package, so one could name a drive.
+      const targetPath = resolvePathInsideFolder(skillDir, entry.path);
+      if (!targetPath) continue;
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, content, "utf8");
     }
@@ -2148,9 +2299,12 @@ export function companySkillService(db: Db) {
     await fs.mkdir(skillDir, { recursive: true });
 
     for (const entry of skill.fileInventory) {
+      // Stored file paths come from the source (a GitHub tree or a package),
+      // so one could name a drive.
+      const targetPath = resolvePathInsideFolder(skillDir, entry.path);
+      if (!targetPath) continue;
       const detail = await readFile(companyId, skill.id, entry.path).catch(() => null);
       if (!detail) continue;
-      const targetPath = path.resolve(skillDir, entry.path);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, detail.content, "utf8");
     }
@@ -2378,10 +2532,10 @@ export function companySkillService(db: Db) {
   async function importFromSource(companyId: string, source: string): Promise<CompanySkillImportResult> {
     await ensureSkillInventoryCurrent(companyId);
     const parsed = parseSkillImportSourceInput(source);
-    const local = !/^https?:\/\//i.test(parsed.resolvedSource);
+    const local = resolvesToLocalPath(parsed);
     const { skills, warnings } = local
       ? {
-        skills: (await readLocalSkillImports(companyId, parsed.resolvedSource))
+        skills: (await readLocalImportSource(companyId, parsed.resolvedSource))
           .filter((skill) => !parsed.requestedSkillSlug || skill.slug === parsed.requestedSkillSlug),
         warnings: parsed.warnings,
       }

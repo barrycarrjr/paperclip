@@ -13,6 +13,7 @@ const mockAccessService = vi.hoisted(() => ({
 
 const mockCompanySkillService = vi.hoisted(() => ({
   importFromSource: vi.fn(),
+  scanProjectWorkspaces: vi.fn(),
   deleteSkill: vi.fn(),
 }));
 
@@ -33,7 +34,10 @@ function registerModuleMocks() {
     agentService: () => mockAgentService,
   }));
 
-  vi.doMock("../services/company-skills.js", () => ({
+  // The real source parser, so the route tells local and remote sources apart
+  // exactly as the service does.
+  vi.doMock("../services/company-skills.js", async () => ({
+    ...await vi.importActual<typeof import("../services/company-skills.js")>("../services/company-skills.js"),
     companySkillService: () => mockCompanySkillService,
   }));
 
@@ -76,6 +80,16 @@ describe("company skill mutation permissions", () => {
     vi.clearAllMocks();
     mockCompanySkillService.importFromSource.mockResolvedValue({
       imported: [],
+      warnings: [],
+    });
+    mockCompanySkillService.scanProjectWorkspaces.mockResolvedValue({
+      scannedProjects: 0,
+      scannedWorkspaces: 0,
+      discovered: 0,
+      imported: [],
+      updated: [],
+      skipped: [],
+      conflicts: [],
       warnings: [],
     });
     mockCompanySkillService.deleteSkill.mockResolvedValue({
@@ -172,5 +186,110 @@ describe("company skill mutation permissions", () => {
     });
     expect(mockCompanySkillService.deleteSkill).toHaveBeenCalledWith("company-1", "skill-1");
     expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  describe("bringing skills in from folders on this computer", () => {
+    const member = {
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", membershipRole: "operator", status: "active" }],
+      source: "session",
+      isInstanceAdmin: false,
+    };
+    const companyOwner = {
+      ...member,
+      memberships: [{ companyId: "company-1", membershipRole: "owner", status: "active" }],
+    };
+    const instanceAdmin = { ...member, userId: "admin-1", isInstanceAdmin: true };
+    const localBoard = {
+      type: "board",
+      userId: "local-board",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: false,
+    };
+    const agent = { type: "agent", agentId: "agent-1", companyId: "company-1", runId: "run-1", source: "agent_key" };
+    const notAdmins = [
+      ["a member who can manage skills", member],
+      ["a company owner", companyOwner],
+      ["an agent that can create agents", agent],
+    ] as const;
+    const admins = [
+      ["an instance admin", instanceAdmin],
+      ["the local board", localBoard],
+    ] as const;
+    const localSources = [
+      "C:\\skills\\release-notes",
+      "/srv/skills/release-notes",
+      "release-notes",
+      "\\\\server\\share\\skills",
+      "npx skills add /srv/skills/release-notes --skill release-notes",
+    ];
+    const remoteSources = [
+      "https://github.com/vercel-labs/agent-browser",
+      "vercel-labs/agent-browser",
+      "google-labs-code/stitch-skills/design-md",
+      "https://skills.sh/google-labs-code/stitch-skills/design-md",
+      "npx skills add https://github.com/vercel-labs/agent-browser --skill agent-browser",
+    ];
+
+    beforeEach(() => {
+      mockAgentService.getById.mockResolvedValue({
+        id: "agent-1",
+        companyId: "company-1",
+        permissions: { canCreateAgents: true },
+      });
+    });
+
+    it.each(notAdmins)("refuses a local path import from %s", async (_label, actor) => {
+      const app = await createApp(actor);
+      for (const source of localSources) {
+        const res = await request(app).post("/api/companies/company-1/skills/import").send({ source });
+        expect(res.status, `${source}: ${JSON.stringify(res.body)}`).toBe(403);
+        expect(res.body).toMatchObject({
+          error: "Only an instance admin can import skills from folders on this computer.",
+          code: "skill_local_import_admin_required",
+        });
+      }
+      expect(mockCompanySkillService.importFromSource).not.toHaveBeenCalled();
+    });
+
+    it.each(notAdmins)("still lets %s import from a URL, GitHub or skills.sh", async (_label, actor) => {
+      const app = await createApp(actor);
+      for (const source of remoteSources) {
+        const res = await request(app).post("/api/companies/company-1/skills/import").send({ source });
+        expect(res.status, `${source}: ${JSON.stringify(res.body)}`).toBe(201);
+        expect(mockCompanySkillService.importFromSource).toHaveBeenLastCalledWith("company-1", source);
+      }
+    });
+
+    it.each(admins)("lets %s import from a folder on this computer", async (_label, actor) => {
+      const app = await createApp(actor);
+      for (const source of localSources) {
+        const res = await request(app).post("/api/companies/company-1/skills/import").send({ source });
+        expect(res.status, `${source}: ${JSON.stringify(res.body)}`).toBe(201);
+        expect(mockCompanySkillService.importFromSource).toHaveBeenLastCalledWith("company-1", source);
+      }
+    });
+
+    it.each(notAdmins)("refuses a project scan from %s", async (_label, actor) => {
+      const res = await request(await createApp(actor))
+        .post("/api/companies/company-1/skills/scan-projects")
+        .send({});
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body).toMatchObject({ code: "skill_local_import_admin_required" });
+      expect(mockCompanySkillService.scanProjectWorkspaces).not.toHaveBeenCalled();
+    });
+
+    it.each(admins)("lets %s scan project workspaces", async (_label, actor) => {
+      const res = await request(await createApp(actor))
+        .post("/api/companies/company-1/skills/scan-projects")
+        .send({});
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockCompanySkillService.scanProjectWorkspaces).toHaveBeenCalledWith("company-1", {});
+    });
   });
 });
