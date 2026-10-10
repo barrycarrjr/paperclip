@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agents, companies, createDb } from "@paperclipai/db";
 import {
@@ -19,15 +22,27 @@ if (!embeddedPostgresSupport.supported) {
 describeEmbeddedPostgres("secretService", () => {
   let stopDb: (() => Promise<void>) | null = null;
   let db!: ReturnType<typeof createDb>;
+  // Without a key file set, local_encrypted secrets create one under the
+  // working directory (server/data), so give the test its own throwaway one.
+  const previousKeyFile = process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+  const secretsTmpDir = path.join(os.tmpdir(), `paperclip-secrets-service-${randomUUID()}`);
 
   beforeAll(async () => {
+    mkdirSync(secretsTmpDir, { recursive: true });
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = path.join(secretsTmpDir, "master.key");
     const started = await startEmbeddedPostgresTestDatabase("secrets-service");
-    stopDb = started.stop;
+    stopDb = started.cleanup;
     db = createDb(started.connectionString);
   });
 
   afterAll(async () => {
     if (stopDb) await stopDb();
+    if (previousKeyFile === undefined) {
+      delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+    } else {
+      process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = previousKeyFile;
+    }
+    rmSync(secretsTmpDir, { recursive: true, force: true });
   });
 
   it("includes agent env reference summaries without exposing adapter config", async () => {

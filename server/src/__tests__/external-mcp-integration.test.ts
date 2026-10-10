@@ -84,10 +84,13 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
   let toolSource!: ReturnType<typeof createExternalMcpToolSource>;
   let companyA!: string;
   let companyB!: string;
+  const priorMasterKey = process.env.PAPERCLIP_SECRETS_MASTER_KEY;
 
   beforeAll(async () => {
+    // A fixed key, so the secrets made here do not write a key file into server/data.
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY = Buffer.alloc(32, 17).toString("base64");
     const started = await startEmbeddedPostgresTestDatabase("external-mcp-int");
-    stopDb = started.stop;
+    stopDb = started.cleanup;
     db = createDb(started.connectionString);
 
     companyA = randomUUID();
@@ -121,6 +124,8 @@ describeEmbeddedPostgres("external MCP connector — integration", () => {
   afterAll(async () => {
     if (manager) await manager.shutdown();
     if (stopDb) await stopDb();
+    if (priorMasterKey === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
+    else process.env.PAPERCLIP_SECRETS_MASTER_KEY = priorMasterKey;
   });
 
   async function insertServer(opts: {
