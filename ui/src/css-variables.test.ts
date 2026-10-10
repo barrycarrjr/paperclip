@@ -42,6 +42,8 @@ const RUNTIME_VARIABLES: Record<string, string> = {
   "--radix-tooltip-content-transform-origin": "Radix Tooltip content",
   // The icon an agent mention chip shows, read by index.css.
   "--paperclip-mention-icon-mask": "lib/mention-chips.ts, on each agent mention chip",
+  // How deep a file tree row sits, which index.css turns into its indent.
+  "--file-tree-depth": "components/FileTree.tsx, on each row",
 };
 
 /** Names used as `utility-(--name)`, `utility-(type:--name)` or `var(--name)`. */
