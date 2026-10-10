@@ -1,15 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { File, Loader2, Paperclip, Send, Square, X } from "lucide-react";
+import { ArrowUp, File, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   chatApi,
   type AvailableModel,
@@ -19,31 +12,21 @@ import {
 } from "../api/chat";
 import { cn } from "../lib/utils";
 import { chatModelEntry, type ModelPickerGroup } from "../lib/model-display";
-import { ModelPicker } from "./ModelPicker";
+import {
+  DEFAULT_NEW_CHAT_SETTINGS,
+  type ClippyFirstSendProgress,
+  type ClippyNewChatSettings,
+} from "../lib/clippy-new-chat";
+import type { ClippyPageContext } from "../lib/clippy-page-context";
+import { useSpeechDictation } from "../hooks/useSpeechDictation";
+import { ClippyChatOptions, type ClippyChatOptionsPatch } from "./ClippyChatOptions";
+import { ClippyContextChip } from "./ClippyEmptyState";
 import {
   DEFAULT_MAX_ATTACHMENT_BYTES,
   formatByteSize as formatBytes,
   tooLargeMessage,
   parseInlineConsentReply,
 } from "@paperclipai/shared";
-
-/**
- * Decode an `adapter:<type>:<modelId>` id into the bare model + adapter
- * source for display. Returns the raw id when it isn't adapter-encoded.
- */
-function formatModelDisplay(id: string): { model: string; adapter: string | null } {
-  if (!id.startsWith("adapter:")) return { model: id, adapter: null };
-  const rest = id.slice("adapter:".length);
-  const sep = rest.indexOf(":");
-  if (sep <= 0) return { model: id, adapter: null };
-  return { model: rest.slice(sep + 1), adapter: rest.slice(0, sep) };
-}
-
-/** How the picker names a session model that is not in the list. */
-function describeSessionModel(id: string): { label: string; hint?: string } {
-  const display = formatModelDisplay(id);
-  return display.adapter ? { label: display.model, hint: `via ${display.adapter}` } : { label: display.model };
-}
 
 interface PendingUpload {
   /** Stable id to track the chip while the upload is in flight. */
@@ -53,20 +36,46 @@ interface PendingUpload {
   mediaType: string;
   /** Object URL for image previews; null until we know it's an image. */
   previewUrl: string | null;
-  status: "uploading" | "done" | "error";
+  /**
+   * "local" is a file picked for a new chat, held here until the first send
+   * creates the chat it can be uploaded to.
+   */
+  status: "local" | "uploading" | "done" | "error";
   error?: string;
+  /**
+   * The picked file, kept until it is uploaded, so an upload that failed is
+   * tried again on the next send. A file turned down before upload (a video,
+   * a shortcut, too big) has none and is never sent.
+   */
+  file?: File;
   /** Set once the server returns the attachment id. */
   attachment?: ChatAttachmentSummary;
 }
 
+/** What the new chat's first send creates it with. */
+export interface ClippyFirstSendSettings extends ClippyNewChatSettings {
+  pageContext: string | null;
+}
+
+export interface ClippyComposerHandle {
+  /** Send this text now, as if typed and sent (a suggested question). */
+  submitText: (text: string) => void;
+  focus: () => void;
+}
+
 interface Props {
+  /** The chat this composer writes to. Null for a new chat, created by its first send. */
   sessionId: string | null;
   permissionMode: PermissionMode;
   effort: EffortLevel;
   model: string;
   streaming: boolean;
   awaitingPermission?: boolean;
-  onSend: (text: string, attachmentIds: string[]) => void | Promise<void>;
+  /**
+   * Send a message. `createdSessionId` is passed only on a new chat's first
+   * send, once `onCreateSession` has made the chat it goes to.
+   */
+  onSend: (text: string, attachmentIds: string[], createdSessionId?: string) => void | Promise<void>;
   onStopAndSend?: (text: string, attachmentIds: string[]) => void | Promise<void>;
   onAbort: () => void;
   onPatch: (patch: {
@@ -74,9 +83,23 @@ interface Props {
     effort?: EffortLevel;
     model?: string;
   }) => void;
+  /**
+   * New chat only: create it with what was chosen, and return its id.
+   * `progress` is this new chat's own record of how far its first send got;
+   * the same one comes back on a retry, so the chat is never made twice.
+   */
+  onCreateSession?: (settings: ClippyFirstSendSettings, progress: ClippyFirstSendProgress) => Promise<string>;
+  /** New chat only: the page it will be told about, shown as a removable chip. */
+  pageContext?: ClippyPageContext | null;
+  /** Take focus when shown. Off when Clippy reopened by itself after a reload. */
+  autoFocus?: boolean;
+  ref?: Ref<ClippyComposerHandle>;
 }
 
 const MAX_ATTACHMENTS = 8;
+
+const UPLOAD_FAILED_MESSAGE =
+  "A file could not be attached, so nothing was sent. Remove it, or send again to try the upload again.";
 
 interface ModelGroup {
   key: string;
@@ -188,6 +211,10 @@ function groupModels(models: AvailableModel[]): ModelGroup[] {
     });
 }
 
+function newLocalId(): string {
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function ClippyComposer({
   sessionId,
   permissionMode,
@@ -199,14 +226,32 @@ export function ClippyComposer({
   onStopAndSend,
   onAbort,
   onPatch,
+  onCreateSession,
+  pageContext = null,
+  autoFocus = true,
+  ref: handleRef,
 }: Props) {
+  const isNewChat = sessionId === null;
   const [text, setText] = useState("");
   const [consentError, setConsentError] = useState<string | null>(null);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [dropping, setDropping] = useState(false);
+  // A new chat's choices, applied when its first send creates it. The
+  // composer is remounted per chat, so each new chat starts from defaults.
+  const [newChatSettings, setNewChatSettings] = useState<ClippyNewChatSettings>(DEFAULT_NEW_CHAT_SETTINGS);
+  const [pageContextRemoved, setPageContextRemoved] = useState(false);
+  // True while a send is creating the chat or uploading files, until it goes.
+  const [sendBusy, setSendBusy] = useState(false);
+  // How far this new chat's first send got, handed back on a retry so the
+  // chat is not made twice (see ClippyFirstSendProgress).
+  const firstSendProgressRef = useRef<ClippyFirstSendProgress>({ session: null });
   const dropDepth = useRef(0);
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const dictation = useSpeechDictation((spoken) => {
+    setText((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")} ${spoken}` : spoken));
+  });
 
   const modelsQuery = useQuery({
     queryKey: ["clippy", "models"],
@@ -228,7 +273,8 @@ export function ClippyComposer({
   );
 
   useEffect(() => {
-    ref.current?.focus();
+    if (autoFocus) ref.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Revoke any object URLs when uploads list changes / unmounts.
@@ -241,60 +287,50 @@ export function ClippyComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const setUpload = (localId: string, patch: Partial<PendingUpload>) => {
+    setUploads((prev) => prev.map((u) => (u.localId === localId ? { ...u, ...patch } : u)));
+  };
+
   const ingestFiles = async (files: FileList | File[]) => {
-    if (!sessionId) return;
     const list = Array.from(files);
     const slotsLeft = Math.max(0, MAX_ATTACHMENTS - uploads.length);
     const toUpload = list.slice(0, slotsLeft);
     for (const file of toUpload) {
-      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const localId = newLocalId();
       const isImage = file.type.startsWith("image/");
       const previewUrl = isImage ? URL.createObjectURL(file) : null;
+      const base = {
+        localId,
+        name: file.name || (isImage ? "image" : "file"),
+        size: file.size,
+        mediaType: file.type || "application/octet-stream",
+        previewUrl,
+      };
 
       // Pre-flight checks the server would otherwise reject — show a clearer
       // message inline instead of a generic "API route not found" / 422.
       const preflightError = preflightRejectionFor(file);
       if (preflightError) {
-        setUploads((prev) => [
-          ...prev,
-          {
-            localId,
-            name: file.name || (isImage ? "image" : "file"),
-            size: file.size,
-            mediaType: file.type || "application/octet-stream",
-            previewUrl,
-            status: "error",
-            error: preflightError,
-          },
-        ]);
+        setUploads((prev) => [...prev, { ...base, status: "error", error: preflightError }]);
         continue;
       }
 
-      setUploads((prev) => [
-        ...prev,
-        {
-          localId,
-          name: file.name || (isImage ? "image" : "file"),
-          size: file.size,
-          mediaType: file.type || "application/octet-stream",
-          previewUrl,
-          status: "uploading",
-        },
-      ]);
+      // A new chat has nowhere to upload to yet. Hold the file; the first
+      // send creates the chat and uploads it then.
+      if (!sessionId) {
+        setUploads((prev) => [...prev, { ...base, status: "local", file }]);
+        continue;
+      }
+
+      // The file stays with its chip until the upload works, so a failed
+      // upload is tried again when the message is sent.
+      setUploads((prev) => [...prev, { ...base, status: "uploading", file }]);
       try {
         const att = await chatApi.uploadAttachment(sessionId, file);
-        setUploads((prev) =>
-          prev.map((u) =>
-            u.localId === localId ? { ...u, status: "done", attachment: att } : u,
-          ),
-        );
+        setUpload(localId, { status: "done", attachment: att, file: undefined });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setUploads((prev) =>
-          prev.map((u) =>
-            u.localId === localId ? { ...u, status: "error", error: msg } : u,
-          ),
-        );
+        setUpload(localId, { status: "error", error: msg });
       }
     }
   };
@@ -307,18 +343,107 @@ export function ClippyComposer({
     });
   };
 
-  const submit = async (opts: { force?: boolean } = {}) => {
-    const trimmed = text.trim();
+  /**
+   * Upload every file still waiting, to `targetId`: a new chat's held files,
+   * and any whose earlier upload failed. Returns the attachment ids in the
+   * order the files were added, or null when one failed. A failed file keeps
+   * its chip and its error, and is tried again on the next send; nothing is
+   * sent without it.
+   */
+  const uploadWaitingFiles = async (targetId: string): Promise<string[] | null> => {
+    const attachmentIds: string[] = [];
+    let failed = false;
+    for (const upload of uploads) {
+      if (upload.status === "done" && upload.attachment) {
+        attachmentIds.push(upload.attachment.id);
+        continue;
+      }
+      // Turned down before upload (a video, a shortcut, too big): its chip
+      // says why, and it is never sent.
+      if (!upload.file) continue;
+      setUpload(upload.localId, { status: "uploading", error: undefined });
+      try {
+        const att = await chatApi.uploadAttachment(targetId, upload.file);
+        setUpload(upload.localId, { status: "done", attachment: att, file: undefined });
+        attachmentIds.push(att.id);
+      } catch (err) {
+        failed = true;
+        setUpload(upload.localId, { status: "error", error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return failed ? null : attachmentIds;
+  };
+
+  /**
+   * A new chat's first send: create the chat with everything chosen so far,
+   * upload the files held for it, then send. Nothing is cleared until all of
+   * that worked, so a failure leaves the message, files and choices in place,
+   * and a retry carries on with the chat the failed try made.
+   */
+  const sendFirstMessage = async (trimmed: string) => {
+    if (!onCreateSession || sendBusy) return;
+    setSendBusy(true);
+    setConsentError(null);
+    try {
+      const createdId = await onCreateSession(
+        {
+          ...newChatSettings,
+          pageContext: pageContext && !pageContextRemoved ? pageContext.value : null,
+        },
+        firstSendProgressRef.current,
+      );
+      const attachmentIds = await uploadWaitingFiles(createdId);
+      if (attachmentIds === null) {
+        setConsentError(UPLOAD_FAILED_MESSAGE);
+        return;
+      }
+      if (!trimmed && attachmentIds.length === 0) return;
+      setText("");
+      setUploads([]);
+      await onSend(trimmed, attachmentIds, createdId);
+    } catch (error) {
+      setConsentError(error instanceof Error ? error.message : "Your message could not be sent. Please try again.");
+    } finally {
+      setSendBusy(false);
+    }
+  };
+
+  const submit = async (opts: { force?: boolean; text?: string } = {}) => {
+    const trimmed = (opts.text ?? text).trim();
     const ready = uploads.filter((u) => u.status === "done" && u.attachment);
-    if (!trimmed && ready.length === 0) return;
-    if (awaitingPermission && !opts.force && (!parseInlineConsentReply(trimmed) || ready.length > 0)) {
+    // Held for a new chat, or failed before and to be tried again.
+    const waiting = uploads.filter((u) => u.status !== "done" && u.status !== "uploading" && u.file);
+    if (!trimmed && ready.length === 0 && waiting.length === 0) return;
+    if (uploads.some((u) => u.status === "uploading")) return;
+    if (isNewChat) {
+      await sendFirstMessage(trimmed);
+      return;
+    }
+    if (
+      awaitingPermission &&
+      !opts.force &&
+      (!parseInlineConsentReply(trimmed) || ready.length > 0 || waiting.length > 0)
+    ) {
       setConsentError("Reply yes or no to the action above, or use its buttons. Stop the current action to give different instructions.");
       return;
     }
     setConsentError(null);
     if (!opts.force && streaming && !awaitingPermission) return;
-    if (uploads.some((u) => u.status === "uploading")) return;
-    const ids = ready.map((u) => u.attachment!.id);
+    let ids = ready.map((u) => u.attachment!.id);
+    if (waiting.length > 0 && sessionId) {
+      if (sendBusy) return;
+      setSendBusy(true);
+      try {
+        const uploaded = await uploadWaitingFiles(sessionId);
+        if (uploaded === null) {
+          setConsentError(UPLOAD_FAILED_MESSAGE);
+          return;
+        }
+        ids = uploaded;
+      } finally {
+        setSendBusy(false);
+      }
+    }
     setText("");
     setUploads([]);
     try {
@@ -328,6 +453,13 @@ export function ClippyComposer({
       setConsentError(error instanceof Error ? error.message : "Your message could not be sent. Please try again.");
     }
   };
+
+  useImperativeHandle(handleRef, () => ({
+    submitText: (suggestion: string) => {
+      void submit({ text: suggestion });
+    },
+    focus: () => ref.current?.focus(),
+  }));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition: CJK and other multi-keystroke input methods commit a
@@ -341,7 +473,6 @@ export function ClippyComposer({
   };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!sessionId) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     const files: File[] = [];
@@ -359,7 +490,6 @@ export function ClippyComposer({
   };
 
   const onDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!sessionId) return;
     if (!e.dataTransfer.types.includes("Files")) return;
     e.preventDefault();
     dropDepth.current += 1;
@@ -380,7 +510,6 @@ export function ClippyComposer({
     e.preventDefault();
     dropDepth.current = 0;
     setDropping(false);
-    if (!sessionId) return;
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       void ingestFiles(files);
@@ -388,17 +517,23 @@ export function ClippyComposer({
   };
 
   const anyUploading = uploads.some((u) => u.status === "uploading");
-  const hasContent = !!text.trim() || uploads.filter((u) => u.status === "done").length > 0;
+  // A file waiting to upload (held, or failed and to be tried again) counts.
+  const hasContent = !!text.trim() || uploads.some((u) => u.status === "done" || (u.file && u.status !== "uploading"));
   const sendDisabled =
-    (streaming && !awaitingPermission) || anyUploading || !hasContent;
+    (streaming && !awaitingPermission) || anyUploading || sendBusy || !hasContent;
   const canStopAndSend = streaming && !awaitingPermission && hasContent && !anyUploading && !!onStopAndSend;
+
+  const options = isNewChat ? newChatSettings : { model, permissionMode, effort };
+  const changeOptions = (patch: ClippyChatOptionsPatch) => {
+    if (isNewChat) setNewChatSettings((prev) => ({ ...prev, ...patch }));
+    else onPatch(patch);
+  };
+  const showPageContext = isNewChat && pageContext && !pageContextRemoved;
+  const notice = consentError ?? dictation.error;
 
   return (
     <div
-      className={cn(
-        "relative border-t border-border bg-background px-3 pb-3 pt-2",
-        dropping && "ring-2 ring-inset ring-primary/60",
-      )}
+      className={cn("relative bg-background px-3 pb-2 pt-1", dropping && "ring-2 ring-inset ring-primary/60")}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
@@ -411,36 +546,41 @@ export function ClippyComposer({
           </div>
         </div>
       )}
-      <div className="mx-auto max-w-3xl">
-        {uploads.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {uploads.map((u) => (
-              <UploadChip key={u.localId} upload={u} onRemove={() => removeUpload(u.localId)} />
-            ))}
-          </div>
-        )}
-        <div className="rounded-md border border-border focus-within:ring-1 focus-within:ring-ring">
+      <div className="mx-auto max-w-3xl space-y-1.5">
+        {showPageContext ? (
+          <ClippyContextChip label={pageContext.label} onRemove={() => setPageContextRemoved(true)} />
+        ) : null}
+        <div className="rounded-lg border border-border bg-background shadow-xs transition-[box-shadow] focus-within:ring-1 focus-within:ring-ring">
+          {uploads.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-2.5 pt-2.5">
+              {uploads.map((u) => (
+                <UploadChip key={u.localId} upload={u} onRemove={() => removeUpload(u.localId)} />
+              ))}
+            </div>
+          )}
           <Textarea
             ref={ref}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder="Ask Clippy anything — drop or paste images and files, Shift+Enter for newline"
-            rows={3}
-            className="min-h-[64px] resize-none border-0 bg-transparent text-sm focus-visible:ring-0"
+            placeholder="Ask Clippy anything"
+            aria-label="Message Clippy"
+            rows={2}
+            className="max-h-48 min-h-[52px] resize-none border-0 bg-transparent px-3 py-2.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
           />
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-2 py-1.5 text-xs">
+          <div className="flex items-center gap-1 px-1.5 pb-1.5">
             <Button
               size="icon-sm"
               variant="ghost"
+              className="size-7 text-muted-foreground"
               onClick={() => fileInputRef.current?.click()}
-              disabled={!sessionId || streaming || uploads.length >= MAX_ATTACHMENTS}
-              title="Attach file"
-              aria-label="Attach file"
+              disabled={streaming || sendBusy || uploads.length >= MAX_ATTACHMENTS}
+              title="Attach files (or drop or paste them here)"
+              aria-label="Attach files"
               type="button"
             >
-              <Paperclip className="h-3.5 w-3.5" />
+              <Paperclip className="size-4" />
             </Button>
             <input
               ref={fileInputRef}
@@ -452,93 +592,66 @@ export function ClippyComposer({
                 e.target.value = "";
               }}
             />
-            {(() => {
-              const isAdapterModel = Boolean(model && model.startsWith("adapter:"));
-              return (
-                <Select
-                  value={isAdapterModel ? "bypass" : permissionMode}
-                  onValueChange={(v) => onPatch({ permissionMode: v as PermissionMode })}
-                  disabled={streaming || isAdapterModel}
+            <div className="ml-auto flex min-w-0 items-center gap-1">
+              <ClippyChatOptions
+                model={options.model}
+                permissionMode={options.permissionMode}
+                effort={options.effort}
+                models={models}
+                modelGroups={modelGroups}
+                modelsLoading={modelsQuery.isLoading}
+                allowDefaultModel={isNewChat}
+                disabled={streaming || sendBusy}
+                onChange={changeOptions}
+              />
+              {dictation.supported ? (
+                // A toggle: one name, with aria-pressed saying whether it is on.
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  type="button"
+                  className={cn("size-7", dictation.listening ? "text-destructive" : "text-muted-foreground")}
+                  aria-label="Dictate"
+                  aria-pressed={dictation.listening}
+                  title="Dictate"
+                  onClick={dictation.listening ? dictation.stop : dictation.start}
                 >
-                  <SelectTrigger
-                    size="sm"
-                    className="h-7 w-auto gap-1 px-2 text-xs"
-                    title={isAdapterModel ? "CLI models run unattended and bypass permission prompts" : undefined}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ask">Ask permission</SelectItem>
-                    <SelectItem value="bypass">Bypass permissions</SelectItem>
-                  </SelectContent>
-                </Select>
-              );
-            })()}
-            {/* A session model that is no longer in the list (an adapter was
-                disabled, a model retired, or a stale id from before the
-                adapter:* encoding) still shows, marked Not available, so the
-                user sees what is selected. */}
-            <ModelPicker
-              groups={modelGroups}
-              value={model}
-              onChange={(v) => {
-                const isNewAdapter = Boolean(v && v.startsWith("adapter:"));
-                if (isNewAdapter && permissionMode === "ask") {
-                  onPatch({ model: v, permissionMode: "bypass" });
-                } else {
-                  onPatch({ model: v });
-                }
-              }}
-              disabled={streaming || (models.length === 0 && !model)}
-              loading={modelsQuery.isLoading}
-              placeholder="Pick a model"
-              emptyMessage="No models available"
-              describeValue={describeSessionModel}
-              appearance="select"
-              triggerClassName="h-7 w-auto max-w-[16rem] gap-1 px-2 text-xs"
-              aria-label="Model"
-            />
-            <Select
-              value={effort}
-              onValueChange={(v) => onPatch({ effort: v as EffortLevel })}
-              disabled={streaming}
-            >
-              <SelectTrigger size="sm" className="h-7 w-auto gap-1 px-2 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Effort: Auto</SelectItem>
-                <SelectItem value="low">Effort: Low</SelectItem>
-                <SelectItem value="medium">Effort: Medium</SelectItem>
-                <SelectItem value="high">Effort: High</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="ml-auto flex items-center gap-1">
+                  <Mic className={cn("size-4", dictation.listening && "animate-pulse motion-reduce:animate-none")} />
+                </Button>
+              ) : null}
               {streaming && (
-                <Button size="sm" variant="ghost" onClick={onAbort}>
-                  <Square className="mr-1 h-3 w-3" /> Stop
+                <Button size="icon-sm" variant="ghost" className="size-7" onClick={onAbort} aria-label="Stop" title="Stop">
+                  <Square className="size-3.5" />
                 </Button>
               )}
               {canStopAndSend ? (
-                <Button size="sm" onClick={() => submit({ force: true })}>
-                  <Send className="mr-1 h-3 w-3" /> Stop & Send
+                <Button size="xs" className="h-7" onClick={() => submit({ force: true })}>
+                  Stop & Send
                 </Button>
               ) : (!streaming || awaitingPermission) && (
-                <Button size="sm" onClick={() => submit()} disabled={sendDisabled}>
-                  <Send className="mr-1 h-3 w-3" /> Send
+                <Button
+                  size="icon-sm"
+                  className="size-7"
+                  onClick={() => submit()}
+                  disabled={sendDisabled}
+                  aria-label="Send"
+                  title="Send (Enter). Shift+Enter for a new line"
+                >
+                  {sendBusy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                 </Button>
               )}
             </div>
           </div>
         </div>
-        {consentError && <p role="alert" className="mt-2 text-xs text-destructive">{consentError}</p>}
-        {models.length === 0 && (
-          <div className="mt-2 text-[11px] text-muted-foreground">
+        {notice && <p role="alert" className="text-xs text-destructive">{notice}</p>}
+        {models.length === 0 && !modelsQuery.isLoading && (
+          <div className="text-xs text-muted-foreground">
             No LLM provider configured. Set <code>ANTHROPIC_API_KEY</code>,{" "}
             <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code>, or start a local Ollama (
             <code>OLLAMA_HOST</code>) to enable Clippy.
           </div>
         )}
+        <p className="text-center text-xs text-muted-foreground">Uses AI. Verify results.</p>
       </div>
     </div>
   );

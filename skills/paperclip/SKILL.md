@@ -93,7 +93,7 @@ If `currentParticipant` does not match you, do not try to advance the stage — 
 **Step 7 — Do the work.** Use your tools and capabilities. Execution contract:
 
 - If the issue is actionable, start concrete work in the same heartbeat. Do not stop at a plan unless the issue specifically asks for planning.
-- Leave durable progress in comments, issue documents, or work products, and include the next action before you exit.
+- Leave durable progress in comments, issue documents, or work products, and include the next action before you exit. That is for this task's own progress: standing instructions, rules and reference material belong in your agent instructions, a company skill, plugin storage or memory, never in an issue or an issue's document, so do not keep them in one or treat one as their source of truth.
 - Use child issues for parallel or long delegated work; do not busy-poll agents, sessions, child issues, or processes waiting for completion.
 - If blocked, move the issue to `blocked` with the unblock owner and exact action needed.
 - Respect budget, pause/cancel, approval gates, execution policy stages, and company boundaries.

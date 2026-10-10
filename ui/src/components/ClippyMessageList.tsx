@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, Download, FileText, Info, Loader2, MessageSquare } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,8 @@ interface Props {
   lastEventAt?: number | null;
   /** True when the active session model runs via a local CLI adapter. */
   isAdapterModel?: boolean;
+  /** What an empty chat shows (a greeting and suggested questions). */
+  emptyState?: ReactNode;
 }
 
 export function ClippyMessageList({
@@ -33,6 +35,7 @@ export function ClippyMessageList({
   liveToolCalls = {},
   lastEventAt = null,
   isAdapterModel = false,
+  emptyState,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -80,22 +83,24 @@ export function ClippyMessageList({
         className="absolute inset-0 overflow-y-auto px-4 py-4 scrollbar-auto-hide"
       >
         {transcript.length === 0 && !streaming && (
-          <div className="flex h-full flex-col items-center justify-center text-center text-sm text-muted-foreground">
-            <MessageSquare className="mb-2 h-8 w-8 opacity-40" />
-            <div className="font-medium">Ask Clippy anything</div>
-            <div className="mt-1 max-w-sm text-xs">
-              Clippy can look things up and take actions for you; each action
-              shows up as a card as it runs.{isAdapterModel ? (
-                <> CLI models execute actions directly.</>
-              ) : (
-                <>
-                  {" "}With{" "}
-                  <span className="font-medium">Ask permission</span> selected below,
-                  anything that makes a real change waits for your OK.
-                </>
-              )}
+          emptyState ?? (
+            <div className="flex h-full flex-col items-center justify-center text-center text-sm text-muted-foreground">
+              <MessageSquare className="mb-2 h-8 w-8 opacity-40" />
+              <div className="font-medium">Ask Clippy anything</div>
+              <div className="mt-1 max-w-sm text-xs">
+                Clippy can look things up and take actions for you; each action
+                shows up as a card as it runs.{isAdapterModel ? (
+                  <> CLI models execute actions directly.</>
+                ) : (
+                  <>
+                    {" "}With{" "}
+                    <span className="font-medium">Ask permission</span> chosen in the chat options,
+                    anything that makes a real change waits for your OK.
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          )
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {transcript.map((entry) => {

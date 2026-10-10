@@ -384,7 +384,7 @@ All follow the property row pattern: `text-xs text-muted-foreground` label on le
 
 **File:** `ModelPicker.tsx`
 **Props:** `models` (or `groups` for one heading per provider), `value`, `onChange`, `emptyOption?` (a first row such as "Default"), `creatable?`, `loading?`, `onRefreshModels?`, `onDetectModel?`
-**Usage:** The one model picker used everywhere a model is chosen: agent settings, new agent, onboarding, issue overrides, Agent Defaults, Clippy and email drafts. Keeps the server's order (current models first, retiring next), folds `status: "legacy"` models under "Older models (N)" (opened when the saved model is one of them), tags rows with ModelLifecycleBadge, and shows a saved model the provider no longer lists as "Not available" rather than dropping it. Do not build a new model dropdown; use this.
+**Usage:** The one model picker used everywhere a model is chosen: agent settings, new agent, onboarding, issue overrides, Agent Defaults, Clippy (inside ClippyChatOptions) and email drafts. Keeps the server's order (current models first, retiring next), folds `status: "legacy"` models under "Older models (N)" (opened when the saved model is one of them), tags rows with ModelLifecycleBadge, and shows a saved model the provider no longer lists as "Not available" rather than dropping it. Do not build a new model dropdown; use this.
 
 ### ModelLifecycleBadge
 
@@ -397,6 +397,20 @@ All follow the property row pattern: `text-xs text-muted-foreground` label on le
 **File:** `SavedModelNotice.tsx`
 **Props:** `models`, `value` (the saved model id), `onSwitch(id)`, `disabled?`
 **Usage:** One line under a model picker when the saved model has been replaced, is retiring, or is no longer offered, with a "Switch to <model>" button. Driven by `describeSavedModel` from `@paperclipai/shared`, so it follows a provider's named successor on to a current model. Renders nothing when the saved model is fine.
+
+### Clippy (ClippyLauncher, ClippyWindow, ClippyChatOptions, ClippyChatRow, ClippyEmptyState, ClippyContextChip)
+
+**Files:** `ClippyLauncher.tsx`, `ClippyWindow.tsx`, `ClippyChatOptions.tsx`, `ClippyChatRow.tsx`, `ClippyEmptyState.tsx`; state in `context/ClippyContext.tsx`
+**Usage:** The in-app assistant. Layout mounts `ClippyProvider`, `ClippyLauncher` and `ClippyWindow` once; nothing else should.
+
+- `ClippyLauncher`: the bottom right "Ask Clippy anything" pill (a round button on a phone), with the amber count of actions waiting on you. The page's scroll buttons stack above it using the offsets in `lib/narrow-layout.ts`; keep any new floating corner control on that same scale. `ClippyLauncherButton` is just its look.
+- `ClippyWindow`: one window in three layouts the person picks from its header: floating (non-modal, resizable from its top and left edges, movable by its header, with the pointer or the arrow keys), sidebar (docked on the right; the page is narrowed by `--clippy-dock-width`, never below a usable width beside the navigation and properties panel) and full screen (the chat list beside the conversation; everything behind it is inert). Switching layout never remounts the conversation. A phone always gets full screen. While it is open, its header carries the count of actions waiting. Sits on `Z_CLIPPY`: above everything a page draws, under dialogs. A page's own fixed bars and notices belong on `Z_PAGE_FLOATING` and `Z_PAGE_NOTICE`, never `z-50`, or they draw over Clippy.
+- `ClippyToolCallCard`: a step Clippy took, collapsed to one line: status icon, what was done in plain words (`summarizeToolStep` in `lib/clippy-tool-labels.ts`, e.g. "Created issue HQ-1", the issue linked), and a chevron that opens the raw parameters and result. Steps waiting for approval are `ClippyPermissionCard`.
+- `ClippyChatOptions`: props `model`, `permissionMode`, `effort`, `models`, `modelGroups`, `allowDefaultModel?`, `disabled?`, `onChange(patch)`. The one control beside Send for a chat's model (through ModelPicker), permissions and effort; closed, it shows the model by its readable name, never the stored `adapter:` id.
+- `ClippyChatRow`: props `session`, `company`, `active`, `onSelect`, `onRename`, `onDelete`, `onArchiveToggle?`. A chat in a list: title, then "Company · 2h ago". Rename and delete (and archive where archived chats are listed) float over the row on hover or focus, through `RowHoverToolbar`; delete asks in the row.
+- `ClippyEmptyState` (`greetingName?`, `suggestions`, `onPickSuggestion`) and `ClippyContextChip` (`label`, `onRemove`): an empty chat's greeting and suggested questions, and the removable "Context:" chip naming the page a new chat will be told about.
+
+A chat is created on its first send (`lib/clippy-new-chat.ts`), never on open or on "New chat".
 
 ### AttachmentChipList
 

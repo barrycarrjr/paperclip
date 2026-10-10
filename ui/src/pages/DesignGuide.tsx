@@ -132,7 +132,13 @@ import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "@/components/email/RowH
 import { ModelLifecycleBadge } from "@/components/ModelLifecycleBadge";
 import { ModelPicker } from "@/components/ModelPicker";
 import { SavedModelNotice } from "@/components/SavedModelNotice";
-import type { ModelPickerEntry } from "@/lib/model-display";
+import { ClippyLauncherButton } from "@/components/ClippyLauncher";
+import { ClippyContextChip, ClippyEmptyState } from "@/components/ClippyEmptyState";
+import { ClippyChatOptions } from "@/components/ClippyChatOptions";
+import { ClippyChatRow } from "@/components/ClippyChatRow";
+import { ClippyToolCallCard } from "@/components/ClippyToolCallCard";
+import type { AvailableModel, ChatSession, EffortLevel, PermissionMode } from "@/api/chat";
+import { chatModelEntry, type ModelPickerEntry } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { InlineEditor } from "@/components/InlineEditor";
 import { DraftInstructionsField } from "@/components/DraftInstructionsField";
@@ -239,6 +245,36 @@ const DEMO_MODELS: ModelPickerEntry[] = [
 ];
 
 /* ------------------------------------------------------------------ */
+/*  Sample chats and chat models for the Clippy section (made up)      */
+/* ------------------------------------------------------------------ */
+
+const DEMO_CHAT_MODELS: AvailableModel[] = [
+  { provider: "anthropic", model: "example-large-3", label: "Example Large 3", status: "current", isDefault: true },
+  { provider: "anthropic", model: "example-fast-3", label: "Example Fast 3", status: "current" },
+];
+
+const HOUR = 60 * 60 * 1000;
+
+const DEMO_CHATS: ChatSession[] = [
+  ["demo-chat-1", "Remind me to send the IRS letter", 2 * HOUR],
+  ["demo-chat-2", "Summarize open issues in HQ", 26 * HOUR],
+  ["demo-chat-3", "What did the agents get done this week?", 5 * 24 * HOUR],
+].map(([id, title, age]) => ({
+  id: id as string,
+  boardUserId: "demo-user",
+  companyId: "demo-company",
+  title: title as string,
+  model: "example-large-3",
+  mode: "agent",
+  permissionMode: "ask",
+  effort: "auto",
+  pageContext: null,
+  archivedAt: null,
+  createdAt: new Date(Date.now() - (age as number)).toISOString(),
+  updatedAt: new Date(Date.now() - (age as number)).toISOString(),
+}));
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -264,6 +300,11 @@ export function DesignGuide() {
   const [mailSearchSummary, setMailSearchSummary] = useState<string | null>(null);
   const demoAttachments = useComposeAttachments(EMAIL_ATTACHMENT_MAX_BYTES);
   const [demoModel, setDemoModel] = useState("example-large-2");
+  const [demoChatOptions, setDemoChatOptions] = useState<{
+    model: string;
+    permissionMode: PermissionMode;
+    effort: EffortLevel;
+  }>({ model: "example-large-3", permissionMode: "ask", effort: "auto" });
 
   return (
     <div className="space-y-10 max-w-4xl">
@@ -306,6 +347,8 @@ export function DesignGuide() {
                 "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "EmailRecipientLines", "RowHoverToolbar",
                 "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
                 "AgentStatusBadge", "TeamWorkStateBadge", "AgentErrorNote",
+                "ClippyLauncher", "ClippyEmptyState", "ClippyContextChip", "ClippyChatOptions", "ClippyChatRow",
+                "ClippyToolCallCard",
               ].map((name) => (
                 <Badge key={name} variant="ghost" className="font-mono text-[10px]">
                   {name}
@@ -1342,6 +1385,98 @@ export function DesignGuide() {
             <SavedModelNotice models={DEMO_MODELS} value="example-large-2-5" onSwitch={() => {}} />
             <SavedModelNotice models={DEMO_MODELS} value="example-large-1" onSwitch={() => {}} />
           </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  CLIPPY                                                       */}
+      {/* ============================================================ */}
+      <Section title="Clippy">
+        <p className="text-sm text-muted-foreground">
+          The pieces of the Clippy assistant. ClippyWindow puts them together in three layouts
+          (floating, docked as a sidebar, full screen); it is not shown here because it is the real,
+          app-wide Clippy. A chat is created on its first send, so the empty state and the context
+          chip belong to a chat that does not exist yet.
+        </p>
+        <SubSection title="Launcher (ClippyLauncher)">
+          <p className="text-xs text-muted-foreground">
+            A pill from md up, a round button on a phone. The amber count is actions waiting on you.
+          </p>
+          <div className="flex flex-wrap items-center gap-4">
+            <ClippyLauncherButton pendingActionCount={0} />
+            <ClippyLauncherButton pendingActionCount={2} />
+          </div>
+        </SubSection>
+        <SubSection title="Empty chat (ClippyEmptyState + ClippyContextChip)">
+          <div className="max-w-sm space-y-3 rounded-xl border border-border p-3">
+            <ClippyEmptyState
+              greetingName="Pat"
+              suggestions={["Which issues are blocked?", "Summarize open issues in HQ", "What changed in the last day?"]}
+              onPickSuggestion={() => {}}
+            />
+            <ClippyContextChip label="HQ | Issues" onRemove={() => {}} />
+          </div>
+        </SubSection>
+        <SubSection title="Chat options (ClippyChatOptions)">
+          <p className="text-xs text-muted-foreground">
+            The one control beside Send for model, permissions and effort. Closed, it shows the model by
+            its readable name.
+          </p>
+          <ClippyChatOptions
+            model={demoChatOptions.model}
+            permissionMode={demoChatOptions.permissionMode}
+            effort={demoChatOptions.effort}
+            models={DEMO_CHAT_MODELS}
+            modelGroups={[{ key: "demo", models: DEMO_CHAT_MODELS.map(chatModelEntry) }]}
+            onChange={(patch) => setDemoChatOptions((prev) => ({ ...prev, ...patch }))}
+          />
+        </SubSection>
+        <SubSection title="Tool steps (ClippyToolCallCard)">
+          <p className="text-xs text-muted-foreground">
+            One plain line per step Clippy took: a status icon, what was done, and a chevron. The raw
+            parameters and result are behind the chevron.
+          </p>
+          <div className="max-w-md rounded-lg bg-muted/50 px-2 py-1.5">
+            <ClippyToolCallCard
+              name="create_issue"
+              input={{ title: "Send the IRS letter", dueDate: "2026-10-16" }}
+              status="completed"
+              result={{ ok: true, data: { ok: true, identifier: "HQ-1", title: "Send the IRS letter" } }}
+            />
+            <ClippyToolCallCard
+              name="list_issues"
+              input={{ status: "todo" }}
+              status="completed"
+              result={{ ok: true, data: [{}, {}, {}] }}
+            />
+            <ClippyToolCallCard
+              name="create_issue"
+              input={{}}
+              status="completed"
+              result={{ ok: false, data: "Company not found" }}
+            />
+            <ClippyToolCallCard name="list_agents" input={{}} status="pending" startedAt={Date.now() - 4000} />
+          </div>
+        </SubSection>
+        <SubSection title="Chat rows (ClippyChatRow)">
+          <p className="text-xs text-muted-foreground">
+            Title, then company and how long ago. Point at a row (or tab into it) for rename, archive and
+            delete; delete asks in the row.
+          </p>
+          <ul className="w-72 space-y-0.5 rounded-md border border-border p-1.5">
+            {DEMO_CHATS.map((chat, index) => (
+              <ClippyChatRow
+                key={chat.id}
+                session={chat}
+                company={index === 2 ? null : { name: "HQ", brandColor: "#2563eb" }}
+                active={index === 0}
+                onSelect={() => {}}
+                onRename={() => {}}
+                onDelete={() => {}}
+                onArchiveToggle={() => {}}
+              />
+            ))}
+          </ul>
         </SubSection>
       </Section>
 

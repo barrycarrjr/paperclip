@@ -1,15 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
   ABOVE_MOBILE_BOTTOM_NAV_CLASS,
+  CLIPPY_LAUNCHER_SIZE_CLASS,
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
   OWN_LINE_ACTIONS_CLASS,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
+  PAGE_SCROLL_BUTTON_SIZE_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
   SCROLL_AREA_FITS_COLUMN_CLASS,
+  SCROLL_TO_BOTTOM_OFFSET_CLASS,
+  SCROLL_TO_TOP_OFFSET_CLASS,
   WRAPPING_ROW_CLASS,
   spacingClassPixels,
 } from "./narrow-layout";
+
+/** The part of a responsive class string for one breakpoint: "" for phones, "md" for desktop. */
+function partFor(classes: string, breakpoint: "" | "md", property: string): string {
+  const part = classes.split(" ").find((candidate) => {
+    const [prefix, rest] = candidate.includes(":") ? candidate.split(":") : ["", candidate];
+    return prefix === breakpoint && rest!.startsWith(`${property}-`);
+  });
+  expect(part, `no ${breakpoint || "phone"} ${property} in "${classes}"`).toBeDefined();
+  return part!.replace(/^md:/, "");
+}
 
 describe("spacingClassPixels", () => {
   it("reads a plain Tailwind scale value", () => {
@@ -45,6 +59,31 @@ describe("the floating-control offset above the phone bottom bar", () => {
     // breakpoint or every desktop window keeps a gap it does not need.
     expect(ABOVE_MOBILE_BOTTOM_NAV_CLASS).toContain("md:bottom-4");
   });
+});
+
+describe("the page scroll buttons above the Clippy launcher", () => {
+  // The round launcher left room for the scroll buttons to its left. The
+  // "Ask Clippy anything" pill is wider than that room, so the buttons stack
+  // above it instead, and these numbers live in one file so they agree.
+  for (const breakpoint of ["", "md"] as const) {
+    const name = breakpoint ? "on a desktop" : "on a phone";
+
+    it(`puts scroll-to-bottom clear above the launcher ${name}`, () => {
+      const launcherBottom = spacingClassPixels(partFor(ABOVE_MOBILE_BOTTOM_NAV_CLASS, breakpoint, "bottom"));
+      const launcherHeight = breakpoint
+        ? spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "md", "h"))
+        : spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "", "size"));
+      const buttonBottom = spacingClassPixels(partFor(SCROLL_TO_BOTTOM_OFFSET_CLASS, breakpoint, "bottom"));
+      expect(buttonBottom).toBeGreaterThan(launcherBottom + launcherHeight);
+    });
+
+    it(`puts scroll-to-top clear above scroll-to-bottom ${name}`, () => {
+      const buttonHeight = spacingClassPixels(PAGE_SCROLL_BUTTON_SIZE_CLASS.replace("size-", "h-"));
+      const lower = spacingClassPixels(partFor(SCROLL_TO_BOTTOM_OFFSET_CLASS, breakpoint, "bottom"));
+      const upper = spacingClassPixels(partFor(SCROLL_TO_TOP_OFFSET_CLASS, breakpoint, "bottom"));
+      expect(upper).toBeGreaterThan(lower + buttonHeight);
+    });
+  }
 });
 
 describe("an action row that takes its own line when it is too wide", () => {

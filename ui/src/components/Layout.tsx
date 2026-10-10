@@ -15,12 +15,14 @@ import { NewAgentDialog } from "./NewAgentDialog";
 import { KeyboardShortcutsCheatsheet } from "./KeyboardShortcutsCheatsheet";
 import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
-import { ClippyDrawer } from "./ClippyDrawer";
+import { ClippyLauncher } from "./ClippyLauncher";
+import { ClippyWindow } from "./ClippyWindow";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
+import { ClippyProvider, useClippyCoversPage } from "../context/ClippyContext";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
@@ -60,10 +62,43 @@ function readRememberedInstanceSettingsPath(): string {
   }
 }
 
+/** Widths of the app's own columns beside the page (CompanyRail, Sidebar, PropertiesPanel). */
+const COMPANY_RAIL_WIDTH = 72;
+const NAV_SIDEBAR_WIDTH = 240;
+const PROPERTIES_PANEL_WIDTH = 320;
+
+/**
+ * Clippy's state lives here, inside the company routes, so it reads the
+ * company from the address on the very first render after a switch (see
+ * hooks/useRouteCompany.ts), and the shell below can make room for it.
+ */
 export function Layout() {
+  const { isMobile, sidebarOpen } = useSidebar();
+  const { panelContent, panelVisible } = usePanel();
+  const location = useLocation();
+  // What the docked Clippy panel must leave room for beside the page.
+  const reservedPageWidth =
+    COMPANY_RAIL_WIDTH +
+    (sidebarOpen ? NAV_SIDEBAR_WIDTH : 0) +
+    (panelContent && panelVisible ? PROPERTIES_PANEL_WIDTH : 0);
+  return (
+    <ClippyProvider
+      isPhone={isMobile}
+      onClippyPage={/^\/[^/]+\/clippy\/?$/i.test(location.pathname)}
+      reservedPageWidth={reservedPageWidth}
+    >
+      <LayoutShell />
+    </ClippyProvider>
+  );
+}
+
+function LayoutShell() {
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialog();
-  const { togglePanelVisible } = usePanel();
+  const { togglePanelVisible, panelContent, panelVisible } = usePanel();
+  // Full screen Clippy covers everything; the page behind it is taken out of
+  // the keyboard's path and away from screen readers until it closes.
+  const clippyCoversPage = useClippyCoversPage();
   const {
     companies,
     loading: companiesLoading,
@@ -358,18 +393,27 @@ export function Layout() {
       <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
+        // Room for Clippy when it is docked as a side panel: ClippyWindow
+        // sets the width, and leaves it at nothing otherwise.
+        "pr-[var(--clippy-dock-width,0px)]",
         isMobile ? "min-h-dvh" : "flex h-dvh flex-col overflow-hidden",
       )}
       >
+      {/* Full screen Clippy is a modal window: everything behind it, the skip
+          link and the banners included, is out of the keyboard's reach until
+          it closes, so Tab stays inside Clippy. */}
       <a
         href="#main-content"
+        inert={clippyCoversPage}
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         Skip to Main Content
       </a>
-      <WorktreeBanner />
-      <DevRestartBanner devServer={health?.devServer} />
-      <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
+      <div inert={clippyCoversPage} className="contents">
+        <WorktreeBanner />
+        <DevRestartBanner devServer={health?.devServer} />
+      </div>
+      <div inert={clippyCoversPage} className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
         {isMobile ? (
           /* The phone drawer is a Sheet, which is the app's own Radix dialog
              primitive, rather than a panel slid off screen by hand. The hand
@@ -541,14 +585,19 @@ export function Layout() {
           </div>
         </div>
       </div>
-      {isMobile && <MobileBottomNav visible={mobileNavVisible} />}
+      {isMobile && (
+        <div inert={clippyCoversPage}>
+          <MobileBottomNav visible={mobileNavVisible} />
+        </div>
+      )}
       <CommandPalette />
       <NewIssueDialog />
       <NewProjectDialog />
       <NewGoalDialog />
       <NewAgentDialog />
       <KeyboardShortcutsCheatsheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      <ClippyDrawer />
+      <ClippyLauncher besidePropertiesPanel={Boolean(panelContent && panelVisible)} />
+      <ClippyWindow />
       <ToastViewport />
       </div>
     </GeneralSettingsProvider>

@@ -30,6 +30,43 @@ export const ABOVE_MOBILE_BOTTOM_NAV_CLASS =
   "bottom-[calc(5rem+env(safe-area-inset-bottom))] md:bottom-4";
 
 /**
+ * Size of the Clippy launcher: a round 48 pixel button on a phone, and from
+ * `md` up a 40 pixel tall "Ask Clippy anything" pill. It sits at
+ * {@link ABOVE_MOBILE_BOTTOM_NAV_CLASS} in the bottom right corner.
+ */
+export const CLIPPY_LAUNCHER_SIZE_CLASS = "size-12 md:h-10 md:w-auto";
+
+/** Size of the round scroll-to-top and scroll-to-bottom buttons on long pages. */
+export const PAGE_SCROLL_BUTTON_SIZE_CLASS = "size-9";
+
+/**
+ * Where the page's scroll buttons sit: in a column above the Clippy
+ * launcher, never beside it. The round launcher left room for them to its
+ * left, 80 pixels in from the edge; the pill is wider than that, so they move
+ * up instead. Each value is one rem length so the test can add them up:
+ * on a phone the launcher's top is 5rem + 3rem, on a desktop 1rem + 2.5rem,
+ * and each button is 2.25rem tall with a small gap above what it clears.
+ */
+export const SCROLL_TO_BOTTOM_OFFSET_CLASS =
+  "bottom-[calc(8.75rem+env(safe-area-inset-bottom))] md:bottom-[4.25rem]";
+export const SCROLL_TO_TOP_OFFSET_CLASS =
+  "bottom-[calc(11.5rem+env(safe-area-inset-bottom))] md:bottom-[7rem]";
+
+/**
+ * How far in from the right the scroll buttons sit: centred over the round
+ * launcher on a phone, lined up with the pill's right edge from `md` up.
+ * `--clippy-dock-width` is the width of Clippy when it is docked as a side
+ * panel (0 otherwise), set on the document by ClippyWindow, so the buttons
+ * move out from under the panel rather than being covered by it.
+ */
+export const PAGE_SCROLL_BUTTON_RIGHT_CLASS =
+  "right-[1.375rem] md:right-[calc(var(--clippy-dock-width,0px)+1rem)]";
+
+/** The same, while the 320 pixel properties panel is also showing on the right. */
+export const PAGE_SCROLL_BUTTON_RIGHT_BESIDE_PANEL_CLASS =
+  "md:right-[calc(var(--clippy-dock-width,0px)+320px+1rem)]";
+
+/**
  * Stops one page making the whole app slide sideways on a phone.
  *
  * On a phone the app lets the document scroll, so the page area is an ordinary
