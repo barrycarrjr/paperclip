@@ -70,7 +70,16 @@ export function ClippyChatOptions({
   // is asked, so the control says so rather than offering a choice it ignores.
   const shownPermission: PermissionMode = adapterModel ? "bypass" : permissionMode;
   // An existing chat with no model yet is one whose record is still loading.
-  const modelName = model ? chatModelDisplayName(model, models) : allowDefaultModel ? DEFAULT_MODEL_LABEL : "Model";
+  // So is a model list that has not arrived: until it does, no model can be
+  // named and each would show as its raw id (claude-opus-4-8).
+  // const modelName = model ? chatModelDisplayName(model, models) : allowDefaultModel ? DEFAULT_MODEL_LABEL : "Model";
+  const modelName = model
+    ? modelsLoading
+      ? "Model"
+      : chatModelDisplayName(model, models)
+    : allowDefaultModel
+      ? DEFAULT_MODEL_LABEL
+      : "Model";
   const permissionLabel = PERMISSION_OPTIONS.find((o) => o.value === shownPermission)?.label ?? shownPermission;
   const effortLabel = EFFORT_OPTIONS.find((o) => o.value === effort)?.label ?? effort;
 
