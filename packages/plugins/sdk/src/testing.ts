@@ -1291,6 +1291,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           needsConfirmation: [],
           toolCalls: [],
           error: null,
+          skippedImages: [],
         };
       },
     },

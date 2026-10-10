@@ -70,6 +70,7 @@ import {
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import {
   attachmentTooLargeMessage,
+  contentDispositionHeader,
   isInlineAttachmentContentType,
   MAX_ATTACHMENT_BYTES,
   normalizeContentType,
@@ -4461,7 +4462,7 @@ export function issueRoutes(
     }
     const filename = attachment.originalFilename ?? "attachment";
     const disposition = isInlineAttachmentContentType(responseContentType) ? "inline" : "attachment";
-    res.setHeader("Content-Disposition", `${disposition}; filename=\"${filename.replaceAll("\"", "")}\"`);
+    res.setHeader("Content-Disposition", contentDispositionHeader(disposition, filename));
 
     object.stream.on("error", (err) => {
       next(err);

@@ -1604,6 +1604,19 @@ export interface PluginChannelsClient {
   lookupUser(identity: PluginChannelIdentity): Promise<PluginChannelUserLookupResult>;
 }
 
+/**
+ * An image sent with a chat turn, such as a screenshot from a chat app. The
+ * same shape `ctx.ai.complete` takes.
+ */
+export interface PluginChatTurnImage {
+  /** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+  mediaType: string;
+  /** The image bytes as raw base64, with no `data:` URL prefix. */
+  base64: string;
+  /** File name shown with the message in the app, e.g. "screenshot.png". */
+  name?: string;
+}
+
 export interface PluginChatTurnInput {
   /** Who sent the message; must be paired to a Paperclip user. */
   identity: PluginChannelIdentity;
@@ -1616,9 +1629,30 @@ export interface PluginChatTurnInput {
   sessionId?: string | null;
   /** Title for a session started by this call. */
   title?: string;
+  /** The message. Still required when images are sent. */
   text: string;
   /** Model for a session started by this call; defaults to the instance's Clippy default. */
   model?: string;
+  /**
+   * Images sent with the message. The host stores each one as an attachment
+   * of the session and sends it with the message, exactly as an image
+   * attached in the app's chat composer, so Clippy sees it and it shows in
+   * the conversation in the app.
+   *
+   * Limits: PNG, JPEG, GIF or WebP, and at most 8 images, as in the app's
+   * composer; at most 10 MB of base64 for one image (about 7.5 MB of file)
+   * and 24 MB for all of a turn's images together (about 18 MB), the caps
+   * `ctx.ai.complete` applies. Claude's API refuses a larger image, and a
+   * direct API provider resends every image in the conversation on every
+   * turn. The host checks the bytes really are one of those image types. An
+   * image that breaks a rule is left out and named in `skippedImages` with
+   * the reason; the turn still runs.
+   *
+   * A host older than this field ignores it without an error, so say in
+   * `text` that an image came with the message: the turn still makes sense
+   * when the image never reaches Clippy.
+   */
+  images?: PluginChatTurnImage[];
 }
 
 export interface PluginChatTurnResult {
@@ -1636,6 +1670,13 @@ export interface PluginChatTurnResult {
   toolCalls: Array<{ name: string; ok: boolean }>;
   /** Set when the turn failed part way; the session id is still valid. */
   error: string | null;
+  /**
+   * Images from `images` that were left out, each with the reason in a
+   * sentence: one that broke a rule, or all of them when the turn stopped
+   * before the message was saved. Empty when every image went with the
+   * message. Missing on a host older than `images`, which ignores them all.
+   */
+  skippedImages?: Array<{ name: string; reason: string }>;
 }
 
 /**

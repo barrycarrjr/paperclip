@@ -85,6 +85,34 @@ export function isInlineAttachmentContentType(contentType: string): boolean {
   return matchesContentType(contentType, [...INLINE_ATTACHMENT_TYPES]);
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * A Content-Disposition value any file name survives. Node refuses a header
+ * holding a character above U+00FF (ERR_INVALID_CHAR), and macOS puts a
+ * narrow no-break space in every screenshot's name, so `filename` carries an
+ * ASCII stand-in and `filename*` the real name in UTF-8 (RFC 6266 and RFC
+ * 5987), which browsers prefer when both are present.
+ */
+export function contentDispositionHeader(disposition: "inline" | "attachment", name: string): string {
+  // encodeURIComponent throws on half a surrogate pair.
+  const wellFormed = name.replace(LONE_SURROGATE, "\uFFFD");
+  // NFKD turns the narrow no-break space into a plain one and splits accents
+  // off their letters, so "Résumé" falls back to "Resume", not "R_sum_".
+  const fallback =
+    wellFormed
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\x20-\x7e]/g, "_")
+      .replace(/["\\]/g, "")
+      .trim() || "file";
+  const encoded = encodeURIComponent(wellFormed).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 // ---------- Module-level singletons read once at startup ----------
 
 const allowedPatterns: string[] = parseAllowedTypes(

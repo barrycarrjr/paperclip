@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -331,5 +332,39 @@ describe("POST /api/companies/:companyId/logo", () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toBe("SVG could not be sanitized");
     expect(createAssetMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/assets/:assetId/content", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../services/activity-log.js");
+    vi.doUnmock("../services/assets.js");
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/assets.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    getAssetByIdMock.mockReset();
+  });
+
+  it("serves an asset whose name is not Latin-1, with an ASCII fallback and the real name in filename*", async () => {
+    const storage = createStorageService("image/png");
+    vi.mocked(storage.getObject).mockResolvedValue({
+      stream: Readable.from([Buffer.from("png")]),
+      contentLength: 3,
+      contentType: "image/png",
+    } as never);
+    // A narrow no-break space (U+202F), as macOS writes, is past Latin-1.
+    getAssetByIdMock.mockResolvedValue({ ...createAsset(), byteSize: 3, originalFilename: "Café logo.png" });
+    const app = await createApp(storage);
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/assets/asset-1/content"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toBe(
+      `inline; filename="Cafe logo.png"; filename*=UTF-8''Caf%C3%A9%E2%80%AFlogo.png`,
+    );
   });
 });

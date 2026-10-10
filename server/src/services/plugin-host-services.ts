@@ -44,6 +44,8 @@ import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
 import { logActivity } from "./activity-log.js";
 import { chatService } from "./chat.js";
+import { chatAttachmentService } from "./chat-attachments.js";
+import { PLUGIN_MAX_IMAGE_BASE64_BYTES, PLUGIN_MAX_IMAGES_BASE64_BYTES } from "./plugin-image-limits.js";
 import { approvalService } from "./approvals.js";
 import { approvalDecisionService } from "./approval-decisions.js";
 import {
@@ -473,10 +475,10 @@ if (_logFlushInterval.unref) _logFlushInterval.unref();
 // AI completions (single-turn) for `ctx.ai.complete`
 // ---------------------------------------------------------------------------
 
-/** Per-image base64 size cap (before decoding). Generous for high-res photos. */
-const PLUGIN_AI_MAX_IMAGE_BASE64_BYTES = 12 * 1024 * 1024; // ~9 MB binary
-/** Total cap across all images in one request. */
-const PLUGIN_AI_MAX_TOTAL_BASE64_BYTES = 24 * 1024 * 1024;
+/** Per-image base64 size cap (before decoding), shared with `chat.turn`. */
+const PLUGIN_AI_MAX_IMAGE_BASE64_BYTES = PLUGIN_MAX_IMAGE_BASE64_BYTES; // ~7.5 MB binary
+/** Total cap across all images in one request, shared with `chat.turn`. */
+const PLUGIN_AI_MAX_TOTAL_BASE64_BYTES = PLUGIN_MAX_IMAGES_BASE64_BYTES;
 /** Maximum images per request. */
 const PLUGIN_AI_MAX_IMAGES = 8;
 /** Hard upper bound on output tokens. */
@@ -725,6 +727,7 @@ export function buildHostServices(
     }
     return chatSvc;
   };
+  const chatAttachments = chatAttachmentService(db);
   const channelMethods = createChannelHostMethods({
     pluginId,
     pluginKey,
@@ -735,6 +738,10 @@ export function buildHostServices(
     boardActorForUser: (userId) => boardActorForLinkedUser(db, userId),
     ensurePluginAvailableForCompany: (companyId) => ensurePluginAvailableForCompany(companyId),
     chat: () => getChat(),
+    storeAttachment: ({ sessionId, userId, buffer, mediaType, name }) =>
+      chatAttachments.upload({ sessionId, boardUserId: userId, buffer, mediaType, originalName: name }),
+    removeUnusedAttachments: ({ sessionId, attachmentIds }) =>
+      chatAttachments.removeUnreferenced(sessionId, attachmentIds),
     registerInteractions: (sessionId, emit) => registerChatToolInteractions(sessionId, emit),
     denyConfirmation: (sessionId, toolUseId) => {
       chatPermissions.resolve(sessionId, toolUseId, "deny");

@@ -81,6 +81,7 @@ import {
   inspectBoardClaimChallenge
 } from "../board-claim.js";
 import { getStorageService } from "../storage/index.js";
+import { contentDispositionHeader } from "../attachment-types.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -3127,7 +3128,7 @@ export function accessRoutes(
       res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
     }
     const filename = logoAsset.originalFilename ?? "company-logo";
-    res.setHeader("Content-Disposition", `inline; filename=\"${filename.replaceAll("\"", "")}\"`);
+    res.setHeader("Content-Disposition", contentDispositionHeader("inline", filename));
 
     object.stream.on("error", (err) => {
       next(err);

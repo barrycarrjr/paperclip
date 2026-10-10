@@ -292,6 +292,7 @@ export type {
   PluginChannelPairingStartResult,
   PluginChannelUserLookupResult,
   PluginChannelsClient,
+  PluginChatTurnImage,
   PluginChatTurnInput,
   PluginChatTurnResult,
   PluginChatClient,

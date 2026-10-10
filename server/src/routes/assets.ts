@@ -8,6 +8,7 @@ import type { StorageService } from "../storage/types.js";
 import { assetService, logActivity } from "../services/index.js";
 import {
   attachmentTooLargeMessage,
+  contentDispositionHeader,
   isAllowedContentType,
   MAX_ATTACHMENT_BYTES,
 } from "../attachment-types.js";
@@ -332,7 +333,7 @@ export function assetRoutes(db: Db, storage: StorageService) {
       res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
     }
     const filename = asset.originalFilename ?? "asset";
-    res.setHeader("Content-Disposition", `inline; filename=\"${filename.replaceAll("\"", "")}\"`);
+    res.setHeader("Content-Disposition", contentDispositionHeader("inline", filename));
 
     object.stream.on("error", (err) => {
       next(err);
