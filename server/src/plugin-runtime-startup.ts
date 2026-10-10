@@ -10,6 +10,11 @@
 // as Slack would start answering messages, all to be cut off part way.
 // Plugin routes stay mounted; only the start-up of the plugins themselves is
 // skipped.
+//
+// The warm-up of external MCP servers goes with them. Their tools reach Clippy
+// and agents through the same dispatcher as plugin tools, and warming one
+// starts a child process (for Docker's MCP gateway, a container per enabled
+// server) that a trial would only kill again.
 
 export const PLUGIN_RUNTIME_ENV = "PAPERCLIP_PLUGIN_RUNTIME_ENABLED";
 
@@ -21,6 +26,9 @@ export interface PluginRuntimeStartSteps {
   startJobCoordinator(): void;
   startScheduler(): void;
   loadPlugins(): void;
+  // Must return at once and never throw: start-up does not wait for a server
+  // to connect, and one that cannot start must not stop Paperclip starting.
+  warmExternalMcpServers(): void;
   onSkipped?(): void;
 }
 
@@ -33,5 +41,6 @@ export function startPluginRuntime(enabled: boolean, steps: PluginRuntimeStartSt
   steps.startJobCoordinator();
   steps.startScheduler();
   steps.loadPlugins();
+  steps.warmExternalMcpServers();
   return true;
 }

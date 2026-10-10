@@ -44,6 +44,8 @@ import {
 } from "./services/index.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
+import { createExternalMcpServerManager } from "./services/external-mcp-server-manager.js";
+import { createGracefulShutdown } from "./graceful-shutdown.js";
 import { loadPersonalCompanyIndex } from "./services/personal-companies.js";
 import { ensureHqCompany } from "./services/instance-bootstrap.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
@@ -864,6 +866,9 @@ export async function startServer(): Promise<StartedServer> {
   await loadPersonalCompanyIndex(db as any);
 
   const pluginWorkerManager = createPluginWorkerManager();
+  // Made here rather than inside createApp so the graceful stop below can
+  // close its clients, which are child processes.
+  const externalMcpServerManager = createExternalMcpServerManager(db as any);
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -890,6 +895,7 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
     pluginWorkerManager,
+    externalMcpServerManager,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 
@@ -1210,26 +1216,41 @@ export async function startServer(): Promise<StartedServer> {
   });
   
   {
-    const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
-      if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+    // const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+    //   if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+    //     logger.info({ signal }, "Stopping embedded PostgreSQL");
+    //     try {
+    //       await stopEmbeddedPostgresCompletely({
+    //         dataDir: resolve(config.embeddedPostgresDataDir),
+    //         stop: () => embeddedPostgres!.stop(),
+    //         log: (message, detail) => logger.warn(detail ?? {}, message),
+    //       });
+    //     } catch (err) {
+    //       logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
+    //     }
+    //   }
+    //
+    //   process.exit(0);
+    // };
+    // The same stop now runs from graceful-shutdown.ts, after closing the
+    // external MCP clients, which are child processes.
+    const shutdown = createGracefulShutdown({
+      externalMcpServerManager,
+      stopEmbeddedPostgres: async (signal) => {
+        if (!(embeddedPostgres && embeddedPostgresStartedByThisProcess)) return;
         logger.info({ signal }, "Stopping embedded PostgreSQL");
-        try {
-          // Not just stop(): on Windows that is a force kill of the postmaster,
-          // and postgres's worker processes can outlive it. One survivor keeps
-          // the cluster's shared memory, and the next start - the second half
-          // of every restart - then fails. So the stop is followed through.
-          await stopEmbeddedPostgresCompletely({
-            dataDir: resolve(config.embeddedPostgresDataDir),
-            stop: () => embeddedPostgres!.stop(),
-            log: (message, detail) => logger.warn(detail ?? {}, message),
-          });
-        } catch (err) {
-          logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
-        }
-      }
-
-      process.exit(0);
-    };
+        // Not just stop(): on Windows that is a force kill of the postmaster,
+        // and postgres's worker processes can outlive it. One survivor keeps
+        // the cluster's shared memory, and the next start - the second half
+        // of every restart - then fails. So the stop is followed through.
+        await stopEmbeddedPostgresCompletely({
+          dataDir: resolve(config.embeddedPostgresDataDir),
+          stop: () => embeddedPostgres!.stop(),
+          log: (message, detail) => logger.warn(detail ?? {}, message),
+        });
+      },
+      exit: (code) => process.exit(code),
+    });
 
     process.once("SIGINT", () => {
       void shutdown("SIGINT");
