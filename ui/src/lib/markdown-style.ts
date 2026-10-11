@@ -1,7 +1,6 @@
 import type { ToMarkdownOptions } from "@mdxeditor/editor";
+import { splitFrontMatter } from "./front-matter";
 
-const FRONT_MATTER_OPEN = /^---[ \t]*$/;
-const FRONT_MATTER_CLOSE = /^(?:---|\.\.\.)[ \t]*$/;
 const BLOCKQUOTE_PREFIX = /^(?: {0,3}>[ \t]?)+/;
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const SETEXT_H1_UNDERLINE = /^ {0,3}=+[ \t]*$/;
@@ -23,10 +22,7 @@ const EMPHASIS_MARKERS = [
 
 /** The lines after a leading YAML front matter block, which is not markdown. */
 function bodyLines(markdown: string): string[] {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  if (!FRONT_MATTER_OPEN.test(lines[0] ?? "")) return lines;
-  const close = lines.findIndex((line, index) => index > 0 && FRONT_MATTER_CLOSE.test(line));
-  return close > 0 ? lines.slice(close + 1) : lines;
+  return splitFrontMatter(markdown).body.replace(/\r\n?/g, "\n").split("\n");
 }
 
 function firstMarker<T extends string>(

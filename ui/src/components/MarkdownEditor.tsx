@@ -34,6 +34,9 @@ import {
 import { buildAgentMentionHref, buildProjectMentionHref, buildUserMentionHref } from "@paperclipai/shared";
 import { Boxes, User } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
+import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
+import { frontMatterYamlText, joinFrontMatter, splitFrontMatter, withFrontMatterYaml } from "../lib/front-matter";
 import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChipHref } from "../lib/mention-chips";
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
 import { mentionDeletionPlugin } from "../lib/mention-deletion";
@@ -41,6 +44,7 @@ import { looksLikeMarkdownPaste } from "../lib/markdownPaste";
 import { markdownStyleOptions } from "../lib/markdown-style";
 import { normalizeMarkdown } from "../lib/normalize-markdown";
 import { pasteNormalizationPlugin } from "../lib/paste-normalization";
+import { brandWarningText } from "../lib/status-colors";
 import { cn } from "../lib/utils";
 import { useEditorAutocomplete, type SkillCommandOption } from "../context/EditorAutocompleteContext";
 
@@ -490,6 +494,65 @@ function applyMention(markdown: string, state: MentionState, option: Autocomplet
   return markdown.slice(0, idx) + replacement + markdown.slice(idx + search.length);
 }
 
+/** The front matter above the rich editor, shown as written, with a way to edit it as plain text. */
+function FrontMatterBox({
+  yaml,
+  readOnly,
+  bordered,
+  onChange,
+}: {
+  yaml: string;
+  readOnly: boolean;
+  bordered: boolean;
+  /** Takes the edited YAML. False when a line of it would end the front matter, so it was not taken. */
+  onChange: (yaml: string) => boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [refused, setRefused] = useState(false);
+
+  return (
+    <div
+      data-testid="front-matter"
+      className={cn("border-b border-border", bordered ? "px-2.5 py-1.5" : "mb-2 pb-2")}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">Frontmatter</span>
+        {!readOnly && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-label={editing ? "Done editing frontmatter" : "Edit frontmatter"}
+            onClick={() => {
+              setEditing((current) => !current);
+              setRefused(false);
+            }}
+          >
+            {editing ? "Done" : "Edit"}
+          </Button>
+        )}
+      </div>
+      {editing && !readOnly ? (
+        <>
+          <Textarea
+            value={yaml}
+            aria-label="Frontmatter"
+            spellCheck={false}
+            autoFocus
+            onChange={(event) => setRefused(!onChange(event.target.value))}
+            className="mt-1 font-mono text-xs md:text-xs"
+          />
+          <p role="status" className={cn("text-xs", brandWarningText, refused && "mt-1")}>
+            {refused ? "A line of only --- or ... ends the frontmatter, so it cannot go here." : ""}
+          </p>
+        </>
+      ) : (
+        <pre className="mt-1 whitespace-pre-wrap wrap-break-word font-mono text-xs">{yaml}</pre>
+      )}
+    </div>
+  );
+}
+
 /* ---- Component ---- */
 
 export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>(function MarkdownEditor({
@@ -507,7 +570,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   onSubmit,
   readOnly = false,
 }: MarkdownEditorProps, forwardedRef) {
-  const editorValue = useMemo(() => prepareMarkdownForEditor(value), [value]);
+  // A YAML front matter block at the top (agent instructions, skills) is not
+  // markdown, and the rich editor writes it back broken. It never reaches the
+  // editor: it is shown above it, and every change is written out with it
+  // exactly as it was.
+  const { frontMatter, body } = useMemo(() => splitFrontMatter(value), [value]);
+  const frontMatterRef = useRef(frontMatter);
+  frontMatterRef.current = frontMatter;
+  const editorValue = useMemo(() => prepareMarkdownForEditor(body), [body]);
   // Writes edits back with the markers this markdown already uses ("-" lists,
   // "_" emphasis and so on) rather than the editor's own.
   const toMarkdownOptions = useMemo(() => markdownStyleOptions(editorValue), [editorValue]);
@@ -533,6 +603,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   // Stable ref for imageUploadHandler so plugins don't recreate on every render
   const imageUploadHandlerRef = useRef(imageUploadHandler);
   imageUploadHandlerRef.current = imageUploadHandler;
+
+  /** The whole text for markdown the rich editor wrote: the front matter, then that markdown. */
+  const withFrontMatter = useCallback((markdown: string) => {
+    const current = frontMatterRef.current;
+    if (!current) return markdown;
+    // The editor writes "\n" line endings. A file with Windows ones keeps them.
+    const lineEnding = current.lineEnding;
+    return joinFrontMatter(current, lineEnding === "\n" ? markdown : markdown.replace(/\n/g, lineEnding));
+  }, []);
 
   // Mention state (ref kept in sync so callbacks always see the latest value)
   const [mentionState, setMentionState] = useState<MentionState | null>(null);
@@ -670,7 +749,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 latestValueRef.current = updated;
                 echoIgnoreMarkdownRef.current = updated;
                 ref.current?.setMarkdown(updated);
-                onChange(updated);
+                onChange(withFrontMatter(updated));
                 requestAnimationFrame(() => {
                   ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
                 });
@@ -705,7 +784,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       all.push(imagePlugin({ imageUploadHandler: imageHandler }));
     }
     return all;
-  }, [hasImageUpload]);
+  }, [hasImageUpload, withFrontMatter]);
 
   useEffect(() => {
     if (editorValue !== latestValueRef.current) {
@@ -863,7 +942,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         latestValueRef.current = next;
         echoIgnoreMarkdownRef.current = next;
         ref.current?.setMarkdown(next);
-        onChange(next);
+        onChange(withFrontMatter(next));
       }
 
       const restoreSelection = (attemptsRemaining: number) => {
@@ -891,7 +970,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       setMentionState(null);
       return true;
     },
-    [decorateProjectMentions, onChange],
+    [decorateProjectMentions, onChange, withFrontMatter],
   );
 
   const handleAutocompletePress = useCallback((
@@ -913,6 +992,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
 
   const canDropFile = fileDropTarget === "editor" && Boolean(imageUploadHandler || onDropFile);
   const handlePasteCapture = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
+    // A paste into the front matter's own text box stays there.
+    if (event.target instanceof HTMLTextAreaElement) return;
     const clipboard = event.clipboardData;
     if (!clipboard || !ref.current) return;
     const types = new Set(Array.from(clipboard.types));
@@ -1092,6 +1173,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       }}
       onPasteCapture={handlePasteCapture}
     >
+      {frontMatter && (
+        <FrontMatterBox
+          yaml={frontMatterYamlText(frontMatter)}
+          readOnly={readOnly}
+          bordered={bordered}
+          onChange={(yaml) => {
+            const next = withFrontMatterYaml(frontMatter, yaml);
+            if (!next) return false;
+            onChange(joinFrontMatter(next, body));
+            return true;
+          }}
+        />
+      )}
       <MDXEditor
         ref={setEditorRef}
         markdown={editorValue}
@@ -1125,7 +1219,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
           // opening it never counts as a change.
           if (initialMarkdownNormalize) return;
           latestValueRef.current = next;
-          onChange(next);
+          onChange(withFrontMatter(next));
         }}
         onBlur={() => onBlur?.()}
         onError={(payload) => {

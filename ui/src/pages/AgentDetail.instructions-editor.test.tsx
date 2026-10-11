@@ -83,6 +83,21 @@ const INSTRUCTIONS = [
   "Ask when unsure.",
 ].join("\n");
 
+// An instructions file that starts with YAML front matter, as AGENTS.md and
+// references/COMPANY.md often do.
+const COMPANY = [
+  "---",
+  "name: Acme Printing",
+  "description: Printing and graphic design",
+  "tags: [printing, design, mailing]",
+  "---",
+  "",
+  "## Identity",
+  "",
+  "- Prints things.",
+  "- Designs things.",
+].join("\n");
+
 /**
  * The Instructions tab with the real rich editor (the other PromptsTab tests
  * stand in for it), because the editor rewriting the file as it opened it is
@@ -117,7 +132,8 @@ describe("PromptsTab, opening instructions in the rich editor", () => {
     vi.clearAllMocks();
   });
 
-  async function render() {
+  /** Draws the tab and waits for the file to show, by a line of it. */
+  async function render(shownText = "Always run the tests.") {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
       // StrictMode as in main.tsx: the rewrite reached the tab there.
@@ -145,7 +161,7 @@ describe("PromptsTab, opening instructions in the rich editor", () => {
       );
     });
     await flushReact();
-    await vi.waitFor(() => expect(container.textContent).toContain("Always run the tests."));
+    await vi.waitFor(() => expect(container.textContent).toContain(shownText));
     await flushReact();
   }
 
@@ -193,5 +209,72 @@ describe("PromptsTab, opening instructions in the rich editor", () => {
         content: INSTRUCTIONS.replace("# Agent rules", "# Agent rules now"),
       }),
     );
+  });
+
+  describe("a file with front matter", () => {
+    beforeEach(() => {
+      mockAgentsApi.instructionsFile.mockResolvedValue({ path: "AGENTS.md", content: COMPANY, language: "markdown" });
+    });
+
+    function frontMatterBox() {
+      return container.querySelector<HTMLElement>('[data-testid="front-matter"]');
+    }
+
+    async function save() {
+      expect(saveAction, "Save is offered").not.toBeNull();
+      await act(async () => {
+        saveAction!();
+      });
+      await flushReact();
+    }
+
+    it("shows the front matter, and saves an edit with the front matter byte for byte", async () => {
+      await render("Prints things.");
+      expect(dirtyChanges).not.toContain(true);
+      expect(saveAction).toBeNull();
+
+      // Typing " now" after the first heading.
+      await act(async () => {
+        lexicalEditor().update(() => {
+          const heading = $getRoot().getAllTextNodes()[0];
+          if (!$isTextNode(heading)) throw new Error("no heading to type into");
+          heading.setTextContent(`${heading.getTextContent()} now`);
+        });
+      });
+      await flushReact();
+      await save();
+
+      // It used to save "***", then "tags: \[printing, design, mailing]" under
+      // a line of dashes that made the YAML a heading.
+      expect(mockAgentsApi.saveInstructionsFile.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ path: "AGENTS.md", content: COMPANY.replace("## Identity", "## Identity now") }),
+      );
+      expect(frontMatterBox()?.textContent).toContain("tags: [printing, design, mailing]");
+    });
+
+    it("saves the front matter edited as text, with the rest of the file as it was", async () => {
+      await render("Prints things.");
+
+      const edit = Array.from(frontMatterBox()?.querySelectorAll("button") ?? []).find((button) => button.textContent === "Edit");
+      expect(edit, "an Edit button for the front matter").toBeDefined();
+      await act(async () => {
+        edit!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      const yaml = frontMatterBox()!.querySelector("textarea")!;
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+        setter.call(yaml, "name: Acme Printing\ndescription: Printing, design and mailing\ntags: [printing, design, mailing]");
+        yaml.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await flushReact();
+      await save();
+
+      expect(mockAgentsApi.saveInstructionsFile.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          path: "AGENTS.md",
+          content: COMPANY.replace("description: Printing and graphic design", "description: Printing, design and mailing"),
+        }),
+      );
+    });
   });
 });
