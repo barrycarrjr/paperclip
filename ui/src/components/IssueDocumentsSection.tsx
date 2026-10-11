@@ -918,9 +918,11 @@ export function IssueDocumentsSection({
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    {/* Keeps its size, and the key gives way instead: cut
+                        short beside a long key, it read "u…" on a phone. */}
                     <a
                       href={`#document-${encodeURIComponent(doc.key)}`}
-                      className="truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                      className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
                     >
                       updated {relativeTime(displayedUpdatedAt)}
                     </a>

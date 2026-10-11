@@ -40,8 +40,15 @@ import { describe, expect, it } from "vitest";
  * buttons. A fixed class list may only name a bottom offset that knows about
  * the bars along the bottom; the rest take theirs from lib/narrow-layout.
  *
- * Last, a bar the page scrolls under (fixed or sticky) is solid: at 85 to 95
- * per cent the page showed through the phone's top bar as it scrolled.
+ * A bar the page scrolls under (fixed or sticky) is solid: at 85 to 95 per
+ * cent the page showed through the phone's top bar as it scrolled.
+ *
+ * Last, a bar that sticks to the top of the page sits right under the top bar.
+ * Inside the page area a bar at `top-0` stops at the area's padding: the issue
+ * page's header stuck 24 pixels under the top bar on a desktop, with the thread
+ * showing through the strip above it, and on a phone the company export bar
+ * slid under the top bar. Such a bar is placed with PAGE_STICKY_TOP_CLASS
+ * (lib/narrow-layout).
  */
 
 const srcDir = fileURLToPath(new URL(".", import.meta.url));
@@ -510,5 +517,93 @@ describe("a bar the page scrolls under", () => {
       'const h = <div className="sticky top-0 bg-background hover:bg-accent/50" />;',
     ].join("\n");
     expect(seeThroughBars("page.tsx", page)).toEqual([1, 2, 5, 6]);
+  });
+});
+
+/**
+ * The lines of a file with a class list for a bar that sticks (at any width)
+ * at `top-0`. Inside the page area such a bar stops at the area's padding.
+ */
+function stuckAtTopZero(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const lines: number[] = [];
+  const visit = (node: ts.Node) => {
+    const templatePart = ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node);
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || templatePart) {
+      const classes = node.text.trim().split(/\s+/);
+      const sticks = classes.some((name) => /^(?:[\w@[\]-]+:)*sticky$/.test(name));
+      const atTopEdge = classes.some((name) => /^(?:[\w@[\]-]+:)*top-0$/.test(name));
+      if (sticks && atTopEdge) lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
+/** Files with a bar that sticks at `top-0` where that is right, and why. */
+const STICKS_AT_THE_TOP_EDGE: Record<string, string> = {
+  "components/Layout.tsx": "the top bar itself, which sticks to the top of the window on a phone",
+  "components/ClippySessionRail.tsx": "day headings inside the chat list's own scrolling box, which has no padding",
+  "pages/InstanceLogs.tsx": "day headings inside the log's own scrolling box, which has no padding",
+};
+
+describe("a bar that sticks to the top of the page", () => {
+  const stuck = files.flatMap(({ file, relative }) =>
+    stuckAtTopZero(relative, readFileSync(file, "utf8")).map((line) => ({ relative, line })),
+  );
+
+  it("sits right under the top bar rather than at the page area's padding", () => {
+    // At top-0 the issue page's header stuck 24 pixels under the top bar on a
+    // desktop, and the thread showed through the strip above it. On a phone
+    // the company export bar slid under the top bar, and only its button
+    // showed below it.
+    const offending = stuck
+      .filter(({ relative }) => !(relative in STICKS_AT_THE_TOP_EDGE))
+      .map(({ relative, line }) => `${relative}:${line}`);
+    expect(offending, "place these with PAGE_STICKY_TOP_CLASS (lib/narrow-layout)").toEqual([]);
+  });
+
+  it("is placed with PAGE_STICKY_TOP_CLASS on each page that has one", () => {
+    // The issue page's header, the company export and import bars, and the
+    // agent form's Save bar. Fewer would mean one went back to its own offset.
+    const placed = files
+      .filter(({ file }) => /cn\([^)]*\bsticky\b[^)]*PAGE_STICKY_TOP_CLASS/.test(readFileSync(file, "utf8")))
+      .map(({ relative }) => relative);
+    expect(placed).toEqual(
+      expect.arrayContaining([
+        "components/AgentConfigForm.tsx",
+        "pages/CompanyExport.tsx",
+        "pages/CompanyImport.tsx",
+        "pages/IssueDetail.tsx",
+      ]),
+    );
+  });
+
+  it("lists no file as sticking at the top edge that has no such bar any more", () => {
+    const stale = Object.keys(STICKS_AT_THE_TOP_EDGE).filter(
+      (relative) => !stuck.some((entry) => entry.relative === relative),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it("is told apart however its classes are written", () => {
+    const page = [
+      'const a = <div className="sticky top-0 z-10 bg-background" />;',
+      'const b = <div className="md:sticky md:top-0 md:z-20 md:bg-background" />;',
+      "const c = <div className={`sticky top-0 ${tone}`} />;",
+      'const d = <div className={cn("sticky z-10 bg-background", PAGE_STICKY_TOP_CLASS)} />;',
+      'const e = <aside className="@4xl:sticky @4xl:top-4" />;',
+      'const f = <div className="sticky bottom-0 bg-background" />;',
+      'const g = <div className="fixed inset-x-0 top-0" />;',
+      'const h = <div className="@4xl:sticky @4xl:top-0" />;',
+    ].join("\n");
+    expect(stuckAtTopZero("page.tsx", page)).toEqual([1, 2, 3, 8]);
   });
 });

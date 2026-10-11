@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { TooltipProvider } from "./ui/tooltip";
+import { TOP_BAR_HEIGHT_CLASS } from "../lib/narrow-layout";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -428,5 +429,18 @@ describe("BreadcrumbBar", () => {
   it("lets the scope take the full touch height when it shares a line with the page name", () => {
     render();
     expect(scopeButton().hasAttribute("data-touch-target")).toBe(false);
+  });
+
+  // A bar a page sticks to the top sits just under the top bar on a phone
+  // (PAGE_STICKY_TOP_CLASS in lib/narrow-layout), so the top bar keeps the
+  // height that place is worked out from.
+  it("is as tall as a bar sticking just under it expects, on a phone and on a wide screen", () => {
+    for (const phone of [true, false]) {
+      onAPhone = phone;
+      render();
+      const bar = container.querySelector('[data-testid="top-bar"]');
+      expect(bar, phone ? "on a phone" : "on a wide screen").not.toBeNull();
+      expect(bar!.classList.contains(TOP_BAR_HEIGHT_CLASS)).toBe(true);
+    }
   });
 });

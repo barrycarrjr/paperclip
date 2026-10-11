@@ -39,6 +39,7 @@ const RUNTIME_VARIABLES: Record<string, string> = {
   "--radix-select-content-transform-origin": "Radix Select content",
   "--radix-select-trigger-height": "Radix Select content",
   "--radix-select-trigger-width": "Radix Select content",
+  "--radix-tooltip-content-available-width": "Radix Tooltip content",
   "--radix-tooltip-content-transform-origin": "Radix Tooltip content",
   // The icon an agent mention chip shows, read by index.css.
   "--paperclip-mention-icon-mask": "lib/mention-chips.ts, on each agent mention chip",

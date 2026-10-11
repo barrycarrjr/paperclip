@@ -59,7 +59,7 @@ import { PluginSlotOutlet } from "@/plugins/slots";
 import { buildReviewSenderGroups, clearStoredReviewEntry } from "../lib/email-triage-rules";
 import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "../components/HoverPreview";
 import type { Agent, ActivityEvent, Issue } from "@paperclipai/shared";
 
 const OVERNIGHT_HOURS = 14;
@@ -960,8 +960,8 @@ function ReviewQueueRow({
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
         <div className="flex-1 min-w-0">
-          <Tooltip>
-            <TooltipTrigger asChild>
+          <HoverPreview>
+            <HoverPreviewTrigger>
               <Link
                 to={messageHref}
                 title={preview ? "Open this email" : "Open this mailbox (no recent message found in INBOX)"}
@@ -984,12 +984,8 @@ function ReviewQueueRow({
                   )}
                 </div>
               </Link>
-            </TooltipTrigger>
-            <TooltipContent
-              side="bottom"
-              align="start"
-              className="max-w-lg p-3 text-left whitespace-normal"
-            >
+            </HoverPreviewTrigger>
+            <HoverPreviewContent className="p-3 text-left whitespace-normal">
               {preview ? (
                 <div className="space-y-1.5">
                   <div className="text-[13px] font-medium leading-snug break-words">
@@ -1024,8 +1020,8 @@ function ReviewQueueRow({
                   </div>
                 </div>
               )}
-            </TooltipContent>
-          </Tooltip>
+            </HoverPreviewContent>
+          </HoverPreview>
         </div>
         <div className={OWN_LINE_ACTIONS_CLASS}>
           <button

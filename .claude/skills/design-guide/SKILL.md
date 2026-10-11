@@ -206,6 +206,8 @@ Label is always `text-xs text-muted-foreground`, value on the right. Wrap in a c
 
 A pill is a `rounded-full` box with padding either side of a count or a short label: "0 agents", "Paused", a status. It keeps its text on one line wherever it sits. `Badge` already does; for a pill written by hand, `ui/src/index.css` sets it for every `rounded-full` box with `px-` padding, so a row squeezed on a phone cannot break "0 agents" into "0" over "agents". A chip that holds a sentence, or text that can be wider than a phone, says `whitespace-normal`. `ui/src/pills.test.ts` keeps the rule and the pills it reaches in step.
 
+A pill that holds text a person wrote (a label's name, a document key) shows it through `PillText` in a pill with `PILL_HOLDING_TEXT_CLASS` (`ui/src/components/PillText.tsx`): cut short with "…", the whole of it on hover, and it gives way in its row. Only the pill gives way: a time, a count or a revision beside it keeps its size (`shrink-0`, not `truncate`). Cut short as well, a document's "updated" time read "u…" beside a long key on a phone.
+
 ### Metric Card Grid
 
 Dashboard metrics in a responsive grid:
@@ -277,6 +279,10 @@ A note that changes what the person's next action does, or where it lands, uses 
 
 StatusIcon and PriorityIcon use Radix Popover for inline selection. Follow this pattern for any clickable property that opens a picker.
 
+### Hover Previews
+
+A card of detail under a list row while the pointer rests on it (an issue's description, the opening lines of an email) is a `HoverPreview` (`ui/src/components/HoverPreview.tsx`), written the way a Tooltip is. It only opens where the pointer can hover, so never on a phone, where a tap on the row opens the whole thing; and it is never wider than the room on screen. Written as a plain Tooltip, the portfolio issues preview opened on a phone whenever the row took focus, and ran 115 pixels past the right edge of the screen. A tooltip wider than 20rem goes through it.
+
 ---
 
 ## 9. Layout System
@@ -305,6 +311,10 @@ The page area (`main`) is a size container (`PAGE_AREA_CONTAINER_CLASS`, `ui/src
 - A query answers to the nearest container: inside a component that is one itself (`@container/card-header`, the agent run panels) it measures that component instead. Make a card a container when its own grid has to follow the card, as the Costs finance ledger does beside the inference ledger.
 - Separate the columns of an arbitrary grid value with underscores, never commas: `@4xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]`. Written `grid-cols-[1.3fr,1fr]`, the value is one browsers drop, so the columns stack at every width and nothing says so. A comma outside brackets only belongs in values that are lists, such as `transition-[...]` or `shadow-[...]`, and each layer of a `bg-[...]` list is an image: a colour goes in a `bg-` class of its own. `ui/src/arbitrary-values.test.ts` fails on any other.
 
+### Bars That Stick to the Top
+
+A bar that sticks to the top of a page (the issue page's header, the company export bar) is placed with `PAGE_STICKY_TOP_CLASS` (`ui/src/lib/narrow-layout.ts`), never `top-0`, so it sits right under the top bar. Inside the page area a bar at `top-0` stops at the area's padding: the issue header stuck 24 pixels under the top bar on a desktop, with the thread showing through the strip above it, and on a phone the export bar slid under the top bar. Only a heading that sticks inside a list's own scrolling box stays at `top-0`. `ui/src/fixed-elements.test.ts` fails on any other.
+
 ### Bottom Bars and Floating Buttons
 
 The bottom of the window is shared: the Clippy launcher and the page's scroll buttons sit in the right corner, the toasts at the left of the page, and a page may pin a bar there too.
@@ -314,6 +324,7 @@ The bottom of the window is shared: the Clippy launcher and the page's scroll bu
 - Place that bar with `PAGE_BOTTOM_BAR_FLUSH_CLASS` (full width along the edge) or `PAGE_BOTTOM_BAR_FLOATING_CLASS` (1.5rem above it), never `bottom-0` or `bottom-6`. On a phone they rest on top of the bottom navigation, which Layout publishes as `--mobile-bottom-nav-room`, and follow it down when it slides away. At `bottom-0` the agent Save bar sat under the navigation and Save could not be pressed; at `bottom-6` the selection bars covered its middle buttons. `ui/src/fixed-elements.test.ts` fails on a registered bar placed any other way. The navigation registers as a bottom bar itself, so a bar resting on it still lifts the launcher.
 - Nothing else that floats may cover the phone's bottom navigation either: the toasts sit above it (`TOAST_VIEWPORT_PHONE_CLASS`) and stop short of the launcher's corner, and a page's notice in the bottom right corner takes the launcher's own offset (`ABOVE_MOBILE_BOTTOM_NAV_CLASS`) rather than `bottom-4`.
 - The row that ends a page needs nothing: the page area keeps room under a page that scrolls (`PAGE_END_ROOM_CLASS`), so its last row ends above the launcher.
+- Something that stays in the bottom right corner as the page scrolls on a phone, such as the issue reply box, keeps everything in it clear of the launcher and the scroll buttons, its text as well as its buttons: `CLEAR_OF_PHONE_LAUNCHER_CLASS` on the element around its contents, measured with `useRightInsetRef`. Only its own edge passes under them. Covering just the buttons left the launcher and scroll-to-top over the end of the lines being typed.
 - Anything a page fixes to the right adds docked Clippy's width, `var(--clippy-dock-width,0px)` (`PAGE_CORNER_RIGHT_CLASS` at the corner offset), or the docked panel covers it.
 - Floating layers stay off the app's own columns: toasts start beside the navigation, not over its account button, and the launcher moves beside the properties panel. The launcher never covers the scroll buttons, which stack above it.
 
@@ -395,3 +406,6 @@ All components use `cn()` from `@/lib/utils` for className merging. All componen
 - A page's bar at `bottom-0` or `bottom-6`, or a toast or notice at `bottom-3` or `bottom-4`: on a phone it lands on the bottom navigation, under it or over it (see Bottom Bars and Floating Buttons)
 - A comma between the columns of an arbitrary grid value, `grid-cols-[1fr,2fr]`: browsers drop the whole value and the columns stack (see Page Layouts Follow the Page Area)
 - `whitespace-normal` on a pill that holds a count or a short label: it breaks onto two lines when its row is squeezed (see Pills)
+- `truncate` on a time or a count beside a pill holding a name or a key: both give way, and the time reads "u…" (see Pills)
+- A bar that sticks to the top of a page at `top-0`: it stops 24 pixels under the top bar on a desktop, or slides under it on a phone (see Bars That Stick to the Top)
+- A row's preview card written as a plain Tooltip with `max-w-md` or wider: it runs off a phone and opens there on focus. Use `HoverPreview` (see Hover Previews)

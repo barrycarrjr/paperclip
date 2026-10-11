@@ -58,6 +58,7 @@ import { useEmailToolsPlugin } from "../hooks/useEmailToolsPlugin";
 import { makeEmailToolsApi, type MailHeader } from "../api/emailTools";
 import { pluginsApi } from "../api/plugins";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "../components/HoverPreview";
 import { useCompanyOrder } from "../hooks/useCompanyOrder";
 import { SortableSections, type SortableSection } from "../components/SortableSections";
 
@@ -1328,8 +1329,8 @@ function ReviewQueueRow({
           <Mail className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
         <div className="flex-1 min-w-0">
-          <Tooltip>
-            <TooltipTrigger asChild>
+          <HoverPreview>
+            <HoverPreviewTrigger>
               <Link
                 to={messageHref}
                 onClick={handleLinkClick}
@@ -1353,12 +1354,8 @@ function ReviewQueueRow({
                   )}
                 </div>
               </Link>
-            </TooltipTrigger>
-            <TooltipContent
-              side="bottom"
-              align="start"
-              className="max-w-lg p-3 text-left whitespace-normal"
-            >
+            </HoverPreviewTrigger>
+            <HoverPreviewContent className="p-3 text-left whitespace-normal">
               {preview ? (
                 <div className="space-y-1.5">
                   <div className="text-[13px] font-medium leading-snug break-words">
@@ -1392,8 +1389,8 @@ function ReviewQueueRow({
                   </div>
                 </div>
               )}
-            </TooltipContent>
-          </Tooltip>
+            </HoverPreviewContent>
+          </HoverPreview>
         </div>
         <div className={OWN_LINE_ACTIONS_CLASS}>
           {ruleButtonGate(
@@ -1525,9 +1522,9 @@ function OutcomeRow({ event, company }: OutcomeRowProps) {
   );
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-      <TooltipContent side="bottom" align="start" className="max-w-md p-3 text-left whitespace-normal">
+    <HoverPreview>
+      <HoverPreviewTrigger>{trigger}</HoverPreviewTrigger>
+      <HoverPreviewContent width="md" className="p-3 text-left whitespace-normal">
         <div className="space-y-1.5">
           <div className="text-[13px] font-medium leading-snug break-words">
             {outcome.verb}
@@ -1544,8 +1541,8 @@ function OutcomeRow({ event, company }: OutcomeRowProps) {
             </div>
           )}
         </div>
-      </TooltipContent>
-    </Tooltip>
+      </HoverPreviewContent>
+    </HoverPreview>
   );
 }
 

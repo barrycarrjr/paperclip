@@ -12,6 +12,7 @@ import {
   OWN_LINE_ACTIONS_CLASS,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
+  PAGE_AREA_PADDING_CLASS,
   PAGE_BOTTOM_BAR_CENTER_CLASS,
   PAGE_BOTTOM_BAR_FLOATING_CLASS,
   PAGE_BOTTOM_BAR_FLUSH_CLASS,
@@ -20,7 +21,9 @@ import {
   PAGE_END_ROOM_CLASS,
   PAGE_END_ROOM_EXTRA_PX,
   PAGE_SCROLL_BOX_END_ROOM_CLASS,
+  PAGE_SCROLL_BUTTON_RIGHT_CLASS,
   PAGE_SCROLL_BUTTON_SIZE_CLASS,
+  PAGE_STICKY_TOP_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
   PHONE_PAGE_END_ROOM_CLASS,
   RIGHT_INSET_PROPERTY,
@@ -30,6 +33,7 @@ import {
   TOAST_STACK_MAX_HEIGHT_CLASS,
   TOAST_VIEWPORT_DESKTOP_CLASS,
   TOAST_VIEWPORT_PHONE_CLASS,
+  TOP_BAR_HEIGHT_CLASS,
   WRAPPING_ROW_CLASS,
   pageBottomBarFlushPadding,
   pageNeedsEndRoom,
@@ -354,6 +358,16 @@ describe("a row of buttons the round launcher floats beside on a phone", () => {
     expect(room(120)).toBe(0);
   });
 
+  it("keeps clear of the scroll buttons too, which stand over the launcher within its reach", () => {
+    // With the issue thread a little above its end, scroll-to-top sat over the
+    // end of the lines in the reply box. The box keeps this room, so the
+    // buttons may not stand further in from the edge than the launcher does.
+    const scrollButtonReach =
+      spacingClassPixels(partFor(PAGE_SCROLL_BUTTON_RIGHT_CLASS, "", "right")) +
+      spacingClassPixels(PAGE_SCROLL_BUTTON_SIZE_CLASS);
+    expect(scrollButtonReach).toBeLessThanOrEqual(launcherReach);
+  });
+
   it("is room at the right of the row, on a phone only", () => {
     expect(CLEAR_OF_PHONE_LAUNCHER_CLASS.startsWith("max-md:pr-[")).toBe(true);
     expect(CLEAR_OF_PHONE_LAUNCHER_CLASS).not.toContain(" ");
@@ -491,6 +505,29 @@ describe("the page area as a size container", () => {
   // left four stat cards in four columns of about 150 pixels.
   it("is a container pages can query with @md:, @2xl: and the rest", () => {
     expect(PAGE_AREA_CONTAINER_CLASS).toBe("@container");
+  });
+});
+
+describe("a bar that sticks to the top of the page", () => {
+  // A bar that sticks inside the page area stops at the area's padding. At
+  // top-0 the issue page's header stuck 24 pixels under the top bar on a
+  // desktop, and the thread showed through the strip above it.
+  it("takes back the page area's padding from md up, where the page area is what scrolls", () => {
+    const top = partFor(PAGE_STICKY_TOP_CLASS, "md", "-top");
+    expect(spacingClassPixels(top)).toBe(spacingClassPixels(partFor(PAGE_AREA_PADDING_CLASS, "md", "p")));
+    expect(spacingClassPixels(top)).toBe(24);
+  });
+
+  it("sits just under the top bar on a phone, where the top bar sticks to the top of the window", () => {
+    // At top-0 the company export bar slid under the top bar, and only its
+    // button showed below it.
+    expect(spacingClassPixels(partFor(PAGE_STICKY_TOP_CLASS, "", "top"))).toBe(spacingClassPixels(TOP_BAR_HEIGHT_CLASS));
+  });
+
+  it("leaves whether a bar sticks, and from which width, to the page", () => {
+    // The issue page's header only sticks from md up (md:sticky); on a phone
+    // the offset does nothing to it.
+    for (const part of PAGE_STICKY_TOP_CLASS.split(" ")) expect(part).not.toMatch(/sticky/);
   });
 });
 

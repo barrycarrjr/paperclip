@@ -13,6 +13,7 @@ import {
   MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
+  PAGE_AREA_PADDING_CLASS,
   PAGE_END_ROOM_CLASS,
   PHONE_PAGE_END_ROOM_CLASS,
 } from "../lib/narrow-layout";
@@ -809,6 +810,24 @@ describe("Layout", () => {
       const pageArea = container.querySelector("#main-content");
       expect(pageArea).not.toBeNull();
       expect(pageArea!.classList.contains(PAGE_AREA_CONTAINER_CLASS)).toBe(true);
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("pads the page area by the padding a bar that sticks to the top of a page takes back", async () => {
+    // At top-0 the issue page's header stuck the page area's 24 pixels of
+    // padding under the top bar. PAGE_STICKY_TOP_CLASS takes back
+    // PAGE_AREA_PADDING_CLASS, so the page area has to be padded by exactly it.
+    for (const isMobile of [false, true]) {
+      sidebarState.isMobile = isMobile;
+      const { root } = await renderLayout();
+      const pageArea = container.querySelector("#main-content");
+      expect(pageArea).not.toBeNull();
+      for (const part of PAGE_AREA_PADDING_CLASS.split(" ")) {
+        expect(pageArea!.classList.contains(part), `${part} ${isMobile ? "on a phone" : "on a desktop"}`).toBe(true);
+      }
       await act(async () => {
         root.unmount();
       });

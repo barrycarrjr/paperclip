@@ -22,6 +22,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { cn } from "../lib/utils";
+import { PAGE_STICKY_TOP_CLASS } from "../lib/narrow-layout";
 import { queryKeys } from "../lib/queryKeys";
 import { createZipArchive } from "../lib/zip";
 import { buildInitialExportCheckedFiles } from "../lib/company-export-selection";
@@ -937,8 +938,8 @@ export function CompanyExport() {
 
   return (
     <div>
-      {/* Sticky top action bar */}
-      <div className="sticky top-0 z-10 border-b border-border bg-background px-5 py-3">
+      {/* Sticky top action bar, right under the top bar (PAGE_STICKY_TOP_CLASS) */}
+      <div className={cn("sticky z-10 border-b border-border bg-background px-5 py-3", PAGE_STICKY_TOP_CLASS)}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-4 text-sm">
             <span className="font-medium">

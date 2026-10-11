@@ -62,6 +62,7 @@ import {
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import { PAGE_STICKY_TOP_CLASS } from "../lib/narrow-layout";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
@@ -2792,8 +2793,10 @@ export function IssueDetail() {
       )}
 
       {/* Solid, like every bar the page scrolls under: see-through, the
-          thread showed through the header as it scrolled. */}
-      <div className="md:sticky md:top-0 md:z-20 md:-mt-3 md:py-3 md:bg-background md:border-b md:border-border/40">
+          thread showed through the header as it scrolled. And right under the
+          top bar (PAGE_STICKY_TOP_CLASS): at top-0 it stuck 24 pixels lower,
+          and the thread showed through the strip above it. */}
+      <div className={cn("md:sticky md:z-20 md:-mt-3 md:py-3 md:bg-background md:border-b md:border-border/40", PAGE_STICKY_TOP_CLASS)}>
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <StatusIcon
             status={issue.status}

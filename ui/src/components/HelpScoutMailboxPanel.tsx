@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { Company } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "./HoverPreview";
 import { Button } from "@/components/ui/button";
 import {
   makeHelpScoutBridgeApi,
@@ -462,8 +463,8 @@ function ConversationRow({
           )}
         />
       </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <HoverPreview>
+        <HoverPreviewTrigger>
           <div className="flex-1 min-w-0 overflow-hidden">
             <div className="flex items-baseline justify-between gap-2 min-w-0">
               <span
@@ -482,16 +483,16 @@ function ConversationRow({
               {ellipsize(conv.subject ?? "(no subject)", MAX_SUBJECT_CHARS)}
             </div>
           </div>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="start" className="max-w-md">
+        </HoverPreviewTrigger>
+        <HoverPreviewContent width="md">
           <div className="text-xs font-semibold">{conv.subject ?? "(no subject)"}</div>
           {conv.preview && (
             <div className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-words">
               {conv.preview}
             </div>
           )}
-        </TooltipContent>
-      </Tooltip>
+        </HoverPreviewContent>
+      </HoverPreview>
       <RowHoverToolbar>
         <Tooltip>
           <TooltipTrigger asChild>

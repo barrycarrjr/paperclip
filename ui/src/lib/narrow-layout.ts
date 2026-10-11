@@ -18,6 +18,13 @@
 export const MOBILE_BOTTOM_NAV_HEIGHT_CLASS = "h-16";
 
 /**
+ * Height of the top bar (BreadcrumbBar), on a phone and on a desktop. On a
+ * phone it sticks to the top of the window, and a bar a page sticks to the top
+ * sits just under it (PAGE_STICKY_TOP_CLASS).
+ */
+export const TOP_BAR_HEIGHT_CLASS = "h-12";
+
+/**
  * How far up from the bottom of the window the phone bottom bar reaches while
  * it shows: its own height (MOBILE_BOTTOM_NAV_HEIGHT_CLASS) and the safe area
  * under it. Layout publishes it as MOBILE_BOTTOM_NAV_ROOM_PROPERTY on a phone,
@@ -109,17 +116,20 @@ export const CLIPPY_LAUNCHER_RIGHT_CLASS = "right-4";
 export const RIGHT_INSET_PROPERTY = "--right-inset";
 
 /**
- * Room at the right end of a row of buttons that scrolls through the bottom
- * right corner on a phone, where the round Clippy launcher floats over the
- * page: the issue page's reply box, whose Send button the launcher covered
- * whenever the bottom bar showed. The launcher reaches 4rem in from the right
- * edge of the window ({@link CLIPPY_LAUNCHER_RIGHT_CLASS} and its 3rem
- * width), and the row's last button ends half a rem clear of it. However far
- * the row already ends from that edge counts towards it, measured and written
- * on the row as {@link RIGHT_INSET_PROPERTY} (hooks/useRightInset); until it
- * is measured the row keeps the whole 4.5rem. Only below `md`: from there up
- * the launcher is the pill. The scroll buttons above the launcher sit inside
- * the same 4rem, so the row clears them too.
+ * Room at the right end of something that scrolls through the bottom right
+ * corner on a phone, where the round Clippy launcher floats over the page: the
+ * issue page's reply box, whose Send button the launcher covered whenever the
+ * bottom bar showed, and whose lines being typed the launcher and
+ * scroll-to-top covered with the thread a little above its end. So the whole
+ * of the box's contents keeps the room, its text as well as its buttons. The
+ * launcher reaches 4rem in from the right edge of the window
+ * ({@link CLIPPY_LAUNCHER_RIGHT_CLASS} and its 3rem width), and the contents
+ * end half a rem clear of it. However far the element already ends from that
+ * edge counts towards it, measured and written on the element as
+ * {@link RIGHT_INSET_PROPERTY} (hooks/useRightInset); until it is measured
+ * the element keeps the whole 4.5rem. Only below `md`: from there up the
+ * launcher is the pill. The scroll buttons above the launcher sit inside the
+ * same 4rem, so the room clears them too.
  */
 export const CLEAR_OF_PHONE_LAUNCHER_CLASS = "max-md:pr-[max(0px,calc(4.5rem_-_var(--right-inset,0px)))]";
 
@@ -294,6 +304,31 @@ export const PAGE_AREA_CLIPS_SIDEWAYS_CLASS = "overflow-x-clip overflow-y-visibl
  * draws them in a layer beside the page area, whatever the browser.
  */
 export const PAGE_AREA_CONTAINER_CLASS = "@container";
+
+/**
+ * The page area's own padding (Layout), here so that a bar that sticks to the
+ * top of the page can take it back (PAGE_STICKY_TOP_CLASS).
+ */
+export const PAGE_AREA_PADDING_CLASS = "p-4 md:p-6";
+
+/**
+ * Where a bar that sticks to the top of the page sits once the page scrolls
+ * under it: right under the top bar, with nothing showing above it.
+ *
+ * A bar that sticks inside the page area stops at the area's padding, as a
+ * bar that sticks to the bottom does (PAGE_END_ROOM_CLASS). At `top-0` the
+ * issue page's header stuck 24 pixels below the top bar on a desktop, and the
+ * thread showed through the strip above it as it scrolled. From `md` up the
+ * page area is what scrolls, so the bar takes back the area's 1.5rem of
+ * padding (PAGE_AREA_PADDING_CLASS). On a phone the document scrolls and the
+ * top bar sticks to the top of the window (Layout), so the bar sticks just
+ * under the top bar (TOP_BAR_HEIGHT_CLASS): at `top-0` the company export bar
+ * slid under the top bar, and only its button showed below it.
+ *
+ * A heading that sticks inside a list's own scrolling box has no padding to
+ * take back, and stays at `top-0`.
+ */
+export const PAGE_STICKY_TOP_CLASS = "top-12 md:-top-6";
 
 /**
  * Room at the end of a page that scrolls, so its last row ends above the
