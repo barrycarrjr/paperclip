@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildSkillMentionHref, isUuidLike } from "@paperclipai/shared";
+import { notFound } from "../errors.js";
 
 // An adapter that declares its own account variable, one no tool list names,
 // so a test can tell that the declared variable is protected on its own.
@@ -172,9 +173,78 @@ describe("resolveExecutionRunAdapterConfig", () => {
 
   it("drops the account variable the agent's adapter declares, and only for that adapter", () => {
     const env = { DECLARED_SIGN_IN_TOKEN: "stage-token", REGION: "eu-west-1" };
-    expect(withoutProtectedRoutineEnv(env, "declaring_local")).toEqual({ REGION: "eu-west-1" });
-    expect(withoutProtectedRoutineEnv(env, "codex_local")).toEqual(env);
-    expect(withoutProtectedRoutineEnv({ PAPERCLIP_AGENT_ID: "x" }, "codex_local")).toBeNull();
+    expect(withoutProtectedRoutineEnv(env, { adapterType: "declaring_local" })).toEqual({ REGION: "eu-west-1" });
+    expect(withoutProtectedRoutineEnv(env, { adapterType: "codex_local" })).toEqual(env);
+    expect(withoutProtectedRoutineEnv({ PAPERCLIP_AGENT_ID: "x" }, { adapterType: "codex_local" })).toBeNull();
+  });
+
+  it("drops a stage's cloud sign-in names when the agent's own env runs on Bedrock", async () => {
+    const stageEnv = { AWS_ACCESS_KEY_ID: "stage-key", REGION: "eu-west-1" };
+    const run = (agentEnv: Record<string, string>) =>
+      resolveExecutionRunAdapterConfig({
+        companyId: "company-1",
+        executionRunConfig: {},
+        projectEnv: null,
+        routineEnv: stageEnv,
+        secretsSvc: {
+          resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({ config: { env: agentEnv }, secretKeys: new Set() }),
+          resolveEnvBindings: fakeEnvResolver(),
+        } as any,
+      });
+
+    expect((await run({ CLAUDE_CODE_USE_BEDROCK: "1" })).resolvedConfig.env).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      REGION: "eu-west-1",
+    });
+    expect((await run({ CLAUDE_CODE_USE_BEDROCK: "0" })).resolvedConfig.env).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "0",
+      ...stageEnv,
+    });
+  });
+
+  it("names the variable and the stage when a secret the stage gives is gone", async () => {
+    const resolveEnvBindings = vi.fn(async (_companyId: string, envValue: Record<string, unknown>) => {
+      if ("DEPLOY_TOKEN" in envValue) throw notFound("Secret not found");
+      return { env: { REGION: "eu-west-1" }, secretKeys: new Set<string>() };
+    });
+    const describeRoutineEnvSource = vi.fn(async () => 'stage "Deploy" in pipeline "Releases"');
+
+    await expect(resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      executionRunConfig: {},
+      projectEnv: null,
+      routineEnv: {
+        REGION: "eu-west-1",
+        DEPLOY_TOKEN: { type: "secret_ref", secretId: "secret-1", version: "latest" },
+      },
+      describeRoutineEnvSource,
+      secretsSvc: {
+        resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({ config: {}, secretKeys: new Set() }),
+        resolveEnvBindings,
+      } as any,
+    })).rejects.toThrow(
+      'This run could not start: the secret behind DEPLOY_TOKEN, set by stage "Deploy" in pipeline "Releases", ' +
+        "no longer exists. Tasks already started keep the stage's settings from when they started.",
+    );
+  });
+
+  it("keeps a stage's env out of the env it hands on for runtime services", async () => {
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      executionRunConfig: {},
+      projectEnv: null,
+      routineEnv: { SHARED_KEY: "stage", DEPLOY_TOKEN: { type: "secret_ref", secretId: "secret-1", version: "latest" } },
+      secretsSvc: {
+        resolveAdapterConfigForRuntime: vi.fn().mockResolvedValue({
+          config: { env: { SHARED_KEY: "agent", AGENT_ONLY: "agent-only" } },
+          secretKeys: new Set(),
+        }),
+        resolveEnvBindings: fakeEnvResolver(),
+      } as any,
+    });
+
+    expect(result.resolvedConfig.env).toMatchObject({ SHARED_KEY: "stage", DEPLOY_TOKEN: "resolved:DEPLOY_TOKEN" });
+    expect(result.envWithoutRoutineEnv).toEqual({ SHARED_KEY: "agent", AGENT_ONLY: "agent-only" });
   });
 });
 

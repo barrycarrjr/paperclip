@@ -9,7 +9,9 @@ import {
   heartbeatRuns,
   issueComments,
   issues,
+  routineRevisions,
   routineRuns,
+  routines,
 } from "@paperclipai/db";
 import type { EnvBinding } from "@paperclipai/shared";
 import {
@@ -70,8 +72,25 @@ vi.mock("../adapters/index.ts", async () => {
   };
 });
 
+/** The env each run hands to its runtime services (dev servers and the like), by run. */
+const runtimeServiceEnvs = vi.hoisted(() => new Map<string, Record<string, string>>());
+
+vi.mock("../services/workspace-runtime.ts", async () => {
+  const actual = await vi.importActual<typeof import("../services/workspace-runtime.ts")>(
+    "../services/workspace-runtime.ts",
+  );
+  return {
+    ...actual,
+    ensureRuntimeServicesForRun: async (input: Parameters<typeof actual.ensureRuntimeServicesForRun>[0]) => {
+      runtimeServiceEnvs.set(input.runId, { ...input.adapterEnv });
+      return actual.ensureRuntimeServicesForRun(input);
+    },
+  };
+});
+
 import { heartbeatService } from "../services/heartbeat.js";
 import { pipelineService, type PipelineActor } from "../services/pipelines.js";
+import { routineService } from "../services/routines.js";
 import { secretService } from "../services/secrets.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -85,9 +104,10 @@ if (!embeddedPostgresSupport.supported) {
 
 /**
  * A pipeline stage's saved env (Pipeline Settings, "Stage secrets") reaches the
- * agent when the stage's automation runs, as upstream passes a routine's env:
- * on the task the automation created, fixed when it ran, never over the
- * agent's own sign-in or a PAPERCLIP_ name, and with its secrets masked.
+ * stage's own agent when the stage's automation runs, as upstream passes a
+ * routine's env: on the task the automation created, fixed when it ran, never
+ * over the agent's own sign-in or a PAPERCLIP_ name, and with its secrets
+ * masked. Nobody else who comes to run on that task gets any of it.
  */
 describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () => {
   let db!: ReturnType<typeof createDb>;
@@ -121,6 +141,7 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
 
   beforeEach(() => {
     adapterExecute.mockClear();
+    runtimeServiceEnvs.clear();
   });
 
   afterAll(async () => {
@@ -198,6 +219,23 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     });
   }
 
+  /**
+   * Writes an env straight into the stage's routine and the revision its next
+   * run is pinned to, as one saved before the save refused names would be.
+   */
+  async function plantStageEnv(routineId: string, env: Record<string, EnvBinding>) {
+    const [routine] = await db.select().from(routines).where(eq(routines.id, routineId));
+    const [revision] = await db
+      .select()
+      .from(routineRevisions)
+      .where(eq(routineRevisions.id, routine!.latestRevisionId!));
+    await db.update(routines).set({ env }).where(eq(routines.id, routineId));
+    await db
+      .update(routineRevisions)
+      .set({ snapshot: { ...revision!.snapshot, routine: { ...revision!.snapshot.routine, env } } })
+      .where(eq(routineRevisions.id, revision!.id));
+  }
+
   /** Moves a new case into the stage, which runs its automation, and returns the task the automation created. */
   async function enterStage(stage: Stage, caseKey: string) {
     const created = await pipelines.ingestCase({
@@ -222,26 +260,33 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     return issueId!;
   }
 
-  /** What the adapter was handed for a run, once the run and the agent's after-run bookkeeping are done. */
-  async function finishedRun(runId: string) {
+  /** A run's stored record, once it has ended in `status` and its agent's after-run bookkeeping is done. */
+  async function settledRun(runId: string, status: "succeeded" | "failed") {
     await vi.waitFor(
       async () => {
         const [row] = await db
           .select({ status: heartbeatRuns.status, agentId: heartbeatRuns.agentId })
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.id, runId));
-        expect(row?.status).toBe("succeeded");
+        expect(row?.status).toBe(status);
         const [agent] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, row!.agentId));
-        expect(agent?.status).toBe("idle");
+        expect(agent?.status).not.toBe("running");
       },
       { timeout: 20_000, interval: 100 },
     );
+    const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    return row!;
+  }
+
+  /** What the adapter was handed for a run, once the run has succeeded and settled. */
+  async function finishedRun(runId: string) {
+    await settledRun(runId, "succeeded");
     const input = adapterExecute.mock.calls.map(([call]) => call).find((call) => call.runId === runId);
     expect(input).toBeDefined();
     return input!;
   }
 
-  /** The run the stage's automation started on its task. */
+  /** The run the routine started on the task it created. */
   async function automationRun(issueId: string) {
     await vi.waitFor(
       () => expect(adapterExecute.mock.calls.some(([call]) => call.context.issueId === issueId)).toBe(true),
@@ -259,33 +304,59 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
       contextSnapshot: issueId ? { issueId } : {},
     });
     expect(run).not.toBeNull();
-    return finishedRun(run!.id);
+    return run!.id;
   }
 
-  /** Wakes an agent on someone else's task the way mentioning it in a comment there does. */
-  async function mentionOn(agentId: string, issueId: string) {
+  async function commentOn(issueId: string, author: { userId?: string; agentId?: string }, body: string) {
     const [issue] = await db.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, issueId));
     const [comment] = await db.insert(issueComments).values({
       companyId: issue!.companyId,
       issueId,
-      authorUserId: "board-user",
-      body: "Could you check this release too?",
+      authorUserId: author.userId ?? null,
+      authorAgentId: author.agentId ?? null,
+      body,
     }).returning();
+    return comment!.id;
+  }
+
+  /** Wakes an agent on someone else's task the way mentioning it in a comment there does. */
+  async function mentionOn(agentId: string, issueId: string) {
+    const commentId = await commentOn(issueId, { userId: "board-user" }, "Could you check this release too?");
     const run = await heartbeat.wakeup(agentId, {
       source: "automation",
       triggerDetail: "system",
       reason: "issue_comment_mentioned",
-      payload: { issueId, commentId: comment!.id },
+      payload: { issueId, commentId },
       requestedByActorType: "user",
       requestedByActorId: "board-user",
       contextSnapshot: {
         issueId,
         taskId: issueId,
-        commentId: comment!.id,
-        wakeCommentId: comment!.id,
+        commentId,
+        wakeCommentId: commentId,
         wakeReason: "issue_comment_mentioned",
         source: "comment.mention",
       },
+    });
+    expect(run).not.toBeNull();
+    return finishedRun(run!.id);
+  }
+
+  /**
+   * An agent waking itself on a task through POST /agents/:id/wakeup, passing
+   * the task and a comment on it so the run goes ahead though the task is not
+   * assigned to it.
+   */
+  async function selfWakeOn(agentId: string, issueId: string) {
+    const commentId = await commentOn(issueId, { agentId }, "Picking this up.");
+    const run = await heartbeat.wakeup(agentId, {
+      source: "on_demand",
+      triggerDetail: "manual",
+      reason: "issue_commented",
+      payload: { issueId, commentId },
+      requestedByActorType: "agent",
+      requestedByActorId: agentId,
+      contextSnapshot: { triggeredBy: "agent", actorId: agentId, forceFreshSession: false },
     });
     expect(run).not.toBeNull();
     return finishedRun(run!.id);
@@ -295,7 +366,7 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     return (input.config.env ?? {}) as Record<string, string>;
   }
 
-  it("hands a run on the automation's task the stage's plain and secret values, masking the secret", async () => {
+  it("hands the stage's own agent its plain and secret values, masks the secret, and keeps them from runtime services", async () => {
     const stage = await seedStage({
       SHARED_KEY: { type: "plain", value: "agent" },
       AGENT_ONLY: { type: "plain", value: "agent-only" },
@@ -331,39 +402,38 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     });
     const [stored] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.runId));
     expect(JSON.stringify([events, stored])).not.toContain(secretValue);
+
+    // A runtime service started for the run can outlive it and serve other
+    // tasks, so it gets the run's env without the stage's.
+    expect(runtimeServiceEnvs.get(run.runId)).toEqual({ SHARED_KEY: "agent", AGENT_ONLY: "agent-only" });
   }, 90_000);
 
-  it("never lets the stage's env set the agent's sign-in or a PAPERCLIP_ name", async () => {
+  it("drops the names a stage may not set from an env saved before they were refused", async () => {
     const stage = await seedStage({
       ANTHROPIC_API_KEY: { type: "plain", value: "agent-own-key" },
     });
     const secret = await seedSecret(stage.companyId, `stage-${randomUUID()}`);
-    await saveStageEnv(stage, {
-      REGION: "eu-west-1",
+    const saved = await saveStageEnv(stage, { REGION: "eu-west-1" });
+    const dropped = {
       ANTHROPIC_API_KEY: "stage-key",
-      OPENAI_API_KEY: { type: "secret_ref", secretId: secret.id },
+      ANTHROPIC_BASE_URL: "https://elsewhere.example",
+      OPENAI_API_KEY: { type: "secret_ref", secretId: secret.id, version: "latest" },
       CLAUDE_CODE_OAUTH_TOKEN: "stage-token",
-      CLAUDE_CONFIG_DIR: "/stage/claude",
       CODEX_HOME: "/stage/codex",
+      HTTPS_PROXY: "http://proxy.example",
+      NODE_OPTIONS: "--require /stage/hook.js",
+      PATH: "/stage/bin",
       PAPERCLIP_API_KEY: "stage-paperclip-key",
-      PAPERCLIP_RUN_ID: "stage-run",
       paperclip_task_id: "stage-task",
-    });
+    } satisfies Record<string, EnvBinding>;
+    await plantStageEnv(saved.routineId, { REGION: "eu-west-1", ...dropped });
 
     const issueId = await enterStage(stage, "v1");
     const env = runEnv(await automationRun(issueId));
 
     expect(env.REGION).toBe("eu-west-1");
     expect(env.ANTHROPIC_API_KEY).toBe("agent-own-key");
-    for (const name of [
-      "OPENAI_API_KEY",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "CLAUDE_CONFIG_DIR",
-      "CODEX_HOME",
-      "PAPERCLIP_API_KEY",
-      "PAPERCLIP_RUN_ID",
-      "paperclip_task_id",
-    ]) {
+    for (const name of Object.keys(dropped).filter((key) => key !== "ANTHROPIC_API_KEY")) {
       expect(env).not.toHaveProperty(name);
     }
   }, 90_000);
@@ -379,7 +449,7 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     await saveStageEnv(stage, { REGION: "us-east-1" });
 
     // The same task, woken again: still the env it started with, in the same session.
-    const again = await wakeOn(stage.agentId, firstIssueId);
+    const again = await finishedRun(await wakeOn(stage.agentId, firstIssueId));
     expect(runEnv(again).REGION).toBe("eu-west-1");
     expect(again.runtime.sessionId).toBe(`session-${firstRun.runId}`);
 
@@ -392,18 +462,62 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
     expect(routineRun!.routineRevisionId).toBe(first.latestRoutineRevisionId);
   }, 90_000);
 
-  it("reaches every agent woken on the automation's task and nothing else", async () => {
+  it("gives nothing to an agent mentioned on the stage's task, while the stage's own agent still gets it", async () => {
     const stage = await seedStage();
     await saveStageEnv(stage, { REGION: "eu-west-1" });
     const issueId = await enterStage(stage, "v1");
     expect(runEnv(await automationRun(issueId)).REGION).toBe("eu-west-1");
 
-    // Another agent asked to look at the same task gets it too, as upstream.
     const reviewerId = await seedAgent(stage.companyId, "Reviewer");
-    expect(runEnv(await mentionOn(reviewerId, issueId)).REGION).toBe("eu-west-1");
+    expect(runEnv(await mentionOn(reviewerId, issueId))).not.toHaveProperty("REGION");
 
-    // The same agent on a task the automation did not create, or on no task,
-    // gets nothing from the stage.
+    expect(runEnv(await finishedRun(await wakeOn(stage.agentId, issueId))).REGION).toBe("eu-west-1");
+  }, 90_000);
+
+  it("gives nothing to another agent that wakes itself on the stage's task", async () => {
+    const stage = await seedStage();
+    await saveStageEnv(stage, { REGION: "eu-west-1" });
+    const issueId = await enterStage(stage, "v1");
+    await automationRun(issueId);
+
+    const otherId = await seedAgent(stage.companyId, "Other Agent");
+    const run = await selfWakeOn(otherId, issueId);
+    expect(run.agent.id).toBe(otherId);
+    expect(runEnv(run)).not.toHaveProperty("REGION");
+  }, 90_000);
+
+  it("gives nothing once the stage's task is reassigned to another agent", async () => {
+    const stage = await seedStage();
+    await saveStageEnv(stage, { REGION: "eu-west-1" });
+    const issueId = await enterStage(stage, "v1");
+    await automationRun(issueId);
+
+    const otherId = await seedAgent(stage.companyId, "Other Agent");
+    await db.update(issues).set({ assigneeAgentId: otherId }).where(eq(issues.id, issueId));
+    const run = await finishedRun(await wakeOn(otherId, issueId));
+    expect(run.agent.id).toBe(otherId);
+    expect(runEnv(run)).not.toHaveProperty("REGION");
+  }, 90_000);
+
+  it("gives nothing to a run of the stage's routine that names another assignee", async () => {
+    const stage = await seedStage();
+    const saved = await saveStageEnv(stage, { REGION: "eu-west-1" });
+    const otherId = await seedAgent(stage.companyId, "Other Agent");
+
+    const routineRun = await routineService(db, { heartbeat }).runRoutine(saved.routineId, {
+      source: "manual",
+      assigneeAgentId: otherId,
+      variables: { pipeline_name: "Releases", stage_name: "In progress", case_title: "Hotfix" },
+    });
+    expect(routineRun.linkedIssueId).toBeTruthy();
+    const run = await automationRun(routineRun.linkedIssueId!);
+    expect(run.agent.id).toBe(otherId);
+    expect(runEnv(run)).not.toHaveProperty("REGION");
+  }, 90_000);
+
+  it("gives nothing to the stage's agent on another task or on none", async () => {
+    const stage = await seedStage();
+    await saveStageEnv(stage, { REGION: "eu-west-1" });
     const [otherIssue] = await db.insert(issues).values({
       companyId: stage.companyId,
       title: "Unrelated task",
@@ -411,8 +525,25 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
       priority: "medium",
       assigneeAgentId: stage.agentId,
     }).returning();
-    expect(runEnv(await wakeOn(stage.agentId, otherIssue!.id))).not.toHaveProperty("REGION");
-    expect(runEnv(await wakeOn(stage.agentId, null))).not.toHaveProperty("REGION");
+
+    expect(runEnv(await finishedRun(await wakeOn(stage.agentId, otherIssue!.id)))).not.toHaveProperty("REGION");
+    expect(runEnv(await finishedRun(await wakeOn(stage.agentId, null)))).not.toHaveProperty("REGION");
+  }, 90_000);
+
+  it("fails a run whose stage secret was deleted, naming the variable and the stage", async () => {
+    const stage = await seedStage();
+    const secret = await seedSecret(stage.companyId, `deploy-${randomUUID()}`);
+    await saveStageEnv(stage, { DEPLOY_TOKEN: { type: "secret_ref", secretId: secret.id } });
+    const issueId = await enterStage(stage, "v1");
+    await automationRun(issueId);
+
+    await secretService(db).remove(secret.id);
+
+    const failed = await settledRun(await wakeOn(stage.agentId, issueId), "failed");
+    expect(failed.error).toBe(
+      'This run could not start: the secret behind DEPLOY_TOKEN, set by stage "In progress" in pipeline "Releases", ' +
+        "no longer exists. Tasks already started keep the stage's settings from when they started.",
+    );
   }, 90_000);
 
   /**
@@ -432,13 +563,13 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
       .where(and(eq(routineRuns.id, issue!.originRunId!), eq(routineRuns.companyId, stage.companyId)));
 
     // Unchanged: the session carries on.
-    const unchanged = await wakeOn(stage.agentId, issueId);
+    const unchanged = await finishedRun(await wakeOn(stage.agentId, issueId));
     expect(runEnv(unchanged).REGION).toBe("eu-west-1");
     expect(unchanged.runtime.sessionId).toBe(`session-${firstRun.runId}`);
 
     await saveStageEnv(stage, { REGION: "us-east-1" });
 
-    const changed = await wakeOn(stage.agentId, issueId);
+    const changed = await finishedRun(await wakeOn(stage.agentId, issueId));
     expect(runEnv(changed).REGION).toBe("us-east-1");
     expect(changed.runtime.sessionId).toBeNull();
   }, 90_000);

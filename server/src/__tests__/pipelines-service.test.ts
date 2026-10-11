@@ -1718,6 +1718,61 @@ describeEmbeddedPostgres("pipelineService", () => {
     expect(clearedRoutine!.env).toBeNull();
   });
 
+  it("refuses stage secrets that set a name a stage may not, naming them and storing nothing", async () => {
+    const { company, pipeline, byKey } = await seedPipeline();
+    const routineSeed = await seedRoutine(company.id, "Protected names seed");
+    const stageId = byKey.get("in_progress")!.id;
+    const savedStage = await svc.updateStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      patch: {
+        config: {
+          automation: {
+            assigneeAgentId: routineSeed.assigneeAgentId,
+            instructionsBody: "Deploy {{case_title}}.",
+          },
+        },
+      },
+      actor: userActor,
+    });
+    const routineId = (savedStage.config as { onEnter?: { routineId?: string } }).onEnter?.routineId;
+    const [before] = await db.select().from(routines).where(eq(routines.id, routineId!));
+
+    await expect(svc.updateStageAutomationEnv({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      env: {
+        REGION: "eu-west-1",
+        ANTHROPIC_BASE_URL: "https://elsewhere.example",
+        path: "/stage/bin",
+        PAPERCLIP_API_KEY: "stage-key",
+      },
+      actor: userActor,
+    })).rejects.toMatchObject({
+      status: 422,
+      message:
+        "These names cannot be set for a stage: ANTHROPIC_BASE_URL, path, PAPERCLIP_API_KEY. " +
+        "They control the agent's sign-in, the program it runs, or Paperclip's own settings for the run.",
+      details: { code: "stage_env_name_protected", names: ["ANTHROPIC_BASE_URL", "path", "PAPERCLIP_API_KEY"] },
+    });
+    const [after] = await db.select().from(routines).where(eq(routines.id, routineId!));
+    expect(after!.env).toBeNull();
+    expect(after!.latestRevisionNumber).toBe(before!.latestRevisionNumber);
+
+    // Cloud sign-in names are protected only for an agent that runs on
+    // Bedrock or Vertex, which only its run knows, so the save allows them.
+    const saved = await svc.updateStageAutomationEnv({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId,
+      env: { AWS_ACCESS_KEY_ID: "stage-access-key", REGION: "eu-west-1" },
+      actor: userActor,
+    });
+    expect(Object.keys(saved.env ?? {}).sort()).toEqual(["AWS_ACCESS_KEY_ID", "REGION"]);
+  });
+
   it("rejects cross-company stage automation routines at save and execution", async () => {
     const company = await seedCompany();
     const otherCompany = await seedCompany();
