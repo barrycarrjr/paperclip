@@ -77,6 +77,7 @@ import {
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { secretService } from "../services/secrets.js";
+import type { AuthorizationActor } from "../services/authorization.js";
 import {
   detectAdapterModel,
   findActiveServerAdapter,
@@ -216,6 +217,27 @@ export function agentRoutes(
     "instructionsEntryFile",
     "instructionsFilePath",
     "agentsMdPath",
+  ] as const;
+  // What an agent may not change on itself, by PATCH or by config rollback.
+  const FORBIDDEN_SELF_FIELDS = [
+    "role",
+    "budgetMonthlyCents",
+    "spentMonthlyCents",
+    "defaultEnvironmentId",
+    "status",
+    "adapterType",
+  ] as const;
+  const FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS = [
+    "command",
+    "args",
+    "extraArgs",
+    "cwd",
+    "env",
+    "dangerouslySkipPermissions",
+    "dangerouslyBypassApprovalsAndSandbox",
+    "dangerouslyBypassSandbox",
+    "secretBindings",
+    "secrets",
   ] as const;
 
   const router = Router();
@@ -371,8 +393,41 @@ export function agentRoutes(
     }
   }
 
+  // "Configure agents" (agents:configure) from Company Access, decided by the
+  // shared authorization rules. It adds to agents:create and never replaces
+  // it. "Suggest agent changes" grants nothing yet: applying a suggestion
+  // needs a person to accept it first, and this server has no check for that.
+  async function canReadConfigurationsByGrant(req: Request, companyId: string) {
+    const decision = await access.decide({
+      actor: req.actor as AuthorizationActor,
+      action: "agents:configure",
+      resource: { type: "company", companyId },
+    });
+    return decision.allowed;
+  }
+
+  async function canConfigureAgentByGrant(req: Request, targetAgent: { id: string; companyId: string }) {
+    const decision = await access.decide({
+      actor: req.actor as AuthorizationActor,
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: targetAgent.companyId, agentId: targetAgent.id },
+    });
+    return decision.allowed;
+  }
+
+  async function assertBoardCanConfigureAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+    assertBoard(req);
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (await access.canUser(targetAgent.companyId, req.actor.userId, "agents:create")) return;
+    if (await canConfigureAgentByGrant(req, targetAgent)) return;
+    throw forbidden("Missing permission: agents:create");
+  }
+
   async function assertCanReadConfigurations(req: Request, companyId: string) {
-    return assertCanCreateAgentsForCompany(req, companyId);
+    if (await actorCanReadConfigurationsForCompany(req, companyId)) return;
+    // Refused: answer with the same errors as the agents:create check.
+    await assertCanCreateAgentsForCompany(req, companyId);
   }
 
   async function getAccessibleAgent(req: Request, res: Response, id: string) {
@@ -392,13 +447,15 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
-      return access.canUser(companyId, req.actor.userId, "agents:create");
+      if (await access.canUser(companyId, req.actor.userId, "agents:create")) return true;
+      return canReadConfigurationsByGrant(req, companyId);
     }
     if (!req.actor.agentId) return false;
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== companyId) return false;
     const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
-    return allowedByGrant || canCreateAgents(actorAgent);
+    if (allowedByGrant || canCreateAgents(actorAgent)) return true;
+    return canReadConfigurationsByGrant(req, companyId);
   }
 
   async function buildSkippedWakeupResponse(
@@ -471,7 +528,7 @@ export function agentRoutes(
   async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+      await assertBoardCanConfigureAgent(req, targetAgent);
       return;
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
@@ -490,6 +547,7 @@ export function agentRoutes(
       "agents:create",
     );
     if (allowedByGrant || canCreateAgents(actorAgent)) return;
+    if (await canConfigureAgentByGrant(req, targetAgent)) return;
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
@@ -673,7 +731,7 @@ export function agentRoutes(
   /**
    * Derived scheduler-heartbeat fields appended to company-scoped agent
    * responses so the UI can show "next wake" without reading runtimeConfig
-   * (which is redacted for members lacking agents:create). Mirrors the
+   * (which is redacted for members who cannot read configurations). Mirrors the
    * status eligibility used by heartbeat.tickTimers and the instance
    * scheduler-heartbeats route.
    */
@@ -839,7 +897,7 @@ export function agentRoutes(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    await assertBoardCanConfigureAgent(req, targetAgent);
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -852,6 +910,62 @@ export function agentRoutes(
     throw forbidden(
       `Agent-authenticated callers cannot modify instructions path or bundle configuration (${changedSensitiveKeys.join(", ")})`,
     );
+  }
+
+  // A rollback restores a whole saved configuration, so an agent caller gets
+  // the refusals PATCH gives for the same changes. Each changed adapter setting
+  // holds the restored value, or null where the rollback removes it. A value
+  // the snapshot lacks or holds badly is left to the rollback, which refuses an
+  // invalid snapshot.
+  async function assertAgentCanRestoreConfigSnapshot(
+    req: Request,
+    existing: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
+    snapshot: Record<string, unknown>,
+  ) {
+    if (req.actor.type !== "agent") return;
+    const restoredFields = {
+      role: typeof snapshot.role === "string" && snapshot.role.length > 0 ? snapshot.role : existing.role,
+      budgetMonthlyCents:
+        typeof snapshot.budgetMonthlyCents === "number" && Number.isFinite(snapshot.budgetMonthlyCents)
+          ? Math.max(0, Math.floor(snapshot.budgetMonthlyCents))
+          : existing.budgetMonthlyCents,
+      defaultEnvironmentId: typeof snapshot.defaultEnvironmentId === "string" ? snapshot.defaultEnvironmentId : null,
+      adapterType:
+        typeof snapshot.adapterType === "string" && snapshot.adapterType.length > 0
+          ? snapshot.adapterType
+          : existing.adapterType,
+    };
+    const changedFields = new Set<string>(
+      (Object.keys(restoredFields) as Array<keyof typeof restoredFields>).filter(
+        (field) => restoredFields[field] !== (existing[field] ?? null),
+      ),
+    );
+    const currentConfig = asRecord(existing.adapterConfig) ?? {};
+    const restoredConfig = asRecord(snapshot.adapterConfig) ?? {};
+    const changedConfig = Object.fromEntries(
+      [...new Set([...Object.keys(currentConfig), ...Object.keys(restoredConfig)])]
+        .filter((key) => JSON.stringify(currentConfig[key]) !== JSON.stringify(restoredConfig[key]))
+        .map((key) => [key, restoredConfig[key] ?? null]),
+    );
+
+    if (req.actor.agentId === existing.id) {
+      const field = FORBIDDEN_SELF_FIELDS.find((name) => changedFields.has(name));
+      if (field) {
+        throw forbidden(`Agents cannot self-modify '${field}'; ask a CEO or board member.`);
+      }
+      const key = FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS.find((name) => hasOwn(changedConfig, name));
+      if (key) {
+        throw forbidden(`Agents cannot self-modify adapterConfig.${key}; ask a CEO or board member.`);
+      }
+    }
+    if (changedFields.has("role")) {
+      const actorAgent = await svc.getById(req.actor.agentId!);
+      if (!actorAgent || actorAgent.role !== "ceo") {
+        throw forbidden("Only CEO or board members can change agent roles.");
+      }
+    }
+    assertNoAgentInstructionsConfigMutation(req, changedConfig);
+    assertNoAgentHostWorkspaceCommandMutation(req, collectAgentAdapterWorkspaceCommandPaths(changedConfig));
   }
 
   function summarizeAgentUpdateDetails(patch: Record<string, unknown>) {
@@ -1081,7 +1195,7 @@ export function agentRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const type = assertKnownAdapterType(req.params.type as string);
-      await assertCanReadConfigurations(req, companyId);
+      await assertCanCreateAgentsForCompany(req, companyId);
 
       const adapter = requireServerAdapter(type);
 
@@ -1642,6 +1756,7 @@ export function agentRoutes(
       const revision = await svc.getConfigRevision(id, revisionId);
       const snapshot = asRecord(revision?.afterConfig);
       if (snapshot) {
+        await assertAgentCanRestoreConfigSnapshot(req, existing, snapshot);
         assertNoAgentHostExecutionMutation(
           req,
           collectAgentAdapterHostExecutionPaths(
@@ -2585,14 +2700,6 @@ export function agentRoutes(
     const isSelfPatch =
       req.actor.type === "agent" && req.actor.agentId === existing.id;
     if (isSelfPatch) {
-      const FORBIDDEN_SELF_FIELDS = [
-        "role",
-        "budgetMonthlyCents",
-        "spentMonthlyCents",
-        "defaultEnvironmentId",
-        "status",
-        "adapterType",
-      ] as const;
       for (const field of FORBIDDEN_SELF_FIELDS) {
         if (hasOwn(req.body as object, field)) {
           throw forbidden(
@@ -2609,18 +2716,6 @@ export function agentRoutes(
 
       if (hasOwn(req.body as object, "adapterConfig")) {
         const incomingAdapterConfig = asRecord((req.body as Record<string, unknown>).adapterConfig) ?? {};
-        const FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS = [
-          "command",
-          "args",
-          "extraArgs",
-          "cwd",
-          "env",
-          "dangerouslySkipPermissions",
-          "dangerouslyBypassApprovalsAndSandbox",
-          "dangerouslyBypassSandbox",
-          "secretBindings",
-          "secrets",
-        ] as const;
         for (const key of FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS) {
           if (hasOwn(incomingAdapterConfig, key)) {
             throw forbidden(
@@ -2633,8 +2728,9 @@ export function agentRoutes(
 
     // Role changes require CEO or board approval even for non-self targets.
     // assertCanUpdateAgent permits non-CEO agents with an agents:create grant
-    // to update other agents (for hiring), but role escalation must be reserved
-    // to the CEO so a hiring grant can't be used to mint a peer CEO.
+    // (for hiring) or an agents:configure grant to update other agents, but role
+    // escalation must be reserved to the CEO so such a grant can't be used to
+    // mint a peer CEO.
     if (hasOwn(req.body as object, "role") && req.actor.type === "agent") {
       const actorAgent = await svc.getById(req.actor.agentId!);
       if (!actorAgent || actorAgent.role !== "ceo") {
