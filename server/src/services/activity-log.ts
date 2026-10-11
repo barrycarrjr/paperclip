@@ -5,7 +5,7 @@ import { PLUGIN_EVENT_TYPES, type PluginEventType } from "@paperclipai/shared";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import { publishLiveEvent } from "./live-events.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
-import { sanitizeRecord } from "../redaction.js";
+import { redactSensitiveTextValues, sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -60,6 +60,21 @@ export interface LogActivityInput {
   agentId?: string | null;
   runId?: string | null;
   details?: Record<string, unknown> | null;
+}
+
+// Redacts details read back from the log the same way logActivity redacts
+// them on the way in, for rows written before a redaction rule existed. It
+// also clears tokens written into free text, such as a comment snippet, which
+// the key-based pass cannot see.
+export async function createActivityDetailsRedactor(db: Db) {
+  const currentUserRedactionOptions = {
+    enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
+  };
+  return (details: Record<string, unknown> | null) => (
+    details
+      ? redactCurrentUserValue(redactSensitiveTextValues(sanitizeRecord(details)), currentUserRedactionOptions)
+      : null
+  );
 }
 
 export async function logActivity(db: Db, input: LogActivityInput) {

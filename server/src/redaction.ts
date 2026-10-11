@@ -78,3 +78,17 @@ export function redactSensitiveText(input: string): string {
     .replace(GITHUB_TOKEN_TEXT_RE, REDACTED_EVENT_VALUE)
     .replace(JWT_TEXT_RE, REDACTED_EVENT_VALUE);
 }
+
+/**
+ * redactSensitiveText for every string inside a value, at any depth. For free
+ * text kept in a record, such as a comment snippet, where a key-based pass
+ * (sanitizeRecord) cannot see a token written into the text.
+ */
+export function redactSensitiveTextValues<T>(value: T): T {
+  if (typeof value === "string") return redactSensitiveText(value) as T;
+  if (Array.isArray(value)) return value.map((entry) => redactSensitiveTextValues(entry)) as T;
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, redactSensitiveTextValues(entry)]),
+  ) as T;
+}
