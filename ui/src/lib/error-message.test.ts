@@ -56,6 +56,36 @@ describe("failedResponseMessage: the server sent words", () => {
   });
 });
 
+describe("failedResponseMessage: a plugin's own failure", () => {
+  it("keeps a plugin's stock refusal or outside code instead of saying it did not answer", () => {
+    expect(failedResponseMessage(502, { code: "WORKER_ERROR", message: "Unauthorized" })).toBe(
+      "The plugin reported: Unauthorized.",
+    );
+    expect(failedResponseMessage(502, { code: "WORKER_ERROR", message: "invalid_grant" })).toBe(
+      "The plugin reported: invalid_grant.",
+    );
+  });
+
+  it("still words a plugin's stock server failure by status", () => {
+    expect(failedResponseMessage(502, { code: "WORKER_ERROR", message: "Internal server error" })).toBe(
+      statusFailureMessage(502),
+    );
+    expect(failedResponseMessage(502, { code: "WORKER_ERROR", message: "error" })).toBe(statusFailureMessage(502));
+  });
+});
+
+describe("failedResponseMessage: a long reply", () => {
+  it("words a reply holding a long run of spaces at once", () => {
+    // Stripping a trailing full stop with /[.\s]+$/ retried from every space
+    // of a long run, which froze the page for seconds.
+    const started = performance.now();
+    const message = failedResponseMessage(400, { error: `Bad value a${" ".repeat(100_000)}b.` });
+
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(message.startsWith("Bad value a")).toBe(true);
+  });
+});
+
 describe("failedResponseMessage: the server sent only a code", () => {
   it("words a known code sent beside no words", () => {
     expect(failedResponseMessage(403, { code: "skill_local_import_admin_required" })).toBe(

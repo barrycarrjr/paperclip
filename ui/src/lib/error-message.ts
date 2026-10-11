@@ -113,8 +113,17 @@ function withStop(sentence: string) {
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
+// A loop, not /[.\s]+$/: that regex retries from every position of a long run
+// of spaces or dots, so a long echoed value would freeze the page.
 function withoutStop(sentence: string) {
-  return sentence.trim().replace(/[.\s]+$/, "");
+  const trimmed = sentence.trim();
+  let end = trimmed.length;
+  while (end > 0) {
+    const char = trimmed[end - 1]!;
+    if (char !== "." && char.trim() !== "") break;
+    end -= 1;
+  }
+  return trimmed.slice(0, end);
 }
 
 /** A machine code standing in for words: skill_local_import_admin_required, INVALID_EMAIL_OR_PASSWORD, TIMEOUT. */
@@ -222,9 +231,29 @@ export function isNetworkFailure(error: unknown): boolean {
       .test(error.message.trim());
 }
 
+/**
+ * A plugin's own failure, passed on by the plugin bridge as
+ * { code: "WORKER_ERROR", message }. The bridge always answers 502, so wording
+ * it by status would say the plugin did not answer when it did. A stock phrase
+ * such as "Unauthorized", or an outside service's code such as "invalid_grant",
+ * still tells the person to reconnect, so the plugin's own text is kept.
+ */
+function pluginFailureMessage(reply: unknown): string | null {
+  const body = fields(reply);
+  if (!body || body.code !== "WORKER_ERROR" || typeof body.message !== "string") return null;
+  const message = withoutStop(body.message.slice(0, 300));
+  if (!message) return null;
+  const stock = PLACEHOLDER_STATUS.get(message.toLowerCase());
+  if (stock === null || (stock !== undefined && stock >= 500)) return null;
+  return `The plugin reported: ${message}.`;
+}
+
 /** The sentence for a request the server answered with a failure, from its status and what it sent back. */
 export function failedResponseMessage(status: number, body: unknown): string {
-  return describeReply(body) ?? statusFailureMessage(status) ?? GENERIC_FAILURE_MESSAGE;
+  return describeReply(body)
+    ?? pluginFailureMessage(body)
+    ?? statusFailureMessage(status)
+    ?? GENERIC_FAILURE_MESSAGE;
 }
 
 /**

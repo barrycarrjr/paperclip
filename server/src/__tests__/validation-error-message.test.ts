@@ -34,4 +34,16 @@ describe("validationErrorMessage", () => {
 
     expect(message).toBe("Some details are not valid. Expected string, received number.");
   });
+
+  it("words a huge echoed value at once and keeps the message short", () => {
+    // A refused choice echoes the submitted value. A long run of spaces inside
+    // it once took seconds to word, blocking every other request.
+    const schema = z.object({ permissionMode: z.enum(["ask", "bypass"]) });
+    const started = performance.now();
+    const message = validationErrorMessage(failure(schema, { permissionMode: `a${" ".repeat(200_000)}b` }));
+
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(message.startsWith("Some details are not valid. permissionMode: ")).toBe(true);
+    expect(message.length).toBeLessThan(400);
+  });
 });

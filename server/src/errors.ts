@@ -51,6 +51,23 @@ export function tooManyRequests(message = "Too many requests", details?: unknown
 
 /** How many of a failed validation's problems its message names. */
 const VALIDATION_PROBLEMS_SHOWN = 3;
+/** A problem's message can echo the submitted value; longer ones are cut. */
+const VALIDATION_PROBLEM_MAX_LENGTH = 300;
+
+/**
+ * Drops trailing full stops and spaces. A loop, not a regex: an unanchored
+ * /[.\s]+$/ retries from every position of a long run of spaces or dots, which
+ * takes seconds on a large submitted value and blocks the whole server.
+ */
+function stripTrailingStops(text: string): string {
+  let end = text.length;
+  while (end > 0) {
+    const char = text[end - 1]!;
+    if (char !== "." && char.trim() !== "") break;
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
 
 /**
  * A request body that did not match its schema, said in words. A ZodError's
@@ -61,7 +78,10 @@ const VALIDATION_PROBLEMS_SHOWN = 3;
 export function validationErrorMessage(error: ZodError): string {
   const problems = error.issues.map((issue) => {
     const field = issue.path.join(".");
-    const problem = issue.message.trim().replace(/[.\s]+$/, "");
+    const message = issue.message.length > VALIDATION_PROBLEM_MAX_LENGTH
+      ? `${issue.message.slice(0, VALIDATION_PROBLEM_MAX_LENGTH)}…`
+      : issue.message;
+    const problem = stripTrailingStops(message.trim());
     return field ? `${field}: ${problem}` : problem;
   });
   if (problems.length === 0) return "Some details are not valid.";
