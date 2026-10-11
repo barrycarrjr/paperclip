@@ -164,7 +164,15 @@ describe("chat.turn", () => {
     const methods = createChannelHostMethods(deps);
     const result = await methods.chatTurn({ identity: PAT_SLACK, companyId: HQ, text: "chase the invoices", title: "Slack DM" });
     expect(chat.createSession).toHaveBeenCalledWith(
-      { userId: USER, isInstanceAdmin: false, companyIds: [HQ] },
+      {
+        userId: USER,
+        isInstanceAdmin: false,
+        companyIds: [HQ],
+        // The roles go with it, so Clippy's tools refuse a change where the
+        // user is only a viewer.
+        memberships: [{ companyId: HQ, membershipRole: "owner", status: "active" }],
+        isPortfolioRootUserAdmin: false,
+      },
       { title: "Slack DM", companyId: HQ, model: undefined },
     );
     expect(chat.runTurn).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }), "s-new", "chase the invoices", undefined, []);

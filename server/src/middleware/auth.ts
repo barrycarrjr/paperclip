@@ -79,7 +79,12 @@ async function annotateHqStatus(req: Request, db: Db): Promise<void> {
 async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Promise<void> {
   if ((actor.type === "agent" || actor.type === "tool_session") && actor.companyId) {
     const rootId = await getPortfolioRootCompanyId(db);
-    if (rootId && actor.companyId === rootId) {
+    // A tool session gets HQ's read across companies only when the person it
+    // acts for has that themselves, as an HQ owner or admin. A key scoped to
+    // HQ is not enough: an HQ viewer, or an instance admin outside HQ, can
+    // start a chat there but cannot read the other companies themselves.
+    const readsAcross = actor.type === "agent" || actor.person?.isPortfolioRootUserAdmin === true;
+    if (rootId && actor.companyId === rootId && readsAcross) {
       actor.isPortfolioRootAgent = true;
     }
   } else if (
@@ -101,13 +106,16 @@ async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Pro
 }
 
 /**
- * The board actor for a user acting through a paired chat app rather than a
- * browser: the same memberships, admin flag and portfolio-root status a
- * signed-in request from that user gets, so every access rule treats a
- * Slack message exactly like a click in the web app. Null when the user no
- * longer exists.
+ * The board actor for a user acting through something other than a browser:
+ * the same memberships, admin flag and portfolio-root status a signed-in
+ * request from that user gets, so every access rule treats them exactly like
+ * a click in the web app. Null when the user no longer exists.
  */
-export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
+async function boardActorForUser(
+  db: Db,
+  userId: string,
+  source: Request["actor"]["source"],
+): Promise<Request["actor"] | null> {
   const access = await boardAuthService(db).resolveBoardAccess(userId);
   if (!access.user) return null;
   const actor: Request["actor"] = {
@@ -118,10 +126,18 @@ export async function boardActorForLinkedUser(db: Db, userId: string): Promise<R
     companyIds: access.companyIds,
     memberships: access.memberships,
     isInstanceAdmin: access.isInstanceAdmin,
-    source: "channel_link",
+    source,
   };
   await annotatePortfolioRootStatus(actor, db);
   return actor;
+}
+
+/**
+ * The board actor for a user acting through a paired chat app, so a Slack
+ * message is treated exactly like a click in the web app.
+ */
+export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
+  return boardActorForUser(db, userId, "channel_link");
 }
 
 interface ActorMiddlewareOptions {
@@ -269,6 +285,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         const userId = typeof claims.user_id === "string" && claims.user_id.length > 0
           ? claims.user_id
           : undefined;
+        // The key acts as the person chatting and may never do more than they
+        // can. Their access is read here on every request rather than frozen
+        // into the key, so a removed membership or a move to viewer applies to
+        // the very next call instead of when the key expires, up to two days on.
+        const person = userId ? await boardActorForUser(db, userId, "tool_session_jwt") : null;
+        if (!person) {
+          next(unauthorized("Tool-session token is not for an existing user; obtain fresh credentials and retry"));
+          return;
+        }
         req.actor = {
           type: "tool_session",
           userId,
@@ -276,6 +301,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           toolSessionId: claims.sub,
           runId: runIdHeader || claims.run_id || undefined,
           source: "tool_session_jwt",
+          person,
         };
         await annotateHqStatus(req, db);
         next();

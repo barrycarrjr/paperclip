@@ -38,6 +38,8 @@ export interface DirectiveActor {
   userId: string;
   isInstanceAdmin: boolean;
   companyIds: string[];
+  /** The user's roles, so a company where they are only a viewer is skipped. */
+  memberships?: Array<{ companyId: string; membershipRole?: string | null; status?: string }>;
 }
 
 export interface DirectiveDispatch {
@@ -171,6 +173,12 @@ export function portfolioDirectiveService(db: Db) {
     return actor.isInstanceAdmin || actor.companyIds.includes(companyId);
   }
 
+  /** A viewer there: they may read the company but not give its CEO work, as anywhere else. */
+  function isViewerOnly(actor: DirectiveActor, companyId: string): boolean {
+    if (actor.isInstanceAdmin) return false;
+    return actor.memberships?.find((m) => m.companyId === companyId)?.membershipRole === "viewer";
+  }
+
   async function resolveTargetCompanies(
     input: PreviewDirectiveInput,
   ): Promise<{
@@ -269,6 +277,10 @@ export function portfolioDirectiveService(db: Db) {
           companyName: row.name,
           reason: "No write access — you are not a member of this company",
         });
+        continue;
+      }
+      if (isViewerOnly(actor, row.id)) {
+        skipped.push({ companyId: row.id, companyName: row.name, reason: "Viewer access is read-only" });
         continue;
       }
       targets.push({ id: row.id, name: row.name });

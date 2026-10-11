@@ -22,11 +22,14 @@ import {
   listConfiguredProviders,
   pickBestDefaultModel,
   removeClippyWorkspace,
+  runsOnServer,
   withOperatorDefaults,
   type CanonicalContentBlock,
   type CanonicalMessage,
 } from "./chat-providers.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { personalCompanyOwner } from "./personal-companies.js";
+import { assertActorCompanyAccess } from "../routes/authz.js";
 import type { InstanceAgentDefaults } from "@paperclipai/shared";
 import {
   attachmentDownloadUrl,
@@ -196,6 +199,47 @@ export async function appendApprovedDraftResultToChatSession(
 }
 
 export interface ChatActor extends ToolActor {}
+
+/**
+ * Refuses a company the person could not use themselves, so no chat session
+ * is made for one, moved to one, or runs a turn in one. The rule is the web
+ * app's own check for reading a company, plus the allowance Clippy's tools
+ * already give an instance admin: any company but someone else's Personal.
+ * Reading is enough to chat. What Clippy may change there is checked again on
+ * each action, against the same person, so a viewer's Clippy only reads.
+ */
+function assertCanChatInCompany(actor: ChatActor, companyId: string) {
+  if (actor.isInstanceAdmin && !personalCompanyOwner(companyId)) return;
+  assertActorCompanyAccess(
+    {
+      type: "board",
+      userId: actor.userId,
+      companyIds: actor.companyIds,
+      memberships: actor.memberships,
+      isInstanceAdmin: actor.isInstanceAdmin,
+      isPortfolioRootUserAdmin: actor.isPortfolioRootUserAdmin,
+      source: "session",
+    },
+    companyId,
+    "read",
+    "GET",
+  );
+}
+
+/**
+ * Models that run a program on this machine (Claude Code, for one) do so with
+ * their permission prompts off, which is a shell on the server. Only an
+ * instance admin may chat on one; every other model is open to everyone.
+ */
+function mayUseModel(actor: ChatActor, model: string): boolean {
+  return actor.isInstanceAdmin || !runsOnServer(model);
+}
+
+function assertMayUseModel(actor: ChatActor, model: string) {
+  if (!mayUseModel(actor, model)) {
+    throw forbidden("Only instance admins can use models that run on this server.");
+  }
+}
 
 export function systemPromptFor(session: ChatSession, defaultCompanyId: string | null, pluginTools: ReturnType<typeof listChatToolSpecs> = []): string {
   const lines = [
@@ -403,6 +447,20 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     return rowToSession(row);
   }
 
+  /**
+   * The session, once its owner may run a turn in it. Access can change while
+   * a session lives, so its company is checked again before every turn, not
+   * only when the session was made or moved there.
+   */
+  async function getSessionForTurn(actor: ChatActor, id: string) {
+    const session = await getSession(actor, id);
+    if (session.companyId) assertCanChatInCompany(actor, session.companyId);
+    // A chat already on a model that runs on this server stops here for
+    // anyone who is not an instance admin, however it got that model.
+    assertMayUseModel(actor, session.model);
+    return session;
+  }
+
   async function createSession(
     actor: ChatActor,
     input: {
@@ -413,11 +471,16 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       pageContext?: string | null;
     },
   ) {
+    if (input.companyId) assertCanChatInCompany(actor, input.companyId);
     // Auto-pick the best available model when the caller didn't specify one,
     // so a fresh chat lands on something that actually works for this user
     // (e.g. claude_local Opus via Claude Pro auth) rather than a hardcoded
-    // model that requires an API key they may not have set.
-    const initialModel = input.model ?? (await pickBestDefaultModel(await readAgentDefaults()));
+    // model that requires an API key they may not have set. Only from the
+    // models this person may use.
+    const initialModel =
+      input.model ??
+      (await pickBestDefaultModel(await readAgentDefaults(), { serverModels: actor.isInstanceAdmin }));
+    assertMayUseModel(actor, initialModel);
     const isAdapter = Boolean(initialModel?.startsWith("adapter:"));
     const created = await db
       .insert(chatSessions)
@@ -448,6 +511,8 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     },
   ) {
     const current = await getSession(actor, id);
+    if (patch.companyId) assertCanChatInCompany(actor, patch.companyId);
+    if (patch.model !== undefined) assertMayUseModel(actor, patch.model);
     const targetModel = patch.model !== undefined ? patch.model : current.model;
     const isAdapter = Boolean(targetModel?.startsWith("adapter:"));
     // Drizzle infers `updatedAt` as `Date | SQL` because of the default; the
@@ -564,7 +629,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     onAbort?: (cb: () => void) => void,
     attachmentIds: string[] = [],
   ): AsyncGenerator<StreamEvent, void, void> {
-    let session = await getSession(actor, sessionId);
+    let session = await getSessionForTurn(actor, sessionId);
     const provider = getProviderForModel(session.model);
     if (!provider) {
       const available = await listAvailableModels();
@@ -928,13 +993,16 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
     return null;
   }
 
-  async function listModels() {
-    return withOperatorDefaults(await listAvailableModels(), await readAgentDefaults());
+  /** The models the picker offers this person: only those they may chat on. */
+  async function listModels(actor: ChatActor) {
+    const models = withOperatorDefaults(await listAvailableModels(), await readAgentDefaults());
+    return models.filter((entry) => mayUseModel(actor, entry.model));
   }
 
   return {
     listSessions,
     getSession,
+    getSessionForTurn,
     createSession,
     updateSession,
     deleteSession,

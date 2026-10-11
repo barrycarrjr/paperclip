@@ -88,7 +88,15 @@ describe("start work routes", () => {
   });
 
   it("returns 403 for a tool_session actor", async () => {
-    const app = createApp({ type: "tool_session", companyId: COMPANY_ID, userId: "user-1", toolSessionId: "ts-1" });
+    // Acting for a person who may use the route themselves, so what refuses
+    // it is the board check, not the company check.
+    const app = createApp({
+      type: "tool_session",
+      companyId: COMPANY_ID,
+      userId: "user-1",
+      toolSessionId: "ts-1",
+      person: boardActor(),
+    });
     const res = await request(app).post(PATH).send(VALID_BODY);
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("Board access required");

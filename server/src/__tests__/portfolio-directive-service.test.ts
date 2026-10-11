@@ -174,6 +174,34 @@ describe("portfolioDirectiveService.broadcast", () => {
     ]);
   });
 
+  it("skips a company where the board user is only a viewer, unless they are an instance admin", async () => {
+    const db = makeDb({
+      companies: [
+        { id: "c1", name: "Acme", status: "active", isPortfolioRoot: false },
+        { id: "c2", name: "Globex", status: "active", isPortfolioRoot: false },
+      ],
+      ceo: [{ id: "ceo-1", name: "Chief" }],
+      roster: [{ id: "ceo-1", name: "Chief", reportsTo: null }],
+    });
+    const memberships = [
+      { companyId: "c1", membershipRole: "member", status: "active" },
+      { companyId: "c2", membershipRole: "viewer", status: "active" },
+    ];
+
+    const result = await previewThenSend(db, {
+      actor: { userId: "user-2", isInstanceAdmin: false, companyIds: ["c1", "c2"], memberships },
+      intent: "Do the thing",
+    });
+    expect(result.dispatched.map((d) => d.companyId)).toEqual(["c1"]);
+    expect(result.skipped).toEqual([{ companyId: "c2", companyName: "Globex", reason: "Viewer access is read-only" }]);
+
+    const asAdmin = await previewThenSend(db, {
+      actor: { userId: "user-2", isInstanceAdmin: true, companyIds: ["c1", "c2"], memberships },
+      intent: "Do the thing",
+    });
+    expect(asAdmin.dispatched.map((d) => d.companyId).sort()).toEqual(["c1", "c2"]);
+  });
+
   it("targets nothing for an explicit empty company selection, rather than falling through to every accessible company", async () => {
     // Regression (P4 audit, 2026-09-03): `companyIds: []` used to be treated
     // identically to "omitted" (`companyIds && companyIds.length > 0` is

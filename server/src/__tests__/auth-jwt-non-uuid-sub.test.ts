@@ -62,13 +62,17 @@ describe("actorMiddleware: local agent JWT sub handling", () => {
     // Clippy mints sub = `clippy-<sessionId>` in chat-providers.ts. The
     // middleware recognizes the synthetic prefix, skips the agents lookup
     // entirely (the sub is not a key into agents.id), and authenticates
-    // with company scope + the driving user id from the user_id claim.
+    // with company scope + the driving user id from the user_id claim,
+    // carrying that user's access as it stands now.
     const failOnAgentsLookup = (): never => {
       throw new Error("agents table must not be queried for tool-session sub");
     };
     const { app, select } = buildApp([
       [], // boardApiKeys: no match
       [], // agentApiKeys: no match
+      [{ id: userId, name: "Pat", email: null }], // the user the key acts for
+      [{ companyId, membershipRole: "viewer", status: "active" }], // their memberships
+      [], // instance admin role: none
       failOnAgentsLookup,
     ]);
 
@@ -92,8 +96,43 @@ describe("actorMiddleware: local agent JWT sub handling", () => {
       source: "tool_session_jwt",
     });
     expect(res.body.runId).toBe(runId);
-    // Only boardApiKeys + agentApiKeys; agents lookup MUST be skipped.
-    expect(select).toHaveBeenCalledTimes(2);
+    expect(res.body.person).toMatchObject({
+      type: "board",
+      userId,
+      companyIds: [companyId],
+      memberships: [{ companyId, membershipRole: "viewer", status: "active" }],
+      isInstanceAdmin: false,
+    });
+    // boardApiKeys + agentApiKeys, then the user's access; the agents lookup
+    // MUST be skipped.
+    expect(select).toHaveBeenCalledTimes(5);
+  });
+
+  it("refuses a Clippy key whose user no longer exists", async () => {
+    const { app } = buildApp([
+      [], // boardApiKeys: no match
+      [], // agentApiKeys: no match
+      [], // the user: gone
+      [], // memberships
+      [], // instance admin role
+    ]);
+    const token = createLocalAgentJwt(`clippy-${sessionUuid}`, companyId, "claude_local", runId, { userId });
+
+    const res = await request(app).get("/actor").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+  });
+
+  it("refuses a Clippy key that names no user, since it can act for nobody", async () => {
+    const { app } = buildApp([
+      [], // boardApiKeys: no match
+      [], // agentApiKeys: no match
+    ]);
+    const token = createLocalAgentJwt(`clippy-${sessionUuid}`, companyId, "claude_local", runId);
+
+    const res = await request(app).get("/actor").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
   });
 
   it("rejects an unrecognized non-UUID sub instead of reaching the agents lookup", async () => {

@@ -40,6 +40,14 @@ export type ToolActor = {
   userId: string;
   isInstanceAdmin: boolean;
   companyIds: string[];
+  /**
+   * The person's memberships with their roles, so a change can be refused
+   * where they are only a viewer, as the web app refuses it. Absent for an
+   * agent run's actor, which has no person behind it.
+   */
+  memberships?: Array<{ companyId: string; membershipRole?: string | null; status?: string }>;
+  /** An HQ owner or admin, who may read companies they are not a member of. */
+  isPortfolioRootUserAdmin?: boolean;
 };
 
 export interface ToolContext {
@@ -73,7 +81,11 @@ export interface ChatToolDefinition<TInput = unknown> {
   handler: (input: TInput, ctx: ToolContext) => Promise<unknown>;
 }
 
-async function assertCompanyAccess(ctx: ToolContext, companyId: string) {
+async function assertCompanyAccess(
+  ctx: Pick<ToolContext, "actor">,
+  companyId: string,
+  mode: "read" | "write" = "read",
+) {
   // Personal first, ahead of the instance-admin bypass below. An admin's
   // Clippy could otherwise read straight into anyone's private company —
   // which is exactly the door this is supposed to have no key for.
@@ -88,6 +100,16 @@ async function assertCompanyAccess(ctx: ToolContext, companyId: string) {
   if (!ctx.actor.companyIds.includes(companyId)) {
     throw forbidden(`No access to company ${companyId}`);
   }
+  // Clippy acts as the person, so where they are only a viewer it reads but
+  // does not change anything, the same as the web app.
+  if (mode === "write" && isViewerOf(ctx.actor, companyId)) {
+    throw forbidden("Viewer access is read-only");
+  }
+}
+
+function isViewerOf(actor: ToolActor, companyId: string): boolean {
+  const membership = actor.memberships?.find((m) => m.companyId === companyId);
+  return membership?.membershipRole === "viewer";
 }
 
 async function resolveAccessibleCompanyIds(ctx: ToolContext): Promise<string[]> {
@@ -386,7 +408,7 @@ const createIssueTool: ChatToolDefinition<{
     if (!target) {
       throw forbidden("No company context: pass companyId or select a company first");
     }
-    await assertCompanyAccess(ctx, target);
+    await assertCompanyAccess(ctx, target, "write");
     const attribution = attributionFor(ctx);
     const created = await issueService(ctx.db).create(target, {
       title,
@@ -495,7 +517,7 @@ const updateIssueTool: ChatToolDefinition<{
       .where(eq(issues.id, issueId))
       .then((r) => r[0] ?? null);
     if (!existing) throw notFound(`Issue ${issueId} not found`);
-    await assertCompanyAccess(ctx, existing.companyId);
+    await assertCompanyAccess(ctx, existing.companyId, "write");
 
     const attribution = attributionFor(ctx);
     // Through the service rather than straight at the table: closing an issue
@@ -551,7 +573,7 @@ const addCommentTool: ChatToolDefinition<{ issueId: string; body: string }> = {
       .where(eq(issues.id, issueId))
       .then((r) => r[0] ?? null);
     if (!issueRow) throw notFound(`Issue ${issueId} not found`);
-    await assertCompanyAccess(ctx, issueRow.companyId);
+    await assertCompanyAccess(ctx, issueRow.companyId, "write");
     const created = await ctx.db
       .insert(issueComments)
       .values({
@@ -1018,7 +1040,7 @@ const createReminderTool: ChatToolDefinition<CreateReminderInput> = {
     if (!target) {
       throw forbidden("No company context: select a company first");
     }
-    await assertCompanyAccess(ctx, target);
+    await assertCompanyAccess(ctx, target, "write");
 
     const timezone = input.timezone?.trim() || "UTC";
     const channels: ("desktop" | "slack")[] =
@@ -1174,7 +1196,7 @@ const cancelReminderTool: ChatToolDefinition<{ reminderId: string }> = {
     if (!existing || existing.companyId !== ctx.defaultCompanyId) {
       throw badRequest(`Reminder ${reminderId} not found in the current company`);
     }
-    await assertCompanyAccess(ctx, existing.companyId);
+    await assertCompanyAccess(ctx, existing.companyId, "write");
     const updated = await svc.update(
       reminderId,
       { status: "cancelled" },
@@ -1276,7 +1298,7 @@ const rememberTool: ChatToolDefinition<{
     if (!target) {
       throw forbidden("No company context: select a company first");
     }
-    await assertCompanyAccess(ctx, target);
+    await assertCompanyAccess(ctx, target, "write");
     const svc = memoryService(ctx.db);
     const actor = { userId: ctx.actor.userId ?? "board", agentId: null };
     const existing = await svc.getCompanyMemoryByName(target, name);
@@ -1389,7 +1411,7 @@ const forgetMemoryTool: ChatToolDefinition<{ memoryId?: string; name?: string; c
     if (!target) {
       throw forbidden("No company context: select a company first");
     }
-    await assertCompanyAccess(ctx, target);
+    await assertCompanyAccess(ctx, target, "write");
     const svc = memoryService(ctx.db);
     const existing = memoryId
       ? await svc.getById(memoryId)
@@ -1517,6 +1539,17 @@ export async function listPluginToolSpecsForChat(
 }
 
 /**
+ * Refuses a plugin tool call for a person who could not make one in
+ * `companyId` themselves. The REST route that runs plugin tools counts every
+ * call as a change, so where the person is only a viewer their Clippy runs
+ * none. Used by the native tool loop below and by the MCP bridge that adapter
+ * models call plugin tools through.
+ */
+export async function assertPluginToolAccess(actor: ToolActor, companyId: string): Promise<void> {
+  await assertCompanyAccess({ actor }, companyId, "write");
+}
+
+/**
  * Execute a plugin tool that was surfaced into a chat-Agent session.
  * Builds a synthetic `runContext` (`agentId="clippy:<userId>"`, fresh
  * runId) since chat-Agent isn't an agent run. The plugin worker only
@@ -1543,7 +1576,11 @@ export async function executePluginChatTool(
     };
   }
   const namespacedName = chatNameToPluginTool(chatName);
-  await assertCompanyAccess(ctx, ctx.defaultCompanyId);
+  try {
+    await assertPluginToolAccess(ctx.actor, ctx.defaultCompanyId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
   const runContext = {
     agentId: `clippy:${ctx.actor.userId}`,
     runId: randomUUID(),
