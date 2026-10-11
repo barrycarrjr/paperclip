@@ -2,6 +2,7 @@ import type { Request, RequestHandler } from "express";
 import type { IncomingHttpHeaders } from "node:http";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
 import { toNodeHandler } from "better-auth/node";
 import type { Db } from "@paperclipai/db";
 import {
@@ -12,6 +13,7 @@ import {
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
+import { ACCOUNT_DECLINED_MESSAGE, loadAccountApprovalStatus } from "../services/account-approvals.js";
 import { isLoopbackHost } from "../url-utils.js";
 
 export type BetterAuthSessionUser = {
@@ -99,6 +101,27 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   return Array.from(trustedOrigins);
 }
 
+export const ACCOUNT_DECLINED_ERROR_CODE = "ACCOUNT_DECLINED";
+
+/**
+ * A declined account cannot sign in. Refused when its session would be made,
+ * which is after the password has been checked, so only the account's owner
+ * ever learns it was declined. An account still waiting for approval does
+ * sign in: what it sees is the waiting screen. A session for an account this
+ * cannot find yet (one being made by sign-up this moment) is let through, as
+ * a new account is never a declined one.
+ */
+export function refuseDeclinedAccountSession(db: Db) {
+  return async (session: { userId: string }) => {
+    if ((await loadAccountApprovalStatus(db, session.userId)) === "declined") {
+      throw new APIError("FORBIDDEN", {
+        message: ACCOUNT_DECLINED_MESSAGE,
+        code: ACCOUNT_DECLINED_ERROR_CODE,
+      });
+    }
+  };
+}
+
 export function createBetterAuthInstance(
   db: Db,
   config: Config,
@@ -136,6 +159,13 @@ export function createBetterAuthInstance(
       enabled: true,
       requireEmailVerification: false,
       disableSignUp: config.authDisableSignUp,
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          before: refuseDeclinedAccountSession(db),
+        },
+      },
     },
     advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies: isHttpOnly }),
   };

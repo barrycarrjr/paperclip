@@ -17,6 +17,12 @@ declare global {
           status?: string;
         }>;
         isInstanceAdmin?: boolean;
+        /**
+         * A signed-in account an instance admin has not approved yet. It
+         * carries no memberships and no admin role, and is refused everywhere
+         * but the few calls middleware/account-approval-guard.ts lets through.
+         */
+        awaitingApproval?: boolean;
         /** True if this agent's company is the portfolio root (HQ). Confers cross-company READ via `assertCompanyAccess(..., "read")`. */
         isPortfolioRootAgent?: boolean;
         /** True if this board user has an active owner|admin membership in the portfolio root (HQ). Confers cross-company READ via `assertCompanyAccess(..., "read")`. */

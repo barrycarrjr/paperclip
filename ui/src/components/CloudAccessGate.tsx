@@ -1,8 +1,11 @@
+import { useEffect, useRef } from "react";
 import { Navigate, Outlet, useLocation } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "@/api/access";
 import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
+import { Button } from "@/components/ui/button";
+import { describeError } from "@/lib/error-message";
 import { queryKeys } from "@/lib/queryKeys";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
@@ -40,8 +43,51 @@ function NoBoardAccessPage() {
   );
 }
 
+/**
+ * All a new account sees until an instance admin approves it: the server
+ * refuses it everything else. The gate asks again every so often, so the app
+ * opens by itself once the account is approved.
+ */
+function AccountWaitingPage({ email }: { email: string | null }) {
+  const queryClient = useQueryClient();
+  const signOutMutation = useMutation({
+    mutationFn: () => authApi.signOut(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
+    },
+  });
+
+  return (
+    <div className="mx-auto max-w-xl px-4 py-10">
+      <div className="rounded-lg border border-border bg-card p-6" data-testid="account-waiting">
+        <h1 className="text-xl font-semibold">Your account is waiting for an admin to approve it</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {email ? `You are signed in as ${email}.` : "You are signed in."} You can use Paperclip once an admin
+          approves your account.
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground">This page opens Paperclip by itself when that happens.</p>
+        {signOutMutation.error ? (
+          <p className="mt-3 text-sm text-destructive">
+            {describeError(signOutMutation.error, "Could not sign out. Try again.")}
+          </p>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          className="mt-5"
+          onClick={() => signOutMutation.mutate()}
+          disabled={signOutMutation.isPending}
+        >
+          {signOutMutation.isPending ? "Signing out…" : "Sign out"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function CloudAccessGate() {
   const location = useLocation();
+  const queryClient = useQueryClient();
   const healthQuery = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
@@ -63,19 +109,36 @@ export function CloudAccessGate() {
     queryFn: () => authApi.getSession(),
     enabled: isAuthenticatedMode,
     retry: false,
+    // A new account waits for an instance admin. Look again now and then, so
+    // the app opens by itself once it is approved.
+    refetchInterval: (query) => (query.state.data?.accountStatus === "pending" ? 15_000 : false),
   });
+  const accountWaiting = isAuthenticatedMode && sessionQuery.data?.accountStatus === "pending";
+
+  // Everything the app asked for while the account waited was refused. Once
+  // it is approved (or signs out), ask again rather than keep those answers.
+  const wasWaitingRef = useRef(false);
+  useEffect(() => {
+    if (accountWaiting) {
+      wasWaitingRef.current = true;
+      return;
+    }
+    if (!wasWaitingRef.current) return;
+    wasWaitingRef.current = false;
+    void queryClient.invalidateQueries();
+  }, [accountWaiting, queryClient]);
 
   const boardAccessQuery = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
     queryFn: () => accessApi.getCurrentBoardAccess(),
-    enabled: isAuthenticatedMode && !!sessionQuery.data,
+    enabled: isAuthenticatedMode && !!sessionQuery.data && !accountWaiting,
     retry: false,
   });
 
   if (
     healthQuery.isLoading ||
     (isAuthenticatedMode && sessionQuery.isLoading) ||
-    (isAuthenticatedMode && !!sessionQuery.data && boardAccessQuery.isLoading)
+    (isAuthenticatedMode && !!sessionQuery.data && !accountWaiting && boardAccessQuery.isLoading)
   ) {
     return <div className="mx-auto max-w-xl py-10 text-sm text-muted-foreground">Loading...</div>;
   }
@@ -99,6 +162,10 @@ export function CloudAccessGate() {
   if (isAuthenticatedMode && !sessionQuery.data) {
     const next = encodeURIComponent(`${location.pathname}${location.search}`);
     return <Navigate to={`/auth?next=${next}`} replace />;
+  }
+
+  if (accountWaiting) {
+    return <AccountWaitingPage email={sessionQuery.data?.user.email ?? null} />;
   }
 
   if (

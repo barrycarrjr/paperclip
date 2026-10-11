@@ -25,6 +25,11 @@ const mockSystemApi = vi.hoisted(() => ({
 const mockToggleTheme = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
+const mockUseAccountRequests = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+
+vi.mock("../hooks/useAccountRequests", () => ({
+  useAccountRequests: () => mockUseAccountRequests(),
+}));
 
 vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
@@ -830,6 +835,68 @@ describe("SidebarAccountMenu", () => {
 
       expect(document.body.textContent).toContain("Downloaded but not built. Rebuild to run it.");
       expect(document.body.textContent).not.toContain("runs straight from the working tree");
+      void root;
+    });
+  });
+
+  describe("new accounts waiting for an instance admin", () => {
+    const WAITING = [
+      { id: "user-pat", name: "Pat", email: "pat@example.com", requestedAt: "2026-10-11T15:00:00.000Z" },
+      { id: "user-sam", name: "Sam", email: "sam@example.com", requestedAt: "2026-10-11T16:00:00.000Z" },
+    ];
+
+    async function renderMenu(open: boolean) {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <SidebarAccountMenu
+                deploymentMode="authenticated"
+                instanceSettingsTarget="/instance/settings/general"
+                open={open}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      return root;
+    }
+
+    it("counts them on the account row at the foot of the sidebar, which is on every page", async () => {
+      mockUseAccountRequests.mockReturnValue(WAITING);
+      const root = await renderMenu(false);
+
+      const count = container.querySelector('[data-testid="account-requests-count"]');
+      expect(count?.textContent).toBe("2");
+      expect(
+        container.querySelector('button[aria-label="Open account menu. 2 new accounts are waiting for approval."]'),
+      ).not.toBeNull();
+      void root;
+    });
+
+    it("offers a way straight to them in the menu", async () => {
+      mockUseAccountRequests.mockReturnValue(WAITING);
+      const root = await renderMenu(true);
+
+      const link = Array.from(document.body.querySelectorAll("a")).find((anchor) =>
+        anchor.textContent?.includes("2 new accounts to approve"),
+      );
+      expect(link?.getAttribute("href")).toBe("/instance/settings/access");
+      expect(link?.textContent).toContain("Approve or decline them in Access.");
+      void root;
+    });
+
+    it("shows no count and no extra line when nobody is waiting", async () => {
+      mockUseAccountRequests.mockReturnValue([]);
+      const root = await renderMenu(true);
+
+      expect(container.querySelector('[data-testid="account-requests-count"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Open account menu"]')).not.toBeNull();
+      expect(document.body.textContent).not.toContain("to approve");
       void root;
     });
   });

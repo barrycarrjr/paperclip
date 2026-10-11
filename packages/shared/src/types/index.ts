@@ -297,6 +297,7 @@ export type {
   JoinRequestRecord,
   InstanceUserRoleGrant,
   AdminUserDirectoryEntry,
+  AccountRequest,
   UserCompanyAccessEntry,
   UserCompanyAccessResponse,
 } from "./access.js";

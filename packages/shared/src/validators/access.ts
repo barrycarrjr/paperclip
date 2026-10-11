@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ACCOUNT_APPROVAL_STATUSES,
   AGENT_ADAPTER_TYPES,
   HUMAN_COMPANY_MEMBERSHIP_ROLES,
   INVITE_JOIN_TYPES,
@@ -184,6 +185,12 @@ export const authSessionSchema = z.object({
     userId: z.string().min(1),
   }),
   user: currentUserProfileSchema,
+  /**
+   * "pending" while an instance admin has not yet approved this account. A
+   * server from before the approval step sends nothing, and every account
+   * there could already work.
+   */
+  accountStatus: z.enum(ACCOUNT_APPROVAL_STATUSES).optional(),
 });
 
 export type AuthSession = z.infer<typeof authSessionSchema>;

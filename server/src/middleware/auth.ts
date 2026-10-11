@@ -4,13 +4,18 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import { unauthorized } from "../errors.js";
-import type { DeploymentMode } from "@paperclipai/shared";
+import { forbidden, unauthorized } from "../errors.js";
+import { ACCOUNT_PENDING_APPROVAL_CODE, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 import { ensurePersonalCompanyOnce } from "../services/personal-companies.js";
+import {
+  ACCOUNT_DECLINED_MESSAGE,
+  ACCOUNT_PENDING_APPROVAL_MESSAGE,
+  loadAccountApprovalStatus,
+} from "../services/account-approvals.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -110,6 +115,9 @@ async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Pro
 export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
   const access = await boardAuthService(db).resolveBoardAccess(userId);
   if (!access.user) return null;
+  // A chat app speaks as its user, so an account an instance admin has not
+  // approved gets nothing through one, Clippy included.
+  if (access.user.approvalStatus !== "approved") return null;
   const actor: Request["actor"] = {
     type: "board",
     userId,
@@ -165,7 +173,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         }
         if (session?.user?.id) {
           const userId = session.user.id;
-          const [roleRow, memberships] = await Promise.all([
+          const [roleRow, memberships, approvalStatus] = await Promise.all([
             db
               .select({ id: instanceUserRoles.id })
               .from(instanceUserRoles)
@@ -185,7 +193,34 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
                   eq(companyMemberships.status, "active"),
                 ),
               ),
+            loadAccountApprovalStatus(db, userId),
           ]);
+          if (approvalStatus !== "approved") {
+            // Still waiting for an instance admin: signed in, and nothing
+            // more. No memberships, no admin role, and no Personal company
+            // until approval (services/account-approvals.ts), and the guard
+            // after this middleware refuses it almost everywhere. A declined
+            // account, or one that no longer exists, stays as nobody, as if
+            // it had no session.
+            if (approvalStatus === "pending") {
+              req.actor = {
+                type: "board",
+                userId,
+                userName: session.user.name ?? null,
+                userEmail: session.user.email ?? null,
+                companyIds: [],
+                memberships: [],
+                isInstanceAdmin: false,
+                awaitingApproval: true,
+                runId: runIdHeader ?? undefined,
+                source: "session",
+              };
+            } else if (runIdHeader) {
+              req.actor.runId = runIdHeader;
+            }
+            next();
+            return;
+          }
           req.actor = {
             type: "board",
             userId,
@@ -217,6 +252,17 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (boardKey) {
       const access = await boardAuth.resolveBoardAccess(boardKey.userId);
       if (access.user) {
+        // A key is only as good as its account. One waiting for approval, or
+        // declined, is refused outright rather than treated as nobody, so the
+        // program holding the key is told why.
+        if (access.user.approvalStatus === "pending") {
+          next(forbidden(ACCOUNT_PENDING_APPROVAL_MESSAGE, { code: ACCOUNT_PENDING_APPROVAL_CODE }));
+          return;
+        }
+        if (access.user.approvalStatus !== "approved") {
+          next(unauthorized(ACCOUNT_DECLINED_MESSAGE));
+          return;
+        }
         await boardAuth.touchBoardApiKey(boardKey.id);
         req.actor = {
           type: "board",
