@@ -165,6 +165,12 @@ export interface WorkerRpcHostOptions {
    * environment variable, then 120 000 ms.
    */
   snapshotRpcTimeoutMs?: number;
+
+  /**
+   * Timeout (ms) for the `system.restoreSnapshot` call, which replays a whole
+   * database. Defaults to 30 minutes.
+   */
+  restoreRpcTimeoutMs?: number;
 }
 
 /**
@@ -209,6 +215,12 @@ const APPROVAL_RESPOND_RPC_TIMEOUT_MS = 2 * 60_000;
 export const DEFAULT_SNAPSHOT_RPC_TIMEOUT_MS = 2 * 60_000;
 /** Environment variable that overrides the snapshot call timeout (milliseconds). */
 export const SNAPSHOT_RPC_TIMEOUT_ENV = "PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS";
+/**
+ * Default for `system.restoreSnapshot`: an apply replays the whole database,
+ * which takes longer than taking a snapshot. Giving up early would report a
+ * restore as failed while the host carries on with it.
+ */
+export const DEFAULT_RESTORE_RPC_TIMEOUT_MS = 30 * 60_000;
 
 /** Resolve the `system.createSnapshot` timeout: explicit option, then env var, then the default. */
 export function resolveSnapshotRpcTimeoutMs(
@@ -302,6 +314,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   const stdoutStream = options.stdout ?? process.stdout;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const snapshotRpcTimeoutMs = resolveSnapshotRpcTimeoutMs(options.snapshotRpcTimeoutMs);
+  const restoreRpcTimeoutMs = options.restoreRpcTimeoutMs ?? DEFAULT_RESTORE_RPC_TIMEOUT_MS;
 
   // -----------------------------------------------------------------------
   // State
@@ -581,6 +594,13 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         },
         async releaseSnapshot(filePath: string): Promise<void> {
           await callHost("system.releaseSnapshot", { filePath });
+        },
+        async restoreSnapshot(input) {
+          return callHost(
+            "system.restoreSnapshot",
+            { filePath: input.filePath, mode: input.mode, conflictMode: input.conflictMode },
+            restoreRpcTimeoutMs,
+          );
         },
       },
 

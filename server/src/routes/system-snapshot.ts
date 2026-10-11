@@ -91,6 +91,24 @@ function parseMode(raw: unknown): RestoreSnapshotMode {
 }
 
 /**
+ * Refuse a restore the host cannot honour yet, before the dump goes anywhere
+ * near the database. The HTTP route below and a plugin's
+ * `ctx.system.restoreSnapshot` both call it, so they get the same answer.
+ */
+export function assertRestoreSupported(
+  mode: RestoreSnapshotMode,
+  conflictMode: RestoreSnapshotConflictMode,
+): void {
+  // v0.1: only the overwrite conflict mode is wired through. Reject others
+  // explicitly so callers don't think their request was honored.
+  if (mode === "apply" && conflictMode !== "overwrite") {
+    throw badRequest(
+      `[ESNAPSHOT_CONFLICT_MODE_UNSUPPORTED] conflict=${conflictMode} not yet supported (v0.1 ships overwrite only)`,
+    );
+  }
+}
+
+/**
  * Express routes for instance-wide snapshot/restore.
  *
  * All routes are gated by `assertInstanceAdmin`. The plugin
@@ -162,13 +180,7 @@ export function systemSnapshotRoutes(service: SystemSnapshotService) {
       const mode = parseMode(req.query.mode);
       const conflictMode = parseConflictMode(req.query.conflict);
 
-      // v0.1: only the overwrite conflict mode is wired through. Reject others
-      // explicitly so callers don't think their request was honored.
-      if (mode === "apply" && conflictMode !== "overwrite") {
-        throw badRequest(
-          `[ESNAPSHOT_CONFLICT_MODE_UNSUPPORTED] conflict=${conflictMode} not yet supported (v0.1 ships overwrite only)`,
-        );
-      }
+      assertRestoreSupported(mode, conflictMode);
 
       // Stage the request body to a temp file. Express body-parser is JSON-only;
       // for octet-stream we read req as a stream and write to disk.

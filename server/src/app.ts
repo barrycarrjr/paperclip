@@ -400,8 +400,9 @@ export async function createApp(
           // behalf; both need the plugin tool dispatcher and the MCP bridge.
           getToolDispatcher: () => toolDispatcherRef.current,
           pluginMcpBridge,
-          // Backs `ctx.system.createSnapshot()`. Reaching it still requires
-          // the `system.snapshot.read` capability in the plugin's manifest —
+          // Backs `ctx.system.createSnapshot()` and `restoreSnapshot()`.
+          // Reaching them still requires the `system.snapshot.read` or
+          // `system.snapshot.restore` capability in the plugin's manifest;
           // passing the service here only makes it available to be gated.
           systemSnapshotService: opts.systemSnapshotService,
         });

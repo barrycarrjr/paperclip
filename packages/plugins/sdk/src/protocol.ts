@@ -303,10 +303,11 @@ export interface GetDataParams {
    * Context and query parameters from the UI.
    *
    * `params.hostScope` is reserved by the host: the bridge routes overwrite it
-   * with `{ companyId, userId }` after validating the request, where
-   * `companyId` is the company the host checked (null for an instance-admin
-   * global call) and `userId` is the authenticated board user. A plugin may
-   * read it to scope its work and must never send it; anything a UI puts
+   * with `{ companyId, userId, isInstanceAdmin }` after validating the
+   * request, where `companyId` is the company the host checked (null for an
+   * instance-admin global call), `userId` is the authenticated board user and
+   * `isInstanceAdmin` says whether that person is an instance admin. A plugin
+   * may read it to scope its work and must never send it; anything a UI puts
    * under that key is discarded before the worker sees it.
    */
   params: Record<string, unknown>;
@@ -326,10 +327,11 @@ export interface PerformActionParams {
    * Action parameters from the UI.
    *
    * `params.hostScope` is reserved by the host and carries the same
-   * `{ companyId, userId }` the host stamps on `getData` calls (see
-   * {@link GetDataParams.params}). Plugins read it and never send it; a worker
-   * that must act on one company should trust this over any other key in
-   * `params`, because the browser supplied those.
+   * `{ companyId, userId, isInstanceAdmin }` the host stamps on `getData`
+   * calls (see {@link GetDataParams.params}). Plugins read it and never send
+   * it; a worker that must act on one company, or only for an instance admin,
+   * should trust this over any other key in `params`, because the browser
+   * supplied those.
    */
   params: Record<string, unknown>;
   /** Optional launcher/container metadata from the host render environment. */
@@ -1135,6 +1137,26 @@ export interface WorkerToHostMethods {
   "system.releaseSnapshot": [
     params: { filePath: string },
     result: void,
+  ];
+  // The restore half: the worker writes a gzipped SQL dump to its own disk
+  // and passes the path, for the same reason as above. "preview" checks it
+  // and changes nothing; "apply" replaces the instance's database with it.
+  "system.restoreSnapshot": [
+    params: {
+      /** Absolute path to the gzipped SQL dump on the host's filesystem. */
+      filePath: string;
+      mode: "preview" | "apply";
+      /** Defaults to "overwrite", the only mode that can be applied today. */
+      conflictMode?: "overwrite" | "skip" | "fail-on-conflict";
+    },
+    result: {
+      /** True once the database has been replaced. */
+      applied: boolean;
+      /** True for a preview, which changes nothing. */
+      dryRun: boolean;
+      touchedTables: string[];
+      warnings: string[];
+    },
   ];
 
   // Logger

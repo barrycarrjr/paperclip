@@ -1503,6 +1503,12 @@ export const PLUGIN_CAPABILITIES = [
   "secrets.store",
   "ai.complete",
   "system.snapshot.read",
+  // Replace the instance's whole database with a dump the plugin hands over:
+  // the restore half of a backup plugin, and even more powerful than
+  // system.snapshot.read. The host does not know who asked, so a plugin that
+  // offers it to people must keep it to instance admins itself
+  // (params.hostScope.isInstanceAdmin on a bridge call).
+  "system.snapshot.restore",
   "local.folders",
   // Agent Tools
   "agent.tools.register",

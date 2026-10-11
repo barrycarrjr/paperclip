@@ -83,6 +83,7 @@ import {
   assertInstanceAdmin,
   getActorInfo,
   hasBoardOrgAccess,
+  hasInstanceAdminAccess,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
 import { badRequest, forbidden, notFound, unauthorized, unprocessable, validationErrorMessage } from "../errors.js";
@@ -715,6 +716,13 @@ export function pluginRoutes(
     companyId: string | null;
     /** The authenticated board user, or null when there is none to name. */
     userId: string | null;
+    /**
+     * Whether the caller is an instance admin, by the same rule as
+     * assertInstanceAdmin. A plugin needs it to keep something instance-wide,
+     * such as restoring the database from a backup, to instance admins:
+     * company access says nothing about that.
+     */
+    isInstanceAdmin: boolean;
   }
 
   /**
@@ -751,6 +759,7 @@ export function pluginRoutes(
     const hostScope: PluginBridgeHostScope = {
       companyId: validatedCompanyId ?? null,
       userId: getActorInfo(req).actorId ?? null,
+      isInstanceAdmin: hasInstanceAdminAccess(req),
     };
     return { ...params, hostScope };
   }

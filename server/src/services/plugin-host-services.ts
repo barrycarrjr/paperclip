@@ -69,7 +69,9 @@ import {
 import { completeOnce, OneShotError } from "./llm-one-shot.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
-import type { SystemSnapshotService } from "../routes/system-snapshot.js";
+import { assertRestoreSupported, type SystemSnapshotService } from "../routes/system-snapshot.js";
+import { statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { IncomingMessage, RequestOptions as HttpRequestOptions } from "node:http";
 import { request as httpRequest } from "node:http";
@@ -1199,6 +1201,62 @@ export function buildHostServices(
         }
         snapshotFilesIssuedToPlugin.delete(params.filePath);
         snapshots.cleanupSnapshotFile(params.filePath);
+      },
+
+      /**
+       * Check, or apply, a dump the plugin wrote to its own disk: the restore
+       * half of createSnapshot. Capability-gated upstream
+       * (`system.snapshot.restore`).
+       *
+       * Same service and same checks as the instance-admin HTTP route, so an
+       * apply takes the lock backups take: it is refused while a backup, a
+       * snapshot or another restore runs. The host cannot tell who asked; the
+       * plugin keeps this to instance admins (hostScope.isInstanceAdmin). The
+       * file stays the plugin's to delete.
+       */
+      async restoreSnapshot(params) {
+        const snapshots = requireSnapshotService();
+        if (params.mode !== "preview" && params.mode !== "apply") {
+          throw new Error('restoreSnapshot: mode must be "preview" or "apply"');
+        }
+        const conflictMode = params.conflictMode ?? "overwrite";
+        assertRestoreSupported(params.mode, conflictMode);
+        // The route refuses an empty upload. Refuse a missing or empty file
+        // here the same way, rather than hand psql nothing to run.
+        let sizeBytes = 0;
+        try {
+          const stat = typeof params.filePath === "string" && isAbsolute(params.filePath)
+            ? statSync(params.filePath)
+            : null;
+          sizeBytes = stat?.isFile() ? stat.size : 0;
+        } catch {
+          sizeBytes = 0;
+        }
+        if (sizeBytes === 0) {
+          throw new Error(
+            "[ESNAPSHOT_EMPTY_BODY] restoreSnapshot: filePath must be the absolute path of a gzipped SQL dump that is not empty",
+          );
+        }
+
+        if (params.mode === "apply") {
+          logger.warn({ pluginId, pluginKey, sizeBytes }, "plugin is replacing the instance database from a dump");
+        } else {
+          logger.info({ pluginId, pluginKey, sizeBytes }, "plugin is checking a dump for a restore");
+        }
+        const result = await snapshots.restoreSnapshot({
+          mode: params.mode,
+          conflictMode,
+          bodyFilePath: params.filePath,
+        });
+        if (result.applied) {
+          logger.warn({ pluginId, pluginKey, sizeBytes }, "plugin replaced the instance database from a dump");
+        }
+        return {
+          applied: result.applied,
+          dryRun: result.dryRun,
+          touchedTables: result.touchedTables,
+          warnings: result.warnings,
+        };
       },
     },
 
