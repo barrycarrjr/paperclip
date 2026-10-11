@@ -202,6 +202,10 @@ Key-value pairs in properties panels:
 
 Label is always `text-xs text-muted-foreground`, value on the right. Wrap in a container with `space-y-1`.
 
+### Pills
+
+A pill is a `rounded-full` box with padding either side of a count or a short label: "0 agents", "Paused", a status. It keeps its text on one line wherever it sits. `Badge` already does; for a pill written by hand, `ui/src/index.css` sets it for every `rounded-full` box with `px-` padding, so a row squeezed on a phone cannot break "0 agents" into "0" over "agents". A chip that holds a sentence, or text that can be wider than a phone, says `whitespace-normal`. `ui/src/pills.test.ts` keeps the rule and the pills it reaches in step.
+
 ### Metric Card Grid
 
 Dashboard metrics in a responsive grid:
@@ -298,7 +302,8 @@ The page area (`main`) is a size container (`PAGE_AREA_CONTAINER_CLASS`, `ui/src
 - Pick the size where the content still fits. A starting point is the page width the window breakpoint gave with the navigation open: `lg:` is `@[40rem]:`, `xl:` about `@4xl:`, `2xl:` about `@6xl:`. Not `@2xl:` for `lg:`: at 1024 wide with the navigation open the page area is 664 pixels, about 650 under a scrollbar, just short of the 672 `@2xl:` needs, so the 1024 layout would change.
 - Check the page at 1440 and 1280 wide with Clippy docked as a sidebar, and that it looks the same as before at 1440, and at 1024 with the navigation open, without Clippy.
 - For a choice CSS cannot make, such as panes or tabs, measure the element with `useElementWidth` (`ui/src/hooks/useElementWidth.ts`).
-- A query answers to the nearest container: inside a component that is one itself (`@container/card-header`, the agent run panels) it measures that component instead.
+- A query answers to the nearest container: inside a component that is one itself (`@container/card-header`, the agent run panels) it measures that component instead. Make a card a container when its own grid has to follow the card, as the Costs finance ledger does beside the inference ledger.
+- Separate the columns of an arbitrary grid value with underscores, never commas: `@4xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]`. Written `grid-cols-[1.3fr,1fr]`, the value is one browsers drop, so the columns stack at every width and nothing says so. A comma outside brackets only belongs in values that are lists, such as `transition-[...]` or `shadow-[...]`, and each layer of a `bg-[...]` list is an image: a colour goes in a `bg-` class of its own. `ui/src/arbitrary-values.test.ts` fails on any other.
 
 ### Bottom Bars and Floating Buttons
 
@@ -306,6 +311,8 @@ The bottom of the window is shared: the Clippy launcher and the page's scroll bu
 
 - Anything a page fixes to the screen (a bar, a corner notice, the scroll buttons, a hand built overlay) is drawn through `<PageFloating>` (`ui/src/components/PageFloatingLayer.tsx`), which puts it in a layer beside the page area. Never inside the page area: Safari before 18.4 placed a fixed element inside a size container against the container, so a Save bar sat at the end of the page. `ui/src/fixed-elements.test.ts` fails on a fixed class list that is not drawn this way or through a portal.
 - A bar a page pins along the bottom (fixed, or sticky to the bottom) takes `usePageBottomBarRef` (`ui/src/hooks/usePageBottomBar.ts`). While it shows, the launcher, the scroll buttons and the toasts sit above it. On a phone they sit at the higher of their usual place and just above the bar, not both added up.
+- Place that bar with `PAGE_BOTTOM_BAR_FLUSH_CLASS` (full width along the edge) or `PAGE_BOTTOM_BAR_FLOATING_CLASS` (1.5rem above it), never `bottom-0` or `bottom-6`. On a phone they rest on top of the bottom navigation, which Layout publishes as `--mobile-bottom-nav-room`, and follow it down when it slides away. At `bottom-0` the agent Save bar sat under the navigation and Save could not be pressed; at `bottom-6` the selection bars covered its middle buttons. `ui/src/fixed-elements.test.ts` fails on a registered bar placed any other way. The navigation registers as a bottom bar itself, so a bar resting on it still lifts the launcher.
+- Nothing else that floats may cover the phone's bottom navigation either: the toasts sit above it (`TOAST_VIEWPORT_PHONE_CLASS`) and stop short of the launcher's corner, and a page's notice in the bottom right corner takes the launcher's own offset (`ABOVE_MOBILE_BOTTOM_NAV_CLASS`) rather than `bottom-4`.
 - The row that ends a page needs nothing: the page area keeps room under a page that scrolls (`PAGE_END_ROOM_CLASS`), so its last row ends above the launcher.
 - Anything a page fixes to the right adds docked Clippy's width, `var(--clippy-dock-width,0px)` (`PAGE_CORNER_RIGHT_CLASS` at the corner offset), or the docked panel covers it.
 - Floating layers stay off the app's own columns: toasts start beside the navigation, not over its account button, and the launcher moves beside the properties panel. The launcher never covers the scroll buttons, which stack above it.
@@ -385,3 +392,6 @@ All components use `cn()` from `@/lib/utils` for className merging. All componen
 - A page layout sized by the window (`lg:grid-cols-4`, `xl:grid-cols-[19rem_1fr]`), which squeezes when Clippy is docked. Use a container query (see Page Layouts Follow the Page Area)
 - A bar pinned to the bottom without `usePageBottomBarRef`, or a fixed element placed with a plain `right-4`: the launcher sits on the bar, or docked Clippy hides it (see Bottom Bars and Floating Buttons)
 - A fixed bar, notice or button drawn inside the page instead of through `<PageFloating>`: an older Safari pins it to the page area, not the screen (see Bottom Bars and Floating Buttons)
+- A page's bar at `bottom-0` or `bottom-6`, or a toast or notice at `bottom-3` or `bottom-4`: on a phone it lands on the bottom navigation, under it or over it (see Bottom Bars and Floating Buttons)
+- A comma between the columns of an arbitrary grid value, `grid-cols-[1fr,2fr]`: browsers drop the whole value and the columns stack (see Page Layouts Follow the Page Area)
+- `whitespace-normal` on a pill that holds a count or a short label: it breaks onto two lines when its row is squeezed (see Pills)

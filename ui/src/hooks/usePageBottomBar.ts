@@ -9,6 +9,10 @@ import { registerPageBottomBar } from "../lib/page-bottom-bar";
  * that simply ends the page needs no ref: the page area keeps room under it
  * (PAGE_END_ROOM_CLASS).
  *
+ * Place the bar itself with PAGE_BOTTOM_BAR_FLUSH_CLASS or
+ * PAGE_BOTTOM_BAR_FLOATING_CLASS (lib/narrow-layout), so that on a phone it
+ * rests on top of the bottom bar instead of under or over it.
+ *
  * Pass `forwardTo` when the element already has a ref of its own; it is kept
  * pointing at the element, and set back to null when the element goes.
  */

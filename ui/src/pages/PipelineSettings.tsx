@@ -101,6 +101,7 @@ import {
 } from "../lib/project-workspace-defaults";
 import { orderReusableExecutionWorkspaces } from "../lib/reusable-execution-workspaces";
 import { cn, relativeTime } from "../lib/utils";
+import { PAGE_BOTTOM_BAR_FLUSH_CLASS } from "../lib/narrow-layout";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { StageHealthWarnings } from "../components/PipelineHealthWarnings";
@@ -3304,7 +3305,8 @@ export function PipelineSettings() {
               {saveStage.error ? <p className="text-sm text-destructive">{saveStage.error.message}</p> : null}
 
               {stageDirty || saveStage.isPending ? (
-                <div ref={saveStageBarRef} className="sticky bottom-0 z-10 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2">
+                // Sticks on top of the phone bottom bar, not under it.
+                <div ref={saveStageBarRef} className={cn("sticky z-10 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2", PAGE_BOTTOM_BAR_FLUSH_CLASS)}>
                   <span className="text-sm text-muted-foreground">
                     {saveStage.isPending ? "Saving changes…" : "You have unsaved changes."}
                   </span>

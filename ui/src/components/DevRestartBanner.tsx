@@ -65,19 +65,22 @@ export function DevRestartBanner({ devServer }: { devServer?: DevServerHealthSta
           </div>
         </div>
 
+        {/* These chips hold a sentence, so unlike a pill they may wrap
+            (whitespace-normal, against the pill rule in index.css): on a
+            phone the longest one is wider than the screen. */}
         <div className="flex shrink-0 items-center gap-2 text-xs font-medium">
           {devServer.waitingForIdle ? (
-            <div className="inline-flex items-center gap-2 rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
+            <div className="inline-flex items-center gap-2 whitespace-normal rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
               <TimerReset className="h-3.5 w-3.5" />
               <span>Waiting for {devServer.activeRunCount} live run{devServer.activeRunCount === 1 ? "" : "s"} to finish</span>
             </div>
           ) : devServer.autoRestartEnabled ? (
-            <div className="inline-flex items-center gap-2 rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
+            <div className="inline-flex items-center gap-2 whitespace-normal rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
               <RotateCcw className="h-3.5 w-3.5" />
               <span>Auto-restart will trigger when the instance is idle</span>
             </div>
           ) : (
-            <div className="inline-flex items-center gap-2 rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
+            <div className="inline-flex items-center gap-2 whitespace-normal rounded-full bg-amber-900/10 px-3 py-1.5 dark:bg-amber-100/10">
               <RotateCcw className="h-3.5 w-3.5" />
               <span>Restart <code>pnpm dev:once</code> after the active work is safe to interrupt</span>
             </div>

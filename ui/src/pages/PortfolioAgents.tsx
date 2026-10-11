@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
 import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
-import { PAGE_BOTTOM_BAR_CENTER_CLASS } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS } from "../lib/narrow-layout";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
@@ -436,7 +436,7 @@ function BulkActionsBar({ count, onPause, onResume, onClear, isPending }: BulkAc
     // drew over the Clippy window. See lib/z-layers. Drawn beside the page
     // area, not inside it (see PageFloating).
     <PageFloating>
-      <div ref={barRef} className={cn("fixed bottom-6 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
+      <div ref={barRef} className={cn("fixed flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
         <span className="text-sm font-medium text-muted-foreground mr-1">
           {count} selected
         </span>

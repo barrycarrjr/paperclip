@@ -8,7 +8,11 @@ import {
   type ToastTone,
 } from "../context/ToastContext";
 import { cn } from "../lib/utils";
-import { TOAST_VIEWPORT_DESKTOP_CLASS } from "../lib/narrow-layout";
+import {
+  TOAST_STACK_MAX_HEIGHT_CLASS,
+  TOAST_VIEWPORT_DESKTOP_CLASS,
+  TOAST_VIEWPORT_PHONE_CLASS,
+} from "../lib/narrow-layout";
 import { Z_TOAST } from "@/lib/z-layers";
 
 const toneClasses: Record<ToastTone, string> = {
@@ -110,11 +114,20 @@ export function ToastViewport() {
       // the screen. The right hand edge of every message was off screen, and
       // on a narrower phone that took part of the close button with it.
       //
+      // On a phone it sits above the bottom bar, which a message at
+      // `bottom-3` covered whole, and stops short of the launcher's corner.
+      // See TOAST_VIEWPORT_PHONE_CLASS.
+      //
       // On a desktop it starts beside the navigation, not on it: at the left
       // edge of the window a message covered the account button at the foot
       // of the navigation. It also sits above a page's own bottom bar. See
       // TOAST_VIEWPORT_DESKTOP_CLASS.
-      className={cn("pointer-events-none fixed inset-x-3 bottom-3 max-w-sm", TOAST_VIEWPORT_DESKTOP_CLASS, Z_TOAST)}
+      className={cn(
+        "pointer-events-none fixed max-w-sm",
+        TOAST_VIEWPORT_PHONE_CLASS,
+        TOAST_VIEWPORT_DESKTOP_CLASS,
+        Z_TOAST,
+      )}
     >
       {toasts.length > 0 ? (
         <ol
@@ -131,9 +144,13 @@ export function ToastViewport() {
           // as the messages it holds plus the thin gaps between them, so it
           // catches no more of the page than the messages themselves do.
           //
-          // On a desktop the box may sit higher, above a page's bottom bar,
-          // so the list stops that much sooner too.
-          className="pointer-events-auto flex max-h-[calc(100dvh-1.5rem)] w-full flex-col-reverse gap-2 overflow-y-auto overscroll-contain px-1 md:max-h-[calc(100dvh-1.5rem-var(--page-bottom-bar-room,0px))]"
+          // The box sits higher on a phone, above the bottom bar, and on a
+          // desktop above a page's bottom bar, so the list stops that much
+          // sooner too (TOAST_STACK_MAX_HEIGHT_CLASS).
+          className={cn(
+            "pointer-events-auto flex w-full flex-col-reverse gap-2 overflow-y-auto overscroll-contain px-1",
+            TOAST_STACK_MAX_HEIGHT_CLASS,
+          )}
         >
           {toasts.map((toast) => (
             <AnimatedToast

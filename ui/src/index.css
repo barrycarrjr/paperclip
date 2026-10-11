@@ -433,6 +433,16 @@
   .paperclip-mdxeditor-content {
     font-family: inherit;
   }
+  /* A pill, a rounded-full box with padding either side of a count or a short
+     label ("0 agents", "Paused", a status), keeps it on one line wherever it
+     sits. Squeezed in a row on a phone, Skill Studio's agents pill broke into
+     "0" over "agents", and most of the app's pills are written by hand rather
+     than with Badge, which already holds its line. In the base layer, so a
+     chip that holds a sentence can still say whitespace-normal.
+     src/pills.test.ts keeps this rule and the pills it reaches in step. */
+  .rounded-full:where([class*="px-"]) {
+    white-space: nowrap;
+  }
 }
 
 @media (pointer: coarse) {

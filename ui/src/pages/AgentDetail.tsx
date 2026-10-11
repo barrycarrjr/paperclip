@@ -55,6 +55,7 @@ import { ScrollToBottom } from "../components/ScrollToBottom";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
+import { PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_BOTTOM_BAR_FLUSH_CLASS } from "../lib/narrow-layout";
 import { buildRetryWakePayload, describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1214,7 +1215,7 @@ export function AgentDetail() {
         <PageFloating>
           <div
             ref={configActionBarRef}
-            className="fixed bottom-6 right-[calc(var(--clippy-dock-width,0px)+1.5rem)] z-30"
+            className={cn("fixed right-[calc(var(--clippy-dock-width,0px)+1.5rem)] z-30", PAGE_BOTTOM_BAR_FLOATING_CLASS)}
           >
             <div className="flex items-center gap-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-3 py-1.5 shadow-lg">
               <Button
@@ -1237,16 +1238,21 @@ export function AgentDetail() {
         </PageFloating>
       )}
 
-      {/* Mobile bottom Save/Cancel bar, beside the page area too. */}
+      {/* Mobile bottom Save/Cancel bar, beside the page area too. It rests
+          on top of the phone bottom bar: at `bottom-0` it sat under it, and
+          Save could not be pressed until the page had scrolled far enough
+          for that bar to slide away. While the bottom bar is there it holds
+          the safe area, so the padding for it is only needed once it has
+          gone. */}
       {isMobile && showConfigActionBar && (
         <PageFloating>
           <div
             ref={configActionBarRef}
-            className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm"
+            className={cn("fixed inset-x-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm", PAGE_BOTTOM_BAR_FLUSH_CLASS)}
           >
             <div
               className="flex items-center justify-end gap-2 px-3 py-2"
-              style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
+              style={{ paddingBottom: "max(calc(env(safe-area-inset-bottom) - var(--mobile-bottom-nav-room, 0px)), 0.5rem)" }}
             >
               <Button
                 variant="ghost"

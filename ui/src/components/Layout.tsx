@@ -47,6 +47,8 @@ import {
 } from "../lib/navigation-scroll";
 import {
   APP_NAV_WIDTH_PROPERTY,
+  MOBILE_BOTTOM_NAV_ROOM,
+  MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_END_ROOM_CLASS,
@@ -405,9 +407,15 @@ function LayoutShell() {
 
   // The company rail and the navigation beside the page on a desktop. The
   // toasts start beside them rather than on top of them (lib/narrow-layout);
-  // on a phone the navigation is a drawer, so nothing is published there.
+  // on a phone the navigation is a drawer, so no width is published there.
+  //
+  // On a phone, how far up the bottom bar reaches instead, and nothing once
+  // it has slid away: a page's own bar rests on top of it rather than under
+  // it (PAGE_BOTTOM_BAR_FLUSH_CLASS), and follows it down and back up.
   const appNavStyle = isMobile
-    ? undefined
+    ? ({
+        [MOBILE_BOTTOM_NAV_ROOM_PROPERTY]: mobileNavVisible ? MOBILE_BOTTOM_NAV_ROOM : "0px",
+      } as CSSProperties)
     : ({
         [APP_NAV_WIDTH_PROPERTY]: `${COMPANY_RAIL_WIDTH + (sidebarOpen ? NAV_SIDEBAR_WIDTH : 0)}px`,
       } as CSSProperties);

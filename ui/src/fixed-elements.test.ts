@@ -5,7 +5,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nothing a page fixes to the screen is drawn inside the page area.
+ * Nothing a page fixes to the screen is drawn inside the page area, and a bar
+ * a page pins along the bottom rests on the phone bottom bar.
  *
  * The page area (`main`) is a size container (PAGE_AREA_CONTAINER_CLASS, in
  * lib/narrow-layout), and Safari before 18.4 made a size container the box that
@@ -21,6 +22,20 @@ import { describe, expect, it } from "vitest";
  * (a Radix `...Portal`, or `createPortal`), which puts it at the end of the
  * document. Files whose fixed elements are never inside the page area are
  * listed in OUTSIDE_THE_PAGE_AREA with the reason.
+ *
+ * A bar pinned along the bottom (one that takes usePageBottomBarRef) has a
+ * second rule. On a phone the agent Save bar, pinned at `bottom-0`, sat under
+ * the bottom bar, which is drawn later on the same layer, so Save could not be
+ * pressed; the selection bars, at `bottom-6`, sat over it instead. Such a bar
+ * is placed with PAGE_BOTTOM_BAR_FLUSH_CLASS or PAGE_BOTTOM_BAR_FLOATING_CLASS
+ * (lib/narrow-layout), or with a bottom offset of its own that adds the room
+ * Layout publishes for the bottom bar, `--mobile-bottom-nav-room`.
+ *
+ * And nothing else fixed to the screen sits low enough to cover the phone
+ * bottom bar: the toasts at `bottom-3` lay over all of it, from the highest
+ * layer there is, and the Email page's notices at `bottom-4` over its last
+ * buttons. A fixed class list may only name a bottom offset that knows about
+ * the bars along the bottom; the rest take theirs from lib/narrow-layout.
  */
 
 const srcDir = fileURLToPath(new URL(".", import.meta.url));
@@ -91,6 +106,111 @@ function fixedInPlace(fileName: string, source: string): number[] {
   return lines;
 }
 
+/** Files that fix something at a plain bottom offset, and why that is right there. */
+const PLAIN_BOTTOM_OFFSET: Record<string, string> = {
+  "components/MobileBottomNav.tsx": "the phone bottom bar itself, at the foot of the window",
+};
+
+/**
+ * The lines of a file with a class list that holds `fixed` and a bottom
+ * offset for a phone (no `md:` or other variant in front) that does not know
+ * about the bars along the bottom: it names neither the phone bottom bar's
+ * room nor the room the bars along the bottom take.
+ */
+function fixedAtPlainBottom(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const lines: number[] = [];
+  const visit = (node: ts.Node) => {
+    const templatePart = ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node);
+    if (
+      (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || templatePart) &&
+      holdsFixedClass(node.text, templatePart)
+    ) {
+      const plain = node.text
+        .trim()
+        .split(/\s+/)
+        .filter((name) => name.startsWith("bottom-"))
+        .filter((name) => !/--(mobile-bottom-nav-room|page-bottom-bar-room)\b/.test(name));
+      if (plain.length > 0) lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
+/** Files with a bar registered along the bottom that does not rest on the phone bottom bar, and why. */
+const NOT_ON_THE_BOTTOM_BAR: Record<string, string> = {
+  "components/MobileBottomNav.tsx": "the phone bottom bar itself, which the page's bars rest on",
+  // Its section on the issue page (PageSection) cuts off what overflows it,
+  // which also makes the section the box the reply box sticks inside, so it
+  // stays at the end of the thread and never reaches the foot of the window.
+  // Raised by the bottom bar's room, it only rose further over the thread.
+  // Look again if the reply box is made to stick to the window.
+  "components/IssueChatThread.tsx": "the reply box sticks inside its own section, not to the window",
+};
+
+/** What a bar's class list names to rest on the phone bottom bar. */
+const RESTS_ON_THE_BOTTOM_BAR = ["PAGE_BOTTOM_BAR_FLUSH_CLASS", "PAGE_BOTTOM_BAR_FLOATING_CLASS", "--mobile-bottom-nav-room"];
+
+/**
+ * The bars a file registers along the bottom: each element given a ref made
+ * by usePageBottomBarRef, with its line and whether its class list rests on
+ * the phone bottom bar. A ref no element in the file takes is reported with
+ * line 0, so a bar this cannot read is never passed over in silence.
+ */
+function bottomBars(fileName: string, source: string): Array<{ line: number; restsOnBottomBar: boolean }> {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const refs = new Set<string>();
+  const findRefs = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      node.initializer.expression.getText(sourceFile) === "usePageBottomBarRef"
+    ) {
+      refs.add(node.name.text);
+    }
+    ts.forEachChild(node, findRefs);
+  };
+  findRefs(sourceFile);
+
+  const bars: Array<{ line: number; restsOnBottomBar: boolean }> = [];
+  const used = new Set<string>();
+  const findBars = (node: ts.Node) => {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const attribute = (name: string) =>
+        node.attributes.properties.find(
+          (property): property is ts.JsxAttribute => ts.isJsxAttribute(property) && property.name.getText(sourceFile) === name,
+        );
+      const ref = attribute("ref")?.initializer;
+      const refName =
+        ref && ts.isJsxExpression(ref) && ref.expression && ts.isIdentifier(ref.expression) ? ref.expression.text : null;
+      if (refName && refs.has(refName)) {
+        used.add(refName);
+        const classList = attribute("className")?.initializer?.getText(sourceFile) ?? "";
+        bars.push({
+          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          restsOnBottomBar: RESTS_ON_THE_BOTTOM_BAR.some((name) => classList.includes(name)),
+        });
+      }
+    }
+    ts.forEachChild(node, findBars);
+  };
+  findBars(sourceFile);
+  for (const ref of refs) {
+    if (!used.has(ref)) bars.push({ line: 0, restsOnBottomBar: false });
+  }
+  return bars;
+}
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(dir, entry.name);
@@ -148,6 +268,88 @@ describe("what a page fixes to the screen", () => {
       const entry = files.find((candidate) => candidate.relative === relative);
       return !entry || !fixedAnywhere(readFileSync(entry.file, "utf8"), relative);
     });
+    expect(stale).toEqual([]);
+  });
+});
+
+describe("a bar a page pins along the bottom", () => {
+  const registered = files.flatMap(({ file, relative }) =>
+    bottomBars(relative, readFileSync(file, "utf8")).map((bar) => ({ ...bar, relative })),
+  );
+
+  it("rests on the phone bottom bar rather than under or over it", () => {
+    const offending = registered
+      .filter(({ relative, restsOnBottomBar }) => !restsOnBottomBar && !(relative in NOT_ON_THE_BOTTOM_BAR))
+      .map(({ relative, line }) => `${relative}:${line}`);
+    expect(offending, "place these with PAGE_BOTTOM_BAR_FLUSH_CLASS or PAGE_BOTTOM_BAR_FLOATING_CLASS").toEqual([]);
+  });
+
+  it("is found for every bar the app registers", () => {
+    // The agent Save bars (desktop and phone), four selection bars, the
+    // pipeline stage's unsaved changes bar and the issue reply box, and the
+    // phone bottom bar itself. Fewer would mean the check stopped reading
+    // some of them.
+    expect(registered.length).toBeGreaterThanOrEqual(9);
+    expect(registered.filter(({ line }) => line === 0)).toEqual([]);
+  });
+
+  it("is told apart however its classes are written", () => {
+    const page = [
+      "const barRef = usePageBottomBarRef<HTMLDivElement>();",
+      'const a = <div ref={barRef} className="fixed bottom-0 z-30" />;',
+      'const b = <div ref={barRef} className={cn("fixed inset-x-0", PAGE_BOTTOM_BAR_FLUSH_CLASS)} />;',
+      'const c = <div ref={barRef} className={cn("fixed flex", PAGE_BOTTOM_BAR_FLOATING_CLASS, Z_PAGE_FLOATING)} />;',
+      'const d = <div ref={barRef} className="sticky bottom-[calc(max(var(--mobile-bottom-nav-room,0px),env(safe-area-inset-bottom))+20px)]" />;',
+      'const e = <div ref={otherRef} className="fixed bottom-6" />;',
+    ].join("\n");
+    expect(bottomBars("page.tsx", page)).toEqual([
+      { line: 2, restsOnBottomBar: false },
+      { line: 3, restsOnBottomBar: true },
+      { line: 4, restsOnBottomBar: true },
+      { line: 5, restsOnBottomBar: true },
+    ]);
+    // A ref no element takes is reported rather than passed over.
+    expect(bottomBars("page.tsx", "const lostRef = usePageBottomBarRef();")).toEqual([
+      { line: 0, restsOnBottomBar: false },
+    ]);
+  });
+
+  it("lists no file outside the rule that has no such bar any more", () => {
+    const stale = Object.keys(NOT_ON_THE_BOTTOM_BAR).filter(
+      (relative) => !registered.some((bar) => bar.relative === relative),
+    );
+    expect(stale).toEqual([]);
+  });
+});
+
+describe("what floats along the bottom of a phone", () => {
+  const plain = files.flatMap(({ file, relative }) =>
+    fixedAtPlainBottom(relative, readFileSync(file, "utf8")).map((line) => ({ relative, line })),
+  );
+
+  it("stays clear of the bottom bar, taking its offset from lib/narrow-layout", () => {
+    const offending = plain
+      .filter(({ relative }) => !(relative in PLAIN_BOTTOM_OFFSET))
+      .map(({ relative, line }) => `${relative}:${line}`);
+    expect(offending, "use ABOVE_MOBILE_BOTTOM_NAV_CLASS, or the page bottom bar classes, for the bottom").toEqual([]);
+  });
+
+  it("is told apart however its classes are written", () => {
+    const page = [
+      'const a = <div className="fixed bottom-4 flex" />;',
+      'const b = <div className={cn("pointer-events-none fixed inset-x-3 bottom-3 max-w-sm", Z_TOAST)} />;',
+      'const c = <div className={cn("fixed flex", ABOVE_MOBILE_BOTTOM_NAV_CLASS)} />;',
+      'const d = <div className="fixed inset-x-0 bottom-[var(--mobile-bottom-nav-room,0px)]" />;',
+      'const e = <div className="fixed md:bottom-4 top-4" />;',
+      'const f = <div className="sticky bottom-0" />;',
+    ].join("\n");
+    expect(fixedAtPlainBottom("page.tsx", page)).toEqual([1, 2]);
+  });
+
+  it("lists no file outside the rule that has no such element any more", () => {
+    const stale = Object.keys(PLAIN_BOTTOM_OFFSET).filter(
+      (relative) => !plain.some((entry) => entry.relative === relative),
+    );
     expect(stale).toEqual([]);
   });
 });

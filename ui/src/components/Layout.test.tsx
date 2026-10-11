@@ -9,6 +9,8 @@ import { PAGE_FLOATING_LAYER_ATTRIBUTE, PageFloating } from "./PageFloatingLayer
 import {
   ABOVE_MOBILE_BOTTOM_NAV_CLASS,
   APP_NAV_WIDTH_PROPERTY,
+  MOBILE_BOTTOM_NAV_ROOM,
+  MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_END_ROOM_CLASS,
@@ -888,6 +890,46 @@ describe("Layout", () => {
     const { root } = await renderLayout();
     const shell = container.firstElementChild as HTMLElement;
     expect(shell.style.getPropertyValue(APP_NAV_WIDTH_PROPERTY)).toBe("");
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("publishes how far up the phone bottom bar reaches, for a page's own bar to rest on", async () => {
+    // At bottom-0 the agent Save bar sat under the bottom bar and Save could
+    // not be pressed. A page's bar now rests on top of it by this room, and
+    // drops down when the bar slides away as the page scrolls down.
+    sidebarState.isMobile = true;
+    sidebarState.sidebarOpen = false;
+    const scrollTo = async (top: number) => {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: top });
+      await act(async () => {
+        window.dispatchEvent(new Event("scroll"));
+      });
+    };
+    const { root } = await renderLayout();
+    const shell = container.firstElementChild as HTMLElement;
+    try {
+      expect(shell.style.getPropertyValue(MOBILE_BOTTOM_NAV_ROOM_PROPERTY)).toBe(MOBILE_BOTTOM_NAV_ROOM);
+
+      await scrollTo(400);
+      expect(shell.style.getPropertyValue(MOBILE_BOTTOM_NAV_ROOM_PROPERTY)).toBe("0px");
+
+      await scrollTo(360);
+      expect(shell.style.getPropertyValue(MOBILE_BOTTOM_NAV_ROOM_PROPERTY)).toBe(MOBILE_BOTTOM_NAV_ROOM);
+    } finally {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("publishes no bottom bar on a desktop, where there is none", async () => {
+    sidebarState.isMobile = false;
+    const { root } = await renderLayout();
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.style.getPropertyValue(MOBILE_BOTTOM_NAV_ROOM_PROPERTY)).toBe("");
     await act(async () => {
       root.unmount();
     });

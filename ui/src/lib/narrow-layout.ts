@@ -18,6 +18,40 @@
 export const MOBILE_BOTTOM_NAV_HEIGHT_CLASS = "h-16";
 
 /**
+ * How far up from the bottom of the window the phone bottom bar reaches while
+ * it shows: its own height (MOBILE_BOTTOM_NAV_HEIGHT_CLASS) and the safe area
+ * under it. Layout publishes it as MOBILE_BOTTOM_NAV_ROOM_PROPERTY on a phone,
+ * and 0px once the bar has slid away as the page scrolls down. Nothing is
+ * published on a desktop, where the bar is not drawn.
+ */
+export const MOBILE_BOTTOM_NAV_ROOM_PROPERTY = "--mobile-bottom-nav-room";
+export const MOBILE_BOTTOM_NAV_ROOM = "calc(4rem + env(safe-area-inset-bottom))";
+
+/**
+ * Where a page's own bar along the bottom sits: on top of the phone bottom
+ * bar while that shows, and at the foot of the window once it has slid away,
+ * and on a desktop. It follows the bottom bar as it slides, over the same
+ * 200ms.
+ *
+ * Pinned to the foot of the window, the agent Save bar sat under the phone
+ * bottom bar, which is drawn later on the same layer, so Save could not be
+ * seen or pressed until the page had scrolled far enough for the bottom bar
+ * to slide away. The selection bars were drawn over it instead and hid its
+ * middle buttons.
+ *
+ * PAGE_BOTTOM_BAR_FLUSH_CLASS is for a bar that runs the full width along the
+ * edge (the agent Save bar on a phone, a pipeline stage's unsaved changes
+ * bar), PAGE_BOTTOM_BAR_FLOATING_CLASS for one that floats 1.5rem above it,
+ * clear of the safe area too (the selection bars, the agent Save bar on a
+ * desktop). Either way the bar still takes usePageBottomBarRef, so the
+ * launcher, the scroll buttons and the toasts sit above it.
+ */
+export const PAGE_BOTTOM_BAR_FLUSH_CLASS =
+  "bottom-[var(--mobile-bottom-nav-room,0px)] transition-[bottom] duration-200 ease-out";
+export const PAGE_BOTTOM_BAR_FLOATING_CLASS =
+  "bottom-[calc(max(var(--mobile-bottom-nav-room,0px),env(safe-area-inset-bottom))+1.5rem)] transition-[bottom] duration-200 ease-out";
+
+/**
  * Bottom offset for a floating control that has to stay above the phone bottom
  * bar, dropping back to the ordinary corner offset once the bar is gone. The
  * bar is `md:hidden`, so the `md:` half here has to match that breakpoint.
@@ -100,9 +134,16 @@ export const PAGE_CORNER_RIGHT_CLASS = "right-[calc(var(--clippy-dock-width,0px)
  * under the panel. With Clippy docked it centres on the page area instead,
  * between the navigation (`--app-nav-width`) and the panel; without Clippy
  * `min` keeps it in the middle of the window, where it always was.
+ *
+ * It is never wider than the window either. On a phone the portfolio issues
+ * bar was wider than the screen and ran past both edges, so its "selected"
+ * count and its Deselect button were cut off. It now stops 0.75rem inside
+ * each edge and its buttons wrap onto a second line. `w-max` because a bar
+ * placed at the middle of the window is otherwise only given the half of it
+ * to the right of its left edge.
  */
 export const PAGE_BOTTOM_BAR_CENTER_CLASS =
-  "left-[min(50%,calc(var(--app-nav-width,0px)+(100%-var(--app-nav-width,0px)-var(--clippy-dock-width,0px))/2))] -translate-x-1/2";
+  "left-[min(50%,calc(var(--app-nav-width,0px)+(100%-var(--app-nav-width,0px)-var(--clippy-dock-width,0px))/2))] -translate-x-1/2 w-max max-w-[calc(100vw-1.5rem)] flex-wrap justify-center";
 
 /**
  * Where the toasts sit on a desktop: beside the company rail and the
@@ -111,11 +152,36 @@ export const PAGE_BOTTOM_BAR_CENTER_CLASS =
  * bottom of the navigation and the add-company button under the rail.
  * `--app-nav-width` is the width of those two columns, set by Layout
  * (APP_NAV_WIDTH_PROPERTY). On a phone the navigation is a drawer, so the
- * toasts keep their place there.
+ * toasts take their place there from TOAST_VIEWPORT_PHONE_CLASS.
  */
 export const APP_NAV_WIDTH_PROPERTY = "--app-nav-width";
 export const TOAST_VIEWPORT_DESKTOP_CLASS =
-  "md:left-[calc(var(--app-nav-width,0px)+0.75rem)] md:bottom-[calc(0.75rem+var(--page-bottom-bar-room,0px))]";
+  "md:left-[calc(var(--app-nav-width,0px)+0.75rem)] md:right-3 md:bottom-[calc(0.75rem+var(--page-bottom-bar-room,0px))]";
+
+/**
+ * Where the toasts sit on a phone: above the bottom bar, and left of the
+ * corner the Clippy launcher and the scroll buttons stand in.
+ *
+ * At `bottom-3` a message covered the whole bottom bar from the highest layer
+ * there is, so while it showed (a failure stays until it is closed) none of
+ * the six destinations could be reached. The offset follows the launcher's
+ * rule (ABOVE_MOBILE_BOTTOM_NAV_CLASS): the higher of clear of the bottom bar
+ * and the safe area, or 0.75rem above a page's own bar, not both added up.
+ * Up there a message the full width of the screen lay over the round
+ * launcher, so it stops 0.75rem short of the launcher's corner: the launcher
+ * is 3rem wide and 1rem in from the edge.
+ */
+export const TOAST_VIEWPORT_PHONE_CLASS =
+  "left-3 right-[4.75rem] bottom-[max(calc(4.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+0.75rem))]";
+
+/**
+ * How tall the pile of toasts may grow: up to 0.75rem short of the top of the
+ * window, from wherever TOAST_VIEWPORT_PHONE_CLASS and, from `md` up,
+ * TOAST_VIEWPORT_DESKTOP_CLASS put its foot. The oldest message, the one that
+ * says why something failed, is never above the top edge.
+ */
+export const TOAST_STACK_MAX_HEIGHT_CLASS =
+  "max-h-[calc(100dvh-0.75rem-max(calc(4.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+0.75rem)))] md:max-h-[calc(100dvh-1.5rem-var(--page-bottom-bar-room,0px))]";
 
 /**
  * Stops one page making the whole app slide sideways on a phone.

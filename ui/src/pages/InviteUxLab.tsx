@@ -697,7 +697,7 @@ function CompanyInvitesPreview() {
 export function InviteUxLab() {
   return (
     <div className="space-y-6">
-      <div className="overflow-hidden rounded-[32px] border border-border/70 bg-[linear-gradient(135deg,rgba(8,145,178,0.10),transparent_28%),linear-gradient(180deg,rgba(245,158,11,0.10),transparent_44%),var(--background)] shadow-[0_30px_80px_rgba(15,23,42,0.10)]">
+      <div className="overflow-hidden rounded-[32px] border border-border/70 bg-background bg-[linear-gradient(135deg,rgba(8,145,178,0.10),transparent_28%),linear-gradient(180deg,rgba(245,158,11,0.10),transparent_44%)] shadow-[0_30px_80px_rgba(15,23,42,0.10)]">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_320px]">
           <div className="p-6 sm:p-7">
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/25 bg-cyan-500/[0.08] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-300">
@@ -750,7 +750,7 @@ export function InviteUxLab() {
         eyebrow="Top-level states"
         title="Landing state coverage"
         description="Small cards for the fast-return invite states that do not render the full split-screen layout."
-        accentClassName="bg-[linear-gradient(180deg,rgba(59,130,246,0.05),transparent_30%),var(--background)]"
+        accentClassName="bg-background bg-[linear-gradient(180deg,rgba(59,130,246,0.05),transparent_30%)]"
       >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatusCard
@@ -804,7 +804,7 @@ export function InviteUxLab() {
         eyebrow="Invite landing"
         title="Split-screen invite flows"
         description="These frames mirror the production invite surface closely enough to review spacing, hierarchy, and control states while keeping data fixture-driven."
-        accentClassName="bg-[linear-gradient(180deg,rgba(234,179,8,0.06),transparent_28%),var(--background)]"
+        accentClassName="bg-background bg-[linear-gradient(180deg,rgba(234,179,8,0.06),transparent_28%)]"
       >
         <div className="space-y-5">
           <InviteLandingShell
@@ -881,7 +881,7 @@ export function InviteUxLab() {
         eyebrow="Result states"
         title="Approval and completion screens"
         description="These are the post-submit states returned from invite acceptance, including optional claim and onboarding metadata."
-        accentClassName="bg-[linear-gradient(180deg,rgba(16,185,129,0.06),transparent_30%),var(--background)]"
+        accentClassName="bg-background bg-[linear-gradient(180deg,rgba(16,185,129,0.06),transparent_30%)]"
       >
         <div className="grid gap-5 xl:grid-cols-3">
           <InviteResultPreview
@@ -906,7 +906,7 @@ export function InviteUxLab() {
         eyebrow="Standalone auth"
         title="Auth page states"
         description="The general `/auth` page uses a different composition from invite landing. These previews keep both sign-in and sign-up variants visible."
-        accentClassName="bg-[linear-gradient(180deg,rgba(168,85,247,0.06),transparent_28%),var(--background)]"
+        accentClassName="bg-background bg-[linear-gradient(180deg,rgba(168,85,247,0.06),transparent_28%)]"
       >
         <div className="space-y-5">
           <AuthScreenPreview mode="sign_in" error="Invalid email or password" />
@@ -918,7 +918,7 @@ export function InviteUxLab() {
         eyebrow="Company settings"
         title="Company invite management"
         description="This section captures the board-side invite creation flow, copied-link state, audit table, and the edge states that are otherwise tedious to stage."
-        accentClassName="bg-[linear-gradient(180deg,rgba(244,114,182,0.06),transparent_28%),var(--background)]"
+        accentClassName="bg-background bg-[linear-gradient(180deg,rgba(244,114,182,0.06),transparent_28%)]"
       >
         <CompanyInvitesPreview />
       </LabSection>

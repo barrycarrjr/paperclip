@@ -56,6 +56,35 @@ describe("how much room a page's bottom bar takes", () => {
     expect(PAGE_BOTTOM_BAR_REACH_PX).toBeGreaterThanOrEqual(56);
     expect(PAGE_BOTTOM_BAR_REACH_PX).toBeLessThan(72);
   });
+
+  // On a phone the bottom bar registers too, 64 pixels tall with its 1 pixel
+  // border, and a page's bar rests on top of it.
+  const PHONE_BOTTOM_BAR = barAt(0, 65);
+
+  it("counts a page's bar resting on the phone bottom bar, which is further up than the reach", () => {
+    // Held against the window alone, the agent Save bar resting there did not
+    // count, and the launcher sat on its Save button.
+    expect(pageBottomBarRoom([PHONE_BOTTOM_BAR, barAt(65, 48)], WINDOW_HEIGHT)).toBe(65 + 48);
+    // In either order.
+    expect(pageBottomBarRoom([barAt(65, 48), PHONE_BOTTOM_BAR], WINDOW_HEIGHT)).toBe(65 + 48);
+  });
+
+  it("counts a bar floating a little above the phone bottom bar, as the selection bars do", () => {
+    expect(pageBottomBarRoom([PHONE_BOTTOM_BAR, barAt(65 + 24, 46)], WINDOW_HEIGHT)).toBe(65 + 24 + 46);
+  });
+
+  it("still leaves out a bar higher up than the reach above the phone bottom bar", () => {
+    // The issue reply box, scrolled to its own place well above the bottom.
+    expect(
+      pageBottomBarRoom([PHONE_BOTTOM_BAR, barAt(65 + PAGE_BOTTOM_BAR_REACH_PX + 1, 120)], WINDOW_HEIGHT),
+    ).toBe(65);
+  });
+
+  it("is nothing for the phone bottom bar once it has slid below the window", () => {
+    expect(pageBottomBarRoom([barAt(-65, 65)], WINDOW_HEIGHT)).toBe(0);
+    // And a page's bar that followed it down counts from the bottom again.
+    expect(pageBottomBarRoom([barAt(-65, 65), barAt(0, 48)], WINDOW_HEIGHT)).toBe(48);
+  });
 });
 
 describe("registering a page's bottom bar", () => {
@@ -122,5 +151,43 @@ describe("registering a page's bottom bar", () => {
     release();
     release();
     expect(roomOnPage()).toBe("");
+  });
+
+  it("measures again when a bar has finished sliding, which no scroll or resize reports", () => {
+    // The phone bottom bar slides away as the page scrolls, and a page's bar
+    // resting on it slides down with it, after the scroll that started it.
+    const phoneBottomBar = makeBar(0, 65);
+    const saveBar = makeBar(65, 48);
+    const releaseNav = registerPageBottomBar(phoneBottomBar);
+    const releaseSave = registerPageBottomBar(saveBar);
+    expect(roomOnPage()).toBe("113px");
+
+    const below = barAt(-65, 65);
+    phoneBottomBar.getBoundingClientRect = () =>
+      ({ ...below, left: 0, right: 100, width: 100, height: 65, x: 0, y: below.top, toJSON: () => below }) as DOMRect;
+    const down = barAt(0, 48);
+    saveBar.getBoundingClientRect = () =>
+      ({ ...down, left: 0, right: 100, width: 100, height: 48, x: 0, y: down.top, toJSON: () => down }) as DOMRect;
+    saveBar.dispatchEvent(new Event("transitionend"));
+    expect(roomOnPage()).toBe("48px");
+
+    releaseSave();
+    releaseNav();
+  });
+
+  it("stops listening for the end of a slide once a bar is released", () => {
+    const released = makeBar(24, 46);
+    const release = registerPageBottomBar(released);
+    const kept = makeBar(0, 30);
+    const keep = registerPageBottomBar(kept);
+    release();
+    expect(roomOnPage()).toBe("30px");
+    // Every measurement reads the bar still there, so count those.
+    const measureKept = vi.spyOn(kept, "getBoundingClientRect");
+    released.dispatchEvent(new Event("transitionend"));
+    expect(measureKept).not.toHaveBeenCalled();
+    kept.dispatchEvent(new Event("transitionend"));
+    expect(measureKept).toHaveBeenCalledTimes(1);
+    keep();
   });
 });

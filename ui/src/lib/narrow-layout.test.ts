@@ -5,10 +5,14 @@ import {
   CLIPPY_LAUNCHER_SIZE_CLASS,
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
+  MOBILE_BOTTOM_NAV_ROOM,
+  MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   OWN_LINE_ACTIONS_CLASS,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_BOTTOM_BAR_CENTER_CLASS,
+  PAGE_BOTTOM_BAR_FLOATING_CLASS,
+  PAGE_BOTTOM_BAR_FLUSH_CLASS,
   PAGE_CORNER_RIGHT_CLASS,
   PAGE_END_ROOM_CLASS,
   PAGE_END_ROOM_EXTRA_PX,
@@ -17,7 +21,9 @@ import {
   SCROLL_AREA_FITS_COLUMN_CLASS,
   SCROLL_TO_BOTTOM_OFFSET_CLASS,
   SCROLL_TO_TOP_OFFSET_CLASS,
+  TOAST_STACK_MAX_HEIGHT_CLASS,
   TOAST_VIEWPORT_DESKTOP_CLASS,
+  TOAST_VIEWPORT_PHONE_CLASS,
   WRAPPING_ROW_CLASS,
   pageNeedsEndRoom,
   spacingClassPixels,
@@ -52,8 +58,19 @@ function splitOutsideBrackets(value: string, separator: string): string[] {
   return parts;
 }
 
-/** The pixels behind a CSS length made of max(), calc() sums, rem and px, the safe area and a bar's room. */
-function lengthPixels(value: string, at: { safeArea: number; barRoom: number }): number {
+/**
+ * What a length is worked out against: the bottom safe area, how far up the
+ * window the bars along the bottom reach, and how far up the phone bottom bar
+ * reaches (nothing on a desktop, where Layout publishes none).
+ */
+interface LengthAt {
+  safeArea: number;
+  barRoom: number;
+  navRoom?: number;
+}
+
+/** The pixels behind a CSS length made of max(), calc() sums, rem and px, the safe area and the published rooms. */
+function lengthPixels(value: string, at: LengthAt): number {
   const inside = (name: string) =>
     value.startsWith(`${name}(`) && value.endsWith(")") ? value.slice(name.length + 1, -1) : null;
   const largest = inside("max");
@@ -62,10 +79,11 @@ function lengthPixels(value: string, at: { safeArea: number; barRoom: number }):
   }
   const sum = inside("calc");
   if (sum !== null) {
-    return splitOutsideBrackets(sum, "+").reduce((total, term) => total + lengthPixels(term, at), 0);
+    return splitOutsideBrackets(sum, "+").reduce((total, term) => total + lengthPixels(term.trim(), at), 0);
   }
   if (value === "env(safe-area-inset-bottom)") return at.safeArea;
   if (value === `var(${PAGE_BOTTOM_BAR_ROOM_PROPERTY},0px)`) return at.barRoom;
+  if (value === `var(${MOBILE_BOTTOM_NAV_ROOM_PROPERTY},0px)`) return at.navRoom ?? 0;
   const length = /^(\d+(?:\.\d+)?)(rem|px)$/.exec(value);
   if (length) return Number(length[1]) * (length[2] === "rem" ? 16 : 1);
   throw new Error(`cannot work out "${value}"`);
@@ -76,9 +94,16 @@ function lengthPixels(value: string, at: { safeArea: number; barRoom: number }):
  * in pixels, worked out as the browser would for a bottom safe area and a
  * page's bottom bar reaching a given height up the window.
  */
-function bottomPixels(bottomClass: string, at: { safeArea: number; barRoom: number }): number {
+function bottomPixels(bottomClass: string, at: LengthAt): number {
   const value = /^bottom-\[(.+)\]$/.exec(bottomClass)?.[1];
   return value === undefined ? spacingClassPixels(bottomClass) : lengthPixels(value, at);
+}
+
+/** The arbitrary value of the one class in a list that sets a property, as in `bottom-[...]`. */
+function valueOf(classes: string, property: string): string {
+  const part = classes.split(" ").find((candidate) => candidate.startsWith(`${property}-[`));
+  expect(part, `no ${property} in "${classes}"`).toBeDefined();
+  return part!.slice(property.length + 2, -1);
 }
 
 describe("spacingClassPixels", () => {
@@ -210,6 +235,99 @@ describe("where the toasts sit on a desktop", () => {
   });
 });
 
+describe("where the toasts sit on a phone", () => {
+  // At bottom-3 a message covered the whole bottom bar from the highest layer
+  // there is, so while it showed none of its six destinations could be
+  // reached. On a phone the bars along the bottom include the bottom bar
+  // itself (MobileBottomNav registers), so with nothing else there the room
+  // is the bottom bar's own.
+  const SAFE_AREA = 34;
+  const NAV_ROOM = 64 + SAFE_AREA;
+  const phone = (barRoom: number) =>
+    bottomPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "bottom"), { safeArea: SAFE_AREA, barRoom });
+
+  it("sits 0.75rem above the bottom bar, not on it", () => {
+    expect(phone(NAV_ROOM)).toBe(NAV_ROOM + 12);
+  });
+
+  it("stays clear of where the bottom bar comes back, while it has slid away", () => {
+    expect(phone(0)).toBe(NAV_ROOM + 12);
+  });
+
+  it("sits 0.75rem above a page's bar resting on the bottom bar, not that bar's height on top of the bottom bar's", () => {
+    expect(phone(NAV_ROOM + 48)).toBe(NAV_ROOM + 48 + 12);
+  });
+
+  it("stops short of the corner the Clippy launcher stands in", () => {
+    // Up there a message the width of the screen lay over the round launcher,
+    // which is 1rem in from the right edge (ClippyLauncher) and this wide.
+    const launcherReach = 16 + spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "", "size"));
+    expect(spacingClassPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "right"))).toBeGreaterThan(launcherReach);
+    // And still held in from the left, so the box has both its edges.
+    expect(spacingClassPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "left"))).toBe(12);
+  });
+
+  it("goes back to the desktop place from md up, where the bottom bar is hidden", () => {
+    for (const property of ["left", "right", "bottom"]) {
+      partFor(TOAST_VIEWPORT_DESKTOP_CLASS, "md", property);
+    }
+  });
+
+  it("lets the pile of messages grow only as far as the top of the window, from wherever its foot is", () => {
+    // A failure stays until it is closed, so they pile up. Measured from the
+    // old foot, the pile on a phone would have run off the top by the height
+    // of the bottom bar, taking the oldest message, and the reason it gives,
+    // with it.
+    const parts = TOAST_STACK_MAX_HEIGHT_CLASS.split(" ");
+    expect(parts).toContain(`max-h-[calc(100dvh-0.75rem-${valueOf(TOAST_VIEWPORT_PHONE_CLASS, "bottom")})]`);
+    expect(parts).toContain(`md:max-h-[calc(100dvh-1.5rem-var(${PAGE_BOTTOM_BAR_ROOM_PROPERTY},0px))]`);
+  });
+});
+
+describe("how far up the phone bottom bar reaches", () => {
+  // Layout publishes it for a page's own bar to rest on. It has to be the
+  // bar's own height, or a bar resting on it leaves a gap or sits on its
+  // buttons.
+  it("is the bottom bar's height and the safe area under it", () => {
+    expect(MOBILE_BOTTOM_NAV_ROOM_PROPERTY).toBe("--mobile-bottom-nav-room");
+    expect(lengthPixels(MOBILE_BOTTOM_NAV_ROOM, { safeArea: 34, barRoom: 0 })).toBe(
+      spacingClassPixels(MOBILE_BOTTOM_NAV_HEIGHT_CLASS) + 34,
+    );
+  });
+});
+
+describe("a page's own bar along the bottom", () => {
+  // At bottom-0 the agent Save bar sat under the phone bottom bar, which is
+  // drawn later on the same layer, so Save could not be pressed. At bottom-6
+  // the selection bars sat over it and hid its middle buttons.
+  const SAFE_AREA = 34;
+  const NAV_ROOM = 64 + SAFE_AREA;
+  const flush = (at: LengthAt) => bottomPixels(partFor(PAGE_BOTTOM_BAR_FLUSH_CLASS, "", "bottom"), at);
+  const floating = (at: LengthAt) => bottomPixels(partFor(PAGE_BOTTOM_BAR_FLOATING_CLASS, "", "bottom"), at);
+
+  it("rests on top of the phone bottom bar while it shows", () => {
+    expect(flush({ safeArea: SAFE_AREA, barRoom: 0, navRoom: NAV_ROOM })).toBe(NAV_ROOM);
+    expect(floating({ safeArea: SAFE_AREA, barRoom: 0, navRoom: NAV_ROOM })).toBe(NAV_ROOM + 24);
+  });
+
+  it("goes down with it when it slides away, the floating one still clear of the safe area", () => {
+    expect(flush({ safeArea: SAFE_AREA, barRoom: 0, navRoom: 0 })).toBe(0);
+    expect(floating({ safeArea: SAFE_AREA, barRoom: 0, navRoom: 0 })).toBe(SAFE_AREA + 24);
+  });
+
+  it("sits where it always did on a desktop, where no bottom bar is published", () => {
+    expect(flush({ safeArea: 0, barRoom: 0 })).toBe(spacingClassPixels("bottom-0"));
+    expect(floating({ safeArea: 0, barRoom: 0 })).toBe(spacingClassPixels("bottom-6"));
+  });
+
+  it("slides with the bottom bar rather than jumping", () => {
+    // The bottom bar slides over 200ms (MobileBottomNav).
+    for (const placement of [PAGE_BOTTOM_BAR_FLUSH_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS]) {
+      expect(placement.split(" ")).toEqual(expect.arrayContaining(["transition-[bottom]", "duration-200"]));
+    }
+  });
+});
+
 describe("a page's own floating element in the bottom right corner", () => {
   // Placed against the window, `right-4` put it under docked Clippy, on a
   // higher layer: the agent Save and Cancel bar could not be seen at all.
@@ -231,6 +349,16 @@ describe("a page's own bar centred along the bottom", () => {
     // Without the dock the page-area centre is right of the window centre, so
     // `min` with 50% keeps the old place.
     expect(PAGE_BOTTOM_BAR_CENTER_CLASS).toMatch(/^left-\[min\(50%,/);
+  });
+
+  it("is never wider than the window, and wraps its buttons instead", () => {
+    // On a phone the portfolio issues bar ran past both edges of the screen,
+    // cutting off its count and its Deselect button. Placed at the middle of
+    // the window, a bar is only given the right half of it unless it asks for
+    // its own width (w-max).
+    expect(PAGE_BOTTOM_BAR_CENTER_CLASS.split(" ")).toEqual(
+      expect.arrayContaining(["w-max", "max-w-[calc(100vw-1.5rem)]", "flex-wrap"]),
+    );
   });
 });
 

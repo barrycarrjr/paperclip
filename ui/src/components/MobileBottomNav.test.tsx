@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { MOBILE_BOTTOM_NAV_HEIGHT_CLASS } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_ROOM_PROPERTY } from "../lib/page-bottom-bar";
 
 vi.mock("@/lib/router", () => ({
   useLocation: () => ({ pathname: "/PAP/dashboard", search: "", hash: "", state: null }),
@@ -166,5 +167,39 @@ describe("MobileBottomNav", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  // A page's own bar rests on top of this one on a phone (the agent Save bar,
+  // the selection bars). Counted with the bars along the bottom, it makes the
+  // stack the launcher and the toasts sit above start from its top, so a bar
+  // resting there lifts them too. Left out, the Save bar resting on it was
+  // too far up to count, and the launcher sat on its Save button.
+  it("counts itself with the bars along the bottom of the window", () => {
+    const roomOnPage = () => document.documentElement.style.getPropertyValue(PAGE_BOTTOM_BAR_ROOM_PROPERTY);
+    vi.stubGlobal("innerHeight", 844);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const root = createRoot(container);
+    try {
+      act(() => {
+        root.render(<MobileBottomNav visible />);
+      });
+      const nav = container.querySelector<HTMLElement>('nav[aria-label="Mobile navigation"]')!;
+      // jsdom has no layout, so the bar is given its place on a phone by hand.
+      const box = { top: 779, bottom: 844, left: 0, right: 390, width: 390, height: 65, x: 0, y: 779 };
+      nav.getBoundingClientRect = () => ({ ...box, toJSON: () => box }) as DOMRect;
+      document.dispatchEvent(new Event("scroll"));
+      expect(roomOnPage()).toBe("65px");
+
+      act(() => {
+        root.unmount();
+      });
+      expect(roomOnPage()).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
