@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Library, Plus } from "lucide-react";
-import { SPACE_DESCRIPTION_MAX, SPACE_NAME_MAX } from "@paperclipai/shared";
+import { Archive, Library, Plus } from "lucide-react";
+import { SPACE_DESCRIPTION_MAX, SPACE_NAME_MAX, type SpaceListItem } from "@paperclipai/shared";
 import { accessApi } from "@/api/access";
 import { spacesApi } from "@/api/spaces";
 import { EmptyState } from "@/components/EmptyState";
@@ -37,6 +37,7 @@ export function Spaces() {
   const companyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [createOpen, setCreateOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Spaces" }]);
@@ -53,6 +54,15 @@ export function Spaces() {
     queryFn: () => spacesApi.list(companyId!),
     enabled: !!companyId,
   });
+  // Archived Spaces leave the list; they are asked for when shown, and when
+  // the list is empty: "No Spaces yet" would be wrong if every Space is
+  // archived, and would invite a second Space of the same name.
+  const noneInList = spacesQuery.isSuccess && spacesQuery.data.length === 0;
+  const archivedQuery = useQuery({
+    queryKey: queryKeys.spaces.archived(companyId ?? ""),
+    queryFn: () => spacesApi.list(companyId!, { archived: true }),
+    enabled: !!companyId && (showArchived || noneInList),
+  });
 
   if (!companyId) {
     return <EmptyState icon={Library} message="Select a company to see its Spaces." />;
@@ -60,6 +70,7 @@ export function Spaces() {
   if (spacesQuery.isLoading) return <PageSkeleton variant="list" />;
 
   const spaces = spacesQuery.data ?? [];
+  const allArchived = noneInList && (archivedQuery.data ?? []).length > 0;
 
   return (
     <div className="space-y-4">
@@ -101,41 +112,77 @@ export function Spaces() {
 
       {/* An empty list is only "no Spaces yet" when the list loaded: a failed
           load offering to make the first one led to duplicate Spaces. */}
-      {spaces.length === 0 && spacesQuery.error ? null : spaces.length === 0 ? (
-        <EmptyState
-          icon={Library}
-          message="No Spaces yet. A Space holds pages and subpages, like the chapters and sections of a handbook."
-          action={canWrite ? "New Space" : undefined}
-          onAction={canWrite ? () => setCreateOpen(true) : undefined}
-        />
+      {spaces.length === 0 && spacesQuery.error ? null : allArchived ? (
+        <p className="text-sm text-muted-foreground">
+          Every Space is archived. Open one to read it, or unarchive it from its settings.
+        </p>
+      ) : spaces.length === 0 ? (
+        // Not until the archived ones have answered, so "No Spaces yet" is never said of archived ones.
+        archivedQuery.isLoading ? null : (
+          <EmptyState
+            icon={Library}
+            message="No Spaces yet. A Space holds pages and subpages, like the chapters and sections of a handbook."
+            action={canWrite ? "New Space" : undefined}
+            onAction={canWrite ? () => setCreateOpen(true) : undefined}
+          />
+        )
       ) : (
-        <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
-          {spaces.map((space) => (
-            <li key={space.id}>
-              <Link
-                to={`/spaces/${space.urlKey}`}
-                className="flex items-start gap-3 px-4 py-3 text-foreground no-underline transition-colors hover:bg-accent/50"
-              >
-                <Library className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium">{space.name}</span>
-                  {space.description && (
-                    <span className="mt-0.5 text-sm text-muted-foreground line-clamp-2">
-                      {space.description}
-                    </span>
-                  )}
-                </span>
-                <span className="shrink-0 pt-0.5 text-xs text-muted-foreground">
-                  {pageCountLabel(space.pageCount)}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <SpaceList spaces={spaces} />
+      )}
+
+      {!spacesQuery.error && !allArchived && (
+        <div>
+          <Button size="sm" variant="ghost" aria-expanded={showArchived} onClick={() => setShowArchived((shown) => !shown)}>
+            <Archive className="h-3.5 w-3.5" />
+            {showArchived ? "Hide archived Spaces" : "Show archived Spaces"}
+          </Button>
+        </div>
+      )}
+      {(showArchived || allArchived) && (
+        <section aria-label="Archived Spaces" className="space-y-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">Archived</h2>
+          {archivedQuery.error ? (
+            <p className="text-sm text-destructive">{archivedQuery.error.message}</p>
+          ) : archivedQuery.isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading the archived Spaces…</p>
+          ) : (archivedQuery.data ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No archived Spaces.</p>
+          ) : (
+            <SpaceList spaces={archivedQuery.data ?? []} />
+          )}
+        </section>
       )}
 
       <NewSpaceDialog companyId={companyId} open={createOpen} onOpenChange={setCreateOpen} />
     </div>
+  );
+}
+
+function SpaceList({ spaces }: { spaces: SpaceListItem[] }) {
+  return (
+    <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+      {spaces.map((space) => (
+        <li key={space.id}>
+          <Link
+            to={`/spaces/${space.urlKey}`}
+            className="flex items-start gap-3 px-4 py-3 text-foreground no-underline transition-colors hover:bg-accent/50"
+          >
+            <Library className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">{space.name}</span>
+              {space.description && (
+                <span className="mt-0.5 text-sm text-muted-foreground line-clamp-2">
+                  {space.description}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 pt-0.5 text-xs text-muted-foreground">
+              {space.archivedAt ? "Archived" : pageCountLabel(space.pageCount)}
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 

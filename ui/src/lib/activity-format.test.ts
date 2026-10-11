@@ -85,4 +85,21 @@ describe("activity formatting", () => {
     expect(formatActivityVerb("issue.reviewers_updated", details, { agentMap })).toBe("updated reviewers on");
     expect(formatIssueActivityAction("issue.reviewers_updated", details, { agentMap })).toBe("updated reviewers");
   });
+
+  it("words what happened in a Space from its ids and numbers alone", () => {
+    const space = { spaceId: "space-1", pageId: "page-1" };
+    expect(formatActivityVerb("space.archived", { spaceId: "space-1" })).toBe("archived a Space");
+    expect(formatActivityVerb("space.unarchived", { spaceId: "space-1" })).toBe("unarchived a Space");
+    expect(formatActivityVerb("space.page_moved", { ...space, fromSpaceId: "space-1", parentPageId: "page-2" })).toBe(
+      "moved a page in a Space",
+    );
+    expect(formatActivityVerb("space.page_moved", { ...space, spaceId: "space-2", fromSpaceId: "space-1" })).toBe(
+      "moved a page to another Space",
+    );
+    expect(formatActivityVerb("space.page_deleted", { ...space, subpageCount: 2 })).toBe("deleted a page from a Space");
+    expect(formatActivityVerb("space.page_restored", { ...space, subpageCount: 2 })).toBe("brought back a page from a Space's trash");
+    expect(
+      formatActivityVerb("space.page_version_restored", { ...space, revisionNumber: 6, restoredFromRevisionNumber: 3 }),
+    ).toBe("restored version 3 of a page in a Space");
+  });
 });

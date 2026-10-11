@@ -17,6 +17,8 @@ export const updateSpaceSchema = z.object({
   name: z.string().trim().min(1).max(SPACE_NAME_MAX).optional(),
   description: z.string().trim().max(SPACE_DESCRIPTION_MAX).optional().nullable(),
   sortOrder: z.number().int().min(0).max(1_000_000).optional(),
+  /** Archive the Space, or bring it back. Archived, it is read only until it is brought back. */
+  archived: z.boolean().optional(),
 });
 
 export type UpdateSpace = z.infer<typeof updateSpaceSchema>;
@@ -46,3 +48,31 @@ export const updateSpacePageSchema = z.object({
 });
 
 export type UpdateSpacePage = z.infer<typeof updateSpacePageSchema>;
+
+/**
+ * Where a page goes, with all its subpages: under parentPageId, or to the top
+ * level when that is null, in the Space spaceId (its own Space when left out).
+ * index is its place among the pages already there, from 0; left out, it goes
+ * after them. The same parent with another index puts pages in order.
+ */
+export const moveSpacePageSchema = z.object({
+  spaceId: z.string().uuid().optional(),
+  parentPageId: z.string().uuid().nullable(),
+  index: z.number().int().min(0).max(1_000_000).optional(),
+  /**
+   * The parent the page had on the screen that asked (null for the top
+   * level). Given, the move is refused with 409 when the page has moved
+   * since. Move up and Move down send it, so a screen that has not caught up
+   * cannot put a page back where someone just moved it from.
+   */
+  fromParentPageId: z.string().uuid().nullable().optional(),
+});
+
+export type MoveSpacePage = z.infer<typeof moveSpacePageSchema>;
+
+/** A restore is a save: it names the version it was written on, and is refused with 409 if the page has moved on. */
+export const restoreSpacePageRevisionSchema = z.object({
+  baseRevisionId: z.string().uuid(),
+});
+
+export type RestoreSpacePageRevision = z.infer<typeof restoreSpacePageRevisionSchema>;
