@@ -280,6 +280,70 @@ describe("InviteLandingPage", () => {
     });
   });
 
+  it("still reads a sign-in refused with nothing but its status as a wrong email or password", async () => {
+    // Through the real sign-in client: a 401 with no code and no words. The
+    // page used to spot this by the client's old wording, "Request failed: 401".
+    const { authApi } = await vi.importActual<typeof import("../api/auth")>("../api/auth");
+    signInEmailMock.mockImplementation((input: { email: string; password: string }) => authApi.signInEmail(input));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) })));
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+            <QueryClientProvider client={queryClient}>
+              <Routes>
+                <Route path="/invite/:token" element={<InviteLandingPage />} />
+              </Routes>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+
+      const existingAccountButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "I already have an account",
+      );
+      await act(async () => {
+        existingAccountButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+
+      const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      const emailInput = container.querySelector('input[name="email"]') as HTMLInputElement;
+      const passwordInput = container.querySelector('input[name="password"]') as HTMLInputElement;
+      await act(async () => {
+        inputValueSetter!.call(emailInput, "jane@example.com");
+        emailInput.dispatchEvent(new Event("input", { bubbles: true }));
+        inputValueSetter!.call(passwordInput, "wrongpass");
+        passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        container
+          .querySelector('[data-testid="invite-inline-auth"]')
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      });
+      await flushReact();
+      await flushReact();
+
+      expect(signInEmailMock).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain(
+        "That email and password did not match an existing Paperclip account.",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
   it("auto-accepts the invite after account creation and redirects into the company", async () => {
     getSessionMock.mockResolvedValueOnce(null);
     getSessionMock.mockResolvedValue({

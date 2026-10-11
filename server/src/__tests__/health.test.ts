@@ -67,7 +67,8 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "unhealthy",
       version: serverVersion,
-      error: "database_unreachable"
+      error: "database_unreachable",
+      message: "Paperclip cannot reach its database.",
     });
   });
 

@@ -57,7 +57,7 @@ import {
   workProductService,
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
-import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
+import { conflict, forbidden, HttpError, notFound, unauthorized, validationErrorMessage } from "../errors.js";
 import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
@@ -1304,7 +1304,7 @@ export function issueRoutes(
 
     const parsed = previewDirectiveSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.message });
+      res.status(400).json({ error: validationErrorMessage(parsed.error) });
       return;
     }
 
@@ -1323,7 +1323,7 @@ export function issueRoutes(
 
     const parsed = broadcastDirectiveSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.message });
+      res.status(400).json({ error: validationErrorMessage(parsed.error) });
       return;
     }
 

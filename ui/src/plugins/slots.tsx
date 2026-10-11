@@ -39,6 +39,7 @@ import type {
 } from "@paperclipai/shared";
 import { pluginsApi, type PluginUiContribution } from "@/api/plugins";
 import { authApi } from "@/api/auth";
+import { describeError } from "@/lib/error-message";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import {
@@ -107,8 +108,7 @@ function requiresEntityType(slotType: PluginUiSlotType): boolean {
 }
 
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "Unknown error";
+  return describeError(error, "Unknown error");
 }
 
 /**

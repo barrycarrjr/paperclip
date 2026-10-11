@@ -6,6 +6,8 @@ import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { authApi } from "../api/auth";
+import { ApiError, fetchOrNetworkError } from "../api/client";
+import { failedResponseMessage } from "../lib/error-message";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
 import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -87,7 +89,7 @@ async function pluginFetch<T = unknown>(
 ): Promise<T> {
   const url = new URL(`/api/plugins/${PLUGIN_KEY}/api${path}`, window.location.origin);
   url.searchParams.set("companyId", init.companyId);
-  const res = await fetch(url.toString(), {
+  const res = await fetchOrNetworkError(url.toString(), {
     method: init.method ?? "GET",
     credentials: "include",
     headers: {
@@ -99,11 +101,7 @@ async function pluginFetch<T = unknown>(
   });
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    const message =
-      (payload && typeof payload === "object" && "error" in payload && typeof (payload as { error: unknown }).error === "string")
-        ? (payload as { error: string }).error
-        : `Request failed (${res.status})`;
-    throw new Error(message);
+    throw new ApiError(failedResponseMessage(res.status, payload), res.status, payload);
   }
   return payload as T;
 }

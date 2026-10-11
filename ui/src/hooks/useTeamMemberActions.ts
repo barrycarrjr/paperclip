@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useToastActions } from "../context/ToastContext";
+import { describeError } from "../lib/error-message";
 import { queryKeys } from "../lib/queryKeys";
 
 /**
@@ -31,7 +32,7 @@ export function useTeamMemberActions(companyId: string) {
   const fail = (what: string) => (error: unknown) =>
     pushToast({
       title: `Could not ${what}`,
-      body: error instanceof Error ? error.message : String(error),
+      body: describeError(error),
       tone: "error",
     });
 

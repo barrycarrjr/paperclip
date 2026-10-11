@@ -11,6 +11,7 @@ import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { healthApi } from "../api/health";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { statusFailureMessage } from "../lib/error-message";
 import { clearPendingInviteToken, rememberPendingInviteToken } from "../lib/invite-memory";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDate } from "../lib/utils";
@@ -60,6 +61,16 @@ function getAuthErrorMessage(error: unknown) {
   return message.length > 0 ? message : null;
 }
 
+/**
+ * Whether a refusal said nothing but its status: no code and no words of its
+ * own. The sign-in client words that as the status alone (it used to read
+ * "Request failed: 401").
+ */
+function isBareStatusRefusal(error: unknown, status: number) {
+  const errorStatus = error && typeof error === "object" ? (error as { status?: unknown }).status : null;
+  return errorStatus === status && getAuthErrorMessage(error) === statusFailureMessage(status);
+}
+
 function mapInviteAuthFeedback(
   error: unknown,
   authMode: AuthMode,
@@ -84,7 +95,7 @@ function mapInviteAuthFeedback(
     };
   }
 
-  if (authMode === "sign_in" && message === "Request failed: 401") {
+  if (authMode === "sign_in" && isBareStatusRefusal(error, 401)) {
     return {
       tone: "error",
       message:
@@ -92,7 +103,7 @@ function mapInviteAuthFeedback(
     };
   }
 
-  if (authMode === "sign_up" && message === "Request failed: 422") {
+  if (authMode === "sign_up" && isBareStatusRefusal(error, 422)) {
     return {
       tone: "info",
       message: `An account may already exist for ${emailLabel}. Try signing in instead.`,

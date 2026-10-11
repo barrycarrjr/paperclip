@@ -1239,6 +1239,35 @@ describe("SkillStudio dialogs, a failed save", () => {
     expectSaidInStatusLine(dialog, statusBefore, "Couldn't create file. The skill folder is read only.");
   });
 
+  it("says in words that the server failed, where it said only Internal server error", async () => {
+    // Through the real API client, against the answer the server gives to any
+    // failure it did not expect.
+    const { companySkillsApi } = await vi.importActual<typeof import("@/api/companySkills")>("@/api/companySkills");
+    mockCompanySkillsApi.updateFile.mockImplementationOnce(companySkillsApi.updateFile);
+    const node = await renderStudio();
+    await clickLabelled(node, "Add file");
+    await waitFor(() => expect(document.querySelector("#skill-path-input")).toBeTruthy());
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: "Internal server error" }),
+    })));
+
+    try {
+      const { dialog, statusBefore } = await saveAndFail("Create");
+
+      await waitFor(() => expect(dialog.textContent).toContain("Couldn't create file."));
+      expectSaidInStatusLine(
+        dialog,
+        statusBefore,
+        "Couldn't create file. Something went wrong on the server. Try again in a moment.",
+      );
+      expect(dialog.textContent).not.toContain("Internal server error");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("says why a folder could not be deleted", async () => {
     mockCompanySkillsApi.detail.mockResolvedValue(makeSkill(SKILL_WITH_FOLDER));
     mockCompanySkillsApi.deleteFile.mockRejectedValueOnce(new Error("A run is still using these files."));

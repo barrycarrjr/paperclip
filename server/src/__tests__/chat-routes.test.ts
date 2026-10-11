@@ -146,6 +146,10 @@ describe("chat routes", () => {
       .post("/api/chat/sessions")
       .send({ permissionMode: "rogue" });
     expect(res.status).toBe(400);
+    // Words naming the field, where it used to send the problem list as JSON.
+    expect(res.body.error).toMatch(/^Some details are not valid\. permissionMode: /);
+    expect(res.body.error).not.toMatch(/^[[{]/);
+    expect(Object.keys(res.body)).toEqual(["error"]);
   });
 
   it("archive flag patches the session", async () => {

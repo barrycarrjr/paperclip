@@ -7,7 +7,7 @@ import {
   attachmentSummary,
   chatAttachmentService,
 } from "../services/chat-attachments.js";
-import { badRequest, forbidden } from "../errors.js";
+import { badRequest, forbidden, validationErrorMessage } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { attachmentTooLargeMessage, contentDispositionHeader, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { registerChatToolInteractions } from "../services/chat-tool-interactions.js";
@@ -92,14 +92,14 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   router.get("/chat/sessions", async (req, res) => {
     const actor = requireBoardActor(req);
     const parsed = listSessionsQuerySchema.safeParse(req.query);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     res.json({ sessions: await svc.listSessions(actor, parsed.data) });
   });
 
   router.post("/chat/sessions", async (req, res) => {
     const actor = requireBoardActor(req);
     const parsed = createSessionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     const session = await svc.createSession(actor, parsed.data);
     res.status(201).json({ session });
   });
@@ -107,7 +107,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   router.patch("/chat/sessions/:id", async (req, res) => {
     const actor = requireBoardActor(req);
     const parsed = patchSessionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     const session = await svc.updateSession(actor, req.params.id as string, parsed.data);
     res.json({ session });
   });
@@ -133,7 +133,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   router.post("/chat/sessions/:id/messages", async (req, res) => {
     const actor = requireBoardActor(req);
     const parsed = sendMessageSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     const ownedSessionId = req.params.id as string;
     await svc.getSession(actor, ownedSessionId);
     const unregisterInteractions = registerChatToolInteractions(ownedSessionId, (event) => writeSseEvent(res, event));
@@ -291,7 +291,7 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   router.post("/chat/sessions/:id/permissions/:toolUseId", async (req, res) => {
     const actor = requireBoardActor(req);
     const parsed = permissionDecisionSchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     if (parsed.data.responseText !== undefined && parseInlineConsentReply(parsed.data.responseText) !== parsed.data.decision) {
       throw badRequest("Reply yes or no to the pending action, or use its buttons");
     }

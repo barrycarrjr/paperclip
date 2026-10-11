@@ -548,6 +548,25 @@ describe("useSaveMutation", () => {
     ).toBe("true");
   });
 
+  it("words a failure that is not an Error, or is only a code, instead of showing it raw", async () => {
+    const mutationFn = vi
+      .fn<(name: string) => Promise<Saved>>()
+      .mockRejectedValueOnce({ code: "WORKER_ERROR", message: "The plugin is not running." })
+      .mockRejectedValueOnce(new Error("skill_file_boundary_denied"));
+    await render({ mutationFn, successMessage: "Settings saved", errorMessage: "Could not save settings" });
+    const region = liveRegion();
+
+    // A thrown object used to be shown as "[object Object]".
+    await save("Pat");
+    expect(region.textContent).toContain("The plugin is not running.");
+    expect(region.textContent).not.toContain("[object Object]");
+
+    // And a code as it was.
+    await save("Pat");
+    expect(region.textContent).toContain("Skill file paths must stay inside the skill folder.");
+    expect(region.textContent).not.toContain("skill_file_boundary_denied");
+  });
+
   it("still saves where there is nowhere to show a message", async () => {
     const onSuccess = vi.fn();
     await render(

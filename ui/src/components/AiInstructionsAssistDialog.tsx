@@ -9,8 +9,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { ApiError } from "../api/client";
 import { agentsApi } from "../api/agents";
+import { describeError } from "../lib/error-message";
 
 interface AiInstructionsAssistDialogProps {
   open: boolean;
@@ -83,15 +83,10 @@ export function AiInstructionsAssistDialog({
       );
       setResult(res);
     } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? typeof err.body === "object" && err.body && "error" in err.body
-            ? String((err.body as { error?: unknown }).error ?? err.message)
-            : err.message
-          : err instanceof Error
-            ? err.message
-            : "Failed to generate rewrite";
-      setError(message);
+      // The reply's own `error` used to be shown as it came, which can be a
+      // code or "Internal server error". The shared wording keeps the
+      // server's words when it gave some.
+      setError(describeError(err, "Failed to generate rewrite"));
     } finally {
       setGenerating(false);
     }

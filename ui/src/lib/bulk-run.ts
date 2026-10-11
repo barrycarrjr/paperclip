@@ -49,6 +49,9 @@ export const DEFAULT_BULK_CONCURRENCY = 3;
  * is the only thing that distinguishes it.
  */
 export function isRateLimitError(error: unknown): boolean {
+  // A 429 answered with no words reaches here worded as "Too many requests",
+  // not as the number, so the status is read as well.
+  if (error && typeof error === "object" && (error as { status?: unknown }).status === 429) return true;
   const message =
     error instanceof Error
       ? error.message

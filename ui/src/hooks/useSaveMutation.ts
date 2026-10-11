@@ -6,6 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { useOptionalToastActions } from "../context/ToastContext";
+import { describeError } from "../lib/error-message";
 
 /**
  * What a save says when it works: a fixed line such as "Profile saved", or a
@@ -166,7 +167,7 @@ export function useSaveConfirmation({ saveName }: { saveName?: string } = {}) {
       toastActions?.pushToast({
         id: failureId(key),
         title,
-        body: error instanceof Error ? error.message : String(error),
+        body: describeError(error),
         tone: "error",
       });
     },

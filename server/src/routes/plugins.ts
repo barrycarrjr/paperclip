@@ -85,7 +85,7 @@ import {
   hasBoardOrgAccess,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
-import { badRequest, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
+import { badRequest, forbidden, notFound, unauthorized, unprocessable, validationErrorMessage } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 
 const log = logger.child({ service: "plugin-routes" });
@@ -1748,7 +1748,7 @@ export function pluginRoutes(
       acknowledgeCapabilities: rawBody.acknowledgeCapabilities,
     });
     if (!ackParse.success) {
-      res.status(400).json({ error: ackParse.error.message });
+      res.status(400).json({ error: validationErrorMessage(ackParse.error) });
       return;
     }
     const acknowledgeCapabilities = ackParse.data.acknowledgeCapabilities;
@@ -2987,7 +2987,7 @@ export function pluginRoutes(
     const { pluginId } = req.params;
     const bodyParse = upgradePluginSchema.safeParse(req.body ?? {});
     if (!bodyParse.success) {
-      res.status(400).json({ error: bodyParse.error.message });
+      res.status(400).json({ error: validationErrorMessage(bodyParse.error) });
       return;
     }
     const { version, acknowledgeCapabilities } = bodyParse.data;

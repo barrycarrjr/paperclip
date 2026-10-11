@@ -56,6 +56,7 @@ import { useSaveMutation } from "../hooks/useSaveMutation";
 import { useDialogOpening, type DialogOpening } from "../hooks/useDialogOpening";
 import { useElementWidth } from "../hooks/useElementWidth";
 import { classifySkillDenial } from "@/lib/skill-policy-denial";
+import { describeError } from "@/lib/error-message";
 import { agentsApi } from "@/api/agents";
 import { companySkillsApi } from "@/api/companySkills";
 import { issuesApi } from "@/api/issues";
@@ -213,8 +214,7 @@ function useMutationErrorToast() {
         toast?.pushToast({ tone: "warn", title: denial.title, body: denial.remediation });
         return;
       }
-      const body =
-        error instanceof Error && error.message ? error.message : "Please try again.";
+      const body = describeError(error, "Please try again.");
       toast?.pushToast({ tone: "error", title, body });
     },
     [toast],
@@ -229,7 +229,7 @@ function useMutationErrorToast() {
 function dialogFailureText(title: string, error: unknown) {
   const denial = classifySkillDenial(error);
   if (denial) return `${denial.title} ${denial.remediation}`;
-  const reason = error instanceof Error && error.message ? error.message : "Please try again.";
+  const reason = describeError(error, "Please try again.");
   return `${title}. ${reason}`;
 }
 

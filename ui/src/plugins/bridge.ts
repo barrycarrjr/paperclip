@@ -35,6 +35,7 @@ import type {
 import { pluginsApi } from "@/api/plugins";
 import { ApiError } from "@/api/client";
 import { useToastActions, type ToastInput } from "@/context/ToastContext";
+import { describeError } from "@/lib/error-message";
 
 // ---------------------------------------------------------------------------
 // Bridge error type (mirrors the SDK's PluginBridgeError)
@@ -160,6 +161,8 @@ function usePluginBridgeContext(): PluginBridgeContextValue {
  * The bridge proxy endpoints return error bodies shaped as
  * `{ code: PluginBridgeErrorCode, message: string, details?: unknown }`.
  * This helper extracts that structure from the ApiError thrown by the client.
+ * The message is the client's wording of the reply, not the reply's own
+ * field, which can be a code or "Internal server error".
  */
 function extractBridgeError(err: unknown): PluginBridgeError {
   if (err instanceof ApiError && err.body && typeof err.body === "object") {
@@ -167,7 +170,7 @@ function extractBridgeError(err: unknown): PluginBridgeError {
     if (typeof body.code === "string" && typeof body.message === "string") {
       return {
         code: body.code as PluginBridgeErrorCode,
-        message: body.message,
+        message: err.message,
         details: body.details,
       };
     }
@@ -175,14 +178,14 @@ function extractBridgeError(err: unknown): PluginBridgeError {
     if (typeof body.error === "string") {
       return {
         code: "UNKNOWN",
-        message: body.error,
+        message: err.message,
       };
     }
   }
 
   return {
     code: "UNKNOWN",
-    message: err instanceof Error ? err.message : String(err),
+    message: describeError(err),
   };
 }
 

@@ -68,10 +68,13 @@ export function healthRoutes(
       await db.execute(sql`SELECT 1`);
     } catch (error) {
       logger.warn({ err: error }, "Health check database probe failed");
+      // `error` stays a code, which launchers and monitors read. `message`
+      // is for people: the app's front gate showed the bare code.
       res.status(503).json({
         status: "unhealthy",
         version: serverVersion,
-        error: "database_unreachable"
+        error: "database_unreachable",
+        message: "Paperclip cannot reach its database.",
       });
       return;
     }

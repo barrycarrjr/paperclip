@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { badRequest, forbidden } from "../errors.js";
+import { badRequest, forbidden, validationErrorMessage } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import {
   getProviderForModel,
@@ -109,7 +109,7 @@ export function emailDraftRoutes() {
     const companyId = req.actor.companyIds?.[0] ?? null;
 
     const parsed = draftReplySchema.safeParse(req.body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
+    if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
 
     const {
       subject,
