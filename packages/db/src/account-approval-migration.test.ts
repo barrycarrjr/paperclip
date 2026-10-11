@@ -25,19 +25,19 @@ afterEach(async () => {
 
 async function migrationStatements(): Promise<string[]> {
   const content = await fs.promises.readFile(
-    new URL("./migrations/0109_account_approval.sql", import.meta.url),
+    new URL("./migrations/0110_account_approval.sql", import.meta.url),
     "utf8",
   );
   return splitMigrationStatements(content);
 }
 
 /**
- * Migration 0109 adds the approval step for new accounts. Every account that
+ * Migration 0110 adds the approval step for new accounts. Every account that
  * exists when it runs must come out approved, every account made after it
  * must start as a request, and running the file a second time must not
  * approve anybody.
  */
-describeEmbeddedPostgres("migration 0109, account approval", () => {
+describeEmbeddedPostgres("migration 0110, account approval", () => {
   it(
     "approves the accounts already there, leaves new ones waiting, and approves nobody when run again",
     async () => {
@@ -48,7 +48,7 @@ describeEmbeddedPostgres("migration 0109, account approval", () => {
         await sql.end();
       });
 
-      // Back to how the table looked before 0109, with two people on it.
+      // Back to how the table looked before 0110, with two people on it.
       await sql.unsafe(`
         ALTER TABLE "user"
           DROP COLUMN "approval_status",

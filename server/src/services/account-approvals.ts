@@ -11,7 +11,7 @@
  * its Personal company only when it is approved.
  *
  * An account skips the wait when:
- * - it existed before this shipped (migration 0109 approved every one);
+ * - it existed before this shipped (migration 0110 approved every one);
  * - it claims the board or accepts the bootstrap invite, which is how the
  *   first account on an instance is made, by someone holding the server's own
  *   startup output or command line;

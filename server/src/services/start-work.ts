@@ -32,6 +32,7 @@ import {
   type SuggestTasksInteraction,
 } from "@paperclipai/shared";
 import { HttpError, notFound, serviceUnavailable, unprocessable } from "../errors.js";
+import { canonicalUuid } from "../lib/canonical-uuid.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { budgetService } from "./budgets.js";
@@ -92,7 +93,9 @@ const PLAN_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const planDraftTimes = new Map<string, number[]>();
 
 function assertPlanRateLimit(companyId: string, userId: string): void {
-  const key = `${companyId}:${userId}`;
+  // Postgres reads the id in capitals, braces or without hyphens as the same
+  // company, so each spelling must not start a count of its own.
+  const key = `${canonicalUuid(companyId)}:${userId}`;
   const now = Date.now();
   const recent = (planDraftTimes.get(key) ?? []).filter((at) => now - at < PLAN_LIMIT_WINDOW_MS);
   if (recent.length >= PLAN_LIMIT_PER_WINDOW) {

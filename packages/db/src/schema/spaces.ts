@@ -52,7 +52,16 @@ export const spacePages = pgTable(
     documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
     parentPageId: uuid("parent_page_id").references((): AnyPgColumn => spacePages.id, { onDelete: "cascade" }),
     sortOrder: integer("sort_order").notNull().default(0),
+    /** Set while the page is in its Space's trash. */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    /**
+     * On a subpage that went to the trash with the page above it, that page,
+     * so the two come back together. The page that was deleted has none, and
+     * that is what the trash lists.
+     */
+    deletedWithPageId: uuid("deleted_with_page_id").references((): AnyPgColumn => spacePages.id, {
+      onDelete: "cascade",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -63,5 +72,6 @@ export const spacePages = pgTable(
       table.parentPageId,
       table.sortOrder,
     ),
+    deletedWithIdx: index("space_pages_deleted_with_idx").on(table.deletedWithPageId),
   }),
 );

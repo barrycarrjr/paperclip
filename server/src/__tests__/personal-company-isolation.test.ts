@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Request } from "express";
 import { assertCompanyAccess } from "../routes/authz.js";
 import {
+  assertNotPersonalCompany,
+  assertPersonalCompanyOwner,
+  excludeOthersPersonalCompanies,
+  isPersonalCompany,
   loadPersonalCompanyIndex,
   personalCompanyOwner,
   rememberPersonalCompany,
@@ -173,5 +177,49 @@ describe("who can reach a personal company", () => {
         "read",
       ),
     ).toThrow(/does not have access/i);
+  });
+});
+
+describe("the same personal company under another spelling", () => {
+  // Real company ids are uuids, and Postgres reads every one of these as the
+  // same company. The index has to as well, or the check above is one
+  // rewritten id away from letting HQ in.
+  const ALICE_UUID = "c0ffee00-beef-4dad-b0b0-facade123456";
+  const digits = ALICE_UUID.replace(/-/g, "");
+  const spellings: Array<[string, string]> = [
+    ["in capitals", ALICE_UUID.toUpperCase()],
+    ["without hyphens", digits],
+    ["in braces", `{${ALICE_UUID}}`],
+    ["with a hyphen after every four digits", digits.match(/.{4}/g)!.join("-")],
+  ];
+
+  beforeEach(() => {
+    rememberPersonalCompany(ALICE_UUID, ALICE);
+  });
+
+  it.each(spellings)("is still Alice's to every lookup when written %s", (_how, spelling) => {
+    expect(personalCompanyOwner(spelling)).toBe(ALICE);
+    expect(isPersonalCompany(spelling)).toBe(true);
+    expect(() => assertPersonalCompanyOwner(spelling, BOB)).toThrow(/personal company/i);
+    expect(() => assertPersonalCompanyOwner(spelling, ALICE)).not.toThrow();
+    expect(() => assertNotPersonalCompany(spelling, "add a member")).toThrow(/personal company/i);
+    expect(excludeOthersPersonalCompanies([{ id: spelling }], BOB)).toEqual([]);
+  });
+
+  it.each(spellings)("keeps an HQ agent and an HQ admin out when written %s", (_how, spelling) => {
+    expect(() =>
+      assertCompanyAccess(
+        req({ type: "agent", agentId: "a1", companyId: HQ, isPortfolioRootAgent: true }),
+        spelling,
+        "read",
+      ),
+    ).toThrow(/personal company/i);
+    expect(() =>
+      assertCompanyAccess(
+        req({ type: "board", userId: BOB, source: "session", companyIds: [HQ], isPortfolioRootUserAdmin: true }),
+        spelling,
+        "read",
+      ),
+    ).toThrow(/personal company/i);
   });
 });

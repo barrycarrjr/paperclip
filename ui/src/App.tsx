@@ -27,6 +27,7 @@ import { workTabRoutes } from "./pages/Work";
 import { Memories } from "./pages/Memories";
 import { Spaces } from "./pages/Spaces";
 import { SpaceDetail } from "./pages/SpaceDetail";
+import { SpaceTrash } from "./pages/SpaceTrash";
 import { WorkQueues } from "./pages/WorkQueues";
 import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
@@ -297,6 +298,8 @@ export function boardRoutes() {
       <Route path="memories" element={<Memories />} />
       <Route path="spaces" element={<Spaces />} />
       <Route path="spaces/:spaceKey" element={<SpaceDetail />} />
+      {/* A page's address is its id, so "trash" is never a page. */}
+      <Route path="spaces/:spaceKey/trash" element={<SpaceTrash />} />
       <Route path="spaces/:spaceKey/:pageId" element={<SpaceDetail />} />
       <Route path="approvals" element={<Navigate to="/approvals/pending" replace />} />
       <Route path="approvals/pending" element={<Approvals />} />

@@ -264,6 +264,17 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
       await expect(openFeed(companyFeed(alicePersonalId), asUser(userId))).rejects.toThrow(/403/);
     });
 
+    it.each([
+      ["an HQ admin who is not the owner", BOB],
+      ["an instance administrator who is not the owner", CAROL],
+    ])("refuses %s that feed with the company id in capitals and braces", async (_who, userId) => {
+      // Postgres reads that id as the same company. The feed must not depend
+      // on events happening to be routed by the exact string.
+      await expect(
+        openFeed(companyFeed(`{${alicePersonalId.toUpperCase()}}`), asUser(userId)),
+      ).rejects.toThrow(/403/);
+    });
+
     it("opens a Personal company's feed to its owner", async () => {
       const messages = await openFeed(companyFeed(alicePersonalId), asUser(ALICE));
       const event = publishLiveEvent({ companyId: alicePersonalId, type: "activity.logged", payload: {} });
