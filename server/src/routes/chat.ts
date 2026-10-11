@@ -22,6 +22,8 @@ function requireBoardActor(req: Request): ChatActor {
     userId: req.actor.userId,
     isInstanceAdmin: req.actor.isInstanceAdmin === true,
     companyIds: req.actor.companyIds ?? [],
+    memberships: req.actor.memberships,
+    isPortfolioRootUserAdmin: req.actor.isPortfolioRootUserAdmin === true,
   };
 }
 
@@ -85,8 +87,8 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
   });
 
   router.get("/chat/models", async (req, res) => {
-    requireBoardActor(req);
-    res.json({ models: await svc.listModels() });
+    const actor = requireBoardActor(req);
+    res.json({ models: await svc.listModels(actor) });
   });
 
   router.get("/chat/sessions", async (req, res) => {
@@ -135,7 +137,8 @@ export function chatRoutes(db: Db, deps: ChatRoutesDeps = {}) {
     const parsed = sendMessageSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest(validationErrorMessage(parsed.error));
     const ownedSessionId = req.params.id as string;
-    await svc.getSession(actor, ownedSessionId);
+    // Refused here, before the stream opens, so the answer is a plain 403.
+    await svc.getSessionForTurn(actor, ownedSessionId);
     const unregisterInteractions = registerChatToolInteractions(ownedSessionId, (event) => writeSseEvent(res, event));
 
     res.status(200);

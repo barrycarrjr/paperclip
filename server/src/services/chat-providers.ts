@@ -1021,6 +1021,17 @@ export function encodeAdapterModel(adapterType: string, modelId: string): string
   return `${ADAPTER_PREFIX}${adapterType}:${modelId}`;
 }
 
+/**
+ * True for a model that runs a program on this machine. Every adapter-routed
+ * model does: Claude Code and the other CLIs run here with their permission
+ * prompts off, which amounts to a shell on the server. The adapters that run
+ * somewhere else offer Clippy no models, so the route alone decides, and an
+ * adapter added later counts until shown otherwise.
+ */
+export function runsOnServer(model: string): boolean {
+  return decodeAdapterModel(model) !== null;
+}
+
 class AdapterExecuteProvider implements ChatProvider {
   name = "adapter" as const;
 
@@ -1564,14 +1575,21 @@ function rankableEntry(entry: AvailableChatModel) {
  * over older, then the provider's own default, then the newest release, and
  * only then routing. So a model released today is preferred today, and an
  * older model never wins just because its route is preferred.
+ *
+ * `serverModels: false` leaves out models that run on this machine, for
+ * someone who may not use them (see runsOnServer).
  */
-export async function pickBestDefaultModel(agentDefaults?: InstanceAgentDefaults | null): Promise<string> {
+export async function pickBestDefaultModel(
+  agentDefaults?: InstanceAgentDefaults | null,
+  options: { serverModels?: boolean } = {},
+): Promise<string> {
+  const allowed = (model: string) => options.serverModels !== false || !runsOnServer(model);
   const explicit = process.env.PAPERCLIP_CHAT_DEFAULT_MODEL?.trim();
-  if (explicit) {
+  if (explicit && allowed(explicit)) {
     const p = getProviderForModel(explicit);
     if (p?.isConfigured()) return explicit;
   }
-  const models = await listAvailableModels();
+  const models = (await listAvailableModels()).filter((entry) => allowed(entry.model));
   const best = bestOfAvailableModels(models);
   if (!best) return bestKnownNativeModel("anthropic");
   // The ranking picks the route (claude_local, codex_local...). When the

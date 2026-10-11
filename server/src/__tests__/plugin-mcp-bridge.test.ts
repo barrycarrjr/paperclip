@@ -1,6 +1,6 @@
 import http from "node:http";
 import express from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Db } from "@paperclipai/db";
@@ -169,6 +169,66 @@ describe("plugin MCP bridge — built-in chat tools", () => {
       return Array.isArray(res.content) ? res.content[0]?.text ?? "" : "";
     });
     expect(text).toBe("pong");
+  });
+
+  it("refuses a viewer's chat the plugin tools and the changes the person could not make, but not an agent run", async () => {
+    const company = "11111111-1111-1111-1111-111111111111";
+    const executeTool = vi.fn(async () => ({ result: { content: "pong" } }));
+    const bridge = createPluginMcpBridge({
+      pluginToolDispatcher: { ...createDispatcherStub(), executeTool } as unknown as PluginToolDispatcher,
+      db: createDbStub(),
+    });
+    const viewerToken = bridge.mintToken({
+      chatSessionId: "sess-viewer",
+      companyId: company,
+      actor: {
+        userId: "u-viewer",
+        isInstanceAdmin: false,
+        companyIds: [company],
+        memberships: [{ companyId: company, membershipRole: "viewer", status: "active" }],
+      },
+    });
+    // An agent run has no person behind it, so the viewer rule does not apply.
+    const agentToken = bridge.mintToken({
+      chatSessionId: "heartbeat:run-1",
+      companyId: company,
+      actor: { userId: "agent:a1", isInstanceAdmin: false, companyIds: [company] },
+      agentRunContext: { agentId: "a1", runId: "run-1" },
+    });
+    const app = express();
+    app.use(express.json());
+    app.post("/mcp/:token", async (req, res) => {
+      await bridge.handleHttpRequest(req.params.token, req, res, req.body);
+    });
+    const bridgeServer = http.createServer(app);
+    await new Promise<void>((resolve) => bridgeServer.listen(0, "127.0.0.1", resolve));
+    const addr = bridgeServer.address();
+    if (addr === null || typeof addr === "string") throw new Error("no port");
+    const call = async (token: string, name: string, args: Record<string, unknown>) => {
+      const client = new Client({ name: "test", version: "1.0.0" });
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${addr.port}/mcp/${token}`)));
+      try {
+        return await client.callTool({ name, arguments: args });
+      } finally {
+        await client.close();
+      }
+    };
+    try {
+      const plugin = await call(viewerToken, "demo__ping", {});
+      expect(plugin.isError).toBe(true);
+      expect(plugin.content).toEqual([{ type: "text", text: "Viewer access is read-only" }]);
+      expect(executeTool).not.toHaveBeenCalled();
+
+      const change = await call(viewerToken, "create_issue", { title: "Chase the invoices" });
+      expect(change.isError).toBe(true);
+      expect(change.content).toEqual([{ type: "text", text: "Viewer access is read-only" }]);
+
+      const agentRun = await call(agentToken, "demo__ping", {});
+      expect(agentRun.content).toEqual([{ type: "text", text: "pong" }]);
+      expect(executeTool).toHaveBeenCalledTimes(1);
+    } finally {
+      await new Promise<void>((resolve) => bridgeServer.close(() => resolve()));
+    }
   });
 
   it("adapter MCP tools share the live inline consent prompt and report their result", async () => {

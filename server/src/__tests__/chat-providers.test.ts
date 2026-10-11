@@ -278,6 +278,24 @@ describe("pickBestDefaultModel", () => {
     ]);
   });
 
+  it("starts someone who may not use models that run on this server on one that runs elsewhere", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    const mod = await loadWithAdapters([{ type: "claude_local", modelIds: ["claude-opus-5-5"] }]);
+    expect(await mod.pickBestDefaultModel()).toBe(mod.encodeAdapterModel("claude_local", "claude-opus-5-5"));
+
+    const picked = await mod.pickBestDefaultModel(undefined, { serverModels: false });
+    expect(mod.runsOnServer(picked)).toBe(false);
+    expect(picked).toBe("claude-opus-5-5");
+  });
+
+  it("passes over PAPERCLIP_CHAT_DEFAULT_MODEL for them too when it runs on this server", async () => {
+    process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
+    process.env.PAPERCLIP_CHAT_DEFAULT_MODEL = "adapter:claude_local:claude-opus-5-5";
+    const mod = await loadWithAdapters([{ type: "claude_local", modelIds: ["claude-opus-5-5"] }]);
+    expect(await mod.pickBestDefaultModel()).toBe("adapter:claude_local:claude-opus-5-5");
+    expect(await mod.pickBestDefaultModel(undefined, { serverModels: false })).toBe("claude-opus-5-5");
+  });
+
   it("regression: a Claude model from any source still wins over llama via aider", async () => {
     process.env.PAPERCLIP_OLLAMA_DISABLED = "1";
     const mod = await loadWithAdapters([
