@@ -622,6 +622,11 @@ export function createPluginWorkerHandle(
       // this allowlist, so `process.env.PAPERCLIP_API_URL` was always empty in
       // a worker even though plugins are documented to read it.
       PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL ?? "",
+      // The operator's override for how long a worker waits on
+      // `system.createSnapshot` (SNAPSHOT_RPC_TIMEOUT_ENV in the SDK's
+      // worker-rpc-host). The SDK reads it inside the worker, so without this
+      // line the override set on the server never reached any plugin.
+      PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS: process.env.PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS ?? "",
     };
 
     const child = fork(options.entrypointPath, [], {
