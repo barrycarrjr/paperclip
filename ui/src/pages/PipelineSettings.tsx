@@ -3166,6 +3166,7 @@ export function PipelineSettings() {
                             onSave={() => saveStageEnv.mutate()}
                             saving={saveStageEnv.isPending}
                             dirty={stageEnvDirty}
+                            otherSavePending={saveStage.isPending}
                           />
                         );
                       })()}

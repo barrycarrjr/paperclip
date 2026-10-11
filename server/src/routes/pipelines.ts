@@ -85,7 +85,7 @@ import {
 import { accessService } from "../services/access.js";
 import { authorizationService } from "../services/authorization.js";
 import { issueService } from "../services/issues.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess } from "./authz.js";
 import {
   computePipelineHealth,
   deriveCaseType,
@@ -1115,6 +1115,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
   });
 
   router.patch("/pipelines/:pipelineId/stages/:stageId/automation-env", validate(updateStageAutomationEnvSchema), async (req, res) => {
+    // People only, like the secrets API: an agent that may edit a pipeline
+    // must not attach company secrets to a stage whose routine it runs.
+    assertBoard(req);
     const pipelineId = req.params.pipelineId as string;
     const stageId = req.params.stageId as string;
     const companyId = await assertPipelineAccess(db, req, pipelineId);

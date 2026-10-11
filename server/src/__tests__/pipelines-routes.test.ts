@@ -796,6 +796,71 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await http.get(`/api/pipelines/${pipeline.body.id}/health`).expect(200);
   });
 
+  it("lets only people save stage secrets, even when an agent holds pipelines:write", async () => {
+    const company = await seedCompany();
+    const agent = await seedAutomationAgent(company.id);
+    const secret = await seedSecret(company.id, "deploy_token", `value-${randomUUID()}`);
+    const boardHttp = request(app(boardActor));
+    const pipeline = await boardHttp
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "stage-secrets-people-only", name: "Stage secrets people only" })
+      .expect(201);
+    const stageId = pipeline.body.stages.find((stage: { key: string }) => stage.key === "in_progress").id as string;
+    const automated = await boardHttp
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}`)
+      .send({ config: { automation: { assigneeAgentId: agent.id, instructionsBody: "Deploy the item." } } })
+      .expect(200);
+    const routineId = automated.body.config.onEnter.routineId as string;
+
+    // The agent that runs the stage and a person are both active members
+    // holding pipelines:write.
+    const editorUserId = `editor-${randomUUID()}`;
+    await db.insert(companyMemberships).values([
+      { companyId: company.id, principalType: "agent", principalId: agent.id, status: "active", membershipRole: "member" },
+      { companyId: company.id, principalType: "user", principalId: editorUserId, status: "active", membershipRole: "member" },
+    ]);
+    await db.insert(principalPermissionGrants).values([
+      { companyId: company.id, principalType: "agent", principalId: agent.id, permissionKey: "pipelines:write", scope: null },
+      { companyId: company.id, principalType: "user", principalId: editorUserId, permissionKey: "pipelines:write", scope: null },
+    ]);
+
+    // A real run, so the only thing that can stop the agent is the route.
+    const [run] = await db.insert(heartbeatRuns).values({ companyId: company.id, agentId: agent.id }).returning();
+    const agentHttp = request(app({
+      type: "agent",
+      agentId: agent.id,
+      companyId: company.id,
+      runId: run!.id,
+      source: "agent_key",
+    }));
+    const refused = await agentHttp
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}/automation-env`)
+      .send({ env: { DEPLOY_TOKEN: { type: "secret_ref", secretName: "deploy_token" } } })
+      .expect(403);
+    expect(refused.body).toEqual({ error: "Board access required" });
+    const [afterRefusal] = await db.select().from(routines).where(eq(routines.id, routineId));
+    expect(afterRefusal!.env).toBeNull();
+    expect(afterRefusal!.latestRevisionNumber).toBe(1);
+
+    const editorHttp = request(app({
+      type: "board",
+      userId: editorUserId,
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [company.id],
+      memberships: [{ companyId: company.id, membershipRole: "member", status: "active" }],
+    }));
+    const env = { DEPLOY_TOKEN: { type: "secret_ref", secretId: secret.id, version: "latest" } };
+    const saved = await editorHttp
+      .patch(`/api/pipelines/${pipeline.body.id}/stages/${stageId}/automation-env`)
+      .send({ env })
+      .expect(200);
+    expect(saved.body.env).toEqual(env);
+    const [afterSave] = await db.select().from(routines).where(eq(routines.id, routineId));
+    expect(afterSave!.env).toEqual(env);
+    expect(afterSave!.updatedByUserId).toBe(editorUserId);
+  });
+
   it("paginates and caps case event responses", async () => {
     const company = await seedCompany();
     const http = request(app(boardActor));

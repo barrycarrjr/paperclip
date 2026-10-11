@@ -23,6 +23,12 @@ export interface StageSecretsPanelProps {
   onSave: () => void;
   saving: boolean;
   dirty: boolean;
+  /**
+   * Another save on this stage is still running. Save waits for it: until the
+   * page has reloaded the stage, a secrets save would carry the old routine
+   * revision and be refused as someone else's change.
+   */
+  otherSavePending?: boolean;
 }
 
 /**
@@ -46,6 +52,7 @@ export function StageSecretsPanel({
   onSave,
   saving,
   dirty,
+  otherSavePending = false,
 }: StageSecretsPanelProps) {
   // No backing automation/assignee → nothing can receive secrets at runtime.
   // Point the user at Automation instead of creating a hidden routine just
@@ -90,7 +97,7 @@ export function StageSecretsPanel({
       )}
 
       <div className="flex items-center gap-3">
-        <Button type="button" onClick={onSave} disabled={!dirty || saving}>
+        <Button type="button" onClick={onSave} disabled={!dirty || saving || otherSavePending}>
           <Save className="h-4 w-4 mr-1.5" />
           {saving ? "Saving…" : "Save secrets"}
         </Button>
