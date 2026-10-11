@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
+import { auditApi } from "../api/audit";
 import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
@@ -13,6 +14,9 @@ import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
 import { FilterBar } from "../components/FilterBar";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { PageTabBar } from "../components/PageTabBar";
+import { ActivityAgentActions } from "./ActivityAgentActions";
+import { Tabs } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -24,12 +28,15 @@ import { History } from "lucide-react";
 
 const ACTIVITY_PAGE_LIMIT = 200;
 
+type ActivityView = "all" | "agent-actions";
+
 export function Activity() {
   // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
   // see Calendar.tsx's identical fix for the general pattern.
   const selectedCompanyId = useActiveCompanyId();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState("all");
+  const [view, setView] = useState<ActivityView>("all");
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Activity" }]);
@@ -52,6 +59,17 @@ export function Activity() {
     queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+
+  // "Agent actions" is only for people with View agent audit actions. One
+  // row of the all-actors feed says which tier the server gives this person,
+  // without a refused request for everyone else.
+  const { data: auditAccess } = useQuery({
+    queryKey: [...queryKeys.audit.agentActions(selectedCompanyId!, { actorScope: "all" }), "access"],
+    queryFn: () => auditApi.listAgentActions(selectedCompanyId!, { actorScope: "all", limit: 1 }),
+    enabled: !!selectedCompanyId,
+    retry: false,
+  });
+  const canViewAgentActions = auditAccess?.accessTier === "full";
 
   const userProfileMap = useMemo(
     () => buildCompanyUserProfileMap(companyMembers?.users),
@@ -87,6 +105,30 @@ export function Activity() {
     return <EmptyState icon={History} message="Select a company to view activity." />;
   }
 
+  const viewTabs = canViewAgentActions ? (
+    <Tabs value={view} onValueChange={(value) => setView(value as ActivityView)}>
+      <PageTabBar
+        label="Activity view"
+        align="start"
+        value={view}
+        onValueChange={(value) => setView(value as ActivityView)}
+        items={[
+          { value: "all", label: "All activity" },
+          { value: "agent-actions", label: "Agent actions" },
+        ]}
+      />
+    </Tabs>
+  ) : null;
+
+  if (canViewAgentActions && view === "agent-actions") {
+    return (
+      <div className="space-y-4">
+        {viewTabs}
+        <ActivityAgentActions companyId={selectedCompanyId} />
+      </div>
+    );
+  }
+
   if (isLoading) {
     return <PageSkeleton variant="list" />;
   }
@@ -102,6 +144,7 @@ export function Activity() {
 
   return (
     <div className="space-y-4">
+      {viewTabs}
       <div className="flex items-center justify-between gap-2">
         <div>
           {filter !== "all" && (

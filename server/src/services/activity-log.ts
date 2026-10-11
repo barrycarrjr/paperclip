@@ -62,6 +62,17 @@ export interface LogActivityInput {
   details?: Record<string, unknown> | null;
 }
 
+// Redacts details read back from the log the same way logActivity redacts
+// them on the way in, for rows written before a redaction rule existed.
+export async function createActivityDetailsRedactor(db: Db) {
+  const currentUserRedactionOptions = {
+    enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
+  };
+  return (details: Record<string, unknown> | null) => (
+    details ? redactCurrentUserValue(sanitizeRecord(details), currentUserRedactionOptions) : null
+  );
+}
+
 export async function logActivity(db: Db, input: LogActivityInput) {
   const currentUserRedactionOptions = {
     enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
