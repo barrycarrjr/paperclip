@@ -9,6 +9,7 @@ import {
 import { validate } from "../middleware/validate.js";
 import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
 import { isLocalSkillImportSource } from "../services/company-skills.js";
+import type { AuthorizationActor } from "../services/authorization.js";
 import { forbidden } from "../errors.js";
 import { assertCompanyAccess, getActorInfo, hasInstanceAdminAccess } from "./authz.js";
 
@@ -51,13 +52,26 @@ export function companySkillRoutes(db: Db) {
     return skill.key;
   }
 
+  // "Create skills" (skills:create) from Company Access, decided by the shared
+  // authorization rules. It adds to agents:create and never replaces it.
+  // "Suggest skill changes" needs a person to accept the change first, and
+  // this server has no check for that, so on its own it is still refused.
+  async function canChangeSkillsByGrant(req: Request, companyId: string) {
+    const decision = await access.decide({
+      actor: req.actor as AuthorizationActor,
+      action: "skill_config:update",
+      resource: { type: "company", companyId },
+    });
+    return decision.allowed;
+  }
+
   async function assertCanMutateCompanySkills(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
 
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
       const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
-      if (!allowed) {
+      if (!allowed && !(await canChangeSkillsByGrant(req, companyId))) {
         throw forbidden("Missing permission: agents:create");
       }
       return;
@@ -74,6 +88,9 @@ export function companySkillRoutes(db: Db) {
 
     const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
     if (allowedByGrant || canCreateAgents(actorAgent)) {
+      return;
+    }
+    if (await canChangeSkillsByGrant(req, companyId)) {
       return;
     }
 

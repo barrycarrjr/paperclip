@@ -46,6 +46,7 @@ const mockAgentService = vi.hoisted(() => ({
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
   hasPermission: vi.fn(),
+  decide: vi.fn(),
   getMembership: vi.fn(),
   ensureMembership: vi.fn(),
   listPrincipalGrants: vi.fn(),
@@ -314,6 +315,7 @@ describe.sequential("agent permission routes", () => {
     mockAgentService.resolveByReference.mockReset();
     mockAccessService.canUser.mockReset();
     mockAccessService.hasPermission.mockReset();
+    mockAccessService.decide.mockReset();
     mockAccessService.getMembership.mockReset();
     mockAccessService.ensureMembership.mockReset();
     mockAccessService.listPrincipalGrants.mockReset();
@@ -352,6 +354,8 @@ describe.sequential("agent permission routes", () => {
     mockAgentService.updateForbiddenWritePaths.mockResolvedValue(baseAgent);
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(false);
+    // No Company Access configuration grants unless a test adds one.
+    mockAccessService.decide.mockResolvedValue({ allowed: false, reason: "deny_no_grant" });
     mockAccessService.getMembership.mockResolvedValue({
       id: "membership-1",
       companyId,
