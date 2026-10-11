@@ -63,7 +63,7 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo, hasInstanceAdminAccess } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -103,6 +103,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { agentInstructionsBundleMode } from "../services/agent-instructions.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
 import { logger } from "../middleware/logger.js";
@@ -158,6 +159,9 @@ function mergeDesiredSkillKeys(
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
+
+const EXTERNAL_INSTRUCTIONS_ADMIN_ONLY =
+  "Only an instance admin can open or change instructions kept outside Paperclip.";
 
 function readRunLogLimitBytes(value: unknown) {
   const parsed = Number(value ?? RUN_LOG_DEFAULT_LIMIT_BYTES);
@@ -562,6 +566,19 @@ export function agentRoutes(
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== targetAgent.companyId) {
       throw forbidden("Agent key cannot access another company");
+    }
+  }
+
+  // An instructions folder outside Paperclip's own storage can be anywhere on
+  // the host, so reading or changing it needs an instance admin, as upstream.
+  // An agent is never one. The managed folder keeps the usual rules.
+  async function assertExternalInstructionsAdmin(
+    req: Request,
+    agent: Parameters<typeof agentInstructionsBundleMode>[0],
+  ) {
+    if (hasInstanceAdminAccess(req)) return;
+    if (await agentInstructionsBundleMode(agent) === "external") {
+      throw forbidden(EXTERNAL_INSTRUCTIONS_ADMIN_ONLY);
     }
   }
 
@@ -2296,6 +2313,7 @@ export function agentRoutes(
     }
 
     await assertCanManageInstructionsPath(req, existing);
+    await assertExternalInstructionsAdmin(req, existing);
 
     const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
     const explicitKey = asNonEmptyString(req.body.adapterConfigKey);
@@ -2316,6 +2334,7 @@ export function agentRoutes(
     }
 
     const syncedAdapterConfig = syncInstructionsBundleConfigFromFilePath(existing, nextAdapterConfig);
+    await assertExternalInstructionsAdmin(req, { ...existing, adapterConfig: syncedAdapterConfig });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       syncedAdapterConfig,
@@ -2373,6 +2392,7 @@ export function agentRoutes(
       return;
     }
     await assertCanReadAgent(req, existing);
+    await assertExternalInstructionsAdmin(req, existing);
     res.json(await instructions.getBundle(existing));
   });
 
@@ -2384,6 +2404,12 @@ export function agentRoutes(
       return;
     }
     await assertCanManageInstructionsPath(req, existing);
+    // Both ways round: switching away from an outside folder copies its files
+    // into the managed one, and switching to one lists what is there.
+    await assertExternalInstructionsAdmin(req, existing);
+    if (req.body.mode === "external" && !hasInstanceAdminAccess(req)) {
+      throw forbidden(EXTERNAL_INSTRUCTIONS_ADMIN_ONLY);
+    }
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
@@ -2432,6 +2458,7 @@ export function agentRoutes(
       return;
     }
     await assertCanReadAgent(req, existing);
+    await assertExternalInstructionsAdmin(req, existing);
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {
@@ -2450,6 +2477,7 @@ export function agentRoutes(
       return;
     }
     await assertCanManageInstructionsPath(req, existing);
+    await assertExternalInstructionsAdmin(req, existing);
 
     const actor = getActorInfo(req);
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
@@ -2499,6 +2527,7 @@ export function agentRoutes(
       return;
     }
     await assertCanManageInstructionsPath(req, existing);
+    await assertExternalInstructionsAdmin(req, existing);
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {

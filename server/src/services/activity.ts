@@ -363,12 +363,15 @@ export function activityService(db: Db) {
         .then((rows) => rows.map((r) => r.activityLog));
     },
 
-    forIssue: (issueId: string) =>
+    // Only the issue's own company's rows: an entity id is plain text, so a row
+    // logged in another company can name this issue too.
+    forIssue: (issueId: string, companyId: string) =>
       db
         .select()
         .from(activityLog)
         .where(
           and(
+            eq(activityLog.companyId, companyId),
             eq(activityLog.entityType, "issue"),
             eq(activityLog.entityId, issueId),
           ),

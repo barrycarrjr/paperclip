@@ -14,6 +14,7 @@ import { budgetsApi } from "../api/budgets";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
+import { describeError } from "@/lib/error-message";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
@@ -1998,7 +1999,7 @@ export function PromptsTab({
   const getCapabilities = useAdapterCapabilities();
   const isLocal = getCapabilities(agent.adapterType).supportsInstructionsBundle;
 
-  const { data: bundle, isLoading: bundleLoading } = useQuery({
+  const { data: bundle, isLoading: bundleLoading, error: bundleError } = useQuery({
     queryKey: queryKeys.agents.instructionsBundle(agent.id),
     queryFn: () => agentsApi.instructionsBundle(agent.id, companyId),
     enabled: Boolean(companyId && isLocal),
@@ -2335,6 +2336,18 @@ export function PromptsTab({
 
   if (bundleLoading && !bundle) {
     return <PromptsTabSkeleton />;
+  }
+
+  // Refused, or not loaded. The editor used to open empty here, as if this
+  // were a new managed file, and saving it wrote over the real one.
+  if (bundleError && !bundle) {
+    return (
+      <div className="max-w-3xl">
+        <p className="text-sm text-muted-foreground">
+          {describeError(bundleError, "These instructions could not be loaded. Try again.")}
+        </p>
+      </div>
+    );
   }
 
   return (

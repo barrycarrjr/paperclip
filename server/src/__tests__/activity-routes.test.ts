@@ -32,6 +32,14 @@ vi.mock("../services/index.js", () => ({
   heartbeatService: () => mockHeartbeatService,
 }));
 
+const INSTANCE_ADMIN = {
+  type: "board",
+  userId: "admin-1",
+  companyIds: ["company-1"],
+  source: "session",
+  isInstanceAdmin: true,
+};
+
 async function createApp(
   actor: Record<string, unknown> = {
     type: "board",
@@ -151,7 +159,7 @@ describe.sequential("activity routes", () => {
   });
 
   it("requires company access before creating activity events", async () => {
-    const app = await createApp();
+    const app = await createApp(INSTANCE_ADMIN);
     const res = await requestApp(app, (baseUrl) => request(baseUrl)
       .post("/api/companies/company-2/activity")
       .send({
@@ -162,7 +170,78 @@ describe.sequential("activity routes", () => {
       }));
 
     expect(res.status).toBe(403);
+    expect(res.body.error).toBe("User does not have access to this company");
     expect(mockActivityService.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member who is not an instance admin creating activity events", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "issue.start_work.planned", entityType: "issue", entityId: "issue-1" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Instance admin access required");
+    expect(mockActivityService.create).not.toHaveBeenCalled();
+  });
+
+  it("records the caller, not an actor named in the body, when creating activity events", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "event-1", ...row }));
+
+    const app = await createApp(INSTANCE_ADMIN);
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({
+        actorType: "agent",
+        actorId: "33333333-3333-4333-8333-333333333333",
+        agentId: "33333333-3333-4333-8333-333333333333",
+        action: "secret.deleted",
+        entityType: "secret",
+        entityId: "secret-1",
+      }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockActivityService.create).toHaveBeenCalledTimes(1);
+    const row = mockActivityService.create.mock.calls[0]![0];
+    expect(row).toMatchObject({
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "admin-1",
+      agentId: null,
+      action: "secret.deleted",
+      entityType: "secret",
+      entityId: "secret-1",
+    });
+    expect(res.body).toMatchObject({ actorType: "user", actorId: "admin-1", agentId: null });
+  });
+
+  it("accepts an activity event that names no actor and records the caller", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "event-2", ...row }));
+
+    const app = await createApp(INSTANCE_ADMIN);
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "note.added", entityType: "issue", entityId: "issue-1" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockActivityService.create).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "admin-1",
+      agentId: null,
+    }));
+  });
+
+  it("reads an issue's timeline from the issue's own company only", async () => {
+    const issueId = "44444444-4444-4444-8444-444444444444";
+    mockIssueService.getById.mockResolvedValue({ id: issueId, companyId: "company-1" });
+    mockActivityService.forIssue.mockResolvedValue([]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/activity`));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockActivityService.forIssue).toHaveBeenCalledWith(issueId, "company-1");
   });
 
   it("requires company access before listing issues for another company's run", async () => {

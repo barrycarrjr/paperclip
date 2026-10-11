@@ -56,6 +56,7 @@ import type { StorageService } from "../storage/types.js";
 import { accessService } from "./access.js";
 import { agentService } from "./agents.js";
 import { agentInstructionsService } from "./agent-instructions.js";
+import { resolvePortableExportAgentSelection } from "./company-portability-agent-selection.js";
 import { assetService } from "./assets.js";
 import { generateReadme } from "./company-export-readme.js";
 import { renderOrgChartPng, type OrgNode } from "../routes/org-chart-svg.js";
@@ -2958,43 +2959,11 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     let companyLogoPath: string | null = null;
 
     const allAgentRows = include.agents ? await agents.list(companyId, { includeTerminated: true }) : [];
-    const liveAgentRows = allAgentRows.filter((agent) => agent.status !== "terminated");
     const companySkillRows = include.skills || include.agents ? await companySkills.listFull(companyId) : [];
-    if (include.agents) {
-      const skipped = allAgentRows.length - liveAgentRows.length;
-      if (skipped > 0) {
-        warnings.push(`Skipped ${skipped} terminated agent${skipped === 1 ? "" : "s"} from export.`);
-      }
-    }
-
-    const agentByReference = new Map<string, typeof liveAgentRows[number]>();
-    for (const agent of liveAgentRows) {
-      agentByReference.set(agent.id, agent);
-      agentByReference.set(agent.name, agent);
-      const normalizedName = normalizeAgentUrlKey(agent.name);
-      if (normalizedName) {
-        agentByReference.set(normalizedName, agent);
-      }
-    }
-
-    const selectedAgents = new Map<string, typeof liveAgentRows[number]>();
-    for (const selector of input.agents ?? []) {
-      const trimmed = selector.trim();
-      if (!trimmed) continue;
-      const normalized = normalizeAgentUrlKey(trimmed) ?? trimmed;
-      const match = agentByReference.get(trimmed) ?? agentByReference.get(normalized);
-      if (!match) {
-        warnings.push(`Agent selector "${selector}" was not found and was skipped.`);
-        continue;
-      }
-      selectedAgents.set(match.id, match);
-    }
-
-    if (include.agents && selectedAgents.size === 0) {
-      for (const agent of liveAgentRows) {
-        selectedAgents.set(agent.id, agent);
-      }
-    }
+    // The export routes check this same selection before an export runs.
+    const agentSelection = resolvePortableExportAgentSelection(allAgentRows, input.agents, include.agents);
+    warnings.push(...agentSelection.warnings);
+    const selectedAgents = new Map(agentSelection.agents.map((agent) => [agent.id, agent] as const));
 
     const agentRows = Array.from(selectedAgents.values())
       .sort((left, right) => left.name.localeCompare(right.name));

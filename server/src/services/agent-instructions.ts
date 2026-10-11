@@ -111,8 +111,22 @@ function isMarkdown(relativePath: string) {
   return relativePath.toLowerCase().endsWith(".md");
 }
 
+// An absolute path, a drive letter (E:/, C:\ or C:file), a UNC or device path
+// (\\server\share, \\?\ or \\.\) or a path starting with a slash or backslash.
+// path.resolve lets any of these replace the bundle root, and a path on
+// another drive used to pass the ".." check below and be read or written.
+function isRootedPath(candidatePath: string) {
+  return path.posix.isAbsolute(candidatePath)
+    || path.win32.isAbsolute(candidatePath)
+    || /^[a-z]:/i.test(candidatePath);
+}
+
 function normalizeRelativeFilePath(candidatePath: string): string {
-  const normalized = path.posix.normalize(candidatePath.replaceAll("\\", "/")).replace(/^\/+/, "");
+  if (isRootedPath(candidatePath)) {
+    throw unprocessable("Instructions file path must stay within the bundle root");
+  }
+  // const normalized = path.posix.normalize(candidatePath.replaceAll("\\", "/")).replace(/^\/+/, "");
+  const normalized = path.posix.normalize(candidatePath.replaceAll("\\", "/"));
   if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
     throw unprocessable("Instructions file path must stay within the bundle root");
   }
@@ -124,7 +138,13 @@ function resolvePathWithinRoot(rootPath: string, relativePath: string): string {
   const absoluteRoot = path.resolve(rootPath);
   const absolutePath = path.resolve(absoluteRoot, normalizedRelativePath);
   const relativeToRoot = path.relative(absoluteRoot, absolutePath);
-  if (relativeToRoot === ".." || relativeToRoot.startsWith(`..${path.sep}`)) {
+  // A path on another drive has no relative form: path.relative hands back
+  // the absolute path itself, which the ".." checks do not catch.
+  if (
+    relativeToRoot === ".."
+    || relativeToRoot.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeToRoot)
+  ) {
     throw unprocessable("Instructions file path must stay within the bundle root");
   }
   return absolutePath;
@@ -245,12 +265,23 @@ function deriveBundleState(agent: AgentLike): BundleState {
   if (!rootPath && legacyInstructionsPath) {
     try {
       const resolvedLegacyPath = resolveLegacyInstructionsPath(legacyInstructionsPath, config);
-      rootPath = path.dirname(resolvedLegacyPath);
-      entryFile = path.basename(resolvedLegacyPath);
-      mode = resolvedLegacyPath.startsWith(`${resolveManagedInstructionsRoot(agent)}${path.sep}`)
-        || resolvedLegacyPath === path.join(resolveManagedInstructionsRoot(agent), entryFile)
-        ? "managed"
-        : "external";
+      // rootPath = path.dirname(resolvedLegacyPath);
+      // entryFile = path.basename(resolvedLegacyPath);
+      // mode = resolvedLegacyPath.startsWith(`${resolveManagedInstructionsRoot(agent)}${path.sep}`)
+      //   || resolvedLegacyPath === path.join(resolveManagedInstructionsRoot(agent), entryFile)
+      //   ? "managed"
+      //   : "external";
+      // A file anywhere inside the managed folder, a subfolder included, keeps
+      // the managed folder as its root, as upstream. path.relative also ignores
+      // letter case on Windows, where startsWith did not.
+      const managedRoot = resolveManagedInstructionsRoot(agent);
+      const managedRelative = path.relative(managedRoot, resolvedLegacyPath);
+      const inManagedRoot = managedRelative !== ".."
+        && !managedRelative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(managedRelative);
+      rootPath = inManagedRoot ? managedRoot : path.dirname(resolvedLegacyPath);
+      entryFile = inManagedRoot ? normalizeRelativeFilePath(managedRelative) : path.basename(resolvedLegacyPath);
+      mode = inManagedRoot ? "managed" : "external";
       if (!path.isAbsolute(legacyInstructionsPath)) {
         warnings.push("Using legacy relative instructionsFilePath; migrate this agent to a managed or absolute external bundle.");
       }
@@ -271,6 +302,31 @@ function deriveBundleState(agent: AgentLike): BundleState {
     legacyPromptTemplateActive: Boolean(asString(config[PROMPT_KEY])),
     legacyBootstrapPromptTemplateActive: Boolean(asString(config[BOOTSTRAP_PROMPT_KEY])),
   };
+}
+
+// Windows ignores letter case in paths, so c:\x and C:\X are one folder there.
+function isSamePath(left: string, right: string) {
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+/**
+ * Whether an agent's instructions live outside Paperclip's own managed
+ * folder, judged on the folder the service really reads, as every read and
+ * write below does. A saved managed folder the service swaps for the current
+ * one (the instance moved since) counts as managed. Any other folder counts
+ * as external whatever mode is saved, as upstream.
+ */
+export async function agentInstructionsBundleMode(agent: AgentLike): Promise<BundleMode | null> {
+  const state = await recoverManagedBundleState(agent, deriveBundleState(agent));
+  if (state.mode === "external") return "external";
+  if (state.rootPath && !isSamePath(state.rootPath, resolveManagedInstructionsRoot(agent))) {
+    return "external";
+  }
+  return state.mode;
 }
 
 async function recoverManagedBundleState(agent: AgentLike, state: BundleState): Promise<BundleState> {
