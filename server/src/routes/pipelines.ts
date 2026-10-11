@@ -85,7 +85,7 @@ import {
 import { accessService } from "../services/access.js";
 import { authorizationService } from "../services/authorization.js";
 import { issueService } from "../services/issues.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess } from "./authz.js";
 import {
   computePipelineHealth,
   deriveCaseType,
@@ -883,9 +883,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
             assigneeAgentId: routines.assigneeAgentId,
             title: routines.title,
             description: routines.description,
-            env: sql<Record<string, unknown> | null>`null`.as("env"),
-            latestRevisionId: sql<string | null>`null`.as("latest_revision_id"),
-            latestRevisionNumber: sql<number>`1`.as("latest_revision_number"),
+            env: routines.env,
+            latestRevisionId: routines.latestRevisionId,
+            latestRevisionNumber: routines.latestRevisionNumber,
           })
           .from(routines)
           .where(and(eq(routines.companyId, companyId), inArray(routines.id, automationRoutineIds)))
@@ -975,9 +975,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
             assigneeAgentId: routines.assigneeAgentId,
             title: routines.title,
             description: routines.description,
-            env: sql<Record<string, unknown> | null>`null`.as("env"),
-            latestRevisionId: sql<string | null>`null`.as("latest_revision_id"),
-            latestRevisionNumber: sql<number>`1`.as("latest_revision_number"),
+            env: routines.env,
+            latestRevisionId: routines.latestRevisionId,
+            latestRevisionNumber: routines.latestRevisionNumber,
           })
           .from(routines)
           .where(and(eq(routines.companyId, companyId), inArray(routines.id, automationRoutineIds)))
@@ -1115,6 +1115,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
   });
 
   router.patch("/pipelines/:pipelineId/stages/:stageId/automation-env", validate(updateStageAutomationEnvSchema), async (req, res) => {
+    // People only, like the secrets API: an agent that may edit a pipeline
+    // must not attach company secrets to a stage whose routine it runs.
+    assertBoard(req);
     const pipelineId = req.params.pipelineId as string;
     const stageId = req.params.stageId as string;
     const companyId = await assertPipelineAccess(db, req, pipelineId);

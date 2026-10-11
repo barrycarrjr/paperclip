@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb } from "@paperclipai/db";
+import { agents, companies, companySecrets, createDb } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -219,6 +220,54 @@ describeEmbeddedPostgres("secretService", () => {
         },
       }),
     ).rejects.toThrow(/Invalid environment binding for key: DOUBLED/);
+  });
+
+  it("checks that every secret a saved env references belongs to the company", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const svc = secretService(db);
+
+    await db.insert(companies).values([
+      { id: companyId, name: "Sync Co", issuePrefix: "SYN", status: "active" },
+      { id: otherCompanyId, name: "Other Co", issuePrefix: "OTH", status: "active" },
+    ]);
+    const own = await svc.create(companyId, {
+      name: "deploy_token",
+      provider: "local_encrypted",
+      value: "own-value",
+    });
+    const foreign = await svc.create(otherCompanyId, {
+      name: "foreign_token",
+      provider: "local_encrypted",
+      value: "foreign-value",
+    });
+    const target = { targetType: "routine", targetId: randomUUID() };
+
+    await expect(svc.syncEnvBindingsForTarget(companyId, target, {
+      DEPLOY_TOKEN: { type: "secret_ref", secretId: own.id, version: "latest" },
+      PINNED_TOKEN: { type: "secret_ref", secretId: own.id, version: 1 },
+      REGION: { type: "plain", value: "eu-west-1" },
+    })).resolves.toEqual([
+      { secretId: own.id, configPath: "env.DEPLOY_TOKEN", versionSelector: "latest" },
+      { secretId: own.id, configPath: "env.PINNED_TOKEN", versionSelector: 1 },
+    ]);
+
+    await expect(svc.syncEnvBindingsForTarget(companyId, target, {
+      FOREIGN_TOKEN: { type: "secret_ref", secretId: foreign.id, version: "latest" },
+    })).rejects.toThrow(/Secret must belong to same company/);
+
+    // The check reads through the caller's transaction: a secret deleted in
+    // it is already gone, so the save that holds the transaction fails.
+    await expect(db.transaction(async (tx) => {
+      await tx.delete(companySecrets).where(eq(companySecrets.id, own.id));
+      return svc.syncEnvBindingsForTarget(
+        companyId,
+        target,
+        { DEPLOY_TOKEN: { type: "secret_ref", secretId: own.id, version: "latest" } },
+        { db: tx },
+      );
+    })).rejects.toThrow(/Secret not found/);
+    expect(await svc.getById(own.id)).not.toBeNull();
   });
 });
 

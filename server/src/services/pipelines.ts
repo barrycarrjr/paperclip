@@ -20,6 +20,7 @@ import {
   pipelineStages,
   pipelineTransitions,
   pipelines,
+  routineRevisions,
   routines,
 } from "@paperclipai/db";
 import {
@@ -38,6 +39,7 @@ import {
   type PipelineStageAutomation,
   PIPELINE_AUTOMATION_DEFAULT_TITLE_TEMPLATE,
   PIPELINE_CASE_BODY_DOCUMENT_KEY,
+  type RoutineRevisionSnapshotV1,
   type RoutineVariable,
 } from "@paperclipai/shared";
 import { conflict, HttpError, notFound, unprocessable } from "../errors.js";
@@ -1136,9 +1138,9 @@ function derivedStageAutomationPayload(
     titleTemplate: routine.title,
     instructionsBody: routine.description ?? "",
     ...executionContext,
-    env: null,
-    latestRoutineRevisionId: null,
-    latestRoutineRevisionNumber: 1,
+    env: routine.env ?? null,
+    latestRoutineRevisionId: routine.latestRevisionId,
+    latestRoutineRevisionNumber: routine.latestRevisionNumber,
   };
 }
 
@@ -1159,7 +1161,29 @@ function stageAutomationRoutineIdFromConfig(config?: PipelineStageConfig | null)
     : null;
 }
 
-
+function routineRevisionSnapshotRoutine(routine: typeof routines.$inferSelect): RoutineRevisionSnapshotV1["routine"] {
+  return {
+    id: routine.id,
+    companyId: routine.companyId,
+    projectId: routine.projectId,
+    goalId: routine.goalId,
+    parentIssueId: routine.parentIssueId,
+    title: routine.title,
+    description: routine.description,
+    assigneeAgentId: routine.assigneeAgentId,
+    priority: routine.priority as RoutineRevisionSnapshotV1["routine"]["priority"],
+    status: routine.status as RoutineRevisionSnapshotV1["routine"]["status"],
+    concurrencyPolicy: routine.concurrencyPolicy as RoutineRevisionSnapshotV1["routine"]["concurrencyPolicy"],
+    catchUpPolicy: routine.catchUpPolicy as RoutineRevisionSnapshotV1["routine"]["catchUpPolicy"],
+    activityGatePolicy: routine.activityGatePolicy as RoutineRevisionSnapshotV1["routine"]["activityGatePolicy"],
+    activityGateScope: routine.activityGateScope as RoutineRevisionSnapshotV1["routine"]["activityGateScope"],
+    originKind: routine.originKind,
+    originId: routine.originId,
+    variables: routine.variables ?? [],
+    env: routine.env ?? null,
+    responsibleUserId: routine.responsibleUserId ?? null,
+  };
+}
 
 function addFormVariablesForStage(stage: typeof pipelineStages.$inferSelect) {
   const variables = stageConfig(stage).variables;
@@ -2657,7 +2681,37 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     actor: PipelineActor,
     changeSummary: string,
   ) {
-    return routine;
+    const actorPatch = routineActorPatch(actor);
+    const revisionNumber = routine.latestRevisionId ? routine.latestRevisionNumber + 1 : 1;
+    const [revision] = await dbOrTx
+      .insert(routineRevisions)
+      .values({
+        companyId: routine.companyId,
+        routineId: routine.id,
+        revisionNumber,
+        title: routine.title,
+        description: routine.description,
+        snapshot: {
+          version: 1,
+          routine: routineRevisionSnapshotRoutine(routine),
+          triggers: [],
+        },
+        changeSummary,
+        createdByAgentId: actorPatch.agentId,
+        createdByUserId: actorPatch.userId,
+        createdByRunId: actorPatch.runId,
+      })
+      .returning();
+    const [updated] = await dbOrTx
+      .update(routines)
+      .set({
+        latestRevisionId: revision!.id,
+        latestRevisionNumber: revisionNumber,
+        updatedAt: nowDate(),
+      })
+      .where(eq(routines.id, routine.id))
+      .returning();
+    return updated ?? routine;
   }
 
   async function syncPipelineStageAutomation(
@@ -3620,9 +3674,16 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
             routineId,
           });
         }
+        if (input.baseRoutineRevisionId && input.baseRoutineRevisionId !== locked.latestRevisionId) {
+          throw conflict("Stage automation routine was updated by someone else", {
+            currentRoutineRevisionId: locked.latestRevisionId,
+          });
+        }
+
         const [routineWithEnv] = await txDb
           .update(routines)
           .set({
+            env: normalizedEnv,
             updatedByAgentId: actorPatch.agentId,
             updatedByUserId: actorPatch.userId,
             updatedAt: nowDate(),
@@ -3659,8 +3720,8 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
             bindingRefKeys: secretRefs.map((ref) => ref.key).sort(),
             bindingRefIds: [...new Set(secretRefs.map((ref) => ref.secretId))].sort(),
             bindingRefCount: secretRefs.length,
-            routineRevisionId: null,
-            routineRevisionNumber: 1,
+            routineRevisionId: routineWithRevision.latestRevisionId,
+            routineRevisionNumber: routineWithRevision.latestRevisionNumber,
           },
         });
         return routineWithRevision;
