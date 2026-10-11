@@ -1,6 +1,7 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
-import type { Db } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { companies, type Db } from "@paperclipai/db";
 import {
   createAgentTemplateSchema,
   createRoutineTemplateSchema,
@@ -14,7 +15,7 @@ import {
   type TemplateType,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { templateService } from "../services/index.js";
+import { accessService, templateService } from "../services/index.js";
 import { isPersonalCompany } from "../services/personal-companies.js";
 import { templatesLibraryService } from "../services/templates-library.js";
 import { badRequest, forbidden } from "../errors.js";
@@ -68,26 +69,6 @@ function actorUserId(req: Request): string | null {
 }
 
 /**
- * Why this caller may not deploy a template into `companyId`, or null when
- * they may.
- *
- * Nobody but its owner deploys into a Personal company, administrators
- * included. An instance admin may deploy into any other company. An HQ owner
- * or admin who is not one may deploy only where they could make the change
- * themselves: HQ lets them read every company, not change it. The company
- * access check decides both, so its rules are not copied here.
- */
-function deployRefusal(req: Request, companyId: string): string | null {
-  if (hasInstanceAdminAccess(req) && !isPersonalCompany(companyId)) return null;
-  try {
-    assertCompanyAccess(req, companyId, "write");
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : "You cannot deploy into this company";
-  }
-}
-
-/**
  * Deployments into someone else's Personal company are left out. Whether a
  * template went in there, and that company's name, are its owner's business,
  * administrators included.
@@ -107,6 +88,47 @@ export function templateRoutes(
   const router = Router();
   const svc = templateService(db, { pluginWorkerManager: options.pluginWorkerManager });
   const lib = templatesLibraryService(db);
+  const access = accessService(db);
+
+  /**
+   * Why this caller may not deploy a `type` template into `companyId`, or
+   * null when they may.
+   *
+   * Nobody but its owner deploys into a Personal company, administrators
+   * included. An instance admin may deploy into any other company. Anyone
+   * else, an HQ owner or admin who is not an instance admin, may deploy only
+   * what they could make there themselves, so they are asked what the
+   * company's own create routes ask: a seat that can write, then
+   * agents:create for an agent or a skill and tasks:assign for a routine, and
+   * for an agent a company that does not require board approval for new
+   * agents. HQ lets them read every company, not change it.
+   */
+  async function deployRefusal(req: Request, type: TemplateType, companyId: string): Promise<string | null> {
+    if (hasInstanceAdminAccess(req) && !isPersonalCompany(companyId)) return null;
+    try {
+      assertCompanyAccess(req, companyId, "write");
+    } catch (err) {
+      return err instanceof Error ? err.message : "You cannot deploy into this company";
+    }
+    // Past the Personal rule, an instance admin needs nothing more, as anywhere else.
+    if (hasInstanceAdminAccess(req)) return null;
+
+    const permission = type === "routine" ? "tasks:assign" : "agents:create";
+    if (!(await access.canUser(companyId, req.actor.userId, permission))) {
+      return `Missing permission: ${permission}`;
+    }
+    if (type === "agent") {
+      const company = await db
+        .select({ requireBoardApprovalForNewAgents: companies.requireBoardApprovalForNewAgents })
+        .from(companies)
+        .where(eq(companies.id, companyId))
+        .then((rows) => rows[0] ?? null);
+      if (company?.requireBoardApprovalForNewAgents) {
+        return "This company needs board approval for new agents";
+      }
+    }
+    return null;
+  }
 
   router.get("/templates/routine", async (req, res) => {
     assertCanManageTemplates(req);
@@ -256,7 +278,7 @@ export function templateRoutes(
         type,
         req.params.id as string,
         req.body,
-        { userId: actorUserId(req), refusalFor: (companyId) => deployRefusal(req, companyId) },
+        { userId: actorUserId(req), refusalFor: (companyId) => deployRefusal(req, type, companyId) },
       );
       res.status(200).json(result);
     },

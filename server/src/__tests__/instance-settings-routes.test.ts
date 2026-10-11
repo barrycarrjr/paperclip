@@ -229,6 +229,7 @@ describe("instance settings routes", () => {
       runId: null,
       force: true,
       lookbackHours: 12,
+      includeCompany: expect.any(Function),
     });
     expect(mockLogActivity).toHaveBeenCalledTimes(2);
   });

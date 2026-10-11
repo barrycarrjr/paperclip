@@ -10,13 +10,16 @@ import {
   companyMemberships,
   companySkills,
   createDb,
+  principalPermissionGrants,
   routineTemplates,
   routines,
   skillTemplates,
   templateDeployments,
 } from "@paperclipai/db";
+import type { HumanCompanyMembershipRole } from "@paperclipai/shared";
 import { errorHandler } from "../middleware/index.js";
 import { templateRoutes } from "../routes/templates.js";
+import { grantsForHumanRole } from "../services/company-member-roles.js";
 import { loadPersonalCompanyIndex } from "../services/personal-companies.js";
 import { templateService } from "../services/templates.js";
 import {
@@ -46,13 +49,16 @@ if (!embeddedPostgresSupport.supported) {
 
 // The owner of this instance is an instance admin, the HQ owner, and the owner
 // of his own Personal. Bob owns another Personal. Carol is an instance admin
-// with no seat anywhere. Dana is an HQ admin who is not an instance admin: an
-// operator in Beta, a viewer in Gamma, and not a member of Acme.
+// with no seat anywhere. Dana is an HQ admin who is not an instance admin. Her
+// seats: admin in Delta; operator in Beta, which carries only tasks:assign;
+// admin in Gamma, which requires board approval for new agents; operator in
+// Foxtrot with tasks:assign taken away; viewer in Echo; none in Acme.
 const OWNER = "user-owner";
 const BOB = "user-bob";
 const CAROL = "user-carol";
 const DANA = "user-dana";
 const PERSONAL_REFUSAL = "This is someone's personal company";
+const APPROVAL_REFUSAL = "This company needs board approval for new agents";
 
 const KINDS = ["agent", "routine", "skill"] as const;
 type Kind = (typeof KINDS)[number];
@@ -71,6 +77,9 @@ describeEmbeddedPostgres("templates and Personal companies", () => {
   let acmeId!: string;
   let betaId!: string;
   let gammaId!: string;
+  let deltaId!: string;
+  let echoId!: string;
+  let foxtrotId!: string;
   let bobPersonalId!: string;
   let ownerPersonalId!: string;
   const templateIds = {} as Record<Kind, string>;
@@ -88,10 +97,21 @@ describeEmbeddedPostgres("templates and Personal companies", () => {
     await db.delete(companySkills);
     await db.delete(routines);
     await db.delete(agents);
+    await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     // The migrations seed an HQ company of their own, and there can only be one.
     await db.delete(companies);
   }
+
+  /** Dana's seats, each with the permissions that role grants unless given others. */
+  const danaSeats = (): Array<[string, HumanCompanyMembershipRole, Array<{ permissionKey: string }>?]> => [
+    [hqId, "admin"],
+    [betaId, "operator"],
+    [gammaId, "admin"],
+    [deltaId, "admin"],
+    [echoId, "viewer"],
+    [foxtrotId, "operator", []],
+  ];
 
   beforeEach(async () => {
     await clearTables();
@@ -99,16 +119,43 @@ describeEmbeddedPostgres("templates and Personal companies", () => {
     acmeId = randomUUID();
     betaId = randomUUID();
     gammaId = randomUUID();
+    deltaId = randomUUID();
+    echoId = randomUUID();
+    foxtrotId = randomUUID();
     bobPersonalId = randomUUID();
     ownerPersonalId = randomUUID();
     await db.insert(companies).values([
       { id: hqId, name: "HQ", issuePrefix: "HQT", isPortfolioRoot: true },
       { id: acmeId, name: "Acme", issuePrefix: "ACT" },
       { id: betaId, name: "Beta", issuePrefix: "BET" },
-      { id: gammaId, name: "Gamma", issuePrefix: "GAT" },
+      { id: gammaId, name: "Gamma", issuePrefix: "GAT", requireBoardApprovalForNewAgents: true },
+      { id: deltaId, name: "Delta", issuePrefix: "DET" },
+      { id: echoId, name: "Echo", issuePrefix: "ECT" },
+      { id: foxtrotId, name: "Foxtrot", issuePrefix: "FOT" },
       { id: bobPersonalId, name: "Personal", issuePrefix: "MET", kind: "personal", ownerUserId: BOB },
       { id: ownerPersonalId, name: "Personal", issuePrefix: "ME2T", kind: "personal", ownerUserId: OWNER },
     ]);
+    // Written as an invite or a role change writes them, which is what the
+    // company's own routes read.
+    for (const [companyId, role, grants = grantsForHumanRole(role)] of danaSeats()) {
+      await db.insert(companyMemberships).values({
+        companyId,
+        principalType: "user",
+        principalId: DANA,
+        status: "active",
+        membershipRole: role,
+      });
+      if (grants.length > 0) {
+        await db.insert(principalPermissionGrants).values(
+          grants.map((grant) => ({
+            companyId,
+            principalType: "user",
+            principalId: DANA,
+            permissionKey: grant.permissionKey,
+          })),
+        );
+      }
+    }
     await loadPersonalCompanyIndex(db);
 
     const templates = templateService(db);
@@ -181,12 +228,8 @@ describeEmbeddedPostgres("templates and Personal companies", () => {
     source: "session",
     isInstanceAdmin: false,
     isPortfolioRootUserAdmin: true,
-    companyIds: [hqId, betaId, gammaId],
-    memberships: [
-      { companyId: hqId, membershipRole: "admin", status: "active" },
-      { companyId: betaId, membershipRole: "operator", status: "active" },
-      { companyId: gammaId, membershipRole: "viewer", status: "active" },
-    ],
+    companyIds: danaSeats().map(([companyId]) => companyId),
+    memberships: danaSeats().map(([companyId, membershipRole]) => ({ companyId, membershipRole, status: "active" })),
   });
 
   function app(actor: Record<string, unknown>) {
@@ -245,20 +288,36 @@ describeEmbeddedPostgres("templates and Personal companies", () => {
       expect(await deploymentsIn(bobPersonalId)).toBe(0);
     });
 
-    it.each(KINDS)(
-      "lets an HQ admin who is not an instance admin deploy a %s template only where she could write herself",
-      async (kind) => {
-        const results = await deploy(dana(), kind, [betaId, acmeId, gammaId, bobPersonalId]);
+    // What Dana could make in each company herself, through its own create
+    // routes: an agent or a skill needs agents:create, a routine tasks:assign,
+    // and a new agent also a company that does not require board approval.
+    it.each([
+      ["agent", { beta: "Missing permission: agents:create", gamma: APPROVAL_REFUSAL, foxtrot: "Missing permission: agents:create" }],
+      ["skill", { beta: "Missing permission: agents:create", gamma: null, foxtrot: "Missing permission: agents:create" }],
+      ["routine", { beta: null, gamma: null, foxtrot: "Missing permission: tasks:assign" }],
+    ] as const)(
+      "lets an HQ admin who is not an instance admin deploy a %s template only where she could make one herself",
+      async (kind, refusals) => {
+        const results = await deploy(dana(), kind, [deltaId, betaId, gammaId, foxtrotId, echoId, acmeId, bobPersonalId]);
+        const createdOrRefused = (companyId: string, companyName: string, refusal: string | null) =>
+          refusal
+            ? refused(companyId, companyName, refusal)
+            : expect.objectContaining({ companyId, companyName, status: "created" });
 
         expect(results).toEqual([
-          expect.objectContaining({ companyId: betaId, companyName: "Beta", status: "created" }),
+          createdOrRefused(deltaId, "Delta", null),
+          createdOrRefused(betaId, "Beta", refusals.beta),
+          createdOrRefused(gammaId, "Gamma", refusals.gamma),
+          createdOrRefused(foxtrotId, "Foxtrot", refusals.foxtrot),
+          refused(echoId, "Echo", "Viewer access is read-only"),
           refused(acmeId, "Acme", "User does not have access to this company"),
-          refused(gammaId, "Gamma", "Viewer access is read-only"),
           refused(bobPersonalId, bobPersonalId, PERSONAL_REFUSAL),
         ]);
-        expect(await madeIn(kind, acmeId)).toBe(0);
-        expect(await madeIn(kind, gammaId)).toBe(0);
-        expect(await madeIn(kind, bobPersonalId)).toBe(0);
+        expect(await madeIn(kind, betaId)).toBe(refusals.beta ? 0 : 1);
+        expect(await madeIn(kind, gammaId)).toBe(refusals.gamma ? 0 : 1);
+        for (const companyId of [foxtrotId, echoId, acmeId, bobPersonalId]) {
+          expect(await madeIn(kind, companyId)).toBe(0);
+        }
       },
     );
 

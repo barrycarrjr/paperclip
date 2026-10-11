@@ -163,6 +163,10 @@ export function instanceSettingsRoutes(db: Db) {
         runId: actor.runId,
         force: true,
         lookbackHours: req.body.lookbackHours,
+        // It still acts in every company. What it reports, here and in the
+        // activity rows below, leaves out someone else's Personal company,
+        // counts and ids alike, as the preview does.
+        includeCompany: (companyId) => !isOthersPersonalCompany(req.actor, companyId),
       });
       const companyIds = await svc.listCompanyIds();
       await Promise.all(

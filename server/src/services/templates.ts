@@ -46,7 +46,7 @@ type Actor = { userId?: string | null };
  * or null when they may; the route works it out from the signed-in caller. A
  * refused company gets an error row and nothing is made in it.
  */
-type DeployActor = Actor & { refusalFor?: (companyId: string) => string | null };
+type DeployActor = Actor & { refusalFor?: (companyId: string) => Promise<string | null> };
 
 type RoutineVariableInput = CreateRoutineTemplate["variables"][number];
 
@@ -157,12 +157,12 @@ export function templateService(
    * they may. Someone else's Personal company is named by its id alone, as an
    * unknown company is, so its name stays private.
    */
-  function refusedDeployment(
+  async function refusedDeployment(
     actor: DeployActor,
     companyId: string,
     companyName: string,
-  ): TemplateDeploymentResultItem | null {
-    const refusal = actor.refusalFor?.(companyId) ?? null;
+  ): Promise<TemplateDeploymentResultItem | null> {
+    const refusal = (await actor.refusalFor?.(companyId)) ?? null;
     if (!refusal) return null;
     return {
       companyId,
@@ -617,7 +617,7 @@ export function templateService(
         continue;
       }
 
-      const refused = refusedDeployment(actor, companyId, companyName);
+      const refused = await refusedDeployment(actor, companyId, companyName);
       if (refused) {
         results.push(refused);
         continue;
@@ -759,7 +759,7 @@ export function templateService(
         continue;
       }
 
-      const refused = refusedDeployment(actor, companyId, companyName);
+      const refused = await refusedDeployment(actor, companyId, companyName);
       if (refused) {
         results.push(refused);
         continue;
@@ -844,7 +844,7 @@ export function templateService(
         continue;
       }
 
-      const refused = refusedDeployment(actor, companyId, companyName);
+      const refused = await refusedDeployment(actor, companyId, companyName);
       if (refused) {
         results.push(refused);
         continue;
