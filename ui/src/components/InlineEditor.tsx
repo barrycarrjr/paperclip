@@ -84,7 +84,10 @@ export function InlineEditor({
     const previousValue = lastPropValueRef.current;
     lastPropValueRef.current = value;
     setDraft((currentDraft) => {
-      if (multiline && multilineFocused && currentDraft !== previousValue) {
+      // Trimmed for the same reason as trimmedValue: a draft that differs from
+      // the saved text only by end whitespace holds no local edit, so a newer
+      // value from elsewhere (an agent's update) must replace it.
+      if (multiline && multilineFocused && currentDraft.trim() !== previousValue.trim()) {
         return currentDraft;
       }
       return value;
