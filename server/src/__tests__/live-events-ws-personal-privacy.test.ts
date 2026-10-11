@@ -39,12 +39,15 @@ type FeedMessage = { kind?: string; id?: number; companyId?: string };
 // Alice owns a Personal company and is also an HQ admin, so she can open the
 // portfolio feed. Bob is an HQ owner and Carol an instance administrator with
 // an ordinary seat in HQ; neither of them owns Alice's Personal. Dan is an
-// instance administrator with no seat anywhere. The owner of this instance is
-// an instance administrator, an HQ owner, and the owner of his own Personal.
+// instance administrator with no seat anywhere. Erin is an instance
+// administrator and an HQ admin who does not own Alice's Personal either. The
+// owner of this instance is an instance administrator, an HQ owner, and the
+// owner of his own Personal.
 const ALICE = "user-alice";
 const BOB = "user-bob";
 const CAROL = "user-carol";
 const DAN = "user-dan";
+const ERIN = "user-erin";
 const OWNER = "user-owner";
 const HQ_AGENT_TOKEN = "hq-agent-live-feed-token";
 
@@ -120,6 +123,7 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
       // REST portfolio routes require.
       { companyId: hqId, principalType: "user", principalId: CAROL, status: "active", membershipRole: "viewer" },
       { companyId: hqId, principalType: "user", principalId: OWNER, status: "active", membershipRole: "owner" },
+      { companyId: hqId, principalType: "user", principalId: ERIN, status: "active", membershipRole: "admin" },
       {
         companyId: alicePersonalId,
         principalType: "user",
@@ -138,6 +142,7 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
     await db.insert(instanceUserRoles).values([
       { userId: CAROL, role: "instance_admin" },
       { userId: DAN, role: "instance_admin" },
+      { userId: ERIN, role: "instance_admin" },
       { userId: OWNER, role: "instance_admin" },
     ]);
     const [hqAgent] = await db
@@ -279,7 +284,9 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
 
     it.each([
       ["an HQ admin who is not the owner", BOB],
-      ["an instance administrator who is not the owner", CAROL],
+      // Erin, not Carol: Carol has only a viewer seat in HQ, so she is
+      // refused for that alone, and the case would no longer test the id.
+      ["an instance administrator and HQ admin who is not the owner", ERIN],
     ])("refuses %s that feed with the company id in capitals and braces", async (_who, userId) => {
       // Postgres reads that id as the same company. The feed must not depend
       // on events happening to be routed by the exact string.
