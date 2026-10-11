@@ -34,9 +34,10 @@ function spaceVersionAuthor(
   return { name, agentId: null, runId: null };
 }
 
-function restoreFailure(error: unknown) {
+function restoreFailure(error: unknown, version: SpacePageRevision) {
+  // The editor has taken the newer version by now, so a second try is written on it.
   if (error instanceof ApiError && error.status === 409) {
-    return "The page changed after you opened its history. Look at the newest version, then try again.";
+    return `The page changed after you opened its history. It now shows the newest version. Restore again if you still want version ${version.revisionNumber}.`;
   }
   const reason = error instanceof Error && error.message ? error.message : "Please try again.";
   return `Could not restore the version. ${reason}`;
@@ -127,7 +128,7 @@ export function SpacePageHistory({
     },
     onError: (error, sent) => {
       void queryClient.invalidateQueries({ queryKey: versionsKey });
-      if (opening.isShowing(sent.opening)) setOutcome({ tone: "error", text: restoreFailure(error) });
+      if (opening.isShowing(sent.opening)) setOutcome({ tone: "error", text: restoreFailure(error, sent.version) });
     },
   });
 
@@ -244,8 +245,10 @@ export function SpacePageHistory({
       }}
     >
       <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-xl" showCloseButton={!restore.isPending}>
-        <SheetHeader className="border-b border-border pr-12">
-          <SheetTitle>History</SheetTitle>
+        {/* Room for the close button beside the title only, so a message
+            below runs the full width, level with the version below it. */}
+        <SheetHeader className="border-b border-border">
+          <SheetTitle className="pr-8">History</SheetTitle>
           <SheetDescription>Every saved version of this page, newest first. Open one to read it.</SheetDescription>
           {/* On the page even while empty, so a screen reader hears each outcome. */}
           <div

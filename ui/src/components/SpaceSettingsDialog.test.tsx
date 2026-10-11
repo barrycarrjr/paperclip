@@ -121,6 +121,22 @@ describe("SpaceSettingsDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("does not archive while a rename typed above is unsaved, which archiving would lose", async () => {
+    await render();
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>("#space-settings-name")!, "Old pricing (2025)");
+    });
+
+    expect(buttonNamed(container, "Archive")!.disabled).toBe(true);
+    expect(container.textContent).toContain("Save or cancel the changes above first.");
+    await act(async () => {
+      buttonNamed(container, "Save")!.click();
+    });
+    await flush();
+    expect(mockSpacesApi.update).toHaveBeenCalledWith("space-1", { name: "Old pricing (2025)", description: "How we work" });
+    expect(mockSpacesApi.update).not.toHaveBeenCalledWith("space-1", { archived: true });
+  });
+
   it("offers an archived Space only being unarchived", async () => {
     await render({ ...SPACE, archivedAt: new Date("2026-10-11T10:00:00.000Z") });
 

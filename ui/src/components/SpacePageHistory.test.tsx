@@ -223,9 +223,11 @@ describe("SpacePageHistory", () => {
     });
     await flush();
 
+    // The editor has taken the newer version by then, so another try can work.
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      "The page changed after you opened its history. Look at the newest version, then try again.",
+      "The page changed after you opened its history. It now shows the newest version. Restore again if you still want version 2.",
     );
+    expect(buttonNamed(container, "Restore this version")!.disabled).toBe(false);
   });
 
   it("lets a viewer read every version but restore none", async () => {

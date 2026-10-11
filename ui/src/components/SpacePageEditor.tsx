@@ -193,6 +193,27 @@ function hasUnsavedText(draft: Draft | null, saved: SavedState | null) {
 /** A save refused because the page moved on. Said by its own notice, not as a failed save. */
 class PageMovedOn extends Error {}
 
+function isNotFound(error: unknown) {
+  return error instanceof ApiError && error.status === 404;
+}
+
+/**
+ * A save refused for a reason that trying again cannot fix: the Space was
+ * archived, or the page is no longer in this Space (moved to another, or
+ * sent to the trash). A save that waited for either of those to finish gets
+ * the same answer.
+ */
+type SaveRefusal = { reason: "archived"; message: string } | { reason: "gone" };
+
+function saveRefusalOf(error: unknown): SaveRefusal | null {
+  if (!(error instanceof ApiError)) return null;
+  if (error.status === 404) return { reason: "gone" };
+  if (error.status === 422 && error.body?.details?.code === "space_archived") {
+    return { reason: "archived", message: error.message };
+  }
+  return null;
+}
+
 type Conflict = { theirs: SpacePage; showTheirs: boolean };
 
 interface SpacePageEditorProps {
@@ -230,6 +251,9 @@ export function SpacePageEditor({
   const pageQuery = useQuery({
     queryKey: pageQueryKey,
     queryFn: () => spacesApi.getPage(space.id, pageId),
+    // A page that is not here (moved, or in the trash) is said at once,
+    // not after three more tries.
+    retry: (failureCount, error) => !isNotFound(error) && failureCount < 3,
   });
   const page = pageQuery.data;
   const { state: autosaveState, markDirty, reset, runSave } = useAutosaveIndicator();
@@ -238,6 +262,7 @@ export function SpacePageEditor({
   const [conflict, setConflictState] = useState<Conflict | null>(null);
   // Set when this browser could not keep the text (storage full or off).
   const [keepFailed, setKeepFailed] = useState(false);
+  const [refusal, setRefusal] = useState<SaveRefusal | null>(null);
   const draftRef = useRef<Draft | null>(draft);
   draftRef.current = draft;
   const conflictRef = useRef<Conflict | null>(conflict);
@@ -348,6 +373,10 @@ export function SpacePageEditor({
     if (title !== saved.title) change.title = title;
     if (current.body !== saved.body) change.body = current.body;
     if (keepPreviousRef.current) change.keepPrevious = true;
+    // The page's history has a newer version once a save works, though it
+    // may have folded into the last one under a new id.
+    const versionsChanged = () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.spaces.revisions(space.id, pageId) });
     try {
       const updated = await spacesApi.updatePage(space.id, pageId, change);
       keepPreviousRef.current = false;
@@ -356,6 +385,8 @@ export function SpacePageEditor({
       if (change.title !== undefined) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) });
       }
+      void versionsChanged();
+      setRefusal(null);
       syncKeptDraft();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -367,15 +398,26 @@ export function SpacePageEditor({
           // text, saved from a moment ago), so there is nothing to choose.
           savedRef.current = theirsSaved;
           queryClient.setQueryData(queryKeys.spaces.page(space.id, pageId), theirs);
+          void versionsChanged();
           syncKeptDraft();
           return;
         }
         setConflict({ theirs, showTheirs: false });
         throw new PageMovedOn();
       }
+      const refused = saveRefusalOf(error);
+      if (refused) {
+        setRefusal(refused);
+        // Asked again, the Space turns the page read only with its archived
+        // notice, or the list of pages finds where the page went.
+        void queryClient.invalidateQueries({
+          queryKey:
+            refused.reason === "archived" ? queryKeys.spaces.list(space.companyId) : queryKeys.spaces.pageTree(space.id),
+        });
+      }
       throw error;
     }
-  }, [pageId, queryClient, setConflict, space.id, syncKeptDraft]);
+  }, [pageId, queryClient, setConflict, space.companyId, space.id, syncKeptDraft]);
 
   // Saves run one after another, each from the version the last one made, so
   // a save started while another is on its way cannot trip over it.
@@ -424,6 +466,16 @@ export function SpacePageEditor({
     void queueSaveRef.current({ quiet: true });
   }, []);
 
+  // The page moved to another Space while open here, and its new address
+  // kept this editor: text its old Space refused is saved to the new one.
+  const spaceIdRef = useRef(space.id);
+  useEffect(() => {
+    if (spaceIdRef.current === space.id) return;
+    spaceIdRef.current = space.id;
+    setRefusal(null);
+    void queueSaveRef.current();
+  }, [space.id]);
+
   const saveRightAway = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = null;
@@ -459,6 +511,18 @@ export function SpacePageEditor({
     setConflict(null);
   };
 
+  // Takes a version as what this page has saved and shows. draftRef is set
+  // here, not only on the next render: the editor may be gone by then (left
+  // while a restore was on its way), and its leaving save reads it, so the
+  // text from before would otherwise be saved back over this version.
+  const takeSaved = (next: SpacePage) => {
+    savedRef.current = savedStateOf(next);
+    draftRef.current = { title: next.title, body: next.body };
+    queryClient.setQueryData(pageQueryKey, next);
+    setDraft(draftRef.current);
+    forgetUsedDrafts();
+  };
+
   // A restore is a save: it waits for any save on its way, then is written on
   // the version that save made. Text that has not saved stops it, rather than
   // being covered by the version brought back.
@@ -473,11 +537,19 @@ export function SpacePageEditor({
       if (!saved?.revisionId || conflictRef.current || hasUnsavedText(draftRef.current, saved)) {
         throw new Error("Your latest changes are not saved yet. Save them, then restore.");
       }
-      const restored = await spacesApi.restoreRevision(space.id, pageId, version.id, { baseRevisionId: saved.revisionId });
-      savedRef.current = savedStateOf(restored);
-      queryClient.setQueryData(pageQueryKey, restored);
-      setDraft({ title: restored.title, body: restored.body });
-      forgetUsedDrafts();
+      let restored: SpacePage;
+      try {
+        restored = await spacesApi.restoreRevision(space.id, pageId, version.id, { baseRevisionId: saved.revisionId });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          // Someone saved the page meanwhile. Show their version, and write a
+          // second try on it, as a refused save with nothing to choose does.
+          const theirs = await spacesApi.getPage(space.id, pageId).catch(() => null);
+          if (theirs && !conflictRef.current && !hasUnsavedText(draftRef.current, savedRef.current)) takeSaved(theirs);
+        }
+        throw error;
+      }
+      takeSaved(restored);
       void queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) });
       return restored;
     };
@@ -501,9 +573,14 @@ export function SpacePageEditor({
   const failed = autosaveState === "error";
   // "Kept" only when this browser really kept a copy: storage can be full or
   // switched off, and then the text is on this screen alone.
-  const notSavedLine = keepFailed
-    ? "Not saved. Keep this page open: this browser could not keep a copy."
-    : "Not saved, your text is kept";
+  const keptLine = keepFailed ? "Keep this page open: this browser could not keep a copy." : "Your text is kept.";
+  const notSavedLine = refusal?.reason === "archived"
+    ? `Not saved. ${refusal.message} ${keptLine}`
+    : refusal?.reason === "gone"
+      ? `Not saved. This page is no longer in this Space: it was moved, or sent to the trash. ${keptLine}`
+      : keepFailed
+        ? "Not saved. Keep this page open: this browser could not keep a copy."
+        : "Not saved, your text is kept";
   const saveLine = conflict || failed
     ? notSavedLine
     : autosaveState === "saving"
@@ -539,7 +616,8 @@ export function SpacePageEditor({
           >
             {saveLine}
           </span>
-          {failed && !conflict && (
+          {/* Not for a refusal: trying again cannot change its answer. */}
+          {failed && !conflict && !refusal && (
             <button
               type="button"
               className="underline underline-offset-2 hover:text-foreground"
@@ -549,7 +627,8 @@ export function SpacePageEditor({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        {/* At the right edge even when a long save line pushes it onto a line of its own. */}
+        <div className="ml-auto flex items-center gap-2">
           {onAddSubpage && (
             // Only the icon on a phone, so the save line and this stay on one row.
             <Button

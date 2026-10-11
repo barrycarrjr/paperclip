@@ -78,9 +78,12 @@ export interface SpaceTrashChange {
   subpageCount: number;
 }
 
-/** The Space a page is in now, for an address that names another one. */
+/** The Space a page is in now, for an address that names another one, and whether it is in that Space's trash. */
 export interface SpacePageLocation {
   pageId: string;
   spaceId: string;
   spaceUrlKey: string;
+  spaceName: string;
+  /** In the trash, on its own or with a page above it. */
+  inTrash: boolean;
 }

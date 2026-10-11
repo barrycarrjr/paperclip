@@ -18,7 +18,11 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { spaceRoutes } from "../routes/spaces.js";
-import { SPACE_ARCHIVED_MESSAGE, SPACE_PAGE_MOVE_LOOP_MESSAGE } from "../services/spaces.js";
+import {
+  SPACE_ARCHIVED_MESSAGE,
+  SPACE_PAGE_MOVE_LOOP_MESSAGE,
+  SPACE_PAGE_MOVED_SINCE_MESSAGE,
+} from "../services/spaces.js";
 
 /**
  * The Spaces routes against a real database: the real router, validation,
@@ -139,7 +143,7 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
     app: express.Express,
     spaceId: string,
     pageId: string,
-    to: { spaceId?: string; parentPageId: string | null; index?: number },
+    to: { spaceId?: string; parentPageId: string | null; index?: number; fromParentPageId?: string | null },
   ) {
     return request(app).post(`/api/spaces/${spaceId}/pages/${pageId}/move`).send(to);
   }
@@ -1012,16 +1016,96 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
 
     const found = await request(viewer).get(`/api/companies/${companyId}/space-pages/${page.id}`);
     expect(found.status).toBe(200);
-    expect(found.body).toEqual({ pageId: page.id, spaceId: other.id, spaceUrlKey: "other" });
+    expect(found.body).toEqual({ pageId: page.id, spaceId: other.id, spaceUrlKey: "other", spaceName: "Other", inTrash: false });
 
-    // Not for another company, nor once the page is in the trash.
+    // Not for another company.
     const outsider = createApp(person("user-x", randomUUID()));
     expect((await request(outsider).get(`/api/companies/${companyId}/space-pages/${page.id}`)).status).toBe(403);
     const otherCompanyId = await seedCompany();
     expect((await request(createApp(person("user-a", otherCompanyId))).get(`/api/companies/${otherCompanyId}/space-pages/${page.id}`)).status).toBe(404);
-    await request(app).delete(`/api/spaces/${other.id}/pages/${page.id}`);
-    expect((await request(app).get(`/api/companies/${companyId}/space-pages/${page.id}`)).status).toBe(404);
     expect((await request(app).get(`/api/companies/${companyId}/space-pages/not-a-page`)).status).toBe(404);
+
+    // In the trash, it says so, for the page that was deleted and a subpage that went with it.
+    const subpage = await createPage(app, other.id, { title: "Exceptions", parentPageId: page.id });
+    await request(app).delete(`/api/spaces/${other.id}/pages/${page.id}`);
+    for (const id of [page.id, subpage.id]) {
+      const inTrash = await request(viewer).get(`/api/companies/${companyId}/space-pages/${id}`);
+      expect(inTrash.status).toBe(200);
+      expect(inTrash.body).toEqual({ pageId: id, spaceId: other.id, spaceUrlKey: "other", spaceName: "Other", inTrash: true });
+    }
+  });
+
+  it("refuses Move up or Move down from a list that has not caught up, rather than undo someone's move", async () => {
+    const companyId = await seedCompany();
+    const ann = createApp(person("user-ann", companyId));
+    const bob = createApp(person("user-bob", companyId, "operator"));
+    const space = await createSpace(ann, companyId);
+    const x = await createPage(ann, space.id, { title: "X" });
+    const y = await createPage(ann, space.id, { title: "Y" });
+    const p = await createPage(ann, space.id, { title: "P", parentPageId: x.id });
+    await createPage(ann, space.id, { title: "Q", parentPageId: x.id });
+
+    // Bob moves P under Y. Ann's list still shows it first under X, and she
+    // asks for it to go down a place there.
+    expect((await move(bob, space.id, p.id, { parentPageId: y.id })).status).toBe(200);
+    const stale = await move(ann, space.id, p.id, { parentPageId: x.id, index: 1, fromParentPageId: x.id });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toBe(SPACE_PAGE_MOVED_SINCE_MESSAGE);
+    expect(stale.body.details).toEqual({ parentPageId: y.id });
+    expect(await treeOf(ann, space.id)).toEqual([["X", [["Q", []]]], ["Y", [["P", []]]]]);
+
+    // From a list that has caught up, it works, at the top level too.
+    expect((await move(ann, space.id, p.id, { parentPageId: y.id, index: 0, fromParentPageId: y.id })).status).toBe(200);
+    expect((await move(ann, space.id, y.id, { parentPageId: null, index: 0, fromParentPageId: null })).status).toBe(200);
+    expect(await treeOf(ann, space.id)).toEqual([["Y", [["P", []]]], ["X", [["Q", []]]]]);
+    expect((await move(ann, space.id, y.id, { parentPageId: null, index: 0, fromParentPageId: x.id })).status).toBe(409);
+
+    const logged = await db.select().from(activityLog).where(eq(activityLog.action, "space.page_moved"));
+    expect(logged.map((row) => row.actorId)).toEqual(["user-bob"]);
+  });
+
+  it("never reads or locks another company's Space when asked to move a page there", async () => {
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany();
+    const app = createApp(person("user-a", companyId));
+    const theirs = createApp(person("user-b", otherCompanyId));
+    const space = await createSpace(app, companyId);
+    const page = await createPage(app, space.id, { title: "Refunds" });
+    const archived = await createSpace(theirs, otherCompanyId, "Layoffs");
+    const open = await createSpace(theirs, otherCompanyId, "Open");
+    expect((await request(theirs).patch(`/api/spaces/${archived.id}`).send({ archived: true })).status).toBe(200);
+
+    // The same answer whether that Space is archived, open or not there at all.
+    const answers = [];
+    for (const target of [archived.id, open.id, randomUUID()]) {
+      const res = await move(app, space.id, page.id, { spaceId: target, parentPageId: null });
+      answers.push([res.status, res.body.error]);
+    }
+    expect(answers).toEqual(Array(3).fill([422, "A page can only move to a Space of the same company"]));
+
+    // Something in that company holds its Space; the move is refused at once, without waiting for it.
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => { held = resolve; });
+    let letItFinish!: () => void;
+    const mayFinish = new Promise<void>((resolve) => { letItFinish = resolve; });
+    const other = db.transaction(async (tx) => {
+      await tx.execute(sql`select ${spaces.id} from ${spaces} where ${spaces.id} = ${open.id} for update`);
+      held();
+      await mayFinish;
+    });
+    await holding;
+    let answered = false;
+    const refused = move(app, space.id, page.id, { spaceId: open.id, parentPageId: null }).then((res) => {
+      answered = true;
+      return res;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const answeredWhileHeld = answered;
+    letItFinish();
+    await other;
+    expect(answeredWhileHeld).toBe(true);
+    expect((await refused).status).toBe(422);
+    expect(await treeOf(app, space.id)).toEqual([["Refunds", []]]);
   });
 
   it("keeps names and page titles out of part 2's activity rows", async () => {

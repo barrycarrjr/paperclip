@@ -59,6 +59,13 @@ export const moveSpacePageSchema = z.object({
   spaceId: z.string().uuid().optional(),
   parentPageId: z.string().uuid().nullable(),
   index: z.number().int().min(0).max(1_000_000).optional(),
+  /**
+   * The parent the page had on the screen that asked (null for the top
+   * level). Given, the move is refused with 409 when the page has moved
+   * since. Move up and Move down send it, so a screen that has not caught up
+   * cannot put a page back where someone just moved it from.
+   */
+  fromParentPageId: z.string().uuid().nullable().optional(),
 });
 
 export type MoveSpacePage = z.infer<typeof moveSpacePageSchema>;

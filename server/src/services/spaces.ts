@@ -30,6 +30,9 @@ export const SPACE_ARCHIVED_MESSAGE = "This Space is archived. Unarchive it to c
 /** Said when a move would put a page under itself, which would take it out of the tree. */
 export const SPACE_PAGE_MOVE_LOOP_MESSAGE = "A page cannot move under itself or one of its own subpages.";
 
+/** Said when Move up or Move down comes from a screen that still shows the page where it was before a move. */
+export const SPACE_PAGE_MOVED_SINCE_MESSAGE = "This page has moved since you last saw it.";
+
 // 422, not 409: a refused save of a page answers 409 only when the page has
 // moved on, and the editor offers its choice of versions on a 409.
 function spaceArchived() {
@@ -174,11 +177,20 @@ export function spaceService(db: Db) {
    * page under one going to the trash. Taken in id order, so two moves
    * between the same two Spaces cannot each wait for the other. Answers the
    * Spaces as they are now, and refuses the change if one is archived.
+   *
+   * Only this company's Spaces are held. Another company's is never locked
+   * or read, so it is simply missing, and a refusal says nothing about it
+   * (such as whether it is archived).
    */
-  async function holdSpacesForTreeChange(tx: DbTransaction, spaceIds: string[]): Promise<Map<string, Space>> {
+  async function holdSpacesForTreeChange(tx: DbTransaction, companyId: string, spaceIds: string[]): Promise<Map<string, Space>> {
     const held = new Map<string, Space>();
     for (const id of [...new Set(spaceIds)].sort()) {
-      const space = await tx.select().from(spaces).where(eq(spaces.id, id)).for("update").then((rows) => rows[0] ?? null);
+      const space = await tx
+        .select()
+        .from(spaces)
+        .where(and(eq(spaces.id, id), eq(spaces.companyId, companyId)))
+        .for("update")
+        .then((rows) => rows[0] ?? null);
       if (space) held.set(id, space);
     }
     for (const space of held.values()) {
@@ -479,7 +491,7 @@ export function spaceService(db: Db) {
       const parentPageId = input.parentPageId ?? null;
       const pageId = await db.transaction(async (tx) => {
         // Held, so the parent cannot go to the trash while its new subpage is made.
-        await holdSpacesForTreeChange(tx, [space.id]);
+        await holdSpacesForTreeChange(tx, space.companyId, [space.id]);
         if (parentPageId) {
           const parent = await tx
             .select({ id: spacePages.id })
@@ -657,7 +669,8 @@ export function spaceService(db: Db) {
      * level, in its own Space or another Space of the same company, at index
      * among the pages already there (after them when left out). The same
      * parent with another index puts pages in order. A page cannot go under
-     * itself or its own subpages.
+     * itself or its own subpages. With fromParentPageId, the move is refused
+     * with 409 when the page's parent is no longer that one.
      */
     movePage: async (
       space: Space,
@@ -668,13 +681,12 @@ export function spaceService(db: Db) {
       const targetSpaceId = input.spaceId ?? space.id;
       const parentPageId = input.parentPageId ?? null;
       const fromParentPageId = await db.transaction(async (tx) => {
-        const held = await holdSpacesForTreeChange(tx, [space.id, targetSpaceId]);
+        const held = await holdSpacesForTreeChange(tx, space.companyId, [space.id, targetSpaceId]);
         const source = held.get(space.id);
         const target = held.get(targetSpaceId);
         if (!source) throw notFound("Space not found");
-        if (!target || target.companyId !== source.companyId) {
-          throw unprocessable("A page can only move to a Space of the same company");
-        }
+        // Another company's Space is not held, so it is missing here too.
+        if (!target) throw unprocessable("A page can only move to a Space of the same company");
 
         const page = await tx
           .select({ id: spacePages.id, parentPageId: spacePages.parentPageId, sortOrder: spacePages.sortOrder })
@@ -682,6 +694,12 @@ export function spaceService(db: Db) {
           .where(and(eq(spacePages.id, pageId), eq(spacePages.spaceId, space.id), isNull(spacePages.deletedAt)))
           .then((rows) => rows[0] ?? null);
         if (!page) throw notFound("Page not found");
+        // Move up and Move down name the parent their screen showed. If the
+        // page has been moved since, putting it in order there would quietly
+        // undo that move.
+        if (input.fromParentPageId !== undefined && page.parentPageId !== input.fromParentPageId) {
+          throw conflict(SPACE_PAGE_MOVED_SINCE_MESSAGE, { parentPageId: page.parentPageId });
+        }
 
         // Checked under the hold above: a move that waited there sees every
         // move made before it, so two cannot make a loop between them.
@@ -744,7 +762,7 @@ export function spaceService(db: Db) {
     deletePage: async (space: Space, pageId: string): Promise<SpaceTrashChange> => {
       if (!isUuidLike(pageId)) throw notFound("Page not found");
       return db.transaction(async (tx) => {
-        await holdSpacesForTreeChange(tx, [space.id]);
+        await holdSpacesForTreeChange(tx, space.companyId, [space.id]);
         const page = await tx
           .select({ id: spacePages.id, parentPageId: spacePages.parentPageId })
           .from(spacePages)
@@ -792,7 +810,7 @@ export function spaceService(db: Db) {
     restoreFromTrash: async (space: Space, pageId: string): Promise<SpaceTrashChange> => {
       if (!isUuidLike(pageId)) throw notFound("This page is not in the trash");
       return db.transaction(async (tx) => {
-        await holdSpacesForTreeChange(tx, [space.id]);
+        await holdSpacesForTreeChange(tx, space.companyId, [space.id]);
         const page = await tx
           .select({ id: spacePages.id, parentPageId: spacePages.parentPageId, sortOrder: spacePages.sortOrder })
           .from(spacePages)
@@ -833,16 +851,27 @@ export function spaceService(db: Db) {
 
     /**
      * Where a page of this company is now, for an address naming the Space it
-     * was in before it moved. Null for a page in the trash or not found.
+     * was in before it moved, and whether it is in that Space's trash: a link
+     * to a page in the trash (an Activity row's, say) can then say so. Null
+     * for a page not found.
      */
     locatePage: async (companyId: string, pageId: string): Promise<SpacePageLocation | null> => {
       if (!isUuidLike(pageId)) return null;
-      return db
-        .select({ pageId: spacePages.id, spaceId: spaces.id, spaceUrlKey: spaces.urlKey })
+      const row = await db
+        .select({
+          pageId: spacePages.id,
+          spaceId: spaces.id,
+          spaceUrlKey: spaces.urlKey,
+          spaceName: spaces.name,
+          deletedAt: spacePages.deletedAt,
+        })
         .from(spacePages)
         .innerJoin(spaces, eq(spacePages.spaceId, spaces.id))
-        .where(and(eq(spacePages.id, pageId), eq(spacePages.companyId, companyId), isNull(spacePages.deletedAt)))
+        .where(and(eq(spacePages.id, pageId), eq(spacePages.companyId, companyId)))
         .then((rows) => rows[0] ?? null);
+      if (!row) return null;
+      const { deletedAt, ...location } = row;
+      return { ...location, inTrash: deletedAt !== null };
     },
   };
 }

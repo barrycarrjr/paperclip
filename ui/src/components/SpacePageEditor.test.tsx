@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Space, SpacePage, UpdateSpacePage } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
+import { queryKeys } from "../lib/queryKeys";
 import {
   KEPT_DRAFT_MAX_AGE_MS,
   keptSpacePageDraftKey,
@@ -161,22 +162,15 @@ async function advance(ms: number) {
 type Tab = { container: HTMLDivElement; root: Root; queryClient: QueryClient };
 const openTabs: Tab[] = [];
 
-/** One browser tab with the page open. A reload is the same tab id opened again. */
-async function openTab(tabId: string, options: { userId?: string | null; canWrite?: boolean } = {}) {
-  window.sessionStorage.setItem("paperclip:tab-id", tabId);
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const tab: Tab = {
-    container,
-    root: createRoot(container),
-    queryClient: new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
-  };
-  openTabs.push(tab);
+type TabOptions = { userId?: string | null; canWrite?: boolean; space?: Space; queryClient?: QueryClient };
+
+/** Draws the page in a tab, or draws it again with other props (the Space it is in, say). */
+async function drawEditor(tab: Tab, options: TabOptions) {
   await act(async () => {
     tab.root.render(
       <QueryClientProvider client={tab.queryClient}>
         <SpacePageEditor
-          space={SPACE}
+          space={options.space ?? SPACE}
           pageId="page-1"
           canWrite={options.canWrite ?? true}
           currentUserId={options.userId === undefined ? "user-1" : options.userId}
@@ -186,6 +180,22 @@ async function openTab(tabId: string, options: { userId?: string | null; canWrit
   });
   await advance(0);
   await advance(0);
+}
+
+/** One browser tab with the page open. A reload is the same tab id opened again. */
+async function openTab(tabId: string, options: TabOptions = {}) {
+  window.sessionStorage.setItem("paperclip:tab-id", tabId);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const tab: Tab = {
+    container,
+    root: createRoot(container),
+    queryClient:
+      options.queryClient
+      ?? new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
+  };
+  openTabs.push(tab);
+  await drawEditor(tab, options);
   return tab;
 }
 
@@ -536,5 +546,160 @@ describe("SpacePageEditor", () => {
       baseRevisionId: "rev-3",
       body: "Within 30 days, with a receipt.",
     });
+  });
+
+  it("keeps a restore answered after the page was left, rather than saving the text from before over it", async () => {
+    const server = fakeServer();
+    const tab = await openTab("tab-a");
+    await type(tab, "Within 45 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+    expect(server.page.latestRevisionId).toBe("rev-2");
+
+    // The restore is held, as a slow answer is, and the person leaves (Back, a phone's back gesture).
+    let answer!: () => void;
+    mockSpacesApi.restoreRevision.mockImplementation(
+      (_spaceId: string, _pageId: string, _revisionId: string, data: { baseRevisionId: string }) =>
+        new Promise<SpacePage>((resolve, reject) => {
+          answer = () => {
+            if (data.baseRevisionId !== server.page.latestRevisionId) {
+              reject(conflictError(server.page.latestRevisionId));
+              return;
+            }
+            server.page = savedOver(server.page, { body: "Within 30 days." });
+            resolve({ ...server.page });
+          };
+        }),
+    );
+    await click(tab, "History");
+    await click(tab, "Restore version 1");
+    await advance(0);
+    await closeTab(tab);
+    await act(async () => {
+      answer();
+    });
+    await advance(0);
+    await advance(0);
+
+    expect(server.page).toMatchObject({ latestRevisionId: "rev-3", body: "Within 30 days." });
+    // The save made while typing, and nothing after the restore.
+    expect(mockSpacesApi.updatePage).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a restore refused because the page moved on, shows the newer version and writes a second try on it", async () => {
+    const server = fakeServer();
+    mockSpacesApi.restoreRevision.mockImplementation(
+      async (_spaceId: string, _pageId: string, _revisionId: string, data: { baseRevisionId: string }) => {
+        if (data.baseRevisionId !== server.page.latestRevisionId) throw conflictError(server.page.latestRevisionId);
+        server.page = savedOver(server.page, { body: "Within 30 days." });
+        return { ...server.page };
+      },
+    );
+    const tab = await openTab("tab-a");
+    // Someone else saves while this tab still shows version 1.
+    server.page = savedOver(server.page, { body: "Within 14 days, said someone else." });
+
+    await click(tab, "History");
+    await click(tab, "Restore version 1");
+    await advance(0);
+    expect(mockSpacesApi.restoreRevision).toHaveBeenLastCalledWith("space-1", "page-1", "rev-1", { baseRevisionId: "rev-1" });
+    // Refused; the newer version is shown, and is the one this page is now on.
+    expect(editor(tab)!.value).toBe("Within 14 days, said someone else.");
+    expect(tab.container.textContent).not.toContain("This page changed while you were writing");
+
+    await click(tab, "Restore version 1");
+    await advance(0);
+    expect(mockSpacesApi.restoreRevision).toHaveBeenLastCalledWith("space-1", "page-1", "rev-1", { baseRevisionId: "rev-2" });
+    expect(server.page).toMatchObject({ latestRevisionId: "rev-3", body: "Within 30 days." });
+    expect(editor(tab)!.value).toBe("Within 30 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS * 2);
+    expect(mockSpacesApi.updatePage).not.toHaveBeenCalled();
+  });
+
+  it("says at once that a page is not here, without trying again for seconds", async () => {
+    mockSpacesApi.getPage.mockRejectedValue(new ApiError("Page not found", 404, { error: "Page not found" }));
+    // The app's own query defaults, which try a failed request three more times.
+    const tab = await openTab("tab-a", { queryClient: new QueryClient({ defaultOptions: { queries: { staleTime: 30_000 } } }) });
+
+    expect(tab.container.textContent).toContain("Page not found");
+    expect(tab.container.textContent).not.toContain("Loading the page");
+    expect(mockSpacesApi.getPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the page's history out of date after a save, so History opened again lists the newest version", async () => {
+    fakeServer();
+    const tab = await openTab("tab-a");
+    const versionsKey = queryKeys.spaces.revisions("space-1", "page-1");
+    tab.queryClient.setQueryData(versionsKey, []);
+
+    await type(tab, "Within 45 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+    expect(mockSpacesApi.updatePage).toHaveBeenCalledTimes(1);
+    expect(tab.queryClient.getQueryState(versionsKey)?.isInvalidated).toBe(true);
+  });
+
+  it("says a save was refused because the Space was archived, keeps the text, and asks for the Space again", async () => {
+    mockSpacesApi.getPage.mockResolvedValue(page());
+    mockSpacesApi.updatePage.mockRejectedValue(
+      new ApiError("This Space is archived. Unarchive it to change it.", 422, {
+        error: "This Space is archived. Unarchive it to change it.",
+        details: { code: "space_archived" },
+      }),
+    );
+    const tab = await openTab("tab-a");
+    const spaceKey = queryKeys.spaces.detail("company-1", "handbook");
+    tab.queryClient.setQueryData(spaceKey, SPACE);
+
+    await type(tab, "Within 60 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+
+    expect(saveLine(tab)).toContain("Not saved. This Space is archived. Unarchive it to change it. Your text is kept.");
+    // Trying again would get the same answer.
+    expect(tab.container.textContent).not.toContain("Try again");
+    expect(kept("tab-a")).toMatchObject({ body: "Within 60 days." });
+    // Asked again, the Space turns the page read only with its archived notice.
+    expect(tab.queryClient.getQueryState(spaceKey)?.isInvalidated).toBe(true);
+  });
+
+  it("says a save was refused because the page left this Space, keeps the text, and asks for the list of pages again", async () => {
+    mockSpacesApi.getPage.mockResolvedValue(page());
+    mockSpacesApi.updatePage.mockRejectedValue(new ApiError("Page not found", 404, { error: "Page not found" }));
+    const tab = await openTab("tab-a");
+    const treeKey = queryKeys.spaces.pageTree("space-1");
+    tab.queryClient.setQueryData(treeKey, []);
+
+    await type(tab, "Within 60 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+
+    expect(saveLine(tab)).toContain(
+      "Not saved. This page is no longer in this Space: it was moved, or sent to the trash. Your text is kept.",
+    );
+    expect(tab.container.textContent).not.toContain("Try again");
+    expect(kept("tab-a")).toMatchObject({ body: "Within 60 days." });
+    // Asked again, the list finds where the page went, or says it is in the trash.
+    expect(tab.queryClient.getQueryState(treeKey)?.isInvalidated).toBe(true);
+  });
+
+  it("saves to a page's new Space what its old Space refused, once the new address opens it here", async () => {
+    const server = fakeServer();
+    // The page moved to Rules while open here, so its old Space has it no longer.
+    mockSpacesApi.updatePage.mockImplementation(async (spaceId: string, _pageId: string, change: UpdateSpacePage) => {
+      if (spaceId !== "space-2") throw new ApiError("Page not found", 404, { error: "Page not found" });
+      if (change.baseRevisionId !== server.page.latestRevisionId) throw conflictError(server.page.latestRevisionId);
+      server.page = savedOver(server.page, change);
+      return { ...server.page };
+    });
+    const tab = await openTab("tab-a");
+    await type(tab, "Within 60 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+    expect(saveLine(tab)).toContain("This page is no longer in this Space");
+
+    await drawEditor(tab, { space: { ...SPACE, id: "space-2", name: "Rules", urlKey: "rules" } });
+    await advance(0);
+    expect(mockSpacesApi.updatePage).toHaveBeenLastCalledWith("space-2", "page-1", {
+      baseRevisionId: "rev-1",
+      body: "Within 60 days.",
+    });
+    expect(saveLine(tab)).toContain("Saved");
+    expect(kept("tab-a")).toBeNull();
   });
 });

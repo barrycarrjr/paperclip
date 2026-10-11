@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Space, SpacePage, SpacePageTreeNode } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/api/client";
 import { findSpacePage, spacePageIndentPx } from "@/lib/space-pages";
 import { SpaceDetail } from "./SpaceDetail";
 
@@ -344,7 +345,13 @@ describe("SpaceDetail", () => {
 
   it("takes an address naming the Space a page was in to the Space it is in now", async () => {
     routeState.params = { spaceKey: "handbook", pageId: "page-moved" };
-    mockSpacesApi.locatePage.mockResolvedValue({ pageId: "page-moved", spaceId: "space-2", spaceUrlKey: "rules" });
+    mockSpacesApi.locatePage.mockResolvedValue({
+      pageId: "page-moved",
+      spaceId: "space-2",
+      spaceUrlKey: "rules",
+      spaceName: "Rules",
+      inTrash: false,
+    });
     await render();
 
     expect(mockSpacesApi.locatePage).toHaveBeenCalledWith("company-1", "page-moved");
@@ -358,14 +365,57 @@ describe("SpaceDetail", () => {
     expect(navigate).toHaveBeenCalledWith("/spaces/rules/page-moved", { replace: true });
   });
 
-  it("stays put for a page found nowhere, and says so", async () => {
+  it("stays put for a page found nowhere, and says so rather than drawing the page", async () => {
     routeState.params = { spaceKey: "handbook", pageId: "page-gone" };
+    mockSpacesApi.locatePage.mockRejectedValue(new ApiError("Page not found", 404, { error: "Page not found" }));
     await render();
+    await flush();
 
     expect(mockSpacesApi.locatePage).toHaveBeenCalledWith("company-1", "page-gone");
     expect(navigate).not.toHaveBeenCalled();
-    // The editor says the page could not be found.
-    expect(container.querySelector('[data-testid="page-editor"]')?.getAttribute("data-page-id")).toBe("page-gone");
+    // Not the editor: a copy this tab still holds would be drawn as a page whose saves all fail.
+    expect(container.querySelector('[data-testid="page-editor"]')).toBeNull();
+    expect(container.textContent).toContain("This page could not be found.");
+  });
+
+  it("says a page is in the trash, with the way to that trash, instead of drawing the page", async () => {
+    routeState.params = { spaceKey: "handbook", pageId: "page-trashed" };
+    mockSpacesApi.locatePage.mockResolvedValue({
+      pageId: "page-trashed",
+      spaceId: "space-1",
+      spaceUrlKey: "handbook",
+      spaceName: "Handbook",
+      inTrash: true,
+    });
+    await render();
+    await flush();
+
+    expect(container.querySelector('[data-testid="page-editor"]')).toBeNull();
+    expect(container.textContent).toContain("This page is in the trash");
+    expect(container.textContent).toContain("It is in the trash of Handbook");
+    expect(linkTo(container, "/spaces/handbook/trash")?.textContent).toBe("Open the trash");
+    expect(navigate).not.toHaveBeenCalled();
+
+    // An old address naming another Space, or none, says the same, about the Space it is in.
+    navigate.mockReset();
+    mockSpacesApi.locatePage.mockResolvedValue({
+      pageId: "page-trashed",
+      spaceId: "space-2",
+      spaceUrlKey: "rules",
+      spaceName: "Rules",
+      inTrash: true,
+    });
+    queryClient.clear();
+    await render();
+    await flush();
+    expect(container.textContent).toContain("It is in the trash of Rules");
+    expect(linkTo(container, "/spaces/rules/trash")).not.toBeNull();
+    mockSpacesApi.get.mockRejectedValue(new Error("Space not found"));
+    routeState.params = { spaceKey: "no-such-space", pageId: "page-trashed" };
+    await render();
+    await flush();
+    expect(container.textContent).toContain("It is in the trash of Rules");
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("follows the open page when a page above it moves to another Space, and leaves it when one goes to the trash", async () => {

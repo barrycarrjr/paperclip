@@ -114,11 +114,16 @@ export function SpaceSettingsDialog({
                 ? "It is not in the list of Spaces, and its pages are read only. Unarchive it to change them again."
                 : "An archived Space leaves the list of Spaces and its pages become read only. Its address still opens it, and you can unarchive it at any time."}
             </p>
+            {/* Archiving sends nothing else, and an archived Space cannot be
+                renamed, so changes typed above would be lost without a word. */}
+            {!archived && changed && (
+              <p className="text-xs text-muted-foreground">Save or cancel the changes above first.</p>
+            )}
             <Button
               type="button"
               size="sm"
               variant="outline"
-              disabled={update.isPending}
+              disabled={update.isPending || (!archived && changed)}
               onClick={() => update.mutate({ archived: !archived }, { onSuccess: close })}
             >
               {archived ? "Unarchive" : "Archive"}

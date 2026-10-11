@@ -54,11 +54,14 @@ export function Spaces() {
     queryFn: () => spacesApi.list(companyId!),
     enabled: !!companyId,
   });
-  // Archived Spaces leave the list; they are asked for only when shown.
+  // Archived Spaces leave the list; they are asked for when shown, and when
+  // the list is empty: "No Spaces yet" would be wrong if every Space is
+  // archived, and would invite a second Space of the same name.
+  const noneInList = spacesQuery.isSuccess && spacesQuery.data.length === 0;
   const archivedQuery = useQuery({
     queryKey: queryKeys.spaces.archived(companyId ?? ""),
     queryFn: () => spacesApi.list(companyId!, { archived: true }),
-    enabled: !!companyId && showArchived,
+    enabled: !!companyId && (showArchived || noneInList),
   });
 
   if (!companyId) {
@@ -67,6 +70,7 @@ export function Spaces() {
   if (spacesQuery.isLoading) return <PageSkeleton variant="list" />;
 
   const spaces = spacesQuery.data ?? [];
+  const allArchived = noneInList && (archivedQuery.data ?? []).length > 0;
 
   return (
     <div className="space-y-4">
@@ -108,18 +112,25 @@ export function Spaces() {
 
       {/* An empty list is only "no Spaces yet" when the list loaded: a failed
           load offering to make the first one led to duplicate Spaces. */}
-      {spaces.length === 0 && spacesQuery.error ? null : spaces.length === 0 ? (
-        <EmptyState
-          icon={Library}
-          message="No Spaces yet. A Space holds pages and subpages, like the chapters and sections of a handbook."
-          action={canWrite ? "New Space" : undefined}
-          onAction={canWrite ? () => setCreateOpen(true) : undefined}
-        />
+      {spaces.length === 0 && spacesQuery.error ? null : allArchived ? (
+        <p className="text-sm text-muted-foreground">
+          Every Space is archived. Open one to read it, or unarchive it from its settings.
+        </p>
+      ) : spaces.length === 0 ? (
+        // Not until the archived ones have answered, so "No Spaces yet" is never said of archived ones.
+        archivedQuery.isLoading ? null : (
+          <EmptyState
+            icon={Library}
+            message="No Spaces yet. A Space holds pages and subpages, like the chapters and sections of a handbook."
+            action={canWrite ? "New Space" : undefined}
+            onAction={canWrite ? () => setCreateOpen(true) : undefined}
+          />
+        )
       ) : (
         <SpaceList spaces={spaces} />
       )}
 
-      {!spacesQuery.error && (
+      {!spacesQuery.error && !allArchived && (
         <div>
           <Button size="sm" variant="ghost" aria-expanded={showArchived} onClick={() => setShowArchived((shown) => !shown)}>
             <Archive className="h-3.5 w-3.5" />
@@ -127,7 +138,7 @@ export function Spaces() {
           </Button>
         </div>
       )}
-      {showArchived && (
+      {(showArchived || allArchived) && (
         <section aria-label="Archived Spaces" className="space-y-2">
           <h2 className="text-sm font-semibold text-muted-foreground">Archived</h2>
           {archivedQuery.error ? (

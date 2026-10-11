@@ -6,6 +6,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Space, SpacePageTreeNode } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
+import { queryKeys } from "../lib/queryKeys";
 import { SpacePageMenu } from "./SpacePageMenu";
 
 const mockSpacesApi = vi.hoisted(() => ({
@@ -15,11 +17,18 @@ const mockSpacesApi = vi.hoisted(() => ({
   deletePage: vi.fn(),
 }));
 
+const toasts = vi.hoisted(() => ({ pushToast: vi.fn(), dismissToast: vi.fn() }));
+
 vi.mock("../api/spaces", () => ({ spacesApi: mockSpacesApi }));
 
 vi.mock("../context/ToastContext", () => ({
-  useOptionalToastActions: () => null,
+  useOptionalToastActions: () => toasts,
 }));
+
+/** The titles of the messages said, in order. */
+function said() {
+  return toasts.pushToast.mock.calls.map(([toast]) => (toast as { title: string }).title);
+}
 
 // The menu is a portal with its own focus handling; flattened, its items are simply there.
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -126,6 +135,8 @@ describe("SpacePageMenu", () => {
     mockSpacesApi.deletePage.mockReset().mockResolvedValue({ pageId: "page-2", parentPageId: null, subpageCount: 2 });
     onMoved.mockReset();
     onDeleted.mockReset();
+    toasts.pushToast.mockReset();
+    toasts.dismissToast.mockReset();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -149,19 +160,52 @@ describe("SpacePageMenu", () => {
     await flush();
   }
 
-  it("puts a page in order among its neighbours, without dragging", async () => {
+  it("puts a page in order among its neighbours, without dragging, and says it did", async () => {
     await render(TREE[1]!);
 
     await act(async () => {
       buttonNamed(container, "Move up")!.click();
     });
     await flush();
-    expect(mockSpacesApi.movePage).toHaveBeenLastCalledWith("space-1", "page-2", { parentPageId: null, index: 0 });
+    // With the parent this list shows, so a page moved since is not put back here.
+    expect(mockSpacesApi.movePage).toHaveBeenLastCalledWith("space-1", "page-2", {
+      parentPageId: null,
+      index: 0,
+      fromParentPageId: null,
+    });
     await act(async () => {
       buttonNamed(container, "Move down")!.click();
     });
     await flush();
-    expect(mockSpacesApi.movePage).toHaveBeenLastCalledWith("space-1", "page-2", { parentPageId: null, index: 2 });
+    expect(mockSpacesApi.movePage).toHaveBeenLastCalledWith("space-1", "page-2", {
+      parentPageId: null,
+      index: 2,
+      fromParentPageId: null,
+    });
+    // Said, since beside an open page on a phone the list is not on screen.
+    expect(said()).toEqual(["Moved People up", "Moved People down"]);
+  });
+
+  it("draws the list again and says why when the page moved since the list was drawn", async () => {
+    mockSpacesApi.movePage.mockRejectedValue(
+      new ApiError("This page has moved since you last saw it.", 409, {
+        error: "This page has moved since you last saw it.",
+        details: { parentPageId: "page-5" },
+      }),
+    );
+    const treeKey = queryKeys.spaces.pageTree("space-1");
+    queryClient.setQueryData(treeKey, TREE);
+    await render(TREE[1]!);
+
+    await act(async () => {
+      buttonNamed(container, "Move down")!.click();
+    });
+    await flush();
+
+    expect(toasts.pushToast).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tone: "error", title: "Could not move the page", body: "This page has moved since you last saw it." }),
+    );
+    expect(queryClient.getQueryState(treeKey)?.isInvalidated).toBe(true);
   });
 
   it("cannot move the first page up or the last one down", async () => {
@@ -216,6 +260,7 @@ describe("SpacePageMenu", () => {
     // Reported with the page as it was, subpages and all, so an open subpage can be followed.
     expect(onMoved).toHaveBeenCalledWith(TREE[1], expect.objectContaining({ id: "space-2", urlKey: "rules" }));
     expect(container.querySelector('[data-testid="dialog"]')).toBeNull();
+    expect(said()).toEqual(["Moved People to Rules, under Standing rules"]);
   });
 
   it("moves a page to the top level of its own Space", async () => {
@@ -233,6 +278,21 @@ describe("SpacePageMenu", () => {
     await flush();
 
     expect(mockSpacesApi.movePage).toHaveBeenCalledWith("space-1", "page-3", { parentPageId: null });
+    expect(said()).toEqual(["Moved Hiring to the top level"]);
+
+    // And under another page of its own Space.
+    await act(async () => {
+      buttonNamed(container, "Move to…")!.click();
+    });
+    await flush();
+    await act(async () => {
+      place(container, "Pricing")!.click();
+    });
+    await act(async () => {
+      buttonNamed(container, "Move here")!.click();
+    });
+    await flush();
+    expect(said()).toEqual(["Moved Hiring to the top level", "Moved Hiring under Pricing"]);
   });
 
   it("says why a move was refused, in the dialog", async () => {
@@ -258,6 +318,11 @@ describe("SpacePageMenu", () => {
   });
 
   it("asks before deleting, saying how many subpages go with it, then sends them to the trash", async () => {
+    // Copies of the pages this tab holds: they go with the pages, so going
+    // back to one finds it in the trash rather than drawing it from a copy.
+    for (const id of ["page-1", "page-2", "page-3", "page-4"]) {
+      queryClient.setQueryData(queryKeys.spaces.page("space-1", id), { id });
+    }
     await render(TREE[1]!);
     await act(async () => {
       buttonNamed(container, "Delete…")!.click();
@@ -274,5 +339,8 @@ describe("SpacePageMenu", () => {
     expect(mockSpacesApi.deletePage).toHaveBeenCalledWith("space-1", "page-2");
     expect(onDeleted).toHaveBeenCalledWith(TREE[1]);
     expect(container.querySelector('[data-testid="dialog"]')).toBeNull();
+    const held = (id: string) => queryClient.getQueryData(queryKeys.spaces.page("space-1", id));
+    expect(["page-2", "page-3", "page-4"].map(held)).toEqual([undefined, undefined, undefined]);
+    expect(held("page-1")).toEqual({ id: "page-1" });
   });
 });

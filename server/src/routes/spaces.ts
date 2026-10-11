@@ -277,8 +277,9 @@ export function spaceRoutes(db: Db) {
     res.json(result);
   });
 
-  // Where a page is now. An address names the page's Space, so after a move
-  // to another Space its old address finds no page; the screens ask here.
+  // Where a page is now, and whether it is in the trash. An address names the
+  // page's Space, so after a move to another Space its old address finds no
+  // page, and one in the trash is not a page either; the screens ask here.
   router.get("/companies/:companyId/space-pages/:pageId", requirePerson, async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId, "read");

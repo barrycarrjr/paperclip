@@ -5,7 +5,7 @@ import type { Space, SpacePageTreeNode, SpaceTrashChange } from "@paperclipai/sh
 import { spacesApi } from "../api/spaces";
 import { useOptionalToastActions } from "../context/ToastContext";
 import { useDialogOpening, type DialogOpening } from "../hooks/useDialogOpening";
-import { useSaveMutation } from "../hooks/useSaveMutation";
+import { useSaveConfirmation, useSaveMutation } from "../hooks/useSaveMutation";
 import { queryKeys } from "../lib/queryKeys";
 import {
   flattenSpacePageTree,
@@ -67,11 +67,21 @@ export function SpacePageMenu({ space, tree, page, onMoved, onDeleted, className
   const index = siblings.findIndex((sibling) => sibling.id === page.id);
 
   const reorder = useSaveMutation({
-    mutationFn: (to: number) => spacesApi.movePage(space.id, page.id, { parentPageId: page.parentPageId, index: to }),
-    // The list shows the new order.
-    successMessage: () => null,
+    mutationFn: (to: { index: number; up: boolean }) =>
+      spacesApi.movePage(space.id, page.id, {
+        parentPageId: page.parentPageId,
+        index: to.index,
+        // Where this list shows the page. If it has been moved since, the
+        // server says so rather than put it back here.
+        fromParentPageId: page.parentPageId,
+      }),
+    // Said even where the list shows the new order: beside an open page on a
+    // phone, or a narrow page area, the list is not on screen.
+    successMessage: (_moved, to) => `Moved ${title} ${to.up ? "up" : "down"}`,
     errorMessage: "Could not move the page",
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) }),
+    // Refused because the page moved since this list was drawn: draw it again, as it is now.
+    onError: () => queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) }),
   });
 
   return (
@@ -91,13 +101,16 @@ export function SpacePageMenu({ space, tree, page, onMoved, onDeleted, className
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={index <= 0 || reorder.isPending} onSelect={() => reorder.mutate(index - 1)}>
+          <DropdownMenuItem
+            disabled={index <= 0 || reorder.isPending}
+            onSelect={() => reorder.mutate({ index: index - 1, up: true })}
+          >
             <ArrowUp />
             Move up
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={index === -1 || index >= siblings.length - 1 || reorder.isPending}
-            onSelect={() => reorder.mutate(index + 1)}
+            onSelect={() => reorder.mutate({ index: index + 1, up: false })}
           >
             <ArrowDown />
             Move down
@@ -136,6 +149,7 @@ export function MovePageDialog({
 }: PageDialogProps & Pick<SpacePageMenuProps, "onMoved">) {
   const queryClient = useQueryClient();
   const toast = useOptionalToastActions();
+  const { confirmSaved } = useSaveConfirmation();
   // Which opening of the dialog a move was sent from (hooks/useDialogOpening.ts).
   const opening = useDialogOpening(open);
   const [targetSpaceId, setTargetSpaceId] = useState(space.id);
@@ -159,7 +173,13 @@ export function MovePageDialog({
   const target = targets.find((candidate) => candidate.id === targetSpaceId) ?? (targetSpaceId === space.id ? space : null);
 
   const move = useMutation({
-    mutationFn: (sent: { target: Pick<Space, "id" | "urlKey">; parentPageId: string | null; opening: DialogOpening | null }) =>
+    mutationFn: (sent: {
+      target: Pick<Space, "id" | "urlKey">;
+      parentPageId: string | null;
+      /** What to say once it is done. */
+      done: string;
+      opening: DialogOpening | null;
+    }) =>
       spacesApi.movePage(space.id, page.id, {
         ...(sent.target.id !== space.id ? { spaceId: sent.target.id } : {}),
         parentPageId: sent.parentPageId,
@@ -169,6 +189,8 @@ export function MovePageDialog({
       // First, so an open page that moved is followed before its old Space's
       // list of pages, without it, comes back.
       onMoved?.(page, sent.target);
+      // Said, since the list of pages is not on screen beside an open page on a phone.
+      confirmSaved(sent.done);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(sent.target.id) }),
@@ -195,6 +217,14 @@ export function MovePageDialog({
   const stays = targetSpaceId === space.id && parentPageId === page.parentPageId;
   const failure = move.isError ? `Could not move the page. ${reasonOf(move.error)}` : null;
   const message = move.isPending ? "Moving the page…" : failure;
+  const parentTitle = parentPageId
+    ? spacePageTitle(places.find(({ node }) => node.id === parentPageId)?.node.title ?? "")
+    : null;
+  const done = !target
+    ? ""
+    : target.id === space.id
+      ? parentTitle ? `Moved ${title} under ${parentTitle}` : `Moved ${title} to the top level`
+      : parentTitle ? `Moved ${title} to ${target.name}, under ${parentTitle}` : `Moved ${title} to ${target.name}`;
 
   const place = (key: string, label: string, depth: number, value: string | null, disabled = false) => {
     const chosen = parentPageId === value;
@@ -284,9 +314,7 @@ export function MovePageDialog({
           <Button
             type="button"
             disabled={stays || !target || move.isPending}
-            onClick={() =>
-              target && move.mutate({ target, parentPageId, opening: opening.current() })
-            }
+            onClick={() => target && move.mutate({ target, parentPageId, done, opening: opening.current() })}
           >
             {move.isPending ? "Moving…" : "Move here"}
           </Button>
@@ -316,6 +344,12 @@ export function DeletePageDialog({
       if (opening.isShowing(sent.opening)) onOpenChange(false);
       // First, so an open page that went is left before the list of pages comes back without it.
       onDeleted?.(page);
+      // Its copies held here go too: opened again (Back, another link), the
+      // page is looked up and found in the trash, rather than drawn from a
+      // copy as a page whose every save fails.
+      for (const id of spacePageSubtreeIds(page)) {
+        queryClient.removeQueries({ queryKey: queryKeys.spaces.page(space.id, id) });
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.spaces.trash(space.id) }),

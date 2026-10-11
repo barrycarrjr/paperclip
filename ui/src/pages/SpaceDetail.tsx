@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, FileText, Library, Plus, Settings, Trash2 } from "lucide-react";
-import type { Space, SpacePageTreeNode } from "@paperclipai/shared";
+import type { Space, SpacePageLocation, SpacePageTreeNode } from "@paperclipai/shared";
 import { accessApi } from "@/api/access";
+import { ApiError } from "@/api/client";
 import { spacesApi } from "@/api/spaces";
 import { EmptyState } from "@/components/EmptyState";
 import { InlineBanner } from "@/components/InlineBanner";
@@ -64,8 +65,9 @@ export function SpaceDetail() {
   const currentPage = useMemo(() => (pageId ? findSpacePage(tree, pageId) : null), [tree, pageId]);
 
   // An address names the page's Space, so a page moved to another Space is
-  // not found at its old address (a saved link, an activity row). Ask where
-  // it is now and go there.
+  // not found at its old address (a saved link, an activity row), and a page
+  // in the trash is not in the list of pages. Ask where it is now: go there,
+  // or say it is in the trash.
   const pageNotHere = !!pageId && (spaceQuery.isError || (!!space && treeQuery.isSuccess && !currentPage));
   const locationQuery = useQuery({
     queryKey: queryKeys.spaces.pageLocation(companyId ?? "", pageId ?? ""),
@@ -73,11 +75,11 @@ export function SpaceDetail() {
     enabled: !!companyId && pageNotHere,
     retry: false,
   });
-  const location = locationQuery.data;
+  const location = pageNotHere && locationQuery.data?.pageId === pageId ? locationQuery.data : null;
+  const movedTo = location && !location.inTrash && location.spaceId !== space?.id ? location : null;
   useEffect(() => {
-    if (!pageId || !location || location.pageId !== pageId || location.spaceId === space?.id) return;
-    navigate(spacePageHref({ urlKey: location.spaceUrlKey }, pageId), { replace: true });
-  }, [location, navigate, pageId, space?.id]);
+    if (pageId && movedTo) navigate(spacePageHref({ urlKey: movedTo.spaceUrlKey }, pageId), { replace: true });
+  }, [movedTo, navigate, pageId]);
 
   useEffect(() => {
     const crumbs: Breadcrumb[] = [{ label: "Spaces", href: "/spaces" }];
@@ -123,7 +125,14 @@ export function SpaceDetail() {
   }
   if (spaceQuery.isLoading || accessQuery.isLoading) return <PageSkeleton variant="detail" />;
   if (!space) {
-    if (pageNotHere && (locationQuery.isLoading || location)) return <PageSkeleton variant="detail" />;
+    if (location?.inTrash) {
+      return (
+        <div className="max-w-3xl">
+          <PageInTrashNotice location={location} />
+        </div>
+      );
+    }
+    if (pageNotHere && (locationQuery.isLoading || movedTo)) return <PageSkeleton variant="detail" />;
     return (
       <EmptyState
         icon={Library}
@@ -153,7 +162,10 @@ export function SpaceDetail() {
       if (pageId && spacePageSubtreeIds(deleted).has(pageId)) navigate(`/spaces/${space.urlKey}`);
     },
   };
-  const findingPage = pageNotHere && (locationQuery.isLoading || (!!location && location.spaceId !== space.id));
+  const findingPage = pageNotHere && (locationQuery.isLoading || !!movedTo);
+  // Found nowhere: said, rather than the page drawn from a copy this tab
+  // still holds, whose every save would fail.
+  const foundNowhere = pageNotHere && locationQuery.isError;
 
   const archivedNotice = space.archivedAt ? (
     <InlineBanner
@@ -274,6 +286,17 @@ export function SpaceDetail() {
         {archivedNotice}
         {findingPage ? (
           <p className="text-sm text-muted-foreground">Finding the page…</p>
+        ) : location?.inTrash ? (
+          <PageInTrashNotice location={location} />
+        ) : foundNowhere ? (
+          <EmptyState
+            icon={FileText}
+            message={
+              locationQuery.error instanceof ApiError && locationQuery.error.status !== 404
+                ? locationQuery.error.message
+                : "This page could not be found."
+            }
+          />
         ) : (
           <SpacePageEditor
             key={pageId}
@@ -292,6 +315,26 @@ export function SpaceDetail() {
         )}
       </div>
     </div>
+  );
+}
+
+/** For a page in the trash: its address still says where it went, and where it can be brought back from. */
+function PageInTrashNotice({ location }: { location: SpacePageLocation }) {
+  return (
+    <InlineBanner
+      tone="info"
+      title="This page is in the trash"
+      actions={
+        <Button asChild size="sm" variant="outline">
+          {/* Not a task, even in a Space whose address is "issues". */}
+          <Link to={`/spaces/${location.spaceUrlKey}/trash`} disableIssueQuicklook>
+            Open the trash
+          </Link>
+        </Button>
+      }
+    >
+      <p>It is in the trash of {location.spaceName}, and can be brought back from there.</p>
+    </InlineBanner>
   );
 }
 
