@@ -1820,6 +1820,9 @@ function SkillPane({
               bordered={false}
               readOnly={readOnly}
               className="min-h-(--sz-320px)"
+              // The front matter is split off above. This covers a file that
+              // split cannot read, with Windows line endings or a byte order mark.
+              frontMatter
             />
           ) : (
             <Textarea

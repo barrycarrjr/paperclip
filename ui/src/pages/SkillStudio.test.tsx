@@ -104,13 +104,16 @@ vi.mock("@/components/MarkdownEditor", () => ({
     value,
     onChange,
     readOnly,
+    frontMatter,
   }: {
     value: string;
     onChange: (value: string) => void;
     readOnly?: boolean;
+    frontMatter?: boolean;
   }) => (
     <textarea
       data-testid="markdown-editor"
+      data-front-matter={frontMatter ? "kept" : "markdown"}
       readOnly={readOnly}
       value={value}
       onChange={(event) => {
@@ -668,6 +671,30 @@ describe("SkillStudio editor frontmatter", () => {
 
     expect(node.querySelector('[data-testid="frontmatter-panel"]')).toBeNull();
     expect(node.textContent).not.toContain("Add frontmatter");
+  });
+
+  it("has the editor keep front matter the frontmatter section cannot split off", async () => {
+    // Windows line endings: the section does not read this front matter, so
+    // the whole file goes to the editor, which used to write it back broken.
+    const content = "---\r\nname: demo-skill\r\ndescription: Existing\r\n---\r\n\r\n# Demo Skill\r\n";
+    mockCompanySkillsApi.file.mockResolvedValueOnce({
+      path: "SKILL.md",
+      content,
+      markdown: true,
+      editable: true,
+      editableReason: null,
+    });
+
+    const node = await renderStudio();
+
+    let editor: HTMLTextAreaElement | undefined;
+    await waitFor(() => {
+      editor = node.querySelector<HTMLTextAreaElement>('[data-testid="markdown-editor"]') ?? undefined;
+      // The whole file. (A text box reads its text back with "\n" line endings.)
+      expect(editor?.value).toBe(content.replace(/\r\n/g, "\n"));
+    });
+    expect(node.querySelector('[data-testid="frontmatter-panel"]')).toBeNull();
+    expect(editor!.dataset.frontMatter).toBe("kept");
   });
 
   it("shows existing frontmatter collapsed by default", async () => {

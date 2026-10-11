@@ -1,7 +1,7 @@
 import type { ToMarkdownOptions } from "@mdxeditor/editor";
 
-const FRONT_MATTER_OPEN = /^---[ \t]*$/;
-const FRONT_MATTER_CLOSE = /^(?:---|\.\.\.)[ \t]*$/;
+// const FRONT_MATTER_OPEN = /^---[ \t]*$/;
+// const FRONT_MATTER_CLOSE = /^(?:---|\.\.\.)[ \t]*$/;
 const BLOCKQUOTE_PREFIX = /^(?: {0,3}>[ \t]?)+/;
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const SETEXT_H1_UNDERLINE = /^ {0,3}=+[ \t]*$/;
@@ -21,13 +21,16 @@ const EMPHASIS_MARKERS = [
   { marker: "*", pattern: /(?<![*\\])\*(?![\s*])(?:[^*\n]*?[^\s*\\])?\*(?!\*)/ },
 ] as const;
 
-/** The lines after a leading YAML front matter block, which is not markdown. */
-function bodyLines(markdown: string): string[] {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  if (!FRONT_MATTER_OPEN.test(lines[0] ?? "")) return lines;
-  const close = lines.findIndex((line, index) => index > 0 && FRONT_MATTER_CLOSE.test(line));
-  return close > 0 ? lines.slice(close + 1) : lines;
-}
+// The editor now keeps front matter out of the markdown it reads styles from
+// (see markdownStyleOptions), so this skip read a divider at the top of a
+// file's body as front matter.
+// /** The lines after a leading YAML front matter block, which is not markdown. */
+// function bodyLines(markdown: string): string[] {
+//   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+//   if (!FRONT_MATTER_OPEN.test(lines[0] ?? "")) return lines;
+//   const close = lines.findIndex((line, index) => index > 0 && FRONT_MATTER_CLOSE.test(line));
+//   return close > 0 ? lines.slice(close + 1) : lines;
+// }
 
 function firstMarker<T extends string>(
   text: string,
@@ -48,6 +51,10 @@ function firstMarker<T extends string>(
  * instead, so saving an edit keeps the person's own style. Each marker comes
  * from its first use. Anything the markdown does not use keeps the editor's
  * own default.
+ *
+ * `markdown` is what the editor holds, all of it markdown: the editor keeps a
+ * file's front matter out itself. Skipping a block between dividers here as
+ * well would skip text the editor holds, a "---" divider with it.
  */
 export function markdownStyleOptions(markdown: string): ToMarkdownOptions {
   const options: ToMarkdownOptions = { listItemIndent: "one" };
@@ -59,7 +66,8 @@ export function markdownStyleOptions(markdown: string): ToMarkdownOptions {
   let fenceClose: RegExp | null = null;
   let previousIsText = false;
 
-  for (const rawLine of bodyLines(markdown)) {
+  // for (const rawLine of bodyLines(markdown)) {
+  for (const rawLine of markdown.replace(/\r\n?/g, "\n").split("\n")) {
     const line = rawLine.replace(BLOCKQUOTE_PREFIX, "");
     if (fenceClose) {
       if (fenceClose.test(line)) fenceClose = null;

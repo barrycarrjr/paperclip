@@ -487,7 +487,8 @@ function SkillList({
   );
 }
 
-function SkillPane({
+// Exported for its tests.
+export function SkillPane({
   loading,
   detail,
   file,
@@ -733,6 +734,9 @@ function SkillPane({
               onChange={setDraft}
               bordered={false}
               className="min-h-[520px]"
+              // The front matter is split off before this. This covers a file
+              // that split cannot read, one with a byte order mark.
+              frontMatter
             />
           ) : (
             <Textarea
