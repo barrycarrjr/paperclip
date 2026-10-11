@@ -936,6 +936,10 @@ export function routineService(
           idempotencyKey: input.idempotencyKey ?? null,
           triggerPayload,
           dispatchFingerprint,
+          // As upstream: the task this run creates keeps the env of the
+          // revision current now, whatever is saved later (see the heartbeat's
+          // getRoutineEnvForExecutionIssue).
+          routineRevisionId: input.routine.latestRevisionId,
         })
         .returning();
 

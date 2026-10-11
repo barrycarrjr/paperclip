@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -13,6 +13,7 @@ import {
   type EnvironmentLeaseStatus,
   type ExecutionWorkspace,
   type ExecutionWorkspaceConfig,
+  type RoutineRevisionSnapshotV1,
   type RunLivenessState,
 } from "@paperclipai/shared";
 import {
@@ -32,6 +33,9 @@ import {
   issueWorkProducts,
   projects,
   projectWorkspaces,
+  routineRevisions,
+  routineRuns,
+  routines,
   workspaceOperations,
 } from "@paperclipai/db";
 import { conflict, HttpError, notFound } from "../errors.js";
@@ -131,6 +135,7 @@ import {
   type ResolvedAccountEnv,
 } from "./active-account.js";
 import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
+import { signInEnvVarNames } from "./switchboard.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
   hasSessionCompactionThresholds,
@@ -331,10 +336,59 @@ type RuntimeConfigSecretResolver = Pick<
   "resolveAdapterConfigForRuntime" | "resolveEnvBindings"
 >;
 
+/**
+ * A routine's env (a pipeline stage's secrets and values) without the names it
+ * may not set. It reaches every agent that works on the task its automation
+ * created, so it must not change which account or key the run signs in with,
+ * nor anything Paperclip sets for the run itself. Dropped: every name starting
+ * PAPERCLIP_, every tool's sign-in variable (signInEnvVarNames), and the
+ * account variable the agent's adapter declares. Matched in any case, because
+ * Windows treats environment names that way.
+ */
+export function withoutProtectedRoutineEnv(
+  envValue: unknown,
+  adapterType?: string | null,
+): Record<string, unknown> | null {
+  const protectedNames = new Set(signInEnvVarNames().map((name) => name.toUpperCase()));
+  const adapterAccountEnvVar = adapterType ? accountCredentialEnvVarFor(adapterType) : null;
+  if (adapterAccountEnvVar) protectedNames.add(adapterAccountEnvVar.toUpperCase());
+  const kept = Object.fromEntries(
+    Object.entries(parseObject(envValue)).filter(([key]) => {
+      const name = key.toUpperCase();
+      return !name.startsWith("PAPERCLIP_") && !protectedNames.has(name);
+    }),
+  );
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
+/** Context key holding a hash of the routine env a run had, so the next run can tell whether it changed. */
+const ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY = "paperclipRoutineEnvFingerprint";
+
+/** A hash of a routine's env bindings (references and plain values, never a resolved secret), or null when it has none. */
+function fingerprintRoutineEnv(envValue: unknown): string | null {
+  const env = parseObject(envValue);
+  const keys = Object.keys(env).sort();
+  if (keys.length === 0) return null;
+  const canonical = keys.map((key) => {
+    const binding = env[key];
+    return [
+      key,
+      binding && typeof binding === "object" && !Array.isArray(binding)
+        ? Object.fromEntries(Object.entries(binding).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : binding,
+    ];
+  });
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
 export async function resolveExecutionRunAdapterConfig(input: {
   companyId: string;
   executionRunConfig: Record<string, unknown>;
   projectEnv: unknown;
+  /** The routine's env, for a run on the task its automation created. */
+  routineEnv?: unknown;
+  /** The agent's adapter, whose own account variable the routine env may not set. */
+  adapterType?: string | null;
   secretsSvc: RuntimeConfigSecretResolver;
 }) {
   const { config: resolvedConfig, secretKeys } = await input.secretsSvc.resolveAdapterConfigForRuntime(
@@ -350,6 +404,21 @@ export async function resolveExecutionRunAdapterConfig(input: {
       ...projectEnvResolution.env,
     };
     for (const key of projectEnvResolution.secretKeys) {
+      secretKeys.add(key);
+    }
+  }
+  // Merged last, as upstream does, so a stage's value wins over the agent's
+  // and the project's. Protected names are dropped before anything resolves.
+  const routineEnv = withoutProtectedRoutineEnv(input.routineEnv, input.adapterType);
+  const routineEnvResolution = routineEnv
+    ? await input.secretsSvc.resolveEnvBindings(input.companyId, routineEnv)
+    : { env: {}, secretKeys: new Set<string>() };
+  if (Object.keys(routineEnvResolution.env).length > 0) {
+    resolvedConfig.env = {
+      ...parseObject(resolvedConfig.env),
+      ...routineEnvResolution.env,
+    };
+    for (const key of routineEnvResolution.secretKeys) {
       secretKeys.add(key);
     }
   }
@@ -2336,10 +2405,77 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         assigneeAgentId: issues.assigneeAgentId,
         assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
         executionWorkspaceSettings: issues.executionWorkspaceSettings,
+        originKind: issues.originKind,
+        originId: issues.originId,
+        originRunId: issues.originRunId,
       })
       .from(issues)
       .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * The env a routine (a pipeline stage's automation) gives runs on the task
+   * it created, as upstream reads it. Only a routine_execution task qualifies,
+   * so every agent woken on that task gets it and no other task does. The
+   * revision recorded when the routine ran fixes the env for the task's life;
+   * a run recorded without one reads the routine's current env.
+   */
+  async function getRoutineEnvForExecutionIssue(
+    companyId: string,
+    issueContext: { originKind: string | null; originId: string | null; originRunId: string | null } | null,
+  ): Promise<{ routineId: string | null; env: unknown }> {
+    if (!issueContext || issueContext.originKind !== "routine_execution" || !issueContext.originId) {
+      return { routineId: null, env: null };
+    }
+    const routineId = issueContext.originId;
+    const routineRun = issueContext.originRunId
+      ? await db
+          .select({ routineRevisionId: routineRuns.routineRevisionId })
+          .from(routineRuns)
+          .where(
+            and(
+              eq(routineRuns.id, issueContext.originRunId),
+              eq(routineRuns.companyId, companyId),
+              eq(routineRuns.routineId, routineId),
+            ),
+          )
+          .then((rows) => rows[0] ?? null)
+      : null;
+    if (routineRun?.routineRevisionId) {
+      const revision = await db
+        .select({ snapshot: routineRevisions.snapshot })
+        .from(routineRevisions)
+        .where(
+          and(
+            eq(routineRevisions.id, routineRun.routineRevisionId),
+            eq(routineRevisions.companyId, companyId),
+            eq(routineRevisions.routineId, routineId),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      const snapshot = revision?.snapshot as RoutineRevisionSnapshotV1 | undefined;
+      if (snapshot?.version === 1) {
+        return { routineId, env: snapshot.routine.env ?? null };
+      }
+    }
+    const routine = await db
+      .select({ env: routines.env })
+      .from(routines)
+      .where(and(eq(routines.id, routineId), eq(routines.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    return { routineId, env: routine?.env ?? null };
+  }
+
+  /** The routine env hash a run recorded (see ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY), or null. */
+  async function getRunRoutineEnvFingerprint(runId: string) {
+    return db
+      .select({
+        fingerprint: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> ${sql.raw(`'${ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY}'`)}`,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0]?.fingerprint ?? null);
   }
 
   async function getRuntimeState(agentId: string) {
@@ -5220,10 +5356,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const taskSession = taskKey
       ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
       : null;
-    const { reset: resetTaskSession, reason: sessionResetReason } = resolveTaskSessionReset(
-      context,
-      parseHeartbeatPolicy(agent),
-    );
+    const routineEnvContext = await getRoutineEnvForExecutionIssue(agent.companyId, issueContext);
+    const routineEnvFingerprint = fingerprintRoutineEnv(routineEnvContext.env);
+    const wakeSessionReset = resolveTaskSessionReset(context, parseHeartbeatPolicy(agent));
+    // As upstream, a session does not carry on across a change to its task's
+    // routine env. That env is fixed when the routine runs, so only a task
+    // recorded without a revision (before that was done) can see it change.
+    const routineEnvChanged =
+      !wakeSessionReset.reset && routineEnvContext.routineId && taskSession?.lastRunId
+        ? (await getRunRoutineEnvFingerprint(taskSession.lastRunId)) !== routineEnvFingerprint
+        : false;
+    const resetTaskSession = wakeSessionReset.reset || routineEnvChanged;
+    const sessionResetReason = routineEnvChanged
+      ? "the stage automation's env changed"
+      : wakeSessionReset.reason;
+    if (routineEnvFingerprint) {
+      context[ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY] = routineEnvFingerprint;
+    } else {
+      delete context[ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY];
+    }
     const taskSessionForRun = resetTaskSession ? null : taskSession;
     const explicitResumeSessionParams = normalizeSessionParams(
       sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
@@ -5425,6 +5576,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       companyId: agent.companyId,
       executionRunConfig,
       projectEnv: projectContext?.env ?? null,
+      routineEnv: routineEnvContext.env,
+      adapterType: agent.adapterType,
       secretsSvc,
     });
     const runScopedMentionedSkillKeys = await resolveRunScopedMentionedSkillKeys({

@@ -182,6 +182,22 @@ export function envCarriesOwnSignIn(provider: string, env: Record<string, unknow
 }
 
 /**
+ * Every variable through which a run's environment can say how a tool signs
+ * in, for every tool: each folder variable in PROVIDER_ENV and each credential
+ * in PROVIDER_OWN_CREDENTIAL_VARS. Env written by someone other than the
+ * agent's owner, such as a pipeline stage's, may not set any of these, so it
+ * cannot move a run onto another account or key.
+ */
+export function signInEnvVarNames(): string[] {
+  const names = new Set<string>();
+  for (const { envVar } of Object.values(PROVIDER_ENV)) names.add(envVar);
+  for (const vars of Object.values(PROVIDER_OWN_CREDENTIAL_VARS)) {
+    for (const name of vars) names.add(name);
+  }
+  return [...names];
+}
+
+/**
  * Has this machine opted out? Its own function because two callers want the
  * same answer for different reasons: resolution has to return nothing, and any
  * later status surface has to be able to say "switched off" rather than "not

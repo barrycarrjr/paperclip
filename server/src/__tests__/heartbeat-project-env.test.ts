@@ -1,10 +1,44 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildSkillMentionHref, isUuidLike } from "@paperclipai/shared";
+
+// An adapter that declares its own account variable, one no tool list names,
+// so a test can tell that the declared variable is protected on its own.
+vi.mock("../services/active-account.js", async () => {
+  const actual = await vi.importActual<typeof import("../services/active-account.js")>(
+    "../services/active-account.js",
+  );
+  return {
+    ...actual,
+    accountCredentialEnvVarFor: (adapterType: string) =>
+      adapterType === "declaring_local" ? "DECLARED_SIGN_IN_TOKEN" : actual.accountCredentialEnvVarFor(adapterType),
+  };
+});
+
 import {
   applyRunScopedMentionedSkillKeys,
   extractMentionedSkillIdsFromSources,
   resolveExecutionRunAdapterConfig,
+  withoutProtectedRoutineEnv,
 } from "../services/heartbeat.ts";
+
+/** Resolves plain values as they are and each secret reference to "resolved:<key>", marking it secret. */
+function fakeEnvResolver() {
+  return vi.fn(async (_companyId: string, envValue: unknown) => {
+    const env: Record<string, string> = {};
+    const secretKeys = new Set<string>();
+    for (const [key, binding] of Object.entries(envValue as Record<string, unknown>)) {
+      if (typeof binding === "string") {
+        env[key] = binding;
+      } else if ((binding as { type?: string }).type === "plain") {
+        env[key] = String((binding as { value: unknown }).value);
+      } else {
+        env[key] = `resolved:${key}`;
+        secretKeys.add(key);
+      }
+    }
+    return { env, secretKeys };
+  });
+}
 
 describe("resolveExecutionRunAdapterConfig", () => {
   it("overlays project env on top of agent env and unions secret keys", async () => {
@@ -66,6 +100,81 @@ describe("resolveExecutionRunAdapterConfig", () => {
 
     expect(result.resolvedConfig.env).toEqual({ AGENT_ONLY: "agent-only" });
     expect(resolveEnvBindings).not.toHaveBeenCalled();
+  });
+
+  it("overlays a stage's env last and adds its secret keys for masking", async () => {
+    const resolveAdapterConfigForRuntime = vi.fn().mockResolvedValue({
+      config: { env: { SHARED_KEY: "agent", AGENT_ONLY: "agent-only" } },
+      secretKeys: new Set(["AGENT_SECRET"]),
+    });
+    const resolveEnvBindings = fakeEnvResolver();
+
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      executionRunConfig: { env: { SHARED_KEY: "agent" } },
+      projectEnv: { SHARED_KEY: "project", PROJECT_ONLY: "project-only" },
+      routineEnv: {
+        SHARED_KEY: { type: "plain", value: "stage" },
+        DEPLOY_TOKEN: { type: "secret_ref", secretId: "secret-1", version: "latest" },
+      },
+      secretsSvc: { resolveAdapterConfigForRuntime, resolveEnvBindings } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({
+      SHARED_KEY: "stage",
+      AGENT_ONLY: "agent-only",
+      PROJECT_ONLY: "project-only",
+      DEPLOY_TOKEN: "resolved:DEPLOY_TOKEN",
+    });
+    expect(Array.from(result.secretKeys).sort()).toEqual(["AGENT_SECRET", "DEPLOY_TOKEN"]);
+  });
+
+  it("never lets a stage's env set a sign-in variable or a PAPERCLIP_ name", async () => {
+    const resolveAdapterConfigForRuntime = vi.fn().mockResolvedValue({
+      config: { env: { ANTHROPIC_API_KEY: "agent-key", CLAUDE_CONFIG_DIR: "/agent/claude" } },
+      secretKeys: new Set<string>(),
+    });
+    const resolveEnvBindings = fakeEnvResolver();
+    const tokenRef = { type: "secret_ref", secretId: "secret-1", version: "latest" };
+
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      executionRunConfig: {},
+      projectEnv: null,
+      adapterType: "declaring_local",
+      routineEnv: {
+        REGION: "eu-west-1",
+        ANTHROPIC_API_KEY: "stage-key",
+        anthropic_auth_token: "stage-key",
+        CLAUDE_CONFIG_DIR: "/stage/claude",
+        CLAUDE_CODE_OAUTH_TOKEN: tokenRef,
+        CODEX_HOME: "/stage/codex",
+        OPENAI_API_KEY: tokenRef,
+        GEMINI_API_KEY: "stage-key",
+        DECLARED_SIGN_IN_TOKEN: "stage-token",
+        PAPERCLIP_API_KEY: tokenRef,
+        PAPERCLIP_RUN_ID: "stage-run",
+        Paperclip_Task_Id: "stage-task",
+      },
+      secretsSvc: { resolveAdapterConfigForRuntime, resolveEnvBindings } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({
+      ANTHROPIC_API_KEY: "agent-key",
+      CLAUDE_CONFIG_DIR: "/agent/claude",
+      REGION: "eu-west-1",
+    });
+    // Dropped names are never resolved, so a secret behind one is not read.
+    expect(resolveEnvBindings).toHaveBeenCalledTimes(1);
+    expect(Object.keys(resolveEnvBindings.mock.calls[0]![1] as Record<string, unknown>)).toEqual(["REGION"]);
+    expect(result.secretKeys.size).toBe(0);
+  });
+
+  it("drops the account variable the agent's adapter declares, and only for that adapter", () => {
+    const env = { DECLARED_SIGN_IN_TOKEN: "stage-token", REGION: "eu-west-1" };
+    expect(withoutProtectedRoutineEnv(env, "declaring_local")).toEqual({ REGION: "eu-west-1" });
+    expect(withoutProtectedRoutineEnv(env, "codex_local")).toEqual(env);
+    expect(withoutProtectedRoutineEnv({ PAPERCLIP_AGENT_ID: "x" }, "codex_local")).toBeNull();
   });
 });
 
