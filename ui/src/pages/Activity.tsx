@@ -124,7 +124,9 @@ export function Activity() {
     return (
       <div className="space-y-4">
         {viewTabs}
-        <ActivityAgentActions companyId={selectedCompanyId} />
+        {/* Keyed by company, so a company switch starts with no filters: an
+            agent or person picked in one company matches nothing in the next. */}
+        <ActivityAgentActions key={selectedCompanyId} companyId={selectedCompanyId} />
       </div>
     );
   }

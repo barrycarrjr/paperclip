@@ -20,6 +20,9 @@ import { badRequest, forbidden } from "../errors.js";
 const AUDIT_CSV_EXPORT_MAX_ROWS = 10_000;
 const AUDIT_CSV_PAGE_SIZE = 200;
 const CSV_FORMULA_CHARS = /^[=+\-@\t\r]/;
+// A spreadsheet set to split on ";", tabs or line breaks starts a new cell
+// there, so a formula character after one is neutralised too.
+const CSV_EMBEDDED_FORMULA_CHARS = /([;\t\r\n])([=+\-@])/g;
 
 const AUDIT_CSV_COLUMNS = [
   "createdAt",
@@ -42,9 +45,10 @@ function csvCell(value: unknown): string {
   const str = value instanceof Date ? value.toISOString() : String(value);
   // Prevent spreadsheet applications from interpreting user-controlled cells
   // as formulas when an operator opens the export.
-  const safe = CSV_FORMULA_CHARS.test(str) ? `'${str}` : str;
-  // Quote if the value contains a delimiter, quote, or newline; escape quotes by doubling.
-  return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+  const safe = (CSV_FORMULA_CHARS.test(str) ? `'${str}` : str).replace(CSV_EMBEDDED_FORMULA_CHARS, "$1'$2");
+  // Quote if the value contains a delimiter (",", or ";" where that is the
+  // list separator), a quote, or a newline; escape quotes by doubling.
+  return /[",;\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
 function readNested(value: unknown, ...keys: string[]): string | null {
@@ -106,17 +110,27 @@ const createActivitySchema = z.object({
 
 const agentActionAuditActorScopeSchema = z.enum(["agents", "all"]);
 
+// Postgres refuses a NUL character in text and a timestamp outside years 1 to
+// 9999, so those are a bad request here rather than a server error.
+const auditTextFilterSchema = z.string().min(1).refine((value) => !value.includes("\u0000"), {
+  message: "Must not contain a NUL character",
+});
+const auditDateFilterSchema = z.coerce.date().refine((value) => {
+  const year = value.getUTCFullYear();
+  return year >= 1 && year <= 9999;
+}, { message: "Year must be 1 to 9999" });
+
 const agentActionAuditQuerySchema = z.object({
   actorScope: agentActionAuditActorScopeSchema.default("agents"),
   agentId: z.string().uuid().optional(),
-  responsibleUserId: z.string().min(1).optional(),
+  responsibleUserId: auditTextFilterSchema.optional(),
   runId: z.string().uuid().optional(),
-  entityType: z.string().min(1).optional(),
-  entityId: z.string().min(1).optional(),
-  action: z.string().min(1).optional(),
+  entityType: auditTextFilterSchema.optional(),
+  entityId: auditTextFilterSchema.optional(),
+  action: auditTextFilterSchema.optional(),
   actorType: z.enum(["agent", "user", "system", "plugin"]).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  from: auditDateFilterSchema.optional(),
+  to: auditDateFilterSchema.optional(),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -264,13 +278,18 @@ export function activityRoutes(db: Db) {
     const rows: Awaited<ReturnType<typeof agentAudit.list>>["items"] = [];
     let cursor: string | undefined;
     do {
-      const page = await agentAudit.list({ companyId, ...filters, cursor, limit: AUDIT_CSV_PAGE_SIZE });
+      // The file has no details column, so details are not read at all.
+      const page = await agentAudit.list(
+        { companyId, ...filters, cursor, limit: AUDIT_CSV_PAGE_SIZE },
+        { includeDetails: false },
+      );
       for (const item of page.items) {
         if (rows.length >= AUDIT_CSV_EXPORT_MAX_ROWS) break;
         rows.push(item);
       }
       cursor = page.nextCursor ?? undefined;
     } while (cursor && rows.length < AUDIT_CSV_EXPORT_MAX_ROWS);
+    const truncated = rows.length >= AUDIT_CSV_EXPORT_MAX_ROWS && Boolean(cursor);
 
     // The export is itself an auditable act: record who exported what filter
     // set and how many rows left the system.
@@ -285,7 +304,7 @@ export function activityRoutes(db: Db) {
       details: {
         format: "csv",
         rowCount: rows.length,
-        truncated: rows.length >= AUDIT_CSV_EXPORT_MAX_ROWS && Boolean(cursor),
+        truncated,
         filters: {
           actorScope: filters.actorScope,
           agentId: filters.agentId ?? null,
@@ -303,7 +322,12 @@ export function activityRoutes(db: Db) {
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="agent-audit-${companyId}.csv"`);
-    res.send(auditRowsToCsv(rows));
+    // Lets the screen say the file stops at the newest AUDIT_CSV_EXPORT_MAX_ROWS rows.
+    res.setHeader("X-Paperclip-Export-Truncated", truncated ? "true" : "false");
+    res.setHeader("X-Paperclip-Export-Row-Count", String(rows.length));
+    // The byte-order mark makes Excel on Windows read the file as UTF-8, not
+    // the local code page, so non-English text and the "…" in excerpts survive.
+    res.send(`\uFEFF${auditRowsToCsv(rows)}`);
   });
 
   router.get("/companies/:companyId/portfolio-activity", async (req, res) => {

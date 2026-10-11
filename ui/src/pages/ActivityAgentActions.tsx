@@ -20,10 +20,12 @@ import { ApiError } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { Identity } from "../components/Identity";
 import { useToastActions } from "../context/ToastContext";
+import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
 import { formatActivityVerb } from "../lib/activity-format";
 import { buildCompanyUserProfileMap, type CompanyUserProfile } from "../lib/company-members";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
+import { cn } from "../lib/utils";
 
 const PAGE_SIZE = 50;
 const ALL = "__all";
@@ -92,6 +94,17 @@ function ActionTarget({ record, agentMap }: { record: AuditActionRecord; agentMa
       <Link to={`/agents/${targetAgent.id}`} className="font-medium hover:underline">
         {targetAgent.name}
       </Link>
+    );
+  }
+  // Nothing to link to, such as a deleted task: name it from the row itself.
+  const name = activityEntityName(record);
+  const title = activityEntityTitle(record);
+  if (name || title) {
+    return (
+      <span>
+        {name ? <span className="font-medium">{name}</span> : null}
+        {title ? <span className={cn("text-muted-foreground", name && "ml-1")}>{title}</span> : null}
+      </span>
     );
   }
   return <span className="text-muted-foreground">{record.entityType.replaceAll("_", " ")}</span>;
@@ -224,7 +237,7 @@ export function ActivityAgentActions({ companyId }: { companyId: string }) {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const blob = await auditApi.exportAgentActionsCsv(companyId, filters);
+      const { blob, truncated, rowCount } = await auditApi.exportAgentActionsCsv(companyId, filters);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -235,7 +248,15 @@ export function ActivityAgentActions({ companyId }: { companyId: string }) {
       // Browsers may read a blob address after click() returns, so keep it
       // alive long enough for the download to start.
       window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
-      pushToast({ title: "Download started", tone: "success" });
+      pushToast(
+        truncated
+          ? {
+            title: "Download started, but the file is not complete",
+            body: `It holds only the newest ${rowCount === null ? "" : `${rowCount.toLocaleString()} `}actions. Narrow the filters or dates to get the rest.`,
+            tone: "warn",
+          }
+          : { title: "Download started", tone: "success" },
+      );
     } catch (error) {
       pushToast({
         title: "Download failed",

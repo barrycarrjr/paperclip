@@ -13,6 +13,8 @@ const exportCsvMock = vi.hoisted(() => vi.fn());
 const listAgentsMock = vi.hoisted(() => vi.fn());
 const listUserDirectoryMock = vi.hoisted(() => vi.fn());
 const pushToastMock = vi.hoisted(() => vi.fn());
+// The company the page is showing; a test can switch it and render again.
+const companyState = vi.hoisted(() => ({ selectedCompanyId: "company-1" }));
 
 vi.mock("@/api/activity", () => ({
   activityApi: { list: (companyId: string, filters: unknown) => listActivityMock(companyId, filters) },
@@ -35,8 +37,11 @@ vi.mock("@/api/access", () => ({
 
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
-    selectedCompanyId: "company-1",
-    companies: [{ id: "company-1", name: "Paperclip", issuePrefix: "PAP" }],
+    selectedCompanyId: companyState.selectedCompanyId,
+    companies: [
+      { id: "company-1", name: "Paperclip", issuePrefix: "PAP" },
+      { id: "company-2", name: "Second", issuePrefix: "SEC" },
+    ],
   }),
 }));
 
@@ -103,10 +108,12 @@ function isAccessCheck(filters: unknown) {
 describe("Activity agent actions", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let client: QueryClient;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    companyState.selectedCompanyId = "company-1";
     listActivityMock.mockResolvedValue([]);
     listAgentsMock.mockResolvedValue([{ id: "agent-1", name: "Fable", icon: null }]);
     listUserDirectoryMock.mockResolvedValue({
@@ -132,8 +139,13 @@ describe("Activity agent actions", () => {
   }
 
   async function render() {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     root = createRoot(container);
+    await rerender();
+  }
+
+  // Draws the page again, for instance after the company changed.
+  async function rerender() {
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
@@ -210,27 +222,34 @@ describe("Activity agent actions", () => {
     }
   });
 
-  it("filters by date and downloads the same filtered rows as CSV", async () => {
-    grantAccess("full");
-    exportCsvMock.mockResolvedValue(new Blob(["csv"], { type: "text/csv" }));
+  function stubDownload() {
     const createUrl = vi.fn(() => "blob:agent-audit");
-    const revokeUrl = vi.fn();
     (URL as unknown as { createObjectURL: unknown }).createObjectURL = createUrl;
-    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeUrl;
+    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn();
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    await render();
-    await openAgentActions();
+    return { createUrl, clickSpy };
+  }
 
+  async function setFromDate(value: string) {
     const fromInput = Array.from(container.querySelectorAll("label"))
       .find((label) => label.textContent?.trim().startsWith("From"))
       ?.querySelector("input");
     expect(fromInput).toBeTruthy();
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      setValue.call(fromInput, "2026-10-01");
+      setValue.call(fromInput, value);
       fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await flushReact();
+  }
+
+  it("filters by date and downloads the same filtered rows as CSV", async () => {
+    grantAccess("full");
+    exportCsvMock.mockResolvedValue({ blob: new Blob(["csv"], { type: "text/csv" }), truncated: false, rowCount: 1 });
+    const { createUrl, clickSpy } = stubDownload();
+    await render();
+    await openAgentActions();
+    await setFromDate("2026-10-01");
 
     const from = new Date("2026-10-01T00:00:00").toISOString();
     expect(feedCalls().at(-1)?.[1]).toEqual(expect.objectContaining({ from }));
@@ -268,5 +287,95 @@ describe("Activity agent actions", () => {
     });
     await flushReact();
     expect(container.querySelector('a[href="/issues/PAP-2"]')).toBeTruthy();
+  });
+
+  it("says plainly when the downloaded file was cut off", async () => {
+    grantAccess("full");
+    exportCsvMock.mockResolvedValue({ blob: new Blob(["csv"], { type: "text/csv" }), truncated: true, rowCount: 10_000 });
+    const { clickSpy } = stubDownload();
+    await render();
+    await openAgentActions();
+
+    await act(async () => {
+      button("Download CSV").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(clickSpy).toHaveBeenCalled();
+    expect(pushToastMock).toHaveBeenCalledWith(expect.objectContaining({
+      tone: "warn",
+      title: "Download started, but the file is not complete",
+      body: `It holds only the newest ${(10_000).toLocaleString()} actions. Narrow the filters or dates to get the rest.`,
+    }));
+  });
+
+  it("names a deleted task from the row's own details, without a link", async () => {
+    listAgentActionsMock.mockImplementation((_companyId: string, filters: unknown) => (
+      isAccessCheck(filters)
+        ? Promise.resolve({ items: [], nextCursor: null, accessTier: "full" })
+        : Promise.resolve({
+          items: [record({
+            action: "issue.created",
+            details: { identifier: "PAP-9", title: "Removed task" },
+            entity: { issue: null, comment: null, document: null },
+          })],
+          nextCursor: null,
+          accessTier: "full",
+        })
+    ));
+    await render();
+    await openAgentActions();
+
+    const list = container.querySelector('ul[aria-label="Agent actions"]');
+    expect(list?.textContent).toContain("PAP-9");
+    expect(list?.textContent).toContain("Removed task");
+    expect(list?.querySelector('a[href^="/issues/"]')).toBeNull();
+  });
+
+  it("starts with no filters after switching company", async () => {
+    grantAccess("full");
+    // The select list scrolls its chosen item into view, which jsdom lacks.
+    const proto = Element.prototype as unknown as { scrollIntoView?: unknown };
+    const hadScrollIntoView = "scrollIntoView" in proto;
+    const originalScrollIntoView = proto.scrollIntoView;
+    proto.scrollIntoView = vi.fn();
+    try {
+      // Visit the second company first, so its access answer is already known
+      // when the page switches back: then nothing else remounts the view.
+      companyState.selectedCompanyId = "company-2";
+      await render();
+      companyState.selectedCompanyId = "company-1";
+      await rerender();
+      await openAgentActions();
+
+      const agentSelect = container.querySelector('[aria-label="Agent"]');
+      expect(agentSelect).toBeTruthy();
+      await act(async () => {
+        agentSelect!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+      const fable = Array.from(document.body.querySelectorAll('[role="option"]'))
+        .find((option) => option.textContent?.includes("Fable"));
+      expect(fable, "Fable option").toBeTruthy();
+      await act(async () => {
+        fable!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+      expect(feedCalls().at(-1)).toEqual(["company-1", expect.objectContaining({ agentId: "agent-1" })]);
+
+      companyState.selectedCompanyId = "company-2";
+      await rerender();
+
+      const secondCompanyCalls = feedCalls().filter(([companyId]) => companyId === "company-2");
+      expect(secondCompanyCalls.length).toBeGreaterThan(0);
+      for (const [, filters] of secondCompanyCalls) {
+        expect((filters as { agentId?: string }).agentId).toBeUndefined();
+      }
+      expect(container.querySelector('[aria-label="Agent"]')?.textContent).toContain("All agents");
+      expect(container.textContent).not.toContain("Clear filters");
+    } finally {
+      if (hadScrollIntoView) proto.scrollIntoView = originalScrollIntoView;
+      else delete proto.scrollIntoView;
+    }
   });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agents,
@@ -22,7 +22,27 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { activityRoutes } from "../routes/activity.js";
+import { agentActionAuditService } from "../services/agent-action-audit.js";
 import { errorHandler } from "../middleware/index.js";
+
+// The real service, recording the options each list call was given.
+const auditListOptions = vi.hoisted(() => [] as unknown[]);
+vi.mock("../services/agent-action-audit.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/agent-action-audit.js")>();
+  return {
+    ...actual,
+    agentActionAuditService: (db: Parameters<typeof actual.agentActionAuditService>[0]) => {
+      const service = actual.agentActionAuditService(db);
+      return {
+        ...service,
+        list: (...args: Parameters<typeof service.list>) => {
+          auditListOptions.push(args[1]);
+          return service.list(...args);
+        },
+      };
+    },
+  };
+});
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe.sequential : describe.skip;
@@ -511,7 +531,8 @@ describeEmbeddedPostgres("agent action audit routes", () => {
     expect(response.body.items).toHaveLength(4);
     const listed = response.body.items.find((item: { id: string }) => item.id === badRow!.id);
     expect(listed?.entity).toEqual({ issue: null, comment: null, document: null });
-    expect(listed?.details).toBeNull();
+    // No such task exists, so nothing is hidden: the row keeps its details.
+    expect(listed?.details).toEqual({ note: "logged through the board" });
   });
 
   it("never returns secret values held in details", async () => {
@@ -615,4 +636,180 @@ describeEmbeddedPostgres("agent action audit routes", () => {
       filters: { actorScope: "agents", agentId: agent.id, action: "issue.comment" },
     });
   });
+
+  it("clears tokens written into free text: details, comment excerpts and the CSV", async () => {
+    const { company, agent, issue, comment } = await seed();
+    const githubToken = `ghp_${"a1".repeat(15)}`;
+    const openAiKey = `sk-${"b2".repeat(10)}`;
+    await db.update(issueComments)
+      .set({ body: `Use GITHUB_TOKEN=${githubToken} and ${openAiKey} please` })
+      .where(eq(issueComments.id, comment.id));
+    // A cancelled queued comment survives only as this row's snippet.
+    await db.insert(activityLog).values({
+      companyId: company.id,
+      actorType: "agent",
+      actorId: agent.id,
+      agentId: agent.id,
+      action: "issue.comment_cancelled",
+      entityType: "issue",
+      entityId: issue.id,
+      details: { bodySnippet: `deploy with GITHUB_TOKEN=${githubToken}`, notes: [`key ${openAiKey}`] },
+    });
+    const http = request(app(localBoard(company.id)));
+
+    const list = await http.get(`/api/companies/${company.id}/audit/agent-actions`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    const cancelled = list.body.items.find((item: { action: string }) => item.action === "issue.comment_cancelled");
+    expect(cancelled?.details).toEqual({
+      bodySnippet: "deploy with GITHUB_TOKEN=***REDACTED***",
+      notes: ["key ***REDACTED***"],
+    });
+    const commented = list.body.items.find((item: { entityType: string }) => item.entityType === "issue_comment");
+    expect(commented?.entity.comment.excerpt).toBe("Use GITHUB_TOKEN=***REDACTED*** and ***REDACTED*** please");
+
+    const csv = await http.get(`/api/companies/${company.id}/audit/agent-actions.csv`);
+    expect(csv.status, csv.text).toBe(200);
+    expect(csv.text).toContain(",Use GITHUB_TOKEN=***REDACTED*** and ***REDACTED*** please,");
+    for (const text of [JSON.stringify(list.body), csv.text]) {
+      expect(text).not.toContain(githubToken);
+      expect(text).not.toContain(openAiKey);
+    }
+  });
+
+  it("keeps the details of rows about a deleted task, and still hides a hidden task's", async () => {
+    const { company, agent } = await seed();
+    const [removed, hidden] = await db.insert(issues).values([
+      { companyId: company.id, identifier: `${company.issuePrefix}-7`, title: "Removed task", status: "todo", priority: "medium" },
+      { companyId: company.id, identifier: `${company.issuePrefix}-8`, title: "Hidden task", status: "todo", priority: "medium", hiddenAt: new Date() },
+    ]).returning();
+    const [createdRow, deletedRow, hiddenRow] = await db.insert(activityLog).values([
+      { companyId: company.id, actorType: "agent", actorId: agent.id, agentId: agent.id, action: "issue.created", entityType: "issue", entityId: removed!.id, details: { identifier: removed!.identifier, title: removed!.title } },
+      { companyId: company.id, actorType: "agent", actorId: agent.id, agentId: agent.id, action: "issue.deleted", entityType: "issue", entityId: removed!.id, details: { reason: "duplicate" } },
+      { companyId: company.id, actorType: "agent", actorId: agent.id, agentId: agent.id, action: "issue.updated", entityType: "issue", entityId: hidden!.id, details: { identifier: hidden!.identifier, title: hidden!.title } },
+    ]).returning();
+    // What DELETE /issues/:id does to the task row itself.
+    await db.delete(issues).where(eq(issues.id, removed!.id));
+
+    const response = await request(app(localBoard(company.id))).get(`/api/companies/${company.id}/audit/agent-actions`);
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    const find = (id: string) => response.body.items.find((item: { id: string }) => item.id === id);
+    expect(find(createdRow!.id)?.details).toEqual({ identifier: removed!.identifier, title: "Removed task" });
+    expect(find(createdRow!.id)?.entity.issue).toBeNull();
+    expect(find(deletedRow!.id)?.details).toEqual({ reason: "duplicate" });
+    expect(find(hiddenRow!.id)?.details).toBeNull();
+  });
+
+  it("neutralises a formula after a separator inside a value and quotes values with ;", async () => {
+    const { company, agent, issue, issueDocument } = await seed();
+    await db.update(issues).set({ title: "Fix;=HYPERLINK(\"http://x\");" }).where(eq(issues.id, issue.id));
+    await db.update(issueDocuments).set({ key: "plan\t+SUM(B1)" }).where(eq(issueDocuments.id, issueDocument.id));
+    await db.insert(activityLog).values({
+      companyId: company.id,
+      actorType: "agent",
+      actorId: agent.id,
+      agentId: agent.id,
+      action: "note;added",
+      entityType: "note",
+      entityId: "a\r\n-1\r@SUM(C1)",
+      createdAt: new Date("2026-07-16T00:00:00.000Z"),
+    });
+
+    const response = await request(app(localBoard(company.id))).get(`/api/companies/${company.id}/audit/agent-actions.csv`);
+    expect(response.status, response.text).toBe(200);
+    expect(response.text).toContain(",\"Fix;'=HYPERLINK(\"\"http://x\"\");\",");
+    expect(response.text).toContain(",plan\t'+SUM(B1)\r\n");
+    expect(response.text).toContain(",\"a\r\n'-1\r'@SUM(C1)\",");
+    expect(response.text).toContain(",\"note;added\",");
+    expect(response.text).not.toMatch(/[;\t\r\n][=+\-@]/);
+  });
+
+  it("answers bad dates, NUL characters and bad cursors with 400, not a server error", async () => {
+    const { company } = await seed();
+    const http = request(app(localBoard(company.id)));
+    const queries = [
+      "from=0000-01-01T00%3A00%3A00.000Z",
+      "from=-000001-01-01T00%3A00%3A00.000Z",
+      "to=%2B010000-01-01T00%3A00%3A00.000Z",
+      "action=issue.%00",
+      "entityType=issue%00",
+      "entityId=x%00y",
+      "responsibleUserId=user%00",
+    ];
+    for (const query of queries) {
+      const response = await http.get(`/api/companies/${company.id}/audit/agent-actions?${query}`);
+      expect(response.status, `${query}: ${JSON.stringify(response.body)}`).toBe(400);
+      expect(response.body.error, query).toBe("Invalid agent action audit query");
+    }
+
+    const cursorOf = (createdAt: string) => encodeURIComponent(
+      Buffer.from(JSON.stringify({ createdAt, id: randomUUID() }), "utf8").toString("base64url"),
+    );
+    const viewer = request(app(await member(company.id, [], { membershipRole: "viewer" })));
+    for (const createdAt of ["0000-01-01T00:00:00.000000Z", "2026-07-17T00:00:00.000000+99:99"]) {
+      const full = await http.get(`/api/companies/${company.id}/audit/agent-actions?cursor=${cursorOf(createdAt)}`);
+      expect(full.status, `${createdAt}: ${JSON.stringify(full.body)}`).toBe(400);
+      expect(full.body.error).toBe("Invalid audit cursor");
+      // A member at the basic tier can send a cursor too.
+      const basic = await viewer.get(`/api/companies/${company.id}/audit/agent-actions?actorScope=all&cursor=${cursorOf(createdAt)}`);
+      expect(basic.status, `${createdAt}: ${JSON.stringify(basic.body)}`).toBe(400);
+      expect(basic.body.error).toBe("Invalid audit cursor");
+    }
+  });
+
+  it("does not read details for the CSV export", async () => {
+    const { company } = await seed();
+    await seedActorOnlyRows(company.id);
+    const service = agentActionAuditService(db);
+
+    const withDetails = await service.list({ companyId: company.id, actorScope: "all", limit: 50 });
+    expect(withDetails.items.some((item) => item.details !== null)).toBe(true);
+    const withoutDetails = await service.list({ companyId: company.id, actorScope: "all", limit: 50 }, { includeDetails: false });
+    expect(withoutDetails.items).toHaveLength(withDetails.items.length);
+    expect(withoutDetails.items.every((item) => item.details === null)).toBe(true);
+
+    auditListOptions.length = 0;
+    const csv = await request(app(localBoard(company.id))).get(`/api/companies/${company.id}/audit/agent-actions.csv`);
+    expect(csv.status, csv.text).toBe(200);
+    expect(auditListOptions.length).toBeGreaterThan(0);
+    for (const options of auditListOptions) expect(options).toEqual({ includeDetails: false });
+  });
+
+  it("starts the CSV with a byte-order mark and says when the export was cut off", async () => {
+    const { company, agent } = await seed();
+    const http = request(app(localBoard(company.id)));
+
+    const small = await http.get(`/api/companies/${company.id}/audit/agent-actions.csv`)
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(small.status).toBe(200);
+    expect([...(small.body as Buffer).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(small.headers["x-paperclip-export-truncated"]).toBe("false");
+    expect(small.headers["x-paperclip-export-row-count"]).toBe("3");
+
+    // One row past the 10,000 the export holds.
+    const extra = Array.from({ length: 10_001 - 3 }, (_, index) => ({
+      companyId: company.id,
+      actorType: "agent",
+      actorId: agent.id,
+      agentId: agent.id,
+      action: "note.added",
+      entityType: "note",
+      entityId: `note-${index}`,
+    }));
+    for (let start = 0; start < extra.length; start += 2_000) {
+      await db.insert(activityLog).values(extra.slice(start, start + 2_000));
+    }
+
+    const cut = await http.get(`/api/companies/${company.id}/audit/agent-actions.csv`);
+    expect(cut.status).toBe(200);
+    expect(cut.headers["x-paperclip-export-truncated"]).toBe("true");
+    expect(cut.headers["x-paperclip-export-row-count"]).toBe("10000");
+    expect(cut.text.trim().split("\r\n")).toHaveLength(10_001);
+    const logged = (await exportsLogged()).map((row) => row.details);
+    expect(logged).toContainEqual(expect.objectContaining({ rowCount: 10_000, truncated: true }));
+  }, 60_000);
 });

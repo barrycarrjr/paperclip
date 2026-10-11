@@ -40,6 +40,13 @@ export interface AuditActionsResponse {
   accessTier: "basic" | "full";
 }
 
+export interface AuditCsvExport {
+  blob: Blob;
+  /** True when the file stops at the server's row limit. */
+  truncated: boolean;
+  rowCount: number | null;
+}
+
 /** Server-side filters for the audit feed. All optional. */
 export interface AuditActionFilters {
   /** Defaults to `agents`; `all` opts into the unified all-actors feed. */
@@ -88,11 +95,14 @@ export const auditApi = {
     );
   },
 
-  /** The filtered feed as a CSV file. The server records the export. */
+  /**
+   * The filtered feed as a CSV file. The server records the export, and stops
+   * at its row limit; `truncated` says the file does not hold every match.
+   */
   exportAgentActionsCsv: async (
     companyId: string,
     filters: Omit<AuditActionFilters, "cursor" | "limit"> = {},
-  ): Promise<Blob> => {
+  ): Promise<AuditCsvExport> => {
     const qs = buildAuditQuery(filters).toString();
     const res = await fetch(
       `/api/companies/${companyId}/audit/agent-actions.csv${qs ? `?${qs}` : ""}`,
@@ -103,6 +113,12 @@ export const auditApi = {
       const message = (body as { error?: string } | null)?.error ?? `Download failed: ${res.status}`;
       throw new ApiError(message, res.status, body);
     }
-    return res.blob();
+    const rowCountHeader = res.headers.get("X-Paperclip-Export-Row-Count");
+    const rowCount = rowCountHeader === null ? Number.NaN : Number(rowCountHeader);
+    return {
+      blob: await res.blob(),
+      truncated: res.headers.get("X-Paperclip-Export-Truncated") === "true",
+      rowCount: Number.isFinite(rowCount) ? rowCount : null,
+    };
   },
 };
