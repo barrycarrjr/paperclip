@@ -150,13 +150,14 @@ describeEmbeddedPostgres("companySkillService.createLocalSkill", () => {
     expect((await svc.getById(companyId, winner.id))?.markdown).toBe(winner.markdown);
   });
 
-  it("refuses a slug whose folder a deleted skill left behind", async () => {
+  it("refuses a slug whose folder an older delete left behind", async () => {
     const companyId = await createCompany();
-    const deleted = await svc.createLocalSkill(companyId, { name: "Code review" });
-    const skillDir = deleted.sourceLocator!;
+    const other = await svc.createLocalSkill(companyId, { name: "Other" });
+    // Deleting a skill used to keep its folder, so one can be there with no skill.
+    const skillDir = path.join(path.dirname(other.sourceLocator!), "code-review");
     await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "---\nname: Code review\n---\n\n# Old text\n", "utf8");
     await fs.writeFile(path.join(skillDir, "references", "old.md"), "Old notes.\n", "utf8");
-    await svc.deleteSkill(companyId, deleted.id);
 
     await expect(svc.createLocalSkill(companyId, { name: "Code review" })).rejects.toMatchObject({
       status: 409,

@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companySkills } from "@paperclipai/db";
 import { readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
@@ -30,6 +30,7 @@ import type {
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -1587,6 +1588,51 @@ async function assertSkillFileInsideFolder(skill: SkillSourceInfoTarget, absolut
   if (!inside) throw skillFileBoundaryDenied();
 }
 
+// A skill made here keeps its files in the company's skills folder, at the
+// place a create of its short name writes, and that folder goes when the skill
+// is deleted. Nothing else does: a skill imported from a folder or found in a
+// project keeps its folder, and bundled and catalog skills keep theirs.
+async function resolveRemovableSkillFolder(skill: CompanySkill, database: DbOrTransaction) {
+  if (skill.sourceType !== "local_path" || getSkillMeta(skill).sourceKind !== "managed_local") return null;
+  const managedRoot = resolveManagedSkillsRoot(skill.companyId);
+  const skillDir = normalizeSkillDirectory(skill);
+  if (!skillDir || skillDir !== resolvePathInsideFolder(managedRoot, skill.slug)) return null;
+  if (!(await fs.lstat(skillDir).catch(() => null))) return null;
+  // A link there that leads out of the company's skills folder is left alone.
+  if (!(await realPathStaysInside(managedRoot, skillDir))) return null;
+  // So is a folder any other skill was imported from, or it would lose its
+  // files. That skill can name the folder another way (through a link, a
+  // substituted drive or a short name), so where each folder really is counts
+  // too.
+  const realSkillDir = await resolveRealPath(skillDir);
+  const others = await database
+    .select({ sourceType: companySkills.sourceType, sourceLocator: companySkills.sourceLocator })
+    .from(companySkills)
+    .where(ne(companySkills.id, skill.id));
+  for (const other of others) {
+    if (other.sourceType !== "local_path" && other.sourceType !== "catalog") continue;
+    const otherDir = normalizeSourceLocatorDirectory(other.sourceLocator);
+    if (!otherDir) continue;
+    if (pathIsContained(skillDir, otherDir)) return null;
+    // A network share or device path is not looked up, as in an import:
+    // opening a share makes this computer sign in to the other machine.
+    if (!realSkillDir || isUncOrDevicePath(other.sourceLocator ?? "")) continue;
+    const realOtherDir = await resolveRealPath(otherDir);
+    if (realOtherDir && pathIsContained(realSkillDir, realOtherDir)) return null;
+  }
+  return skillDir;
+}
+
+// A delete moves a skill's folder aside as "<skill id>-<random id>".
+const MOVED_SKILL_FOLDER_NAME = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-/i;
+
+// Removing a folder deletes links inside it, never what they lead to.
+async function removeMovedSkillFolder(folder: string, companyId: string, skillId: string) {
+  await fs.rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
+    logger.warn({ err: error, companyId, skillId }, "Skill deleted, but its old folder could not be removed");
+  });
+}
+
 function inferLanguageFromPath(filePath: string) {
   const fileName = path.posix.basename(filePath).toLowerCase();
   if (fileName === "skill.md" || fileName.endsWith(".md")) return "markdown";
@@ -1876,8 +1922,8 @@ export function companySkillService(db: Db) {
     return rows as CompanySkillReferenceRow[];
   }
 
-  async function getById(companyId: string, id: string) {
-    const row = await db
+  async function getById(companyId: string, id: string, database: DbOrTransaction = db) {
+    const row = await database
       .select(selectCompanySkillColumns())
       .from(companySkills)
       .where(and(eq(companySkills.companyId, companyId), eq(companySkills.id, id)))
@@ -2060,8 +2106,9 @@ export function companySkillService(db: Db) {
         throw conflict(`A company skill with slug "${slug}" already exists.`);
       }
       // So is a folder already there that is not the replaced skill's own: one
-      // left by a deleted skill would hand its leftover files to agents, and
-      // one another skill was imported from would get its SKILL.md written over.
+      // an older delete left behind (deletes used to keep the folder) would
+      // hand its leftover files to agents, and one another skill was imported
+      // from would get its SKILL.md written over.
       const folderExists = (await statPath(skillDir)) !== null;
       const ownFolder = existing !== null && normalizeSkillDirectory(existing) === skillDir;
       if (folderExists && !ownFolder) {
@@ -2204,13 +2251,21 @@ export function companySkillService(db: Db) {
     companyId: string,
     input: CompanySkillProjectScanRequest = {},
   ): Promise<CompanySkillProjectScanResult> {
+    // Picking skills by path is not supported here, and a scan that ignored
+    // the pick would import every skill it finds.
+    if (input.selection !== undefined) {
+      throw unprocessable("Choosing which skills to import is not supported. Scan without a selection.");
+    }
     await ensureSkillInventoryCurrent(companyId);
+    // A preview lists what an import would do and saves nothing.
+    const preview = input.mode === "preview";
     const projectRows = input.projectIds?.length
       ? await projects.listByIds(companyId, input.projectIds)
       : await projects.list(companyId);
     const workspaceFilter = new Set(input.workspaceIds ?? []);
     const skipped: CompanySkillProjectScanSkipped[] = [];
     const conflicts: CompanySkillProjectScanConflict[] = [];
+    const candidates: NonNullable<CompanySkillProjectScanResult["candidates"]> = [];
     const warnings: string[] = [];
     const imported: CompanySkill[] = [];
     const updated: CompanySkill[] = [];
@@ -2230,6 +2285,13 @@ export function companySkillService(db: Db) {
       if (nextIndex >= 0) acceptedSkills[nextIndex] = skill;
       else acceptedSkills.push(skill);
       acceptedByKey.set(skill.key, skill);
+    };
+    // A preview saves nothing, so what an import would save stands in for it,
+    // and the skills found after it are checked as an import would check them.
+    // A skill the import would add has no id yet, so its stand-in gets one.
+    const acceptPreviewed = (skill: ImportedSkill, existing: CompanySkill | null) => {
+      const now = new Date();
+      upsertAcceptedSkill({ ...(existing ?? { id: randomUUID(), companyId, createdAt: now }), ...skill, updatedAt: now });
     };
 
     for (const project of projectRows) {
@@ -2282,6 +2344,16 @@ export function companySkillService(db: Db) {
 
       for (const directory of directories) {
         discovered += 1;
+        // Where the skill was found, for the list of what the scan would do.
+        const relativePath = normalizePortablePath(path.relative(target.workspaceCwd, directory.skillDir)) || ".";
+        const foundAt = {
+          workspaceId: target.workspaceId,
+          workspaceName: target.workspaceName,
+          projectId: target.projectId,
+          projectName: target.projectName,
+          directoryRoot: relativePath === "." ? "." : path.posix.dirname(relativePath),
+          relativePath,
+        };
 
         let nextSkill: ImportedSkill;
         try {
@@ -2299,6 +2371,14 @@ export function companySkillService(db: Db) {
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          candidates.push({
+            slug: path.basename(directory.skillDir),
+            name: path.basename(directory.skillDir),
+            description: null,
+            ...foundAt,
+            status: "skipped",
+            reason: message,
+          });
           skipped.push({
             projectId: target.projectId,
             projectName: target.projectName,
@@ -2309,6 +2389,7 @@ export function companySkillService(db: Db) {
           });
           continue;
         }
+        const found = { slug: nextSkill.slug, name: nextSkill.name, description: nextSkill.description, ...foundAt };
 
         const normalizedSourceDir = normalizeSourceLocatorDirectory(nextSkill.sourceLocator);
         const existingByKey = acceptedByKey.get(nextSkill.key) ?? null;
@@ -2320,6 +2401,7 @@ export function companySkillService(db: Db) {
             || !normalizedSourceDir
             || existingSourceDir !== normalizedSourceDir
           ) {
+            const reason = `Skill key ${nextSkill.key} already points at ${existingByKey.sourceLocator ?? "another source"}.`;
             conflicts.push({
               slug: nextSkill.slug,
               key: nextSkill.key,
@@ -2331,11 +2413,17 @@ export function companySkillService(db: Db) {
               existingSkillId: existingByKey.id,
               existingSkillKey: existingByKey.key,
               existingSourceLocator: existingByKey.sourceLocator,
-              reason: `Skill key ${nextSkill.key} already points at ${existingByKey.sourceLocator ?? "another source"}.`,
+              reason,
             });
+            candidates.push({ ...found, status: "conflict", existingSkillId: existingByKey.id, reason });
             continue;
           }
 
+          candidates.push({ ...found, status: "already_imported", existingSkillId: existingByKey.id });
+          if (preview) {
+            acceptPreviewed(nextSkill, existingByKey);
+            continue;
+          }
           const persisted = (await upsertImportedSkills(companyId, [nextSkill]))[0];
           if (!persisted) continue;
           updated.push(persisted);
@@ -2348,6 +2436,7 @@ export function companySkillService(db: Db) {
           return normalizeSkillDirectory(skill) !== normalizedSourceDir;
         });
         if (slugConflict) {
+          const reason = `Slug ${nextSkill.slug} is already in use by ${slugConflict.sourceLocator ?? slugConflict.key}.`;
           conflicts.push({
             slug: nextSkill.slug,
             key: nextSkill.key,
@@ -2359,11 +2448,17 @@ export function companySkillService(db: Db) {
             existingSkillId: slugConflict.id,
             existingSkillKey: slugConflict.key,
             existingSourceLocator: slugConflict.sourceLocator,
-            reason: `Slug ${nextSkill.slug} is already in use by ${slugConflict.sourceLocator ?? slugConflict.key}.`,
+            reason,
           });
+          candidates.push({ ...found, status: "conflict", existingSkillId: slugConflict.id, reason });
           continue;
         }
 
+        candidates.push({ ...found, status: "new" });
+        if (preview) {
+          acceptPreviewed(nextSkill, null);
+          continue;
+        }
         const persisted = (await upsertImportedSkills(companyId, [nextSkill]))[0];
         if (!persisted) continue;
         imported.push(persisted);
@@ -2379,6 +2474,7 @@ export function companySkillService(db: Db) {
       updated,
       skipped,
       conflicts,
+      candidates,
       warnings,
     };
   }
@@ -2692,18 +2788,40 @@ export function companySkillService(db: Db) {
     return { imported, warnings };
   }
 
+  // A folder a delete moved aside but did not remove (the server stopped, say)
+  // goes at the next delete in the company, once its skill is gone. One whose
+  // skill still exists can belong to a delete that is still running.
+  async function removeLeftoverMovedFolders(companyId: string) {
+    const asideRoot = path.join(resolveManagedSkillsRoot(companyId), ".deleted");
+    const leftovers = (await fs.readdir(asideRoot).catch(() => [] as string[])).flatMap((name) => {
+      const skillId = MOVED_SKILL_FOLDER_NAME.exec(name)?.[1]?.toLowerCase();
+      return skillId ? [{ name, skillId }] : [];
+    });
+    if (leftovers.length === 0) return;
+    const remaining = new Set(
+      await db
+        .select({ id: companySkills.id })
+        .from(companySkills)
+        .where(inArray(companySkills.id, leftovers.map((entry) => entry.skillId)))
+        .then((rows) => rows.map((row) => row.id)),
+    );
+    for (const { name, skillId } of leftovers) {
+      if (!remaining.has(skillId)) await removeMovedSkillFolder(path.join(asideRoot, name), companyId, skillId);
+    }
+  }
+
   async function deleteSkill(companyId: string, skillId: string): Promise<CompanySkill | null> {
-    const row = await db
-      .select()
-      .from(companySkills)
-      .where(and(eq(companySkills.id, skillId), eq(companySkills.companyId, companyId)))
-      .then((rows) => rows[0] ?? null);
-    if (!row) return null;
+    await removeLeftoverMovedFolders(companyId).catch((error: unknown) => {
+      logger.warn({ err: error, companyId }, "Could not check for skill folders left by earlier deletes");
+    });
+    const initial = await getById(companyId, skillId);
+    if (!initial) return null;
 
-    const skill = toCompanySkill(row);
-    const usedByAgents = await usage(companyId, skill.key);
-
-    if (usedByAgents.length > 0) {
+    // Checked again once the lock below is held, since an agent can be given
+    // the skill while this delete waits for it.
+    async function assertUnused(skill: CompanySkill) {
+      const usedByAgents = await usage(companyId, skill.key);
+      if (usedByAgents.length === 0) return;
       const agentNames = usedByAgents.map((agent) => agent.name).sort((left, right) => left.localeCompare(right));
       throw unprocessable(
         `Cannot delete skill "${skill.name}" while it is still used by ${agentNames.join(", ")}. Detach it from those agents first.`,
@@ -2719,16 +2837,65 @@ export function companySkillService(db: Db) {
         },
       );
     }
+    await assertUnused(initial);
 
-    // Delete DB row
-    await db
-      .delete(companySkills)
-      .where(eq(companySkills.id, skillId));
+    // A skill made here takes its folder with it, or a later skill with the
+    // same short name would get its old files. The folder is moved aside while
+    // the row is deleted, put back if that fails, and removed once it is saved.
+    let moved: { folder: string; aside: string } | undefined;
+    async function putFolderBack() {
+      if (!moved) return;
+      await fs.rename(moved.aside, moved.folder);
+      moved = undefined;
+    }
+    let deleted: CompanySkill | null;
+    try {
+      deleted = await db.transaction(async (tx) => {
+        // Creating a skill takes the same lock, so a skill made with this short
+        // name after the row was read above keeps its folder.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${companyId}:${initial.slug}`}, 0))`);
+        const skill = await getById(companyId, skillId, tx);
+        if (!skill) return null;
+        if (skill.slug !== initial.slug) throw conflict("The skill changed while it was being deleted. Try again.");
+        await assertUnused(skill);
+        try {
+          const folder = await resolveRemovableSkillFolder(skill, tx);
+          if (folder) {
+            const asideRoot = path.join(resolveManagedSkillsRoot(companyId), ".deleted");
+            await fs.mkdir(asideRoot, { recursive: true });
+            const aside = path.join(asideRoot, `${skill.id}-${randomUUID()}`);
+            await fs.rename(folder, aside).catch((error: NodeJS.ErrnoException) => {
+              // Windows will not move a folder that a program is working in or
+              // has a file open in.
+              if (error.code === "EBUSY" || error.code === "EPERM" || error.code === "EACCES") {
+                throw conflict("The skill's folder is open in another program. Close it and try again.");
+              }
+              throw error;
+            });
+            moved = { folder, aside };
+          }
+          await tx
+            .delete(companySkills)
+            .where(and(eq(companySkills.id, skillId), eq(companySkills.companyId, companyId)));
+        } catch (error) {
+          await putFolderBack();
+          throw error;
+        }
+        return skill;
+      });
+    } catch (error) {
+      await putFolderBack();
+      throw error;
+    }
+    if (!deleted) return null;
 
     // Clean up materialized runtime files
-    await fs.rm(resolveRuntimeSkillMaterializedPath(companyId, skill), { recursive: true, force: true });
+    await fs.rm(resolveRuntimeSkillMaterializedPath(companyId, deleted), { recursive: true, force: true });
+    // The delete is saved, so a folder that cannot be removed only stays aside,
+    // where no skill reads it, until the next delete tries again.
+    if (moved) await removeMovedSkillFolder(moved.aside, companyId, skillId);
 
-    return skill;
+    return deleted;
   }
 
   return {

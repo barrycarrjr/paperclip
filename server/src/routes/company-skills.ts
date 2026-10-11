@@ -267,6 +267,7 @@ export function companySkillRoutes(db: Db) {
         entityType: "company",
         entityId: companyId,
         details: {
+          mode: req.body.mode ?? "import",
           scannedProjects: result.scannedProjects,
           scannedWorkspaces: result.scannedWorkspaces,
           discovered: result.discovered,
