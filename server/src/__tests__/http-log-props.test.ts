@@ -114,4 +114,22 @@ describe("redactSensitive", () => {
     for (let i = 0; i < 10; i += 1) deep = { next: deep };
     expect(JSON.stringify(redactSensitive(deep))).not.toContain("bottom");
   });
+
+  it("logs a binary body as its size, never byte by byte", () => {
+    // A refused upload read with express.raw. Walked as an object, a Buffer
+    // gave one key per byte, and a 45 MB one ran the server out of memory.
+    const upload = Buffer.alloc(5 * 1024 * 1024, 7);
+    const started = performance.now();
+
+    expect(redactSensitive(upload)).toBe(`[binary, ${upload.byteLength} bytes]`);
+    expect(redactSensitive({ file: new Uint8Array(3) })).toEqual({ file: "[binary, 3 bytes]" });
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it("keeps a refused binary upload's log line small", () => {
+    const props = failedRequestLogProps({ body: Buffer.alloc(1024 * 1024, 1), route: { path: "/plugins/install-file" } }, {});
+
+    expect(props.reqBody).toBe("[binary, 1048576 bytes]");
+    expect(JSON.stringify(props).length).toBeLessThan(200);
+  });
 });

@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from "express";
+import type { Request, RequestHandler, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
 
@@ -46,13 +46,38 @@ const BODY_READER_ERRORS: Record<string, string> = {
   "parameters.too.many": "The request has too many parameters.",
 };
 
+const BODY_READER_FALLBACK_MESSAGE = "The request body could not be read.";
+
+/**
+ * Wraps a body reader so every error it passes on is marked as its own. Some
+ * of its errors carry no `type`: a corrupt gzip, deflate or brotli body
+ * arrives as a bare 400.
+ */
+export function markBodyReaderErrors(reader: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    reader(req, res, (err?: unknown) => {
+      if (err && typeof err === "object") {
+        (err as { fromBodyReader?: boolean }).fromBodyReader = true;
+      }
+      next(err as Parameters<NextFunction>[0]);
+    });
+  };
+}
+
 function bodyReaderError(err: unknown): { status: number; message: string } | null {
   if (!err || typeof err !== "object") return null;
-  const { type, status, statusCode } = err as { type?: unknown; status?: unknown; statusCode?: unknown };
-  if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(BODY_READER_ERRORS, type)) return null;
+  const { type, status, statusCode, fromBodyReader } = err as {
+    type?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    fromBodyReader?: unknown;
+  };
+  const knownType = typeof type === "string" && Object.prototype.hasOwnProperty.call(BODY_READER_ERRORS, type);
+  if (!knownType && fromBodyReader !== true) return null;
   const code = typeof status === "number" ? status : typeof statusCode === "number" ? statusCode : 400;
   if (code < 400 || code >= 500) return null;
-  return { status: code, message: BODY_READER_ERRORS[type]! };
+  // Only fixed sentences: the reader's own message can quote the body.
+  return { status: code, message: knownType ? BODY_READER_ERRORS[type as string]! : BODY_READER_FALLBACK_MESSAGE };
 }
 
 export function errorHandler(

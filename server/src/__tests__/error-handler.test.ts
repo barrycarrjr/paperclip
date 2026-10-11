@@ -5,7 +5,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../errors.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { errorHandler, markBodyReaderErrors } from "../middleware/error-handler.js";
 
 function makeReq(): Request {
   return {
@@ -61,11 +61,22 @@ describe("errorHandler: a body the body reader refuses", () => {
   // easy to send.
   function appWithBodyReader() {
     const app = express();
-    app.use(express.json({ limit: "1kb" }));
+    app.use(markBodyReaderErrors(express.json({ limit: "1kb" })));
     app.post("/echo", (req, res) => res.json({ received: req.body }));
     app.use(errorHandler);
     return app;
   }
+
+  it("answers 400 in words for a corrupt compressed body, which carries no error type", async () => {
+    const res = await request(appWithBodyReader())
+      .post("/echo")
+      .set("Content-Type", "application/json")
+      .set("Content-Encoding", "gzip")
+      .send(Buffer.from("this is not gzip data"));
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "The request body could not be read." });
+  });
 
   it("answers 400 in words for malformed JSON, not 500", async () => {
     const res = await request(appWithBodyReader())
@@ -100,7 +111,7 @@ describe("app middleware order", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const source = fs.readFileSync(path.resolve(here, "..", "app.ts"), "utf8");
     const loggerAt = source.indexOf("app.use(httpLogger)");
-    const bodyReaderAt = source.indexOf("app.use(express.json(");
+    const bodyReaderAt = source.indexOf("express.json(");
 
     expect(loggerAt).toBeGreaterThan(-1);
     expect(bodyReaderAt).toBeGreaterThan(-1);
