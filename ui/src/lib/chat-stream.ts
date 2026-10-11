@@ -1,4 +1,5 @@
 import type { ChatSession } from "../api/chat";
+import { describeError, failedResponseMessage } from "./error-message";
 
 export type ChatStreamEvent =
   | { type: "session_state"; session: ChatSession }
@@ -66,7 +67,7 @@ export function postChatMessageStream(
       });
     } catch (err) {
       if ((err as { name?: string }).name === "AbortError") return;
-      onEvent({ type: "error", error: err instanceof Error ? err.message : String(err) });
+      onEvent({ type: "error", error: describeError(err) });
       return;
     }
     if (!res.ok) {
@@ -76,8 +77,7 @@ export function postChatMessageStream(
       } catch {
         /* ignore */
       }
-      const errMsg =
-        (body as { error?: string } | null)?.error ?? `Request failed: ${res.status}`;
+      const errMsg = failedResponseMessage(res.status, body);
       const code = (body as { code?: string } | null)?.code;
       onEvent({ type: "error", error: errMsg, code });
       return;
@@ -145,7 +145,7 @@ export function postChatMessageStream(
         });
         return;
       }
-      onEvent({ type: "error", error: err instanceof Error ? err.message : String(err) });
+      onEvent({ type: "error", error: describeError(err) });
     } finally {
       try {
         reader.releaseLock();

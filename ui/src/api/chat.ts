@@ -1,5 +1,5 @@
 import type { ModelLifecycleFields } from "@paperclipai/shared";
-import { api } from "./client";
+import { api, apiErrorFromResponse, fetchOrNetworkError } from "./client";
 
 export type ChatMode = "chat" | "agent";
 export type PermissionMode = "ask" | "bypass";
@@ -142,20 +142,13 @@ export const chatApi = {
   uploadAttachment: async (sessionId: string, file: File): Promise<ChatAttachmentSummary> => {
     const form = new FormData();
     form.append("file", file, file.name);
-    const res = await fetch(`/api/chat/sessions/${sessionId}/attachments`, {
+    const res = await fetchOrNetworkError(`/api/chat/sessions/${sessionId}/attachments`, {
       method: "POST",
       body: form,
       credentials: "include",
     });
     if (!res.ok) {
-      let body: unknown = null;
-      try {
-        body = await res.json();
-      } catch {
-        /* ignore */
-      }
-      const msg = (body as { error?: string } | null)?.error ?? `Upload failed: ${res.status}`;
-      throw new Error(msg);
+      throw await apiErrorFromResponse(res);
     }
     const json = (await res.json()) as { attachment: ChatAttachmentSummary };
     return json.attachment;

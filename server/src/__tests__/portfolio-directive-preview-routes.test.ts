@@ -112,6 +112,17 @@ describe("portfolio directive preview routes", () => {
     expect(mockBroadcast).not.toHaveBeenCalled();
   });
 
+  it("says in words which field a refused preview got wrong, where it used to send JSON", async () => {
+    const app = await createApp();
+    const res = await request(app).post(PREVIEW_PATH).send({ intent: "x".repeat(4001) });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "Some details are not valid. intent: String must contain at most 4000 character(s).",
+    });
+    expect(mockPreview).not.toHaveBeenCalled();
+  });
+
   it("passes the previewId through to the service on a send", async () => {
     const app = await createApp();
     const res = await request(app)

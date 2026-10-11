@@ -1,3 +1,5 @@
+import { apiErrorFromResponse, fetchOrNetworkError } from "./client";
+
 export type DevServerHealthStatus = {
   enabled: true;
   restartRequired: boolean;
@@ -29,13 +31,14 @@ export type HealthStatus = {
 
 export const healthApi = {
   get: async (): Promise<HealthStatus> => {
-    const res = await fetch("/api/health", {
+    const res = await fetchOrNetworkError("/api/health", {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
     if (!res.ok) {
-      const payload = await res.json().catch(() => null) as { error?: string } | null;
-      throw new Error(payload?.error ?? `Failed to load health (${res.status})`);
+      // With the database down the answer's `error` is the code
+      // database_unreachable, which the app's front gate used to show as it was.
+      throw await apiErrorFromResponse(res);
     }
     return res.json();
   },

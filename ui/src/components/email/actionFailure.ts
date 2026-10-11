@@ -8,11 +8,11 @@
  * silence reads as a dead button rather than as a rejection.
  */
 
+import { describeError } from "../../lib/error-message";
+
 /** The useful part of a thrown failure, or "" when it carried no text. */
 export function failureDetail(err: unknown): string {
-  if (err instanceof Error) return err.message.trim();
-  if (typeof err === "string") return err.trim();
-  return "";
+  return describeError(err, "");
 }
 
 /**

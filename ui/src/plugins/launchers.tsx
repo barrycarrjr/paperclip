@@ -27,6 +27,7 @@ import { pluginsApi, type PluginUiContribution } from "@/api/plugins";
 import { authApi } from "@/api/auth";
 import { Button } from "@/components/ui/button";
 import { useNavigate, useLocation } from "@/lib/router";
+import { describeError } from "@/lib/error-message";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import {
@@ -128,8 +129,7 @@ const supportedLauncherBounds = new Set<PluginLauncherBounds>(
 const PluginLauncherRuntimeContext = createContext<PluginLauncherRuntimeContextValue | null>(null);
 
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "Unknown error";
+  return describeError(error, "Unknown error");
 }
 
 function buildLauncherHostContext(

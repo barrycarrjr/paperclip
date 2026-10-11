@@ -5,6 +5,8 @@ import {
   type CurrentUserProfile,
   type UpdateCurrentUserProfile,
 } from "@paperclipai/shared";
+import { failedResponseMessage } from "../lib/error-message";
+import { fetchOrNetworkError } from "./client";
 
 type AuthErrorBody =
   | {
@@ -48,20 +50,14 @@ function extractAuthError(payload: AuthErrorBody, status: number) {
       : typeof payload?.code === "string"
         ? payload.code
         : null;
-  const message =
-    typeof nested?.message === "string" && nested.message.trim().length > 0
-      ? nested.message
-      : typeof payload?.message === "string" && payload.message.trim().length > 0
-        ? payload.message
-        : typeof payload?.error === "string" && payload.error.trim().length > 0
-          ? payload.error
-          : `Request failed: ${status}`;
-
-  return new AuthApiError(message, status, payload, code);
+  // The sign-in library puts its words in `message`, or in `error.message`;
+  // the profile routes put them in `error`. With none, the person used to see
+  // "Request failed: 401".
+  return new AuthApiError(failedResponseMessage(status, payload), status, payload, code);
 }
 
 async function authPost(path: string, body: Record<string, unknown>) {
-  const res = await fetch(`/api/auth${path}`, {
+  const res = await fetchOrNetworkError(`/api/auth${path}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -75,7 +71,7 @@ async function authPost(path: string, body: Record<string, unknown>) {
 }
 
 async function authPatch<T>(path: string, body: Record<string, unknown>, parse: (value: unknown) => T): Promise<T> {
-  const res = await fetch(`/api/auth${path}`, {
+  const res = await fetchOrNetworkError(`/api/auth${path}`, {
     method: "PATCH",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -90,14 +86,14 @@ async function authPatch<T>(path: string, body: Record<string, unknown>, parse: 
 
 export const authApi = {
   getSession: async (): Promise<AuthSession | null> => {
-    const res = await fetch("/api/auth/get-session", {
+    const res = await fetchOrNetworkError("/api/auth/get-session", {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
     if (res.status === 401) return null;
     const payload = await res.json().catch(() => null);
     if (!res.ok) {
-      throw new Error(`Failed to load session (${res.status})`);
+      throw extractAuthError(payload as AuthErrorBody, res.status);
     }
     const direct = toSession(payload);
     if (direct) return direct;
@@ -114,13 +110,13 @@ export const authApi = {
   },
 
   getProfile: async (): Promise<CurrentUserProfile> => {
-    const res = await fetch("/api/auth/profile", {
+    const res = await fetchOrNetworkError("/api/auth/profile", {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
     const payload = await res.json().catch(() => null);
     if (!res.ok) {
-      throw new Error((payload as { error?: string } | null)?.error ?? `Failed to load profile (${res.status})`);
+      throw extractAuthError(payload as AuthErrorBody, res.status);
     }
     return currentUserProfileSchema.parse(payload);
   },

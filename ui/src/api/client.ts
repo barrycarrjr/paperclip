@@ -1,17 +1,47 @@
+import { failedResponseMessage, isNetworkFailure, NETWORK_FAILURE_MESSAGE } from "../lib/error-message";
+
 const BASE = "/api";
 
+/**
+ * A request that failed. The message is a sentence for the person who asked
+ * (see lib/error-message), never a bare code or a block of JSON. `body` keeps
+ * what the server sent, code and all, for code that has to tell one failure
+ * from another. `status` is 0 when no answer came back at all.
+ */
 export class ApiError extends Error {
   status: number;
   data: unknown;
   body: any;
 
-  constructor(message: string, status: number, data?: unknown) {
-    super(message);
+  constructor(message: string, status: number, data?: unknown, options?: ErrorOptions) {
+    super(message, options);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
     this.body = data;
   }
+}
+
+/**
+ * fetch, except that a request which gets no answer at all (Paperclip is
+ * stopped or restarting, or the network dropped) fails with an ApiError that
+ * says so. The browser's own error for that, "Failed to fetch", is what
+ * people were shown. Anything else fetch throws, a cancel included, is passed
+ * on as it is.
+ */
+export async function fetchOrNetworkError(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    if (isNetworkFailure(error)) throw new ApiError(NETWORK_FAILURE_MESSAGE, 0, null, { cause: error });
+    throw error;
+  }
+}
+
+/** The ApiError for a response that failed, worded from what the server sent back. */
+export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
+  const errorBody = await res.json().catch(() => null);
+  return new ApiError(failedResponseMessage(res.status, errorBody), res.status, errorBody);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -21,22 +51,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchOrNetworkError(`${BASE}${path}`, {
     headers,
     credentials: "include",
     ...init,
   });
   if (!res.ok) {
-    const errorBody = await res.json().catch(() => null);
-    // Most routes answer with `{ error }`, but the plugin bridge answers with
-    // `{ code, message }`. Without the second lookup every bridge failure
-    // reached the operator as a bare "Request failed: 502".
-    const shape = errorBody as { error?: string; message?: string } | null;
-    throw new ApiError(
-      shape?.error ?? shape?.message ?? `Request failed: ${res.status}`,
-      res.status,
-      errorBody,
-    );
+    // Most routes answer with `{ error }`, the plugin bridge with
+    // `{ code, message }`, and some failures carry only a code, JSON or no
+    // body at all. Taking `error` or `message` as it came showed people
+    // skill_local_import_admin_required or a block of JSON, and a reply with
+    // neither reached them as a bare "Request failed: 502".
+    throw await apiErrorFromResponse(res);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

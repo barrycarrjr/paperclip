@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { describeError, failedResponseMessage } from "@/lib/error-message";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -608,7 +609,7 @@ const DynamicEnumField = React.memo(({
           ),
         );
       })
-      .catch((err: Error) => setFetchError(err.message))
+      .catch((err: unknown) => setFetchError(describeError(err)))
       .finally(() => setLoading(false));
   }, [pluginId, optionsFrom?.actionKey]);
 
@@ -722,7 +723,7 @@ const DynamicCheckboxArrayField = React.memo(({
           ),
         );
       })
-      .catch((err: Error) => setFetchError(err.message))
+      .catch((err: unknown) => setFetchError(describeError(err)))
       .finally(() => setLoading(false));
   }, [pluginId, optionsFrom?.actionKey]);
 
@@ -1418,7 +1419,7 @@ const ItemActionsRow = React.memo(({
       if (!res.ok) {
         setResult({
           actionKey: action.actionKey,
-          result: { ok: false, message: json.error ?? json.message ?? `HTTP ${res.status}` },
+          result: { ok: false, message: failedResponseMessage(res.status, json) },
         });
         return;
       }
@@ -1427,7 +1428,7 @@ const ItemActionsRow = React.memo(({
     } catch (err) {
       setResult({
         actionKey: action.actionKey,
-        result: { ok: false, message: (err as Error).message },
+        result: { ok: false, message: describeError(err) },
       });
     } finally {
       setPending(null);

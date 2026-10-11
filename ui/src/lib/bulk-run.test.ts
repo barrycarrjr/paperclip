@@ -159,6 +159,12 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError(new Error("[EDISABLED] change-status is disabled."))).toBe(false);
     expect(isRateLimitError(null)).toBe(false);
   });
+
+  it("recognises a 429 answered with no words, which the client words without the number", () => {
+    const error = Object.assign(new Error("Too many requests. Wait a moment and try again."), { status: 429 });
+
+    expect(isRateLimitError(error)).toBe(true);
+  });
 });
 
 describe("summarizeBulkRun", () => {

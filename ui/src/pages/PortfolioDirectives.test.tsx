@@ -186,6 +186,7 @@ beforeEach(() => {
 afterEach(() => {
   teardown();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Portfolio directives: the preview before a broadcast", () => {
@@ -295,6 +296,35 @@ describe("Portfolio directives: the preview before a broadcast", () => {
     await openDialogAndPreview();
 
     expect(el.textContent).toContain("Portfolio root access required");
+    expect(mockIssuesApi.broadcastDirective).not.toHaveBeenCalled();
+  });
+
+  it("names the field the server refused in words, where it showed the server's JSON", async () => {
+    // Through the real API client, against the answer the server gave an
+    // intent over 4000 characters: its problem list as JSON, in `error`.
+    const { issuesApi } = await vi.importActual<typeof import("../api/issues")>("../api/issues");
+    mockIssuesApi.previewDirective.mockImplementation(issuesApi.previewDirective);
+    const problems = [
+      {
+        code: "too_big",
+        maximum: 4000,
+        type: "string",
+        inclusive: true,
+        exact: false,
+        message: "String must contain at most 4000 character(s)",
+        path: ["intent"],
+      },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: JSON.stringify(problems, null, 2) }),
+    })));
+    const el = await renderPage();
+    await openDialogAndPreview();
+
+    expect(el.textContent).toContain("Some details are not valid. intent: String must contain at most 4000 character(s).");
+    expect(el.textContent).not.toContain("too_big");
     expect(mockIssuesApi.broadcastDirective).not.toHaveBeenCalled();
   });
 });

@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/context/ToastContext";
+import { describeError } from "@/lib/error-message";
 import { queryKeys } from "@/lib/queryKeys";
 
 const SECRET_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -58,7 +59,7 @@ function formatDate(value: Date | string) {
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  return describeError(error, fallback);
 }
 
 function formatAgentReferences(references: CompanySecretAgentReference[]) {

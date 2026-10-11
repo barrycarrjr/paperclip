@@ -1,4 +1,4 @@
-import { api, ApiError } from "./client";
+import { api, apiErrorFromResponse, fetchOrNetworkError } from "./client";
 
 /**
  * Agent action audit API client, for
@@ -104,14 +104,12 @@ export const auditApi = {
     filters: Omit<AuditActionFilters, "cursor" | "limit"> = {},
   ): Promise<AuditCsvExport> => {
     const qs = buildAuditQuery(filters).toString();
-    const res = await fetch(
+    const res = await fetchOrNetworkError(
       `/api/companies/${companyId}/audit/agent-actions.csv${qs ? `?${qs}` : ""}`,
       { credentials: "include", headers: { Accept: "text/csv" } },
     );
     if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      const message = (body as { error?: string } | null)?.error ?? `Download failed: ${res.status}`;
-      throw new ApiError(message, res.status, body);
+      throw await apiErrorFromResponse(res);
     }
     const rowCountHeader = res.headers.get("X-Paperclip-Export-Row-Count");
     const rowCount = rowCountHeader === null ? Number.NaN : Number(rowCountHeader);
