@@ -20,7 +20,10 @@ import { actorMiddleware } from "../middleware/auth.js";
 import { errorHandler } from "../middleware/index.js";
 import { calendarRoutes } from "../routes/calendar.js";
 import { chatRoutes } from "../routes/chat.js";
+import { internalMcpRoutes } from "../routes/internal-mcp.js";
 import { loadPersonalCompanyIndex } from "../services/personal-companies.js";
+import { createPluginMcpBridge, setPluginMcpBridge, type PluginMcpBridge } from "../services/plugin-mcp-bridge.js";
+import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 import { _setPortfolioRootCacheForTesting } from "../services/portfolio-root-cache.js";
 
 /**
@@ -44,25 +47,34 @@ const models = vi.hoisted(() => ({
   server: "adapter:claude_local:claude-opus-5-5",
 }));
 
+/** The bridge addresses the stand-in model was handed, and whether its next turn fails. */
+const turns = vi.hoisted(() => ({ bridgeUrls: [] as string[], fail: false }));
+
 vi.mock("../services/chat-providers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/chat-providers.js")>();
-  const standIn = {
-    name: "anthropic" as const,
+  // A server model's stand-in is named "adapter", as Claude Code's provider
+  // is, so its turn is handed a plugin bridge token the way a real one is.
+  const standIn = (name: "anthropic" | "adapter") => ({
+    name,
     isConfigured: () => true,
     supportsModel: () => true,
     defaultModel: () => models.native,
     listModels: () => [models.native],
-    async *streamTurn() {
+    async *streamTurn(input: { adapterContext?: { pluginMcpUrl?: string } }) {
+      if (input.adapterContext?.pluginMcpUrl) turns.bridgeUrls.push(input.adapterContext.pluginMcpUrl);
+      if (turns.fail) throw new Error("The model stopped answering.");
       yield { type: "text_delta" as const, delta: "Two invoices are due." };
       return {
         content: [{ type: "text" as const, text: "Two invoices are due." }],
         stopReason: "end_turn" as const,
       };
     },
-  };
+  });
+  const native = standIn("anthropic");
+  const server = standIn("adapter");
   return {
     ...actual,
-    getProviderForModel: () => standIn,
+    getProviderForModel: (model: string) => (model.startsWith("adapter:") ? server : native),
     listAvailableModels: async () => [
       { provider: "anthropic", model: models.native },
       { provider: "adapter", model: models.server, source: "claude_local" },
@@ -93,6 +105,7 @@ describeEmbeddedPostgres("Clippy acts as the person, never more (HTTP, real data
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   let app!: express.Express;
+  let bridge!: PluginMcpBridge;
   const previousSecret = process.env.PAPERCLIP_AGENT_JWT_SECRET;
 
   let acme = "";
@@ -132,12 +145,24 @@ describeEmbeddedPostgres("Clippy acts as the person, never more (HTTP, real data
         },
       }),
     );
-    app.use("/api", chatRoutes(db));
+    // The plugin bridge Claude Code calls Clippy's tools through, and its
+    // address, which answers anyone holding a token.
+    bridge = createPluginMcpBridge({
+      pluginToolDispatcher: {
+        listToolsForAgent: async () => [],
+        executeTool: async () => ({ result: { content: "" } }),
+      } as unknown as PluginToolDispatcher,
+      db,
+    });
+    setPluginMcpBridge(bridge);
+    app.use("/api", chatRoutes(db, { pluginMcpBridge: bridge }));
     app.use("/api", calendarRoutes(db));
+    app.use("/api", internalMcpRoutes());
     app.use(errorHandler);
   }, 90_000);
 
   afterAll(async () => {
+    setPluginMcpBridge(null);
     _setPortfolioRootCacheForTesting(undefined);
     await tempDb?.cleanup();
     if (previousSecret === undefined) delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
@@ -340,6 +365,35 @@ describeEmbeddedPostgres("Clippy acts as the person, never more (HTTP, real data
       const bobKey = clippyKey(BOB, bobPersonal);
       expect((await readEvents(bobKey, bobPersonal)).status).toBe(200);
       expect((await addEvent(bobKey, bobPersonal)).status).toBe(201);
+    });
+  });
+
+  describe("the plugin bridge token a Claude Code turn is handed", () => {
+    // The bridge judges every call on the access the person had when the
+    // token was made, and its address answers anyone holding the token, so
+    // the token must not outlive the turn it was made for.
+    it("stops working when the turn ends, with a reply or with an error", async () => {
+      const chat = await createChat(OWNER, { companyId: hq, model: models.server });
+      expect(chat.status, JSON.stringify(chat.body)).toBe(201);
+
+      for (const ending of ["a reply", "an error"]) {
+        turns.bridgeUrls.length = 0;
+        turns.fail = ending === "an error";
+        try {
+          expect((await sendMessage(OWNER, chat.body.session.id)).status).toBe(200);
+        } finally {
+          turns.fail = false;
+        }
+        const token = turns.bridgeUrls[0]?.split("/").pop();
+        expect(token, `the turn ending with ${ending} was handed a bridge token`).toBeTruthy();
+
+        const afterTurn = await request(app)
+          .post(`/api/internal/mcp/${token}`)
+          .set("Accept", "application/json, text/event-stream")
+          .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+        expect(afterTurn.status, `after a turn ending with ${ending}`).toBe(401);
+        expect(bridge.resolveToken(token!)).toBeNull();
+      }
     });
   });
 

@@ -736,7 +736,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
 
     // Plugin MCP bridge token is minted ONCE per turn-stream invocation
     // and reused across the tool-loop iterations below; revoked in the
-    // post-loop cleanup. Adapter-execute providers (claude_local) read
+    // finally that ends the turn. Adapter-execute providers (claude_local) read
     // pluginMcpUrl from adapterContext and write it into a temp .mcp.json
     // so the spawned LLM subprocess can call plugin tools as MCP tools.
     let mcpBridgeToken: string | null = null;
@@ -762,210 +762,220 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       }
     }
 
-    let loops = 0;
-    while (loops < MAX_TOOL_LOOPS && !aborted) {
-      loops += 1;
-      const allMessages = await listMessages(actor, sessionId);
-      const canonical = buildCanonicalMessages(allMessages);
-      const resolved = await loadAttachmentsForMessages(canonical);
-      const turnStream = provider.streamTurn({
-        model: session.model,
-        system: systemPromptFor(session, defaultCompanyId, plugin),
-        messages: canonical,
-        tools,
-        effort: session.effort,
-        signal: abortController.signal,
-        resolvedAttachments: resolved,
-        // Adapter-execute providers use this to resume their own session
-        // (e.g. Claude Code session id) and persist updated params after each turn.
-        adapterContext: {
-          sessionId: session.id,
-          companyId: session.companyId,
-          boardUserId: session.boardUserId,
-          prevSessionParams: session.adapterSessionParams,
-          saveSessionParams: async (params) => {
-            await db
-              .update(chatSessions)
-              .set({ adapterSessionParams: params, updatedAt: new Date() })
-              .where(eq(chatSessions.id, session.id));
-            session = { ...session, adapterSessionParams: params };
+    try {
+      let loops = 0;
+      while (loops < MAX_TOOL_LOOPS && !aborted) {
+        loops += 1;
+        const allMessages = await listMessages(actor, sessionId);
+        const canonical = buildCanonicalMessages(allMessages);
+        const resolved = await loadAttachmentsForMessages(canonical);
+        const turnStream = provider.streamTurn({
+          model: session.model,
+          system: systemPromptFor(session, defaultCompanyId, plugin),
+          messages: canonical,
+          tools,
+          effort: session.effort,
+          signal: abortController.signal,
+          resolvedAttachments: resolved,
+          // Adapter-execute providers use this to resume their own session
+          // (e.g. Claude Code session id) and persist updated params after each turn.
+          adapterContext: {
+            sessionId: session.id,
+            companyId: session.companyId,
+            boardUserId: session.boardUserId,
+            prevSessionParams: session.adapterSessionParams,
+            saveSessionParams: async (params) => {
+              await db
+                .update(chatSessions)
+                .set({ adapterSessionParams: params, updatedAt: new Date() })
+                .where(eq(chatSessions.id, session.id));
+              session = { ...session, adapterSessionParams: params };
+            },
+            pluginMcpUrl,
           },
-          pluginMcpUrl,
-        },
-      });
+        });
 
-      const messageStartedAt = new Date();
-      yield { type: "message_started", messageId: `pending-${messageStartedAt.getTime()}`, role: "assistant" };
+        const messageStartedAt = new Date();
+        yield { type: "message_started", messageId: `pending-${messageStartedAt.getTime()}`, role: "assistant" };
 
-      let result;
-      try {
-        while (true) {
-          const next = await turnStream.next();
-          if (next.done) {
-            result = next.value;
-            break;
+        let result;
+        try {
+          while (true) {
+            const next = await turnStream.next();
+            if (next.done) {
+              result = next.value;
+              break;
+            }
+            if (aborted) break;
+            const event = next.value;
+            if (event.type === "text_delta") {
+              yield event;
+            }
           }
-          if (aborted) break;
-          const event = next.value;
-          if (event.type === "text_delta") {
-            yield event;
+        } catch (err) {
+          // Aborts are user-initiated (Stop button or socket close) and not
+          // actually errors, so don't log them as failures. They still get a
+          // terminal event so the turn ends explicitly rather than trailing off.
+          if (aborted || isAbortError(err)) {
+            yield interruptedEvent();
+            return;
           }
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error({ err, sessionId, provider: provider.name }, "Chat provider stream errored");
+          yield { type: "error", error: message };
+          return;
         }
-      } catch (err) {
-        // Aborts are user-initiated (Stop button or socket close) and not
-        // actually errors — don't log them as failures. They still get a
-        // terminal event so the turn ends explicitly rather than trailing off.
-        if (aborted || isAbortError(err)) {
+        if (aborted || !result) {
           yield interruptedEvent();
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error({ err, sessionId, provider: provider.name }, "Chat provider stream errored");
-        yield { type: "error", error: message };
-        return;
-      }
-      if (aborted || !result) {
-        yield interruptedEvent();
-        return;
-      }
 
-      const persisted = await appendAssistantMessage(sessionId, result.content);
-      yield { type: "message_completed", messageId: persisted.id };
+        const persisted = await appendAssistantMessage(sessionId, result.content);
+        yield { type: "message_completed", messageId: persisted.id };
 
-      const toolUseBlocks = result.content.filter(
-        (b): b is Extract<CanonicalContentBlock, { type: "tool_use" }> => b.type === "tool_use",
-      );
+        const toolUseBlocks = result.content.filter(
+          (b): b is Extract<CanonicalContentBlock, { type: "tool_use" }> => b.type === "tool_use",
+        );
 
-      if (toolUseBlocks.length === 0 || result.stopReason !== "tool_use") {
-        yield { type: "done", stopReason: result.stopReason };
-        return;
-      }
-
-      const toolResults: CanonicalContentBlock[] = [];
-      let draftedThisIteration = false;
-      for (const block of toolUseBlocks) {
-        if (aborted) {
-          yield interruptedEvent();
+        if (toolUseBlocks.length === 0 || result.stopReason !== "tool_use") {
+          yield { type: "done", stopReason: result.stopReason };
           return;
         }
-        const def = CHAT_TOOLS.find((t) => t.name === block.name);
-        const mutating = def?.mutating ?? false;
-        yield {
-          type: "tool_use_block",
-          toolUseId: block.id,
-          name: block.name,
-          input: block.input,
-          mutating,
-        };
 
-        let approved: boolean = !mutating || session.permissionMode === "bypass";
-        if (mutating && session.permissionMode === "ask") {
-          const pendingDecision = chatPermissions.await(block.id, sessionId);
+        const toolResults: CanonicalContentBlock[] = [];
+        let draftedThisIteration = false;
+        for (const block of toolUseBlocks) {
+          if (aborted) {
+            yield interruptedEvent();
+            return;
+          }
+          const def = CHAT_TOOLS.find((t) => t.name === block.name);
+          const mutating = def?.mutating ?? false;
           yield {
-            type: "permission_required",
+            type: "tool_use_block",
             toolUseId: block.id,
             name: block.name,
             input: block.input,
-            ttlMs: CHAT_PERMISSION_TTL_MS,
+            mutating,
           };
-          const decision = await pendingDecision;
-          approved = decision === "approve";
+
+          let approved: boolean = !mutating || session.permissionMode === "bypass";
+          if (mutating && session.permissionMode === "ask") {
+            const pendingDecision = chatPermissions.await(block.id, sessionId);
+            yield {
+              type: "permission_required",
+              toolUseId: block.id,
+              name: block.name,
+              input: block.input,
+              ttlMs: CHAT_PERMISSION_TTL_MS,
+            };
+            const decision = await pendingDecision;
+            approved = decision === "approve";
+          }
+
+          if (aborted) {
+            yield interruptedEvent();
+            return;
+          }
+
+          if (!approved) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: "User denied this action.",
+            });
+            yield {
+              type: "tool_result_block",
+              toolUseId: block.id,
+              ok: false,
+              result: { error: "User denied this action." },
+            };
+            continue;
+          }
+
+          const outcome = await executeChatTool(
+            block.name,
+            block.input,
+            toolCtx,
+            pluginToolDispatcher,
+          );
+          if (outcome.ok) {
+            if (isDraftedToolOutcome(outcome.result)) draftedThisIteration = true;
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: JSON.stringify(outcome.result),
+            });
+            yield {
+              type: "tool_result_block",
+              toolUseId: block.id,
+              ok: true,
+              result: outcome.result,
+            };
+          } else {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: outcome.error,
+            });
+            yield {
+              type: "tool_result_block",
+              toolUseId: block.id,
+              ok: false,
+              result: { error: outcome.error },
+            };
+          }
         }
 
-        if (aborted) {
-          yield interruptedEvent();
+        await appendToolResults(sessionId, toolResults);
+
+        // Trust-loop safety net: a tool was intercepted by the outbound draft
+        // gate (queued as an approval). End the turn now so the LLM cannot
+        // re-fire the same gated tool on the next iteration. The user resolves
+        // the draft in the inbox; `appendApprovedDraftResultToChatSession`
+        // wakes the conversation by appending a tool-role message they will
+        // see on their next turn.
+        if (draftedThisIteration) {
+          yield { type: "done", stopReason: "tool_drafted" };
+          // Revoked in the finally below, with every other way out of the turn.
+          // if (mcpBridgeToken && pluginMcpBridge) {
+          //   pluginMcpBridge.revokeToken(mcpBridgeToken);
+          // }
           return;
         }
 
-        if (!approved) {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            is_error: true,
-            content: "User denied this action.",
-          });
-          yield {
-            type: "tool_result_block",
-            toolUseId: block.id,
-            ok: false,
-            result: { error: "User denied this action." },
-          };
-          continue;
-        }
-
-        const outcome = await executeChatTool(
-          block.name,
-          block.input,
-          toolCtx,
-          pluginToolDispatcher,
-        );
-        if (outcome.ok) {
-          if (isDraftedToolOutcome(outcome.result)) draftedThisIteration = true;
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: JSON.stringify(outcome.result),
-          });
-          yield {
-            type: "tool_result_block",
-            toolUseId: block.id,
-            ok: true,
-            result: outcome.result,
-          };
-        } else {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            is_error: true,
-            content: outcome.error,
-          });
-          yield {
-            type: "tool_result_block",
-            toolUseId: block.id,
-            ok: false,
-            result: { error: outcome.error },
-          };
-        }
+        session = await getSession(actor, sessionId);
       }
 
-      await appendToolResults(sessionId, toolResults);
+      // Revoked in the finally below. Revoking only here missed a turn that
+      // ended with a reply or an error, which left the token valid for a day.
+      // if (mcpBridgeToken && pluginMcpBridge) {
+      //   pluginMcpBridge.revokeToken(mcpBridgeToken);
+      // }
 
-      // Trust-loop safety net: a tool was intercepted by the outbound draft
-      // gate (queued as an approval). End the turn now so the LLM cannot
-      // re-fire the same gated tool on the next iteration. The user resolves
-      // the draft in the inbox; `appendApprovedDraftResultToChatSession`
-      // wakes the conversation by appending a tool-role message they will
-      // see on their next turn.
-      if (draftedThisIteration) {
-        yield { type: "done", stopReason: "tool_drafted" };
-        if (mcpBridgeToken && pluginMcpBridge) {
-          pluginMcpBridge.revokeToken(mcpBridgeToken);
-        }
+      if (loops >= MAX_TOOL_LOOPS) {
+        yield {
+          type: "error",
+          error: `Tool loop exceeded max iterations (${MAX_TOOL_LOOPS}). Stopping to avoid runaway.`,
+        };
         return;
       }
 
-      session = await getSession(actor, sessionId);
-    }
-
-    // Revoke the per-turn MCP bridge token now that the turn is over.
-    // Token has a TTL fallback in the bridge, so a missed revoke just
-    // means it lingers for a day, not a leak. Best effort either way.
-    if (mcpBridgeToken && pluginMcpBridge) {
-      pluginMcpBridge.revokeToken(mcpBridgeToken);
-    }
-
-    if (loops >= MAX_TOOL_LOOPS) {
-      yield {
-        type: "error",
-        error: `Tool loop exceeded max iterations (${MAX_TOOL_LOOPS}). Stopping to avoid runaway.`,
-      };
-      return;
-    }
-
-    // The `!aborted` condition on the tool loop can also drop us out here.
-    // Same rule as every other abort path: end the turn out loud.
-    if (aborted) {
-      yield interruptedEvent();
+      // The `!aborted` condition on the tool loop can also drop us out here.
+      // Same rule as every other abort path: end the turn out loud.
+      if (aborted) {
+        yield interruptedEvent();
+      }
+    } finally {
+      // The bridge token dies with the turn, whichever way it ends: a reply, an
+      // error, a Stop, a drafted tool or the loop limit. Nothing needs it after
+      // the turn, and one left behind would keep the access the person had when
+      // the turn began, for up to a day.
+      if (mcpBridgeToken && pluginMcpBridge) {
+        pluginMcpBridge.revokeToken(mcpBridgeToken);
+      }
     }
   }
 

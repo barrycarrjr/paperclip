@@ -1197,6 +1197,11 @@ const cancelReminderTool: ChatToolDefinition<{ reminderId: string }> = {
       throw badRequest(`Reminder ${reminderId} not found in the current company`);
     }
     await assertCompanyAccess(ctx, existing.companyId, "write");
+    // Only the person's own reminders, as the web app allows, apart from the
+    // allowance an instance admin has in Clippy's tools.
+    if (existing.userId !== ctx.actor.userId && !ctx.actor.isInstanceAdmin) {
+      throw forbidden("You can only modify your own reminders");
+    }
     const updated = await svc.update(
       reminderId,
       { status: "cancelled" },
