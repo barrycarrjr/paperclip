@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -13,6 +13,7 @@ import {
   type EnvironmentLeaseStatus,
   type ExecutionWorkspace,
   type ExecutionWorkspaceConfig,
+  type RoutineRevisionSnapshotV1,
   type RunLivenessState,
 } from "@paperclipai/shared";
 import {
@@ -30,8 +31,13 @@ import {
   issueRelations,
   issues,
   issueWorkProducts,
+  pipelineStages,
+  pipelines,
   projects,
   projectWorkspaces,
+  routineRevisions,
+  routineRuns,
+  routines,
   workspaceOperations,
 } from "@paperclipai/db";
 import { conflict, HttpError, notFound } from "../errors.js";
@@ -131,6 +137,7 @@ import {
   type ResolvedAccountEnv,
 } from "./active-account.js";
 import { agentHasOwnCredential } from "./claude-sign-in-impact.js";
+import { protectedRoutineEnvNames, type RoutineEnvProtectionOptions } from "./routine-env-protection.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
   hasSessionCompactionThresholds,
@@ -331,10 +338,58 @@ type RuntimeConfigSecretResolver = Pick<
   "resolveAdapterConfigForRuntime" | "resolveEnvBindings"
 >;
 
+/**
+ * A routine's env (a pipeline stage's secrets and values) without the names it
+ * may not set, which protectedRoutineEnvNames lists and explains.
+ */
+export function withoutProtectedRoutineEnv(
+  envValue: unknown,
+  options: RoutineEnvProtectionOptions = {},
+): Record<string, unknown> | null {
+  const env = parseObject(envValue);
+  const refused = new Set(protectedRoutineEnvNames(Object.keys(env), options));
+  const kept = Object.fromEntries(Object.entries(env).filter(([key]) => !refused.has(key)));
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
+/** Why a run cannot start when a secret a stage gives it has been deleted. */
+function routineEnvSecretMissingMessage(envKey: string, source: string | null) {
+  return (
+    `This run could not start: the secret behind ${envKey}, set by ${source ?? "the pipeline stage that created this task"}, no longer exists. ` +
+    "Tasks already started keep the stage's settings from when they started."
+  );
+}
+
+/** Context key holding a hash of the routine env a run had, so the next run can tell whether it changed. */
+const ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY = "paperclipRoutineEnvFingerprint";
+
+/** A hash of a routine's env bindings (references and plain values, never a resolved secret), or null when it has none. */
+function fingerprintRoutineEnv(envValue: unknown): string | null {
+  const env = parseObject(envValue);
+  const keys = Object.keys(env).sort();
+  if (keys.length === 0) return null;
+  const canonical = keys.map((key) => {
+    const binding = env[key];
+    return [
+      key,
+      binding && typeof binding === "object" && !Array.isArray(binding)
+        ? Object.fromEntries(Object.entries(binding).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : binding,
+    ];
+  });
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
 export async function resolveExecutionRunAdapterConfig(input: {
   companyId: string;
   executionRunConfig: Record<string, unknown>;
   projectEnv: unknown;
+  /** A stage's env, for a run by the stage's own agent on the task its automation created. */
+  routineEnv?: unknown;
+  /** The agent's adapter, whose own account variable the routine env may not set. */
+  adapterType?: string | null;
+  /** Names the stage the routine env comes from, for the message when one of its secrets is gone. */
+  describeRoutineEnvSource?: () => Promise<string | null>;
   secretsSvc: RuntimeConfigSecretResolver;
 }) {
   const { config: resolvedConfig, secretKeys } = await input.secretsSvc.resolveAdapterConfigForRuntime(
@@ -353,7 +408,39 @@ export async function resolveExecutionRunAdapterConfig(input: {
       secretKeys.add(key);
     }
   }
-  return { resolvedConfig, secretKeys };
+  // The run's env without the stage's, for what can outlive the run and serve
+  // other tasks, such as a shared dev server.
+  const envWithoutRoutineEnv: Record<string, unknown> = { ...parseObject(resolvedConfig.env) };
+  // Merged last, as upstream does, so a stage's value wins over the agent's
+  // and the project's. Protected names are dropped before anything resolves.
+  const routineEnv = withoutProtectedRoutineEnv(input.routineEnv, {
+    adapterType: input.adapterType,
+    baseEnv: envWithoutRoutineEnv,
+  });
+  const routineEnvValues: Record<string, string> = {};
+  // One name at a time, so a secret that has been deleted can be named.
+  for (const [key, binding] of Object.entries(routineEnv ?? {})) {
+    let resolution: Awaited<ReturnType<RuntimeConfigSecretResolver["resolveEnvBindings"]>>;
+    try {
+      resolution = await input.secretsSvc.resolveEnvBindings(input.companyId, { [key]: binding });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        throw new Error(routineEnvSecretMissingMessage(key, (await input.describeRoutineEnvSource?.()) ?? null));
+      }
+      throw error;
+    }
+    Object.assign(routineEnvValues, resolution.env);
+    for (const secretKey of resolution.secretKeys) {
+      secretKeys.add(secretKey);
+    }
+  }
+  if (Object.keys(routineEnvValues).length > 0) {
+    resolvedConfig.env = {
+      ...parseObject(resolvedConfig.env),
+      ...routineEnvValues,
+    };
+  }
+  return { resolvedConfig, secretKeys, envWithoutRoutineEnv };
 }
 
 export function extractMentionedSkillIdsFromSources(
@@ -2336,10 +2423,111 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         assigneeAgentId: issues.assigneeAgentId,
         assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
         executionWorkspaceSettings: issues.executionWorkspaceSettings,
+        originKind: issues.originKind,
+        originId: issues.originId,
+        originRunId: issues.originRunId,
       })
       .from(issues)
       .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * The env a routine (a pipeline stage's automation) gives a run on the task
+   * it created, read as upstream reads it: the revision recorded when the
+   * routine ran fixes the env for the task's life, and a run recorded without
+   * one reads the routine's current env. `routineId` is set for any run on
+   * such a task; `env` only for the stage's own agent, meaning the agent that
+   * is both the task's current assignee and the routine's assignee in that
+   * same revision (or the current routine). Anyone else who comes to run on
+   * the task, by a mention, a wake of its own, a reassignment, or a routine
+   * run naming another assignee, gets none of it.
+   */
+  async function getRoutineEnvForExecutionIssue(
+    companyId: string,
+    agentId: string,
+    issueContext: {
+      originKind: string | null;
+      originId: string | null;
+      originRunId: string | null;
+      assigneeAgentId: string | null;
+    } | null,
+  ): Promise<{ routineId: string | null; env: unknown }> {
+    if (!issueContext || issueContext.originKind !== "routine_execution" || !issueContext.originId) {
+      return { routineId: null, env: null };
+    }
+    const routineId = issueContext.originId;
+    const forStageAgent = (routine: { env: unknown; assigneeAgentId: string | null }) => ({
+      routineId,
+      env: issueContext.assigneeAgentId === agentId && routine.assigneeAgentId === agentId ? routine.env : null,
+    });
+    const routineRun = issueContext.originRunId
+      ? await db
+          .select({ routineRevisionId: routineRuns.routineRevisionId })
+          .from(routineRuns)
+          .where(
+            and(
+              eq(routineRuns.id, issueContext.originRunId),
+              eq(routineRuns.companyId, companyId),
+              eq(routineRuns.routineId, routineId),
+            ),
+          )
+          .then((rows) => rows[0] ?? null)
+      : null;
+    if (routineRun?.routineRevisionId) {
+      const revision = await db
+        .select({ snapshot: routineRevisions.snapshot })
+        .from(routineRevisions)
+        .where(
+          and(
+            eq(routineRevisions.id, routineRun.routineRevisionId),
+            eq(routineRevisions.companyId, companyId),
+            eq(routineRevisions.routineId, routineId),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      const snapshot = revision?.snapshot as RoutineRevisionSnapshotV1 | undefined;
+      if (snapshot?.version === 1) {
+        return forStageAgent({
+          env: snapshot.routine.env ?? null,
+          assigneeAgentId: snapshot.routine.assigneeAgentId ?? null,
+        });
+      }
+    }
+    const routine = await db
+      .select({ env: routines.env, assigneeAgentId: routines.assigneeAgentId })
+      .from(routines)
+      .where(and(eq(routines.id, routineId), eq(routines.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    return forStageAgent({ env: routine?.env ?? null, assigneeAgentId: routine?.assigneeAgentId ?? null });
+  }
+
+  /** The pipeline stage whose automation a routine is, as a person reads it, or null. */
+  async function describeRoutineStage(companyId: string, routineId: string) {
+    const stage = await db
+      .select({ stageName: pipelineStages.name, pipelineName: pipelines.name })
+      .from(pipelineStages)
+      .innerJoin(pipelines, eq(pipelineStages.pipelineId, pipelines.id))
+      .where(
+        and(
+          eq(pipelines.companyId, companyId),
+          sql`${pipelineStages.config} -> 'onEnter' ->> 'routineId' = ${routineId}`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return stage ? `stage "${stage.stageName}" in pipeline "${stage.pipelineName}"` : null;
+  }
+
+  /** The routine env hash a run recorded (see ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY), or null. */
+  async function getRunRoutineEnvFingerprint(runId: string) {
+    return db
+      .select({
+        fingerprint: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> ${sql.raw(`'${ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY}'`)}`,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0]?.fingerprint ?? null);
   }
 
   async function getRuntimeState(agentId: string) {
@@ -5220,10 +5408,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const taskSession = taskKey
       ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
       : null;
-    const { reset: resetTaskSession, reason: sessionResetReason } = resolveTaskSessionReset(
-      context,
-      parseHeartbeatPolicy(agent),
-    );
+    const routineEnvContext = await getRoutineEnvForExecutionIssue(agent.companyId, agent.id, issueContext);
+    const routineEnvFingerprint = fingerprintRoutineEnv(routineEnvContext.env);
+    const wakeSessionReset = resolveTaskSessionReset(context, parseHeartbeatPolicy(agent));
+    // As upstream, a session does not carry on across a change to the routine
+    // env its runs get. That env is fixed when the routine runs, so it changes
+    // only for a task recorded without a revision (before that was done), or
+    // when the agent stops or starts being the stage's own agent on the task.
+    const routineEnvChanged =
+      !wakeSessionReset.reset && routineEnvContext.routineId && taskSession?.lastRunId
+        ? (await getRunRoutineEnvFingerprint(taskSession.lastRunId)) !== routineEnvFingerprint
+        : false;
+    const resetTaskSession = wakeSessionReset.reset || routineEnvChanged;
+    const sessionResetReason = routineEnvChanged
+      ? "the stage automation's env changed"
+      : wakeSessionReset.reason;
+    if (routineEnvFingerprint) {
+      context[ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY] = routineEnvFingerprint;
+    } else {
+      delete context[ROUTINE_ENV_FINGERPRINT_CONTEXT_KEY];
+    }
     const taskSessionForRun = resetTaskSession ? null : taskSession;
     const explicitResumeSessionParams = normalizeSessionParams(
       sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
@@ -5421,10 +5625,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       : persistedWorkspaceManagedConfig;
     const configSnapshot = buildExecutionWorkspaceConfigSnapshot(mergedConfig, selectedEnvironmentId);
     const executionRunConfig = stripWorkspaceRuntimeFromExecutionRunConfig(mergedConfig);
-    const { resolvedConfig, secretKeys } = await resolveExecutionRunAdapterConfig({
+    const { resolvedConfig, secretKeys, envWithoutRoutineEnv } = await resolveExecutionRunAdapterConfig({
       companyId: agent.companyId,
       executionRunConfig,
       projectEnv: projectContext?.env ?? null,
+      routineEnv: routineEnvContext.env,
+      adapterType: agent.adapterType,
+      describeRoutineEnvSource: async () =>
+        routineEnvContext.routineId ? describeRoutineStage(agent.companyId, routineEnvContext.routineId) : null,
       secretsSvc,
     });
     const runScopedMentionedSkillKeys = await resolveRunScopedMentionedSkillKeys({
@@ -6038,8 +6246,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const logEntry = formatRuntimeWorkspaceWarningLog(warning);
         await onLog(logEntry.stream, logEntry.chunk);
       }
+      // Without the stage's env: a shared service started now keeps running
+      // and serves other tasks, which must not inherit the stage's secrets.
       const adapterEnv = Object.fromEntries(
-        Object.entries(parseObject(resolvedConfig.env)).filter(
+        Object.entries(envWithoutRoutineEnv).filter(
           (entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string",
         ),
       );

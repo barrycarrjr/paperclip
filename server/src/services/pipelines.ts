@@ -44,6 +44,7 @@ import {
 } from "@paperclipai/shared";
 import { conflict, HttpError, notFound, unprocessable } from "../errors.js";
 import { routineService } from "./routines.js";
+import { protectedRoutineEnvNames } from "./routine-env-protection.js";
 import { secretService } from "./secrets.js";
 import type { IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
@@ -3650,6 +3651,26 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         throw unprocessable("Pipeline stage does not have automation configured", {
           code: "stage_automation_required",
         });
+      }
+
+      if (input.env) {
+        // Refused here rather than dropped when the stage runs, so the person
+        // saving knows. The cloud sign-in names, protected only for an agent
+        // that runs on Bedrock or Vertex, are left to the run to decide.
+        const assignee = await db
+          .select({ adapterType: agents.adapterType })
+          .from(routines)
+          .innerJoin(agents, eq(agents.id, routines.assigneeAgentId))
+          .where(and(eq(routines.id, routineId), eq(routines.companyId, input.companyId)))
+          .then((rows) => rows[0] ?? null);
+        const refusedNames = protectedRoutineEnvNames(Object.keys(input.env), { adapterType: assignee?.adapterType });
+        if (refusedNames.length > 0) {
+          throw unprocessable(
+            `These names cannot be set for a stage: ${refusedNames.join(", ")}. ` +
+              "They control the agent's sign-in, the program it runs, or Paperclip's own settings for the run.",
+            { code: "stage_env_name_protected", names: refusedNames },
+          );
+        }
       }
 
       const normalizedEnv = input.env === null
