@@ -2,27 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   ABOVE_MOBILE_BOTTOM_NAV_CLASS,
   APP_NAV_WIDTH_PROPERTY,
+  CLEAR_OF_PHONE_LAUNCHER_CLASS,
+  CLIPPY_LAUNCHER_RIGHT_CLASS,
   CLIPPY_LAUNCHER_SIZE_CLASS,
   FILLS_OR_KEEPS_HEIGHT_CLASS,
   MOBILE_BOTTOM_NAV_HEIGHT_CLASS,
+  MOBILE_BOTTOM_NAV_ROOM,
+  MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   OWN_LINE_ACTIONS_CLASS,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_BOTTOM_BAR_CENTER_CLASS,
+  PAGE_BOTTOM_BAR_FLOATING_CLASS,
+  PAGE_BOTTOM_BAR_FLUSH_CLASS,
+  PAGE_CORNER_NOTICE_CLASS,
   PAGE_CORNER_RIGHT_CLASS,
   PAGE_END_ROOM_CLASS,
   PAGE_END_ROOM_EXTRA_PX,
+  PAGE_SCROLL_BOX_END_ROOM_CLASS,
   PAGE_SCROLL_BUTTON_SIZE_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
+  PHONE_PAGE_END_ROOM_CLASS,
+  RIGHT_INSET_PROPERTY,
   SCROLL_AREA_FITS_COLUMN_CLASS,
   SCROLL_TO_BOTTOM_OFFSET_CLASS,
   SCROLL_TO_TOP_OFFSET_CLASS,
+  TOAST_STACK_MAX_HEIGHT_CLASS,
   TOAST_VIEWPORT_DESKTOP_CLASS,
+  TOAST_VIEWPORT_PHONE_CLASS,
   WRAPPING_ROW_CLASS,
+  pageBottomBarFlushPadding,
   pageNeedsEndRoom,
   spacingClassPixels,
 } from "./narrow-layout";
-import { PAGE_BOTTOM_BAR_ROOM_PROPERTY } from "./page-bottom-bar";
+import { PAGE_BOTTOM_BAR_END_ROOM_PROPERTY, PAGE_BOTTOM_BAR_ROOM_PROPERTY } from "./page-bottom-bar";
 
 /** The part of a responsive class string for one breakpoint: "" for phones, "md" for desktop. */
 function partFor(classes: string, breakpoint: "" | "md", property: string): string {
@@ -52,8 +65,27 @@ function splitOutsideBrackets(value: string, separator: string): string[] {
   return parts;
 }
 
-/** The pixels behind a CSS length made of max(), calc() sums, rem and px, the safe area and a bar's room. */
-function lengthPixels(value: string, at: { safeArea: number; barRoom: number }): number {
+/**
+ * What a length is worked out against: the bottom safe area, how far up the
+ * window the bars along the bottom reach, and how far up the phone bottom bar
+ * reaches (nothing on a desktop, where Layout publishes none).
+ */
+interface LengthAt {
+  safeArea: number;
+  barRoom: number;
+  navRoom?: number;
+  endRoom?: number;
+  /** How far a row ends in from the right edge of the window. */
+  rightInset?: number;
+}
+
+/**
+ * The pixels behind a CSS length made of max(), calc() sums and differences,
+ * rem and px, the safe area and the published rooms.
+ */
+function lengthPixels(written: string, at: LengthAt): number {
+  // An underscore is how a Tailwind class writes a space.
+  const value = written.replace(/_/g, " ").trim().replace(/,\s+/g, ",");
   const inside = (name: string) =>
     value.startsWith(`${name}(`) && value.endsWith(")") ? value.slice(name.length + 1, -1) : null;
   const largest = inside("max");
@@ -62,10 +94,28 @@ function lengthPixels(value: string, at: { safeArea: number; barRoom: number }):
   }
   const sum = inside("calc");
   if (sum !== null) {
-    return splitOutsideBrackets(sum, "+").reduce((total, term) => total + lengthPixels(term, at), 0);
+    // Terms joined by + or by a spaced -, outside brackets.
+    let total = 0;
+    let sign = 1;
+    let depth = 0;
+    let start = 0;
+    for (let index = 0; index < sum.length; index += 1) {
+      const character = sum[index];
+      if (character === "(") depth += 1;
+      else if (character === ")") depth -= 1;
+      else if (depth === 0 && (character === "+" || (character === "-" && sum[index - 1] === " " && sum[index + 1] === " "))) {
+        total += sign * lengthPixels(sum.slice(start, index), at);
+        sign = character === "+" ? 1 : -1;
+        start = index + 1;
+      }
+    }
+    return total + sign * lengthPixels(sum.slice(start), at);
   }
   if (value === "env(safe-area-inset-bottom)") return at.safeArea;
   if (value === `var(${PAGE_BOTTOM_BAR_ROOM_PROPERTY},0px)`) return at.barRoom;
+  if (value === `var(${MOBILE_BOTTOM_NAV_ROOM_PROPERTY},0px)`) return at.navRoom ?? 0;
+  if (value === `var(${PAGE_BOTTOM_BAR_END_ROOM_PROPERTY},0px)`) return at.endRoom ?? 0;
+  if (value === `var(${RIGHT_INSET_PROPERTY},0px)`) return at.rightInset ?? 0;
   const length = /^(\d+(?:\.\d+)?)(rem|px)$/.exec(value);
   if (length) return Number(length[1]) * (length[2] === "rem" ? 16 : 1);
   throw new Error(`cannot work out "${value}"`);
@@ -76,9 +126,16 @@ function lengthPixels(value: string, at: { safeArea: number; barRoom: number }):
  * in pixels, worked out as the browser would for a bottom safe area and a
  * page's bottom bar reaching a given height up the window.
  */
-function bottomPixels(bottomClass: string, at: { safeArea: number; barRoom: number }): number {
+function bottomPixels(bottomClass: string, at: LengthAt): number {
   const value = /^bottom-\[(.+)\]$/.exec(bottomClass)?.[1];
   return value === undefined ? spacingClassPixels(bottomClass) : lengthPixels(value, at);
+}
+
+/** The arbitrary value of the one class in a list that sets a property, as in `bottom-[...]`. */
+function valueOf(classes: string, property: string): string {
+  const part = classes.split(" ").find((candidate) => candidate.startsWith(`${property}-[`));
+  expect(part, `no ${property} in "${classes}"`).toBeDefined();
+  return part!.slice(property.length + 2, -1);
 }
 
 describe("spacingClassPixels", () => {
@@ -210,6 +267,190 @@ describe("where the toasts sit on a desktop", () => {
   });
 });
 
+describe("where the toasts sit on a phone", () => {
+  // At bottom-3 a message covered the whole bottom bar from the highest layer
+  // there is, so while it showed none of its six destinations could be
+  // reached. On a phone the bars along the bottom include the bottom bar
+  // itself (MobileBottomNav registers), so with nothing else there the room
+  // is the bottom bar's own.
+  const SAFE_AREA = 34;
+  const NAV_ROOM = 64 + SAFE_AREA;
+  const phone = (barRoom: number) =>
+    bottomPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "bottom"), { safeArea: SAFE_AREA, barRoom });
+
+  it("sits 0.75rem above the bottom bar, not on it", () => {
+    expect(phone(NAV_ROOM)).toBe(NAV_ROOM + 12);
+  });
+
+  it("stays clear of where the bottom bar comes back, while it has slid away", () => {
+    expect(phone(0)).toBe(NAV_ROOM + 12);
+  });
+
+  it("sits 0.75rem above a page's bar resting on the bottom bar, not that bar's height on top of the bottom bar's", () => {
+    expect(phone(NAV_ROOM + 48)).toBe(NAV_ROOM + 48 + 12);
+  });
+
+  it("stops short of the corner the Clippy launcher stands in", () => {
+    // Up there a message the width of the screen lay over the round launcher,
+    // which is 1rem in from the right edge (ClippyLauncher) and this wide.
+    const launcherReach = 16 + spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "", "size"));
+    expect(spacingClassPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "right"))).toBeGreaterThan(launcherReach);
+    // And still held in from the left, so the box has both its edges.
+    expect(spacingClassPixels(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", "left"))).toBe(12);
+  });
+
+  it("goes back to the desktop place from md up, where the bottom bar is hidden", () => {
+    for (const property of ["left", "right", "bottom"]) {
+      partFor(TOAST_VIEWPORT_DESKTOP_CLASS, "md", property);
+    }
+  });
+
+  it("lets the pile of messages grow only as far as the top of the window, from wherever its foot is", () => {
+    // A failure stays until it is closed, so they pile up. Measured from the
+    // old foot, the pile on a phone would have run off the top by the height
+    // of the bottom bar, taking the oldest message, and the reason it gives,
+    // with it.
+    const parts = TOAST_STACK_MAX_HEIGHT_CLASS.split(" ");
+    expect(parts).toContain(`max-h-[calc(100dvh-0.75rem-${valueOf(TOAST_VIEWPORT_PHONE_CLASS, "bottom")})]`);
+    expect(parts).toContain(`md:max-h-[calc(100dvh-1.5rem-var(${PAGE_BOTTOM_BAR_ROOM_PROPERTY},0px))]`);
+  });
+});
+
+describe("a page's own notice in the bottom right corner", () => {
+  // In the launcher's own place on a phone it lay over the round launcher
+  // for the four to six seconds it showed.
+  it("sits where the toasts do on a phone: above the bottom bar, beside the launcher", () => {
+    for (const property of ["right", "bottom"]) {
+      expect(partFor(PAGE_CORNER_NOTICE_CLASS, "", property)).toBe(partFor(TOAST_VIEWPORT_PHONE_CLASS, "", property));
+    }
+  });
+
+  it("sits in the corner from md up, moved in by docked Clippy and above a page's own bar", () => {
+    expect(PAGE_CORNER_NOTICE_CLASS.split(" ")).toContain(`md:${PAGE_CORNER_RIGHT_CLASS}`);
+    expect(partFor(PAGE_CORNER_NOTICE_CLASS, "md", "bottom")).toBe(partFor(ABOVE_MOBILE_BOTTOM_NAV_CLASS, "md", "bottom"));
+  });
+});
+
+describe("a row of buttons the round launcher floats beside on a phone", () => {
+  const WINDOW = 390;
+  /** How far in from the right edge of the window the launcher reaches: its offset and its width. */
+  const launcherReach =
+    spacingClassPixels(CLIPPY_LAUNCHER_RIGHT_CLASS) + spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "", "size"));
+  const room = (rightInset: number) =>
+    lengthPixels(valueOf(CLEAR_OF_PHONE_LAUNCHER_CLASS, "max-md:pr"), { safeArea: 0, barRoom: 0, rightInset });
+
+  it("ends its last button half a rem clear of the launcher, however far in the row ends", () => {
+    // The launcher covered the right end of the reply box's Send button,
+    // whose row ends 50 pixels in on a 390 pixel phone.
+    expect(launcherReach).toBe(64);
+    for (const rightInset of [0, 16, 50, 64]) {
+      const lastButtonEnds = WINDOW - rightInset - room(rightInset);
+      expect(lastButtonEnds, `a row ending ${rightInset} pixels in`).toBe(WINDOW - launcherReach - 8);
+    }
+  });
+
+  it("keeps no room once the row already ends clear of the launcher", () => {
+    expect(room(launcherReach + 8)).toBe(0);
+    expect(room(120)).toBe(0);
+  });
+
+  it("is room at the right of the row, on a phone only", () => {
+    expect(CLEAR_OF_PHONE_LAUNCHER_CLASS.startsWith("max-md:pr-[")).toBe(true);
+    expect(CLEAR_OF_PHONE_LAUNCHER_CLASS).not.toContain(" ");
+  });
+});
+
+describe("the room a phone keeps at the end of the page", () => {
+  const SAFE_AREA = 34;
+  const endPadding = (endRoom: number) =>
+    lengthPixels(valueOf(PHONE_PAGE_END_ROOM_CLASS, "pb"), { safeArea: SAFE_AREA, barRoom: 0, endRoom });
+  /** Where the round launcher's top is, with the bars along the bottom reaching this far up. */
+  const launcherTop = (barRoom: number) =>
+    bottomPixels(partFor(ABOVE_MOBILE_BOTTOM_NAV_CLASS, "", "bottom"), { safeArea: SAFE_AREA, barRoom }) +
+    spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "", "size"));
+
+  it("ends the page a rem clear of the round launcher", () => {
+    // At 5rem the launcher sat on the Wake button of the last card on Team.
+    expect(endPadding(0)).toBe(launcherTop(0) + 16);
+  });
+
+  it("reaches past a bar fixed over the page, and the launcher sitting above that bar", () => {
+    // Two rows of selection buttons, 118 pixels, resting 24 pixels above the
+    // bottom bar and its safe area hid the end of the portfolio issues list.
+    const endRoom = 65 + SAFE_AREA + 24 + 118;
+    expect(endPadding(endRoom)).toBe(launcherTop(endRoom) + 16);
+  });
+
+  it("is padding at the end of the page area, on a phone only", () => {
+    expect(PHONE_PAGE_END_ROOM_CLASS.startsWith("pb-[")).toBe(true);
+    expect(PHONE_PAGE_END_ROOM_CLASS).not.toContain(" ");
+    expect(PHONE_PAGE_END_ROOM_CLASS).not.toContain("md:");
+  });
+});
+
+describe("the padding under a bar that runs along the edge", () => {
+  const padding = (own: string, navRoom: number) =>
+    lengthPixels(pageBottomBarFlushPadding(own), { safeArea: 34, barRoom: 0, navRoom });
+
+  it("is the bar's own while the phone bottom bar shows and holds the safe area", () => {
+    expect(padding("0.5rem", 64 + 34)).toBe(8);
+    expect(padding("0.75rem", 64 + 34)).toBe(12);
+  });
+
+  it("clears the safe area once the bottom bar has slid away", () => {
+    // Without it, an iPhone's home bar sat over the pipeline stage's Save button.
+    expect(padding("0.75rem", 0)).toBe(34);
+  });
+
+  it("is the bar's own where there is no safe area", () => {
+    expect(lengthPixels(pageBottomBarFlushPadding("0.5rem"), { safeArea: 0, barRoom: 0 })).toBe(8);
+  });
+});
+
+describe("how far up the phone bottom bar reaches", () => {
+  // Layout publishes it for a page's own bar to rest on. It has to be the
+  // bar's own height, or a bar resting on it leaves a gap or sits on its
+  // buttons.
+  it("is the bottom bar's height and the safe area under it", () => {
+    expect(MOBILE_BOTTOM_NAV_ROOM_PROPERTY).toBe("--mobile-bottom-nav-room");
+    expect(lengthPixels(MOBILE_BOTTOM_NAV_ROOM, { safeArea: 34, barRoom: 0 })).toBe(
+      spacingClassPixels(MOBILE_BOTTOM_NAV_HEIGHT_CLASS) + 34,
+    );
+  });
+});
+
+describe("a page's own bar along the bottom", () => {
+  // At bottom-0 the agent Save bar sat under the phone bottom bar, which is
+  // drawn later on the same layer, so Save could not be pressed. At bottom-6
+  // the selection bars sat over it and hid its middle buttons.
+  const SAFE_AREA = 34;
+  const NAV_ROOM = 64 + SAFE_AREA;
+  const flush = (at: LengthAt) => bottomPixels(partFor(PAGE_BOTTOM_BAR_FLUSH_CLASS, "", "bottom"), at);
+  const floating = (at: LengthAt) => bottomPixels(partFor(PAGE_BOTTOM_BAR_FLOATING_CLASS, "", "bottom"), at);
+
+  it("rests on top of the phone bottom bar while it shows", () => {
+    expect(flush({ safeArea: SAFE_AREA, barRoom: 0, navRoom: NAV_ROOM })).toBe(NAV_ROOM);
+    expect(floating({ safeArea: SAFE_AREA, barRoom: 0, navRoom: NAV_ROOM })).toBe(NAV_ROOM + 24);
+  });
+
+  it("goes down with it when it slides away, the floating one still clear of the safe area", () => {
+    expect(flush({ safeArea: SAFE_AREA, barRoom: 0, navRoom: 0 })).toBe(0);
+    expect(floating({ safeArea: SAFE_AREA, barRoom: 0, navRoom: 0 })).toBe(SAFE_AREA + 24);
+  });
+
+  it("sits where it always did on a desktop, where no bottom bar is published", () => {
+    expect(flush({ safeArea: 0, barRoom: 0 })).toBe(spacingClassPixels("bottom-0"));
+    expect(floating({ safeArea: 0, barRoom: 0 })).toBe(spacingClassPixels("bottom-6"));
+  });
+
+  it("slides with the bottom bar rather than jumping", () => {
+    // The bottom bar slides over 200ms (MobileBottomNav).
+    for (const placement of [PAGE_BOTTOM_BAR_FLUSH_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS]) {
+      expect(placement.split(" ")).toEqual(expect.arrayContaining(["transition-[bottom]", "duration-200"]));
+    }
+  });
+});
+
 describe("a page's own floating element in the bottom right corner", () => {
   // Placed against the window, `right-4` put it under docked Clippy, on a
   // higher layer: the agent Save and Cancel bar could not be seen at all.
@@ -231,6 +472,16 @@ describe("a page's own bar centred along the bottom", () => {
     // Without the dock the page-area centre is right of the window centre, so
     // `min` with 50% keeps the old place.
     expect(PAGE_BOTTOM_BAR_CENTER_CLASS).toMatch(/^left-\[min\(50%,/);
+  });
+
+  it("is never wider than the window, and wraps its buttons instead", () => {
+    // On a phone the portfolio issues bar ran past both edges of the screen,
+    // cutting off its count and its Deselect button. Placed at the middle of
+    // the window, a bar is only given the right half of it unless it asks for
+    // its own width (w-max).
+    expect(PAGE_BOTTOM_BAR_CENTER_CLASS.split(" ")).toEqual(
+      expect.arrayContaining(["w-max", "max-w-[calc(100vw-1.5rem)]", "flex-wrap"]),
+    );
   });
 });
 
@@ -267,16 +518,47 @@ describe("room at the end of a page that scrolls", () => {
   });
 
   it("is needed by a page longer than the page area, and not by one that fits it", () => {
-    expect(pageNeedsEndRoom({ scrollHeight: 1400, clientHeight: 800 }, false)).toBe(true);
+    expect(pageNeedsEndRoom({ scrollHeight: 1400, clientHeight: 800 }, 0)).toBe(true);
     // A page that fills the area exactly, such as Skill Studio, keeps its height.
-    expect(pageNeedsEndRoom({ scrollHeight: 800, clientHeight: 800 }, false)).toBe(false);
+    expect(pageNeedsEndRoom({ scrollHeight: 800, clientHeight: 800 }, 0)).toBe(false);
   });
 
   it("does not switch itself on and off once added", () => {
     // Overflowing only because of the room itself: the page fits without it.
-    expect(pageNeedsEndRoom({ scrollHeight: 800 + PAGE_END_ROOM_EXTRA_PX - 10, clientHeight: 800 }, true)).toBe(false);
+    expect(pageNeedsEndRoom({ scrollHeight: 800 + PAGE_END_ROOM_EXTRA_PX - 10, clientHeight: 800 }, PAGE_END_ROOM_EXTRA_PX)).toBe(false);
     // Still longer than the area without the room: keep it.
-    expect(pageNeedsEndRoom({ scrollHeight: 1400 + PAGE_END_ROOM_EXTRA_PX, clientHeight: 800 }, true)).toBe(true);
+    expect(pageNeedsEndRoom({ scrollHeight: 1400 + PAGE_END_ROOM_EXTRA_PX, clientHeight: 800 }, PAGE_END_ROOM_EXTRA_PX)).toBe(true);
+    // The room is taller while a bar is fixed over the page, and all of it comes off.
+    expect(pageNeedsEndRoom({ scrollHeight: 800 + PAGE_END_ROOM_EXTRA_PX + 74 - 10, clientHeight: 800 }, PAGE_END_ROOM_EXTRA_PX + 74)).toBe(false);
+  });
+
+  it("ends the page clear of the launcher standing above a bar fixed over the page", () => {
+    // With a selection bar up the pill stands above the bar, and sat on the
+    // end of the last row. The bars reach 74 pixels up at 1280 pixels across.
+    const height = PAGE_END_ROOM_CLASS.split(" ").find((part) => part.includes("after:h-"))!.split(":").pop()!;
+    for (const barsReach of [0, 74, 140]) {
+      const pageEnds = 24 + lengthPixels(height.slice("h-[".length, -1), { safeArea: 0, barRoom: barsReach, endRoom: barsReach });
+      const launcherTop =
+        bottomPixels(partFor(ABOVE_MOBILE_BOTTOM_NAV_CLASS, "md", "bottom"), { safeArea: 0, barRoom: barsReach }) +
+        spacingClassPixels(partFor(CLIPPY_LAUNCHER_SIZE_CLASS, "md", "h"));
+      expect(pageEnds, `bars reaching ${barsReach} pixels up`).toBe(launcherTop + 16);
+    }
+  });
+});
+
+describe("room at the end of a page's own scrolling box", () => {
+  // Portfolio issues scrolls a box inside the page area, so the page area's
+  // room never came on and the pill sat on the end of its last row.
+  it("is the same block as the page area's, there whenever the box is, from md up", () => {
+    const areaHeight = PAGE_END_ROOM_CLASS.split(" ").find((part) => part.includes("after:h-"))!.split(":").pop();
+    const boxParts = PAGE_SCROLL_BOX_END_ROOM_CLASS.split(" ");
+    expect(boxParts).toContain(`md:after:${areaHeight}`);
+    expect(boxParts).toContain("md:after:block");
+    for (const part of boxParts) expect(part.startsWith("md:after:")).toBe(true);
+  });
+
+  it("does not shrink away in a box that lays its rows out as a flex column", () => {
+    expect(PAGE_SCROLL_BOX_END_ROOM_CLASS.split(" ")).toContain("md:after:shrink-0");
   });
 });
 

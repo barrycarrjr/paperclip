@@ -236,7 +236,9 @@ export function ClippySessionRail({
           grouped.map((group) => (
             <div key={group.key}>
               {group.label && (
-                <div className="sticky top-0 z-[1] border-b border-border/60 bg-muted/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                // Solid, like every bar the list scrolls under: at half
+                // strength the sessions showed through it.
+                <div className="sticky top-0 z-[1] border-b border-border/60 bg-muted px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   {group.label}
                 </div>
               )}

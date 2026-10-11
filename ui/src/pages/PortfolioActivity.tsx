@@ -14,6 +14,8 @@ import { EmptyState } from "../components/EmptyState";
 import { FilterPopover } from "../components/FilterPopover";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
+import { cn } from "../lib/utils";
 
 export function PortfolioActivity() {
   // URL-derived, not useCompany()'s selection state (P4 sweep, 2026-09-03) —
@@ -106,7 +108,7 @@ export function PortfolioActivity() {
           </Button>
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-3">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto px-6 py-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading && <PageSkeleton variant="list" />}
         {!isLoading && events.length === 0 && (
           <EmptyState icon={History} message="No recent activity across the portfolio." />

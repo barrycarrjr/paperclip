@@ -17,6 +17,7 @@ import type {
   RequestConfirmationInteraction,
   SuggestTasksInteraction,
 } from "../lib/issue-thread-interactions";
+import { CLEAR_OF_PHONE_LAUNCHER_CLASS, RIGHT_INSET_PROPERTY } from "../lib/narrow-layout";
 
 const { markdownEditorFocusMock } = vi.hoisted(() => ({
   markdownEditorFocusMock: vi.fn(),
@@ -1193,6 +1194,39 @@ describe("IssueChatThread", () => {
 
     const spacer = container.querySelector('[data-testid="issue-chat-bottom-spacer"]');
     expect(spacer).toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  // On a phone the Clippy launcher floats in the bottom right corner, and the
+  // reply box scrolls through that corner: the launcher covered the right end
+  // of Send whenever the bottom bar showed. The row of buttons keeps room for
+  // it, measured so it keeps only the room it needs.
+  it("keeps the reply box's buttons clear of the launcher's corner on a phone", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const send = Array.from(container.querySelectorAll("button")).find((element) => element.textContent === "Send");
+    expect(send).toBeDefined();
+    const row = send!.parentElement!;
+    expect(row.className.split(" ")).toContain(CLEAR_OF_PHONE_LAUNCHER_CLASS);
+    expect(row.style.getPropertyValue(RIGHT_INSET_PROPERTY)).not.toBe("");
 
     act(() => {
       root.unmount();

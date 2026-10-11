@@ -15,6 +15,7 @@ import { suggestedClippyPrompts, type ClippyPageContext } from "../lib/clippy-pa
 import { ClippyComposer, type ClippyComposerHandle, type ClippyFirstSendSettings } from "./ClippyComposer";
 import { ClippyEmptyState } from "./ClippyEmptyState";
 import { ClippyMessageList } from "./ClippyMessageList";
+import { PillText } from "./PillText";
 
 interface Props {
   /** The open chat. Null is a new chat, created on the server by its first send. */
@@ -192,7 +193,7 @@ export function ClippyConversation({
                   style={{ backgroundColor: sessionCompany.brandColor }}
                 />
               ) : null}
-              <span className="truncate max-w-[140px]">{sessionCompany.name}</span>
+              <PillText text={sessionCompany.name} className="max-w-[140px]" />
             </div>
           ) : session ? (
             <div

@@ -308,6 +308,7 @@ export function FailedRunInboxRow({
                   "inline-flex h-4 w-4 items-center justify-center rounded-full transition-colors",
                   "hover:bg-blue-500/20",
                 )}
+                data-touch-target="around"
                 aria-label="Mark as read"
               >
                 <span className={cn(
@@ -322,6 +323,7 @@ export function FailedRunInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+                data-touch-target="around"
                 aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />
@@ -476,6 +478,7 @@ function ApprovalInboxRow({
                   "inline-flex h-4 w-4 items-center justify-center rounded-full transition-colors",
                   "hover:bg-blue-500/20",
                 )}
+                data-touch-target="around"
                 aria-label="Mark as read"
               >
                 <span className={cn(
@@ -490,6 +493,7 @@ function ApprovalInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+                data-touch-target="around"
                 aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />
@@ -614,6 +618,7 @@ function JoinRequestInboxRow({
                   "inline-flex h-4 w-4 items-center justify-center rounded-full transition-colors",
                   "hover:bg-blue-500/20",
                 )}
+                data-touch-target="around"
                 aria-label="Mark as read"
               >
                 <span className={cn(
@@ -628,6 +633,7 @@ function JoinRequestInboxRow({
                 onClick={onArchive}
                 disabled={archiveDisabled}
                 className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+                data-touch-target="around"
                 aria-label="Dismiss from Attention"
               >
                 <X className="h-3.5 w-3.5" />

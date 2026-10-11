@@ -18,6 +18,52 @@
 export const MOBILE_BOTTOM_NAV_HEIGHT_CLASS = "h-16";
 
 /**
+ * How far up from the bottom of the window the phone bottom bar reaches while
+ * it shows: its own height (MOBILE_BOTTOM_NAV_HEIGHT_CLASS) and the safe area
+ * under it. Layout publishes it as MOBILE_BOTTOM_NAV_ROOM_PROPERTY on a phone,
+ * and 0px once the bar has slid away as the page scrolls down. Nothing is
+ * published on a desktop, where the bar is not drawn.
+ */
+export const MOBILE_BOTTOM_NAV_ROOM_PROPERTY = "--mobile-bottom-nav-room";
+export const MOBILE_BOTTOM_NAV_ROOM = "calc(4rem + env(safe-area-inset-bottom))";
+
+/**
+ * Where a page's own bar along the bottom sits: on top of the phone bottom
+ * bar while that shows, and at the foot of the window once it has slid away,
+ * and on a desktop. It follows the bottom bar as it slides, over the same
+ * 200ms.
+ *
+ * Pinned to the foot of the window, the agent Save bar sat under the phone
+ * bottom bar, which is drawn later on the same layer, so Save could not be
+ * seen or pressed until the page had scrolled far enough for the bottom bar
+ * to slide away. The selection bars were drawn over it instead and hid its
+ * middle buttons.
+ *
+ * PAGE_BOTTOM_BAR_FLUSH_CLASS is for a bar that runs the full width along the
+ * edge (the agent Save bar on a phone, a pipeline stage's unsaved changes
+ * bar), PAGE_BOTTOM_BAR_FLOATING_CLASS for one that floats 1.5rem above it,
+ * clear of the safe area too (the selection bars, the agent Save bar on a
+ * desktop). Either way the bar still takes usePageBottomBarRef, so the
+ * launcher, the scroll buttons and the toasts sit above it.
+ */
+export const PAGE_BOTTOM_BAR_FLUSH_CLASS =
+  "bottom-[var(--mobile-bottom-nav-room,0px)] transition-[bottom] duration-200 ease-out";
+export const PAGE_BOTTOM_BAR_FLOATING_CLASS =
+  "bottom-[calc(max(var(--mobile-bottom-nav-room,0px),env(safe-area-inset-bottom))+1.5rem)] transition-[bottom] duration-200 ease-out";
+
+/**
+ * The padding under the contents of a bar placed with
+ * PAGE_BOTTOM_BAR_FLUSH_CLASS, for its inline style: the bar's own padding,
+ * or the safe area once the phone bottom bar has slid away, whichever is
+ * more. While that bar shows, it holds the safe area itself. Without it, an
+ * iPhone's home bar sat over the pipeline stage's Save button once the bottom
+ * bar had gone.
+ */
+export function pageBottomBarFlushPadding(own: string): string {
+  return `max(calc(env(safe-area-inset-bottom) - var(${MOBILE_BOTTOM_NAV_ROOM_PROPERTY}, 0px)), ${own})`;
+}
+
+/**
  * Bottom offset for a floating control that has to stay above the phone bottom
  * bar, dropping back to the ordinary corner offset once the bar is gone. The
  * bar is `md:hidden`, so the `md:` half here has to match that breakpoint.
@@ -47,6 +93,35 @@ export const ABOVE_MOBILE_BOTTOM_NAV_CLASS =
  * {@link ABOVE_MOBILE_BOTTOM_NAV_CLASS} in the bottom right corner.
  */
 export const CLIPPY_LAUNCHER_SIZE_CLASS = "size-12 md:h-10 md:w-auto";
+
+/**
+ * How far in from the right edge of the window the Clippy launcher sits
+ * (ClippyLauncher). src/components/ClippyWindow.modes.test.tsx checks the
+ * launcher still sits there, since CLEAR_OF_PHONE_LAUNCHER_CLASS below is
+ * worked out from it.
+ */
+export const CLIPPY_LAUNCHER_RIGHT_CLASS = "right-4";
+
+/**
+ * The custom property a row carries for how far its right end is in from the
+ * right edge of the window, in pixels (hooks/useRightInset).
+ */
+export const RIGHT_INSET_PROPERTY = "--right-inset";
+
+/**
+ * Room at the right end of a row of buttons that scrolls through the bottom
+ * right corner on a phone, where the round Clippy launcher floats over the
+ * page: the issue page's reply box, whose Send button the launcher covered
+ * whenever the bottom bar showed. The launcher reaches 4rem in from the right
+ * edge of the window ({@link CLIPPY_LAUNCHER_RIGHT_CLASS} and its 3rem
+ * width), and the row's last button ends half a rem clear of it. However far
+ * the row already ends from that edge counts towards it, measured and written
+ * on the row as {@link RIGHT_INSET_PROPERTY} (hooks/useRightInset); until it
+ * is measured the row keeps the whole 4.5rem. Only below `md`: from there up
+ * the launcher is the pill. The scroll buttons above the launcher sit inside
+ * the same 4rem, so the row clears them too.
+ */
+export const CLEAR_OF_PHONE_LAUNCHER_CLASS = "max-md:pr-[max(0px,calc(4.5rem_-_var(--right-inset,0px)))]";
 
 /** Size of the round scroll-to-top and scroll-to-bottom buttons on long pages. */
 export const PAGE_SCROLL_BUTTON_SIZE_CLASS = "size-9";
@@ -100,9 +175,16 @@ export const PAGE_CORNER_RIGHT_CLASS = "right-[calc(var(--clippy-dock-width,0px)
  * under the panel. With Clippy docked it centres on the page area instead,
  * between the navigation (`--app-nav-width`) and the panel; without Clippy
  * `min` keeps it in the middle of the window, where it always was.
+ *
+ * It is never wider than the window either. On a phone the portfolio issues
+ * bar was wider than the screen and ran past both edges, so its "selected"
+ * count and its Deselect button were cut off. It now stops 0.75rem inside
+ * each edge and its buttons wrap onto a second line. `w-max` because a bar
+ * placed at the middle of the window is otherwise only given the half of it
+ * to the right of its left edge.
  */
 export const PAGE_BOTTOM_BAR_CENTER_CLASS =
-  "left-[min(50%,calc(var(--app-nav-width,0px)+(100%-var(--app-nav-width,0px)-var(--clippy-dock-width,0px))/2))] -translate-x-1/2";
+  "left-[min(50%,calc(var(--app-nav-width,0px)+(100%-var(--app-nav-width,0px)-var(--clippy-dock-width,0px))/2))] -translate-x-1/2 w-max max-w-[calc(100vw-1.5rem)] flex-wrap justify-center";
 
 /**
  * Where the toasts sit on a desktop: beside the company rail and the
@@ -111,11 +193,48 @@ export const PAGE_BOTTOM_BAR_CENTER_CLASS =
  * bottom of the navigation and the add-company button under the rail.
  * `--app-nav-width` is the width of those two columns, set by Layout
  * (APP_NAV_WIDTH_PROPERTY). On a phone the navigation is a drawer, so the
- * toasts keep their place there.
+ * toasts take their place there from TOAST_VIEWPORT_PHONE_CLASS.
  */
 export const APP_NAV_WIDTH_PROPERTY = "--app-nav-width";
 export const TOAST_VIEWPORT_DESKTOP_CLASS =
-  "md:left-[calc(var(--app-nav-width,0px)+0.75rem)] md:bottom-[calc(0.75rem+var(--page-bottom-bar-room,0px))]";
+  "md:left-[calc(var(--app-nav-width,0px)+0.75rem)] md:right-3 md:bottom-[calc(0.75rem+var(--page-bottom-bar-room,0px))]";
+
+/**
+ * Where the toasts sit on a phone: above the bottom bar, and left of the
+ * corner the Clippy launcher and the scroll buttons stand in.
+ *
+ * At `bottom-3` a message covered the whole bottom bar from the highest layer
+ * there is, so while it showed (a failure stays until it is closed) none of
+ * the six destinations could be reached. The offset follows the launcher's
+ * rule (ABOVE_MOBILE_BOTTOM_NAV_CLASS): the higher of clear of the bottom bar
+ * and the safe area, or 0.75rem above a page's own bar, not both added up.
+ * Up there a message the full width of the screen lay over the round
+ * launcher, so it stops 0.75rem short of the launcher's corner: the launcher
+ * is 3rem wide and 1rem in from the edge.
+ */
+export const TOAST_VIEWPORT_PHONE_CLASS =
+  "left-3 right-[4.75rem] bottom-[max(calc(4.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+0.75rem))]";
+
+/**
+ * How tall the pile of toasts may grow: up to 0.75rem short of the top of the
+ * window, from wherever TOAST_VIEWPORT_PHONE_CLASS and, from `md` up,
+ * TOAST_VIEWPORT_DESKTOP_CLASS put its foot. The oldest message, the one that
+ * says why something failed, is never above the top edge.
+ */
+export const TOAST_STACK_MAX_HEIGHT_CLASS =
+  "max-h-[calc(100dvh-0.75rem-max(calc(4.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+0.75rem)))] md:max-h-[calc(100dvh-1.5rem-var(--page-bottom-bar-room,0px))]";
+
+/**
+ * Where a page's own short notice in the bottom right corner sits, such as the
+ * Email page's "Archived". On a phone it takes the toasts' place
+ * (TOAST_VIEWPORT_PHONE_CLASS): above the bottom bar and beside the round
+ * launcher. In the launcher's own place it lay over the launcher for the four
+ * to six seconds it showed. From `md` up it sits in the corner, over the
+ * "Ask Clippy anything" pill as before, moved in by docked Clippy's width
+ * (PAGE_CORNER_RIGHT_CLASS) and lifted above a page's own bottom bar.
+ */
+export const PAGE_CORNER_NOTICE_CLASS =
+  "right-[4.75rem] bottom-[max(calc(4.75rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-room,0px)+0.75rem))] md:right-[calc(var(--clippy-dock-width,0px)+1rem)] md:bottom-[calc(1rem+var(--page-bottom-bar-room,0px))]";
 
 /**
  * Stops one page making the whole app slide sideways on a phone.
@@ -194,25 +313,61 @@ export const PAGE_AREA_CONTAINER_CLASS = "@container";
  * `data-page-end-room` then (hooks/usePageEndRoom, pageNeedsEndRoom below). A
  * page that fills the area exactly, such as Skill Studio or the org chart,
  * keeps its full height, and a short page has room to spare already. On a
- * phone the page area already keeps room for the bottom bar and the launcher.
+ * phone the page area keeps its own room (PHONE_PAGE_END_ROOM_CLASS).
+ *
+ * While a page shows a bar fixed over it, such as the selection bar, the
+ * launcher stands above that bar, so the block grows by how far up those bars
+ * reach (`--page-bottom-bar-end-room`, lib/page-bottom-bar), as the phone's
+ * room does. With a selection bar up, the pill sat on the end of the last row.
  */
 export const PAGE_END_ROOM_CLASS =
-  "md:data-[page-end-room=true]:after:block md:data-[page-end-room=true]:after:h-12";
+  "md:data-[page-end-room=true]:after:block md:data-[page-end-room=true]:after:h-[calc(var(--page-bottom-bar-end-room,0px)_+_3rem)]";
 
-/** The height PAGE_END_ROOM_CLASS adds after the page: `h-12`, 3rem. */
+/** The height PAGE_END_ROOM_CLASS adds after the page with no bar fixed over it: 3rem. */
 export const PAGE_END_ROOM_EXTRA_PX = 48;
+
+/**
+ * The same room at the end of a page's own scrolling box, for a page that
+ * fills the page area and scrolls a box inside it instead: the portfolio
+ * lists, the instance log, Skill Studio's panes. The page area never scrolls
+ * there, so PAGE_END_ROOM_CLASS never comes on, and the "Ask Clippy anything"
+ * pill sat on the end of the last row of portfolio issues. Always there from
+ * `md` up: the room is inside the box, so nothing else moves, and a box whose
+ * rows fit has room to spare already. `shrink-0`, since in a box that lays its
+ * rows out as a flex column an empty block would shrink to nothing. On a
+ * phone these boxes do not scroll on their own, and the page area's room
+ * (PHONE_PAGE_END_ROOM_CLASS) ends the page.
+ */
+export const PAGE_SCROLL_BOX_END_ROOM_CLASS =
+  "md:after:block md:after:shrink-0 md:after:h-[calc(var(--page-bottom-bar-end-room,0px)_+_3rem)]";
+
+/**
+ * The room a phone keeps at the end of the page area, as padding: the page's
+ * last row ends a rem above the round Clippy launcher, which stands 5rem up
+ * with the safe area and is 3rem tall. While a page shows a bar fixed over
+ * it, the room reaches past that bar and the launcher above it too
+ * (`--page-bottom-bar-end-room`, lib/page-bottom-bar). At 5rem the launcher
+ * covered the Wake button on the last card of the Team page, and two rows of
+ * selection buttons hid the end of the portfolio issues list.
+ *
+ * Padding is right here, where it is not on a desktop: on a phone the
+ * document scrolls rather than the page area, so a bar that sticks to the
+ * bottom is held against the window, not against this padding.
+ */
+export const PHONE_PAGE_END_ROOM_CLASS =
+  "pb-[max(calc(9rem+env(safe-area-inset-bottom)),calc(var(--page-bottom-bar-end-room,0px)+5rem))]";
 
 /**
  * Whether a page area needs the room at its end: whether its page would still
  * scroll without it. Measured without the room so that adding it cannot change
- * the answer, which would switch it on and off for ever.
+ * the answer, which would switch it on and off for ever. `roomPx` is the room
+ * there now, 0 while it is off; it is taller while a bar is fixed over the page.
  */
 export function pageNeedsEndRoom(
   pageArea: { scrollHeight: number; clientHeight: number },
-  roomIsOn: boolean,
+  roomPx: number,
 ): boolean {
-  const withoutRoom = roomIsOn ? pageArea.scrollHeight - PAGE_END_ROOM_EXTRA_PX : pageArea.scrollHeight;
-  return withoutRoom > pageArea.clientHeight + 1;
+  return pageArea.scrollHeight - roomPx > pageArea.clientHeight + 1;
 }
 
 /**

@@ -153,6 +153,9 @@ export function IssueRow({
                 "inline-flex h-4 w-4 items-center justify-center rounded-full transition-colors",
                 selected ? "hover:bg-muted/80" : "hover:bg-blue-500/20",
               )}
+              // Keeps its 16 pixel circle on a touch screen, with its target
+              // around it (index.css), rather than a tall thin bar.
+              data-touch-target="around"
               aria-label="Mark as read"
             >
               <span
@@ -179,6 +182,7 @@ export function IssueRow({
               }}
               disabled={archiveDisabled}
               className="inline-flex h-4 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+              data-touch-target="around"
               aria-label="Dismiss from inbox"
             >
               <X className="h-3.5 w-3.5" />

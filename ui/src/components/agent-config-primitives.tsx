@@ -72,7 +72,10 @@ export function HintIcon({ text }: { text: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+        {/* items-center: on a touch screen every button is at least 44px
+            tall (index.css), and the icon sat at the top of that, above the
+            label it belongs to instead of beside it. */}
+        <button type="button" className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors">
           <HelpCircle className="h-3 w-3" />
         </button>
       </TooltipTrigger>

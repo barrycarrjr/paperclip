@@ -1,5 +1,16 @@
 import { useLayoutEffect, type RefObject } from "react";
-import { pageNeedsEndRoom } from "../lib/narrow-layout";
+import { PAGE_END_ROOM_EXTRA_PX, pageNeedsEndRoom } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_END_ROOM_PROPERTY } from "../lib/page-bottom-bar";
+
+/**
+ * The room PAGE_END_ROOM_CLASS keeps after the page now, in pixels: 3rem, and
+ * as far again as the bars fixed over the page reach, which lib/page-bottom-bar
+ * writes on the document element.
+ */
+function roomAfterPage(): number {
+  const barsReach = Number.parseFloat(document.documentElement.style.getPropertyValue(PAGE_BOTTOM_BAR_END_ROOM_PROPERTY));
+  return PAGE_END_ROOM_EXTRA_PX + (Number.isFinite(barsReach) ? barsReach : 0);
+}
 
 /**
  * Keeps `data-page-end-room` on the page area while its page scrolls, which
@@ -27,7 +38,7 @@ export function usePageEndRoom(pageAreaRef: RefObject<HTMLElement | null>, enabl
     const update = () => {
       frame = 0;
       const roomIsOn = pageArea.dataset.pageEndRoom === "true";
-      const needed = pageNeedsEndRoom(pageArea, roomIsOn);
+      const needed = pageNeedsEndRoom(pageArea, roomIsOn ? roomAfterPage() : 0);
       if (needed === roomIsOn) return;
       if (needed) pageArea.dataset.pageEndRoom = "true";
       else delete pageArea.dataset.pageEndRoom;

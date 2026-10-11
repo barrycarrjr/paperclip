@@ -18,6 +18,7 @@ import type { InboxIssueColumn, KanbanCardField } from "../lib/inbox";
 import { cn } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Identity } from "./Identity";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "./PillText";
 import { StatusIcon } from "./StatusIcon";
 
 export const issueTrailingColumns: InboxIssueColumn[] = ["assignee", "project", "workspace", "parent", "labels", "updated"];
@@ -404,14 +405,14 @@ export function InboxIssueTrailingColumns({
                 {(issue.labels ?? []).slice(0, 2).map((label) => (
                   <span
                     key={label.id}
-                    className="inline-flex min-w-0 max-w-full shrink-0 items-center rounded-full border px-1.5 py-0 text-[10px] font-medium"
+                    className={cn("shrink-0 rounded-full border px-1.5 py-0 text-[10px] font-medium", PILL_HOLDING_TEXT_CLASS)}
                     style={{
                       borderColor: label.color,
                       color: pickTextColorForPillBg(label.color, 0.12),
                       backgroundColor: `${label.color}1f`,
                     }}
                   >
-                    <span className="truncate">{label.name}</span>
+                    <PillText text={label.name} />
                   </span>
                 ))}
                 {(issue.labels ?? []).length > 2 ? (

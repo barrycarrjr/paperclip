@@ -8,6 +8,7 @@ import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "./PillText";
 
 interface LabelsPickerProps {
   /** Company that owns the label set. Falls back to the active company in context. */
@@ -96,18 +97,20 @@ export function LabelsPicker({
   }, [labelIds, labels, selectedLabelsProp]);
 
   const chipsContent = selectedChips.length > 0 ? (
-    <div className="flex items-center gap-1 flex-wrap">
+    // min-w-0, so the row can give way inside the button and a long label
+    // name is cut short rather than run past the edge of the panel.
+    <div className="flex min-w-0 items-center gap-1 flex-wrap">
       {selectedChips.slice(0, 3).map((label) => (
         <span
           key={label.id}
-          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border"
+          className={cn("rounded-full px-2 py-0.5 text-xs font-medium border", PILL_HOLDING_TEXT_CLASS)}
           style={{
             borderColor: label.color,
             backgroundColor: `${label.color}22`,
             color: pickTextColorForPillBg(label.color, 0.13),
           }}
         >
-          {label.name}
+          <PillText text={label.name} />
         </span>
       ))}
       {selectedChips.length > 3 && (

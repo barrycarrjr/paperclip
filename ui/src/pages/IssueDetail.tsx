@@ -69,6 +69,7 @@ import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { EmailHandoffPanel } from "../components/EmailHandoffPanel";
 import { PageSection } from "../components/PageSection";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "../components/PillText";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { IssueReferenceActivitySummary } from "../components/IssueReferenceActivitySummary";
@@ -2790,7 +2791,9 @@ export function IssueDetail() {
         </div>
       )}
 
-      <div className="md:sticky md:top-0 md:z-20 md:-mt-3 md:py-3 md:bg-background/95 md:backdrop-blur md:supports-[backdrop-filter]:bg-background/75 md:border-b md:border-border/40">
+      {/* Solid, like every bar the page scrolls under: see-through, the
+          thread showed through the header as it scrolled. */}
+      <div className="md:sticky md:top-0 md:z-20 md:-mt-3 md:py-3 md:bg-background md:border-b md:border-border/40">
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <StatusIcon
             status={issue.status}
@@ -2839,18 +2842,20 @@ export function IssueDetail() {
           )}
 
           {(issue.labels ?? []).length > 0 && (
-            <div className="hidden sm:flex items-center gap-1">
+            // Wraps, and gives way in the header row, so long label names do
+            // not make the whole page scroll sideways.
+            <div className="hidden sm:flex min-w-0 max-w-full flex-wrap items-center gap-1">
               {(issue.labels ?? []).slice(0, 4).map((label) => (
                 <span
                   key={label.id}
-                  className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium"
+                  className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", PILL_HOLDING_TEXT_CLASS)}
                   style={{
                     borderColor: label.color,
                     color: pickTextColorForPillBg(label.color, 0.12),
                     backgroundColor: `${label.color}1f`,
                   }}
                 >
-                  {label.name}
+                  <PillText text={label.name} />
                 </span>
               ))}
               {(issue.labels ?? []).length > 4 && (

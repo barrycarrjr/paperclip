@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "@/components/PillText";
 import { cn } from "@/lib/utils";
 
 /**
@@ -193,9 +194,9 @@ export function ForkSkillDialog({
                 {usedByAgents.map((agent) => (
                   <span
                     key={agent.id}
-                    className="inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-xs text-foreground"
+                    className={cn("rounded-full border border-border bg-background px-2 py-0.5 text-xs text-foreground", PILL_HOLDING_TEXT_CLASS)}
                   >
-                    {agent.name}
+                    <PillText text={agent.name} />
                   </span>
                 ))}
               </div>

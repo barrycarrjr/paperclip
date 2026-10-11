@@ -47,9 +47,12 @@ import {
 } from "../lib/navigation-scroll";
 import {
   APP_NAV_WIDTH_PROPERTY,
+  MOBILE_BOTTOM_NAV_ROOM,
+  MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_END_ROOM_CLASS,
+  PHONE_PAGE_END_ROOM_CLASS,
 } from "../lib/narrow-layout";
 import { usePageEndRoom } from "../hooks/usePageEndRoom";
 import { queryKeys } from "../lib/queryKeys";
@@ -386,7 +389,7 @@ function LayoutShell() {
   }, [location.pathname]);
 
   // Room under the last row of a page that scrolls, for the Clippy launcher
-  // (PAGE_END_ROOM_CLASS). A phone keeps room for its bottom bar already.
+  // (PAGE_END_ROOM_CLASS). A phone keeps its own (PHONE_PAGE_END_ROOM_CLASS).
   usePageEndRoom(mainContentRef, !isMobile);
 
   useEffect(() => {
@@ -405,9 +408,15 @@ function LayoutShell() {
 
   // The company rail and the navigation beside the page on a desktop. The
   // toasts start beside them rather than on top of them (lib/narrow-layout);
-  // on a phone the navigation is a drawer, so nothing is published there.
+  // on a phone the navigation is a drawer, so no width is published there.
+  //
+  // On a phone, how far up the bottom bar reaches instead, and nothing once
+  // it has slid away: a page's own bar rests on top of it rather than under
+  // it (PAGE_BOTTOM_BAR_FLUSH_CLASS), and follows it down and back up.
   const appNavStyle = isMobile
-    ? undefined
+    ? ({
+        [MOBILE_BOTTOM_NAV_ROOM_PROPERTY]: mobileNavVisible ? MOBILE_BOTTOM_NAV_ROOM : "0px",
+      } as CSSProperties)
     : ({
         [APP_NAV_WIDTH_PROPERTY]: `${COMPANY_RAIL_WIDTH + (sidebarOpen ? NAV_SIDEBAR_WIDTH : 0)}px`,
       } as CSSProperties);
@@ -555,7 +564,9 @@ function LayoutShell() {
         <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>
           <div
             className={cn(
-              isMobile && "sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
+              // Solid: the page scrolls under it, and showed through it at 85
+              // per cent.
+              isMobile && "sticky top-0 z-20 bg-background",
             )}
           >
             <BreadcrumbBar />
@@ -573,7 +584,8 @@ function LayoutShell() {
                 navigation and the properties panel all take room from the
                 page without the window getting any narrower. And a page
                 that scrolls ends above the Clippy launcher, not under it
-                (PAGE_END_ROOM_CLASS). */}
+                (PAGE_END_ROOM_CLASS, and PHONE_PAGE_END_ROOM_CLASS on a
+                phone, which also clears a bar fixed over the page). */}
             <main
               id="main-content"
               ref={mainContentRef}
@@ -583,7 +595,7 @@ function LayoutShell() {
                 PAGE_AREA_CONTAINER_CLASS,
                 PAGE_END_ROOM_CLASS,
                 isMobile
-                  ? `${PAGE_AREA_CLIPS_SIDEWAYS_CLASS} pb-[calc(5rem+env(safe-area-inset-bottom))]`
+                  ? `${PAGE_AREA_CLIPS_SIDEWAYS_CLASS} ${PHONE_PAGE_END_ROOM_CLASS}`
                   : "overflow-auto",
               )}
             >

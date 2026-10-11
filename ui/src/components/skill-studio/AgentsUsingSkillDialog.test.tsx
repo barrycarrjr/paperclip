@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -206,6 +209,25 @@ describe("AgentsUsingSkillBadge", () => {
     expect(badge).toBeDefined();
     expect(badge?.getAttribute("aria-label")).toBe("0 agents use this skill");
     expect(badge?.className).toContain("text-muted-foreground");
+  });
+
+  it("keeps '0 agents' on one line however tightly its row is squeezed", async () => {
+    // Squeezed in Skill Studio's header on a phone it broke into "0" over
+    // "agents". index.css holds every pill's text on one line; this checks the
+    // rule there reaches this pill as it is drawn, and that it does not opt out.
+    // Under jsdom, `new URL(..., import.meta.url)` resolves against the test
+    // page rather than the disk, so the path is built from this file's own place.
+    const css = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../index.css"), "utf8");
+    const rule = /([^{};]*\.rounded-full[^{};]*\[class\*="px-"\][^{};]*)\{([^}]*)\}/.exec(
+      css.replace(/\/\*[\s\S]*?\*\//g, ""),
+    );
+    expect(rule, "the pill rule in index.css").not.toBeNull();
+    expect(rule![2]).toMatch(/white-space:\s*nowrap/);
+
+    await renderNode(<AgentsUsingSkillBadge companyId="company-1" skill={makeSkill()} />);
+    const badge = findButton("0 agents");
+    expect(badge.matches(rule![1]!.trim())).toBe(true);
+    expect(badge.classList.contains("whitespace-normal")).toBe(false);
   });
 
   it("pluralizes and opens the dialog on click", async () => {

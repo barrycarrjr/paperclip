@@ -84,6 +84,7 @@ import {
 } from "@/components/skill-studio/SkillProvenance";
 import { isProjectScanSkill } from "@/lib/skill-fork";
 import { cn, formatCents, relativeTime } from "@/lib/utils";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "@/lib/narrow-layout";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -471,7 +472,7 @@ function StudioCreateMode({
             emptyLabel="New skill"
           />
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={cn("min-h-0 flex-1 overflow-y-auto", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
           <StudioNewSkillPanel
             companyId={companyId}
             forkFromSkillId={forkFromSkillId}
@@ -869,7 +870,7 @@ function StudioLanding({
             New skill
           </Button>
         </header>
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className={cn("min-h-0 flex-1 overflow-auto", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
           <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-8">
             {visited.length > 0 ? (
               <StudioLandingSection
@@ -1797,7 +1798,7 @@ function SkillPane({
           />
         ) : null}
         <div
-          className="min-h-0 flex-1 overflow-auto px-3 pb-3"
+          className={cn("min-h-0 flex-1 overflow-auto px-3 pb-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}
           onBeforeInputCapture={markBodyInteracted}
           onDropCapture={markBodyInteracted}
           onInput={markBodyInteracted}
@@ -2944,7 +2945,7 @@ function RunsPane({
             />
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div className={cn("min-h-0 flex-1 overflow-auto p-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
           {runsQuery.isLoading ? (
             <div className="text-xs text-muted-foreground">Loading runs…</div>
           ) : runs.length === 0 ? (
@@ -3510,7 +3511,7 @@ function RunDetailView({
 
   return (
     <PaneScaffold title="Run" action={<BackButton onBack={onBack} />}>
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+      <div className={cn("min-h-0 flex-1 space-y-3 overflow-auto p-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={runBadgeStatus(detail.status)} />
           <AgentIdentity agent={agent ?? { id: detail.agentId, name: agentName }} size="xs" />

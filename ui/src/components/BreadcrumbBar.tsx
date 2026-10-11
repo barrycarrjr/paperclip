@@ -62,12 +62,15 @@ function ScopeButton({
   choices,
   onChoose,
   withSeparator = false,
+  overPageName = false,
 }: {
   text: string;
   explanation: ScopeExplanation;
   choices: ScopeChoice[];
   onChoose: (choice: ScopeChoice) => void;
   withSeparator?: boolean;
+  /** Stacked over the page name, as on a phone, where the two lines share the bar's height. */
+  overPageName?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -77,6 +80,11 @@ function ScopeButton({
           <button
             type="button"
             aria-label={`Current scope: ${text}`}
+            // Over the page name it keeps its own height on a touch screen,
+            // with its target in an area around it (index.css). Stretched to
+            // 44 pixels like other buttons, it pushed the page name down
+            // through the bar's bottom line.
+            data-touch-target={overPageName ? "around" : undefined}
             className="group flex min-w-0 shrink-0 items-center gap-1 rounded-sm px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span className="truncate">{text}</span>
@@ -395,6 +403,7 @@ export function BreadcrumbBar() {
       // one line. On a phone they are stacked, so there is nothing to
       // separate.
       withSeparator={!isMobile && breadcrumbs.length > 0}
+      overPageName={isMobile}
     />
   ) : null;
 

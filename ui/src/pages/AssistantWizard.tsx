@@ -1441,6 +1441,9 @@ function CapabilityRow({
             "flex items-center justify-center h-4 w-4 border border-border rounded-sm shrink-0 mt-0.5",
             checked && "bg-foreground border-foreground",
           )}
+          // A checkbox drawn by hand: it keeps its square on a touch screen,
+          // with its target around it (index.css), like the shared Checkbox.
+          data-touch-target="around"
         >
           {checked && <Check className="text-background h-3 w-3" />}
         </button>

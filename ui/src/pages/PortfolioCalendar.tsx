@@ -16,6 +16,7 @@ import { cn } from "../lib/utils";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmptyState } from "../components/EmptyState";
 import { PageTabBar } from "../components/PageTabBar";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "../components/PillText";
 import { CalendarConnectorStatus } from "../components/calendar/CalendarConnectorStatus";
 import { EventDialog } from "../components/calendar/EventDialog";
 import { EventDetailDialog } from "../components/calendar/EventDetailDialog";
@@ -103,14 +104,14 @@ function FilterPopover({ label, options, selected, onChange }: FilterPopoverProp
 function CompanyBadge({ company }: { company: Company | undefined }) {
   if (!company) return null;
   return (
-    <span className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+    <span className={cn("gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground", PILL_HOLDING_TEXT_CLASS)}>
       <CompanyPatternIcon
         companyName={company.name}
         logoUrl={company.logoUrl}
         brandColor={company.brandColor}
         className="h-3 w-3 shrink-0 rounded-[2px]"
       />
-      <span className="max-w-24 truncate">{company.name}</span>
+      <PillText text={company.name} className="max-w-24" />
     </span>
   );
 }

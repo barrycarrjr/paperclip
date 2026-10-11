@@ -4,7 +4,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider, useToastActions, type ToastInput } from "../context/ToastContext";
-import { TOAST_VIEWPORT_DESKTOP_CLASS } from "../lib/narrow-layout";
+import {
+  TOAST_STACK_MAX_HEIGHT_CLASS,
+  TOAST_VIEWPORT_DESKTOP_CLASS,
+  TOAST_VIEWPORT_PHONE_CLASS,
+} from "../lib/narrow-layout";
 import { ToastViewport } from "./ToastViewport";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -97,7 +101,11 @@ describe("ToastViewport", () => {
     });
     const stack = container.querySelector<HTMLElement>('[data-testid="toast-stack"]');
     expect(stack).not.toBeNull();
-    expect(stack?.className).toContain("max-h-[calc(100dvh-1.5rem)]");
+    // As far as the top of the window from wherever the box's foot is, which
+    // on a phone is above the bottom bar (lib/narrow-layout checks the sums).
+    for (const part of TOAST_STACK_MAX_HEIGHT_CLASS.split(" ")) {
+      expect(stack?.classList.contains(part)).toBe(true);
+    }
     expect(stack?.className).toContain("overflow-y-auto");
     // Scrolling a list needs pointer events, and the list is the only part
     // that takes them: the box around it stays see-through to clicks.
@@ -113,16 +121,35 @@ describe("ToastViewport", () => {
       push?.({ title: "Save failed", tone: "error" });
     });
     const box = container.querySelector<HTMLElement>('[data-testid="toast-stack"]')?.parentElement;
-    expect(box?.className).toContain("inset-x-3");
+    const phoneSides = TOAST_VIEWPORT_PHONE_CLASS.split(" ").filter((part) => /^(left|right)-/.test(part));
+    expect(phoneSides).toHaveLength(2);
+    for (const part of phoneSides) {
+      expect(box?.classList.contains(part)).toBe(true);
+    }
     expect(box?.className).not.toContain("w-full");
     expect(box?.className).toContain("max-w-sm");
+  });
+
+  it("sits above the phone's bottom bar instead of covering it", () => {
+    // At bottom-3 a message lay over the whole bottom bar, from the highest
+    // layer there is, so none of its six destinations could be reached while
+    // it showed, and a failure shows until it is closed.
+    act(() => {
+      push?.({ title: "Delete failed", tone: "error" });
+    });
+    const box = container.querySelector<HTMLElement>('[data-testid="toast-stack"]')?.parentElement;
+    for (const part of TOAST_VIEWPORT_PHONE_CLASS.split(" ")) {
+      expect(box?.classList.contains(part)).toBe(true);
+    }
+    expect(box?.classList.contains("bottom-3")).toBe(false);
+    expect(box?.classList.contains("inset-x-3")).toBe(false);
   });
 
   it("sits beside the navigation on a desktop, not on its account button", () => {
     // At the left edge of the window a message covered the account button at
     // the foot of the navigation. On a desktop the box starts at the width
     // Layout publishes for the rail and the navigation, and sits above a
-    // page's own bottom bar; a phone keeps the box held in from both sides.
+    // page's own bottom bar.
     act(() => {
       push?.({ title: "Profile saved", tone: "success" });
     });
@@ -130,8 +157,6 @@ describe("ToastViewport", () => {
     for (const part of TOAST_VIEWPORT_DESKTOP_CLASS.split(" ")) {
       expect(box?.classList.contains(part)).toBe(true);
     }
-    expect(box?.classList.contains("inset-x-3")).toBe(true);
-    expect(box?.classList.contains("bottom-3")).toBe(true);
   });
 
   it("keeps an empty live region on the page before anything is said", () => {

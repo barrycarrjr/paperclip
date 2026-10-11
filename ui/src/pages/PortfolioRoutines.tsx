@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
 import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
-import { PAGE_BOTTOM_BAR_CENTER_CLASS } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
@@ -572,7 +572,7 @@ export function PortfolioRoutines() {
           </Button>
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-3">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto px-6 py-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading && <p className="text-sm text-muted-foreground">Loading routines…</p>}
         {!isLoading && routines.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
@@ -639,7 +639,7 @@ function BulkActionsBar({ count, selectedNonArchivedCount, onRun, onPause, onRes
     // drew over the Clippy window. See lib/z-layers. Drawn beside the page
     // area, not inside it (see PageFloating).
     <PageFloating>
-      <div ref={barRef} className={cn("fixed bottom-6 flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
+      <div ref={barRef} className={cn("fixed flex items-center gap-2 rounded-lg border border-border bg-background shadow-lg px-4 py-2.5", PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_BOTTOM_BAR_CENTER_CLASS, Z_PAGE_FLOATING)}>
         <span className="text-sm font-medium text-muted-foreground mr-1">
           {count} selected
         </span>

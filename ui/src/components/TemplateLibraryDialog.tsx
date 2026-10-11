@@ -297,7 +297,8 @@ export function TemplateLibraryDialog({
         </Tabs>
 
         {selected.size > 0 && (
-          <div className="sticky bottom-0 -mx-6 -mb-6 flex items-center justify-between gap-3 border-t bg-background/95 px-6 py-3 backdrop-blur">
+          // Solid, like every bar the page scrolls under.
+          <div className="sticky bottom-0 -mx-6 -mb-6 flex items-center justify-between gap-3 border-t bg-background px-6 py-3">
             <div className="text-sm">
               <span className="font-medium">{selected.size}</span> selected
             </div>

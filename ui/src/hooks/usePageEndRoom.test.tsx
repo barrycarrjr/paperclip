@@ -4,6 +4,7 @@ import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAGE_END_ROOM_EXTRA_PX } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_END_ROOM_PROPERTY } from "../lib/page-bottom-bar";
 import { usePageEndRoom } from "./usePageEndRoom";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,6 +129,25 @@ describe("usePageEndRoom", () => {
     // a page that only overflows because of it must not keep it.
     await pageIs(800 + PAGE_END_ROOM_EXTRA_PX - 10);
     expect(roomIsOn()).toBe(false);
+  });
+
+  it("takes off all of its room, the part for a bar fixed over the page included, when it decides again", async () => {
+    // While a selection bar is up the room grows by how far the bar reaches,
+    // so the launcher above the bar clears the last row. Taking off only the
+    // usual room kept it on for a page that fits without it.
+    document.documentElement.style.setProperty(PAGE_BOTTOM_BAR_END_ROOM_PROPERTY, "74px");
+    try {
+      await act(async () => {
+        root.render(<PageArea enabled />);
+      });
+      await pageIs(1400);
+      expect(roomIsOn()).toBe(true);
+
+      await pageIs(800 + PAGE_END_ROOM_EXTRA_PX + 74 - 10);
+      expect(roomIsOn()).toBe(false);
+    } finally {
+      document.documentElement.style.removeProperty(PAGE_BOTTOM_BAR_END_ROOM_PROPERTY);
+    }
   });
 
   it("does nothing on a phone, which keeps room for its bottom bar already", async () => {

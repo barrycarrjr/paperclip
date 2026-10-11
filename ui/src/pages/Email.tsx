@@ -159,7 +159,7 @@ import {
 import { followOpenRow, type ListRow, revealRowInList, sameListRow } from "../lib/reveal-in-list";
 import {
   FILLS_OR_KEEPS_HEIGHT_CLASS,
-  PAGE_CORNER_RIGHT_CLASS,
+  PAGE_CORNER_NOTICE_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
 } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
@@ -3494,10 +3494,12 @@ export function Email() {
           <div
             role={actionToast.failed ? "alert" : "status"}
             // The page-notice layer, not z-50 (the dialog layer), where it drew
-            // over the Clippy window. See lib/z-layers.
+            // over the Clippy window. See lib/z-layers. On a phone above the
+            // bottom bar and beside the launcher, not over either
+            // (PAGE_CORNER_NOTICE_CLASS).
             className={cn(
-              "fixed bottom-4 flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
-              PAGE_CORNER_RIGHT_CLASS,
+              "fixed flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
+              PAGE_CORNER_NOTICE_CLASS,
               Z_PAGE_NOTICE,
               actionToast.failed
                 ? "bg-destructive text-destructive-foreground"
