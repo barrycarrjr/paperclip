@@ -194,6 +194,67 @@ describe.sequential("cli auth routes", () => {
     expect(res.body.canApprove).toBe(false);
   });
 
+  function challengeNaming(companyId: string, companyName: string) {
+    return {
+      id: "challenge-1",
+      status: "pending",
+      command: "paperclipai company import",
+      clientName: "paperclipai cli",
+      requestedAccess: "board",
+      requestedCompanyId: companyId,
+      requestedCompanyName: companyName,
+      approvedAt: null,
+      cancelledAt: null,
+      expiresAt: "2026-03-23T13:00:00.000Z",
+      approvedByUser: null,
+    };
+  }
+
+  function signedIn(userId: string, companyIds: string[], extra: Record<string, unknown> = {}) {
+    return { type: "board", userId, source: "session", isInstanceAdmin: false, companyIds, ...extra };
+  }
+
+  async function companyNameShownTo(actor: Record<string, unknown>) {
+    const res = await request(await createApp(actor)).get(
+      "/api/cli-auth/challenges/challenge-1?token=pcp_cli_auth_secret",
+    );
+    expect(res.status).toBe(200);
+    return res.body.requestedCompanyName as string | null;
+  }
+
+  it.sequential("names the requested company only to a signed-in person who can read it", async () => {
+    mockBoardAuthService.describeCliAuthChallenge.mockResolvedValue(
+      challengeNaming("company-1", "Northwind Trading"),
+    );
+
+    expect(await companyNameShownTo({ type: "none", source: "none" })).toBeNull();
+    expect(await companyNameShownTo(signedIn("user-2", ["company-2"]))).toBeNull();
+    expect(await companyNameShownTo(signedIn("user-1", ["company-1"]))).toBe("Northwind Trading");
+  });
+
+  it.sequential("still names the company for the owner, but not someone else's Personal", async () => {
+    const { rememberPersonalCompany } = await import("../services/personal-companies.js");
+    rememberPersonalCompany("owner-personal", "owner-user");
+    rememberPersonalCompany("other-personal", "other-user");
+    // The owner: an instance admin, the HQ owner, and the owner of his own Personal.
+    const owner = signedIn("owner-user", ["hq", "owner-personal"], {
+      isInstanceAdmin: true,
+      isPortfolioRootUserAdmin: true,
+    });
+
+    mockBoardAuthService.describeCliAuthChallenge.mockResolvedValue(challengeNaming("owner-personal", "Personal"));
+    expect(await companyNameShownTo(owner)).toBe("Personal");
+
+    // A company he is not a member of, which the HQ owner can read.
+    mockBoardAuthService.describeCliAuthChallenge.mockResolvedValue(
+      challengeNaming("company-1", "Northwind Trading"),
+    );
+    expect(await companyNameShownTo(owner)).toBe("Northwind Trading");
+
+    mockBoardAuthService.describeCliAuthChallenge.mockResolvedValue(challengeNaming("other-personal", "Personal"));
+    expect(await companyNameShownTo(owner)).toBeNull();
+  });
+
   it.sequential("approves a CLI auth challenge for a signed-in board user", async () => {
     mockBoardAuthService.approveCliAuthChallenge.mockResolvedValue({
       status: "approved",

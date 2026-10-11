@@ -75,7 +75,7 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
-import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, hasCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -2589,9 +2589,16 @@ export function accessRoutes(
       (challenge.requestedAccess !== "instance_admin_required" ||
         isLocalImplicit(req) ||
         Boolean(req.actor.isInstanceAdmin));
+    // A challenge needs no sign-in and may name any company id, so the name is
+    // given only to someone signed in who could read that company anyway.
+    const mayNameCompany =
+      isSignedInBoardUser &&
+      challenge.requestedCompanyId !== null &&
+      hasCompanyAccess(req, challenge.requestedCompanyId, "read");
 
     res.json({
       ...challenge,
+      requestedCompanyName: mayNameCompany ? challenge.requestedCompanyName : null,
       requiresSignIn: !isSignedInBoardUser,
       canApprove,
       currentUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,

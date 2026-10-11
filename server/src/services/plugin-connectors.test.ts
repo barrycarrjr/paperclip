@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginConnectorDeclaration } from "@paperclipai/shared";
-import { readConnectorAccounts, resolveConnectorCompanies } from "./plugin-connectors.js";
+import { accountsVisibleTo, readConnectorAccounts, resolveConnectorCompanies } from "./plugin-connectors.js";
 
 const CONNECTOR: PluginConnectorDeclaration = {
   id: "google-calendar",
@@ -129,6 +129,29 @@ describe("plugin connectors", () => {
     });
 
     expect(resolveConnectorCompanies(withoutLabel, accounts, COMPANIES).companies[0].accountLabel).toBe("ib");
+  });
+
+  it("shows a viewer only the accounts that serve a company they may see", () => {
+    const accounts = readConnectorAccounts(CONNECTOR, {
+      accounts: [
+        { key: "a", userEmail: "books@example.org", allowedCompanies: ["company-a"], refreshTokenRef: "s" },
+        { key: "b", userEmail: "bob.private@example.com", allowedCompanies: ["company-b"], refreshTokenRef: "" },
+        { key: "all", userEmail: "ops@example.com", allowedCompanies: ["*"], refreshTokenRef: "s" },
+        { key: "new", userEmail: "new@example.com", allowedCompanies: [], refreshTokenRef: "" },
+      ],
+    });
+    const labels = (viewer: Parameters<typeof accountsVisibleTo>[1]) =>
+      accountsVisibleTo(accounts, viewer).map((account) => account.label);
+
+    expect(
+      labels({ canSeeCompany: (id) => id === "company-a", seesUnassignedAccounts: false }),
+    ).toEqual(["books@example.org", "ops@example.com"]);
+    expect(labels({ canSeeCompany: () => true, seesUnassignedAccounts: true })).toEqual([
+      "books@example.org",
+      "bob.private@example.com",
+      "ops@example.com",
+      "new@example.com",
+    ]);
   });
 
   it("counts an account as finished when the connector requires no fields", () => {

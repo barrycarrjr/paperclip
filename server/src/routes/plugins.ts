@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import express, { Router } from "express";
 import type { Request, Response } from "express";
 import JSZip from "jszip";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, notInArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -58,6 +58,8 @@ import {
 } from "@paperclipai/shared";
 import type { PluginOperationPolicy } from "@paperclipai/shared";
 import { pluginConnectorService } from "../services/plugin-connectors.js";
+import { pluginConfigVisibleTo } from "../services/plugin-config-visibility.js";
+import { isPersonalCompany, personalCompanyIds } from "../services/personal-companies.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import {
   getPluginUiContributionMetadata,
@@ -83,6 +85,7 @@ import {
   assertInstanceAdmin,
   getActorInfo,
   hasBoardOrgAccess,
+  hasCompanyAccess,
   hasInstanceAdminAccess,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
@@ -444,6 +447,25 @@ interface PluginToolExecuteRequest {
   parameters?: unknown;
   /** Agent run context. */
   runContext: ToolRunContext;
+}
+
+/**
+ * Whether a company named in plugin data may be shown to this caller.
+ *
+ * A plugin serves every company from one instance-wide config, so its connector
+ * lists, config, logs and run history name companies the caller may not be in.
+ * A caller sees the companies they can read. An instance admin looks after
+ * plugins for everyone, so also sees every other company, except someone
+ * else's Personal.
+ */
+function canSeePluginCompany(req: Request, companyId: string): boolean {
+  if (hasCompanyAccess(req, companyId, "read")) return true;
+  return hasInstanceAdminAccess(req) && !isPersonalCompany(companyId);
+}
+
+/** Personal companies whose plugin rows this caller must not see: everyone else's. */
+function othersPersonalCompanyIds(req: Request): string[] {
+  return [...personalCompanyIds()].filter((companyId) => !hasCompanyAccess(req, companyId, "read"));
 }
 
 /**
@@ -1072,6 +1094,9 @@ export function pluginRoutes(
    * An empty array means no installed plugin declares a connector for the
    * surface, and the calling page should render nothing at all.
    *
+   * Each connector lists only the companies the caller may see, and only the
+   * accounts serving one of them (see `canSeePluginCompany`).
+   *
    * Response: PluginConnectorStatus[]
    */
   router.get("/plugins/connectors", async (req, res) => {
@@ -1086,7 +1111,11 @@ export function pluginRoutes(
       return;
     }
 
-    res.json(await connectors.listForSurface(surface));
+    res.json(await connectors.listForSurface(surface, {
+      canSeeCompany: (companyId) => canSeePluginCompany(req, companyId),
+      // Accounts not yet given a company are being set up, which is an admin's job.
+      seesUnassignedAccounts: hasInstanceAdminAccess(req),
+    }));
   });
 
   // ===========================================================================
@@ -2934,10 +2963,13 @@ export function pluginRoutes(
    * - level: Filter by log level (info, warn, error, debug)
    * - since: ISO timestamp to filter logs newer than this time
    *
+   * Instance admins only: a plugin logs for every company it serves. Lines
+   * from someone else's Personal company are left out even then.
+   *
    * Response: Array of log entries, newest first.
    */
   router.get("/plugins/:pluginId/logs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -2951,6 +2983,10 @@ export function pluginRoutes(
     const since = req.query.since as string | undefined;
 
     const conditions = [eq(pluginLogs.pluginId, plugin.id)];
+    const hiddenCompanyIds = othersPersonalCompanyIds(req);
+    if (hiddenCompanyIds.length > 0) {
+      conditions.push(or(isNull(pluginLogs.companyId), notInArray(pluginLogs.companyId, hiddenCompanyIds))!);
+    }
     if (level) {
       conditions.push(eq(pluginLogs.level, level));
     }
@@ -3259,6 +3295,12 @@ export function pluginRoutes(
    * Returns the `PluginConfig` record if one exists, or `null` if the plugin
    * has not yet been configured.
    *
+   * Company pages read this to see whether their company has an account, so
+   * anyone in a company may call it, and gets only the parts for companies
+   * they can read. Instance admins get the whole config: the settings page
+   * saves back exactly what it loaded, so a trimmed copy would delete
+   * everything it did not show.
+   *
    * Response: `PluginConfig | null`
    * Errors: 404 if plugin not found
    */
@@ -3273,7 +3315,23 @@ export function pluginRoutes(
     }
 
     const config = await registry.getConfig(plugin.id);
-    res.json(config);
+    if (!config || hasInstanceAdminAccess(req)) {
+      res.json(config);
+      return;
+    }
+
+    const companyIds = new Set(
+      (await db.select({ id: companies.id }).from(companies)).map((row) => row.id),
+    );
+    res.json({
+      ...config,
+      configJson: pluginConfigVisibleTo(config.configJson ?? {}, plugin.manifestJson?.instanceConfigSchema, {
+        canSeeCompany: (companyId) => canSeePluginCompany(req, companyId),
+        isCompanyId: (value) => companyIds.has(value),
+      }),
+      // Free text from the plugin, which can name any company's account.
+      lastError: null,
+    });
   });
 
   /**
@@ -3537,11 +3595,14 @@ export function pluginRoutes(
    * Query params:
    * - `limit` (optional): Maximum number of runs to return (default: 50)
    *
+   * Instance admins only, like the logs: a run's errors and log lines can be
+   * about any company. Runs for someone else's Personal company are left out.
+   *
    * Response: PluginJobRunRecord[]
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/jobs/:jobId/runs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     if (!jobDeps) {
       res.status(501).json({ error: "Job scheduling is not enabled" });
       return;
@@ -3567,7 +3628,7 @@ export function pluginRoutes(
     }
 
     try {
-      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
+      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit, othersPersonalCompanyIds(req));
       res.json(runs);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -3791,12 +3852,16 @@ export function pluginRoutes(
    * runs, recent webhook deliveries, and the current health check result —
    * all in a single response to avoid multiple round-trips.
    *
+   * Instance admins only, like the logs, and without runs or deliveries for
+   * someone else's Personal company.
+   *
    * Response: PluginDashboardData
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/dashboard", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
+    const hiddenCompanyIds = othersPersonalCompanyIds(req);
 
     const plugin = await resolvePlugin(registry, pluginId);
     if (!plugin) {
@@ -3851,7 +3916,7 @@ export function pluginRoutes(
 
     if (jobDeps) {
       try {
-        const runs = await jobDeps.jobStore.listRunsByPlugin(plugin.id, undefined, 10);
+        const runs = await jobDeps.jobStore.listRunsByPlugin(plugin.id, undefined, 10, hiddenCompanyIds);
         // Also fetch job definitions so we can include jobKey
         const jobs = await jobDeps.jobStore.listJobs(plugin.id);
         const jobKeyMap = new Map(jobs.map((j) => [j.id, j.jobKey]));
@@ -3900,7 +3965,17 @@ export function pluginRoutes(
           createdAt: pluginWebhookDeliveries.createdAt,
         })
         .from(pluginWebhookDeliveries)
-        .where(eq(pluginWebhookDeliveries.pluginId, plugin.id))
+        .where(
+          hiddenCompanyIds.length > 0
+            ? and(
+                eq(pluginWebhookDeliveries.pluginId, plugin.id),
+                or(
+                  isNull(pluginWebhookDeliveries.companyId),
+                  notInArray(pluginWebhookDeliveries.companyId, hiddenCompanyIds),
+                ),
+              )
+            : eq(pluginWebhookDeliveries.pluginId, plugin.id),
+        )
         .orderBy(desc(pluginWebhookDeliveries.createdAt))
         .limit(10);
 

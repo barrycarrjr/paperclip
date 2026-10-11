@@ -461,18 +461,20 @@ export function calendarService(db: Db) {
       return rows;
     },
 
-    ackDesktopNotifications: async (ids: string[]): Promise<string[]> => {
+    ackDesktopNotifications: async (ids: string[], userId?: string): Promise<string[]> => {
       if (ids.length === 0) return [];
+      const conditions = [
+        inArray(calendarEventDeliveries.id, ids),
+        eq(calendarEventDeliveries.channel, "desktop"),
+        eq(calendarEventDeliveries.status, "pending"),
+      ];
+      if (userId) {
+        conditions.push(eq(calendarEventDeliveries.userId, userId));
+      }
       const updated = await db
         .update(calendarEventDeliveries)
         .set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            inArray(calendarEventDeliveries.id, ids),
-            eq(calendarEventDeliveries.channel, "desktop"),
-            eq(calendarEventDeliveries.status, "pending"),
-          ),
-        )
+        .where(and(...conditions))
         .returning({ id: calendarEventDeliveries.id });
       return updated.map((row) => row.id);
     },
