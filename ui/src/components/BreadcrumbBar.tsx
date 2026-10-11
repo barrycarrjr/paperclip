@@ -424,15 +424,24 @@ export function BreadcrumbBar() {
         <BreadcrumbList className="flex-nowrap">
           {breadcrumbs.map((crumb, i) => {
             const isLast = i === breadcrumbs.length - 1;
+            // In a trail of three or more, the crumbs between the first and
+            // the last give way first, cut short with "…", and the page's own
+            // name last. Held at full width, they pushed the page's name out of
+            // the bar on a phone and beside docked Clippy, and cut the crumb
+            // before it off mid-word. The weight goes on them, not a smaller one
+            // on the last crumb: a crumb shrinking alone with a factor below 1
+            // gives up only that share of the room it lacks, and the rest of it
+            // is cut off with no "…".
+            const isBetween = i > 0 && !isLast;
             return (
               <Fragment key={i}>
                 {i > 0 && <BreadcrumbSeparator />}
-                <BreadcrumbItem className={isLast ? "min-w-0" : "shrink-0"}>
+                <BreadcrumbItem className={isLast ? "min-w-0" : isBetween ? "min-w-0 shrink-[4]" : "shrink-0"}>
                   {isLast || !crumb.href ? (
                     <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                   ) : (
                     <BreadcrumbLink asChild>
-                      <Link to={crumb.href}>{crumb.label}</Link>
+                      <Link to={crumb.href} className={isBetween ? "truncate" : undefined}>{crumb.label}</Link>
                     </BreadcrumbLink>
                   )}
                 </BreadcrumbItem>

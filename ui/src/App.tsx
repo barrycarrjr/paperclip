@@ -25,6 +25,8 @@ import { Goals } from "./pages/Goals";
 import { GoalDetail } from "./pages/GoalDetail";
 import { workTabRoutes } from "./pages/Work";
 import { Memories } from "./pages/Memories";
+import { Spaces } from "./pages/Spaces";
+import { SpaceDetail } from "./pages/SpaceDetail";
 import { WorkQueues } from "./pages/WorkQueues";
 import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
@@ -293,6 +295,9 @@ export function boardRoutes() {
       <Route path="execution-workspaces/:workspaceId/issues" element={<ExecutionWorkspaceDetail />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
       <Route path="memories" element={<Memories />} />
+      <Route path="spaces" element={<Spaces />} />
+      <Route path="spaces/:spaceKey" element={<SpaceDetail />} />
+      <Route path="spaces/:spaceKey/:pageId" element={<SpaceDetail />} />
       <Route path="approvals" element={<Navigate to="/approvals/pending" replace />} />
       <Route path="approvals/pending" element={<Approvals />} />
       <Route path="approvals/all" element={<Approvals />} />
@@ -530,6 +535,8 @@ export function App() {
           <Route path="pipelines/*" element={<UnprefixedBoardRedirect />} />
           <Route path="cases" element={<UnprefixedBoardRedirect />} />
           <Route path="cases/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="spaces" element={<UnprefixedBoardRedirect />} />
+          <Route path="spaces/*" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<UnprefixedBoardRedirect />} />

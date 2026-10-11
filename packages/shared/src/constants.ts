@@ -1641,6 +1641,7 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "assistants",
   "calendar",
   "memories",
+  "spaces",
   "work",
   "work-queues",
   "email",
