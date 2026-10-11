@@ -103,6 +103,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { agentInstructionsBundleMode } from "../services/agent-instructions.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
 import { logger } from "../middleware/logger.js";
@@ -562,6 +563,18 @@ export function agentRoutes(
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== targetAgent.companyId) {
       throw forbidden("Agent key cannot access another company");
+    }
+  }
+
+  // An instructions folder outside Paperclip's own storage can be anywhere on
+  // the host, so reading it needs an instance admin, as upstream. An agent is
+  // never one. The managed folder keeps the read rule above.
+  function assertExternalInstructionsAdmin(
+    req: Request,
+    agent: Parameters<typeof agentInstructionsBundleMode>[0],
+  ) {
+    if (agentInstructionsBundleMode(agent) === "external") {
+      assertInstanceAdmin(req);
     }
   }
 
@@ -2373,6 +2386,7 @@ export function agentRoutes(
       return;
     }
     await assertCanReadAgent(req, existing);
+    assertExternalInstructionsAdmin(req, existing);
     res.json(await instructions.getBundle(existing));
   });
 
@@ -2432,6 +2446,7 @@ export function agentRoutes(
       return;
     }
     await assertCanReadAgent(req, existing);
+    assertExternalInstructionsAdmin(req, existing);
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {

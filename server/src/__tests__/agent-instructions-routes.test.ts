@@ -1,6 +1,8 @@
+import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -81,7 +83,15 @@ function registerModuleMocks() {
   }));
 }
 
-async function createApp() {
+const LOCAL_BOARD = {
+  type: "board",
+  userId: "local-board",
+  companyIds: ["company-1"],
+  source: "local_implicit",
+  isInstanceAdmin: false,
+};
+
+async function createApp(actor: Record<string, unknown> = LOCAL_BOARD) {
   const [{ agentRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -89,13 +99,7 @@ async function createApp() {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
+    (req as any).actor = { ...actor };
     next();
   });
   app.use("/api", agentRoutes({} as any));
@@ -148,6 +152,38 @@ function makeAgent() {
     updatedAt: new Date(),
   };
 }
+
+const AGENT_ID = "11111111-1111-4111-8111-111111111111";
+// Any folder on the host other than Paperclip's own managed one.
+const OUTSIDE_ROOT = path.resolve("/srv/team-instructions");
+
+function managedInstructionsRoot() {
+  return path.resolve(resolvePaperclipInstanceRoot(), "companies", "company-1", "agents", AGENT_ID, "instructions");
+}
+
+function makeAgentWithInstructions(mode: "managed" | "external", rootPath: string) {
+  return {
+    ...makeAgent(),
+    adapterConfig: {
+      instructionsBundleMode: mode,
+      instructionsRootPath: rootPath,
+      instructionsEntryFile: "AGENTS.md",
+      instructionsFilePath: path.join(rootPath, "AGENTS.md"),
+    },
+  };
+}
+
+// Holds agents:create (the mocked canUser answers yes), which is what reading
+// another agent's instructions needs, but is not an instance admin.
+const COMPANY_MEMBER = {
+  type: "board",
+  userId: "user-1",
+  companyIds: ["company-1"],
+  source: "session",
+  isInstanceAdmin: false,
+};
+const INSTANCE_ADMIN = { ...COMPANY_MEMBER, userId: "admin-1", isInstanceAdmin: true };
+const SAME_AGENT = { type: "agent", agentId: AGENT_ID, companyId: "company-1", source: "agent_key" };
 
 describe("agent instructions bundle routes", () => {
   beforeEach(() => {
@@ -412,5 +448,78 @@ describe("agent instructions bundle routes", () => {
     expect(res.body.error).toContain('No provider available for model "gpt-4.1"');
     expect(pickOneShotModel).not.toHaveBeenCalled();
     expect(getProviderForModel).toHaveBeenCalledWith("gpt-4.1");
+  });
+
+  describe("reading instructions kept outside Paperclip's own storage", () => {
+    const fileUrl = `/api/agents/${AGENT_ID}/instructions-bundle/file?companyId=company-1&path=AGENTS.md`;
+    const bundleUrl = `/api/agents/${AGENT_ID}/instructions-bundle?companyId=company-1`;
+
+    beforeEach(() => {
+      mockAccessService.canUser.mockResolvedValue(true);
+    });
+
+    it("refuses a member who is not an instance admin the file and the file list", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+      const app = await createApp(COMPANY_MEMBER);
+
+      const file = await requestApp(app, (baseUrl) => request(baseUrl).get(fileUrl));
+      expect(file.status, JSON.stringify(file.body)).toBe(403);
+      expect(file.body).toEqual({ error: "Instance admin access required" });
+
+      const bundle = await requestApp(app, (baseUrl) => request(baseUrl).get(bundleUrl));
+      expect(bundle.status, JSON.stringify(bundle.body)).toBe(403);
+
+      expect(mockAgentInstructionsService.readFile).not.toHaveBeenCalled();
+      expect(mockAgentInstructionsService.getBundle).not.toHaveBeenCalled();
+    });
+
+    it("treats a folder outside Paperclip as outside even when the saved mode says managed", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("managed", OUTSIDE_ROOT));
+
+      const res = await requestApp(await createApp(COMPANY_MEMBER), (baseUrl) => request(baseUrl).get(fileUrl));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(mockAgentInstructionsService.readFile).not.toHaveBeenCalled();
+    });
+
+    it("refuses an agent, even reading its own instructions", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+      const app = await createApp(SAME_AGENT);
+
+      const file = await requestApp(app, (baseUrl) => request(baseUrl).get(fileUrl));
+      expect(file.status, JSON.stringify(file.body)).toBe(403);
+      const bundle = await requestApp(app, (baseUrl) => request(baseUrl).get(bundleUrl));
+      expect(bundle.status, JSON.stringify(bundle.body)).toBe(403);
+
+      expect(mockAgentInstructionsService.readFile).not.toHaveBeenCalled();
+      expect(mockAgentInstructionsService.getBundle).not.toHaveBeenCalled();
+    });
+
+    it("lets an instance admin and the local board read it", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+
+      for (const actor of [INSTANCE_ADMIN, LOCAL_BOARD]) {
+        const app = await createApp(actor);
+        const file = await requestApp(app, (baseUrl) => request(baseUrl).get(fileUrl));
+        expect(file.status, JSON.stringify(file.body)).toBe(200);
+        const bundle = await requestApp(app, (baseUrl) => request(baseUrl).get(bundleUrl));
+        expect(bundle.status, JSON.stringify(bundle.body)).toBe(200);
+      }
+      expect(mockAgentInstructionsService.readFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the usual read rule for Paperclip's own managed folder", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("managed", managedInstructionsRoot()));
+
+      for (const actor of [COMPANY_MEMBER, SAME_AGENT]) {
+        const app = await createApp(actor);
+        const file = await requestApp(app, (baseUrl) => request(baseUrl).get(fileUrl));
+        expect(file.status, JSON.stringify(file.body)).toBe(200);
+        expect(file.body).toMatchObject({ path: "AGENTS.md", content: "# Agent\n" });
+        const bundle = await requestApp(app, (baseUrl) => request(baseUrl).get(bundleUrl));
+        expect(bundle.status, JSON.stringify(bundle.body)).toBe(200);
+      }
+      expect(mockAgentInstructionsService.readFile).toHaveBeenCalledTimes(2);
+    });
   });
 });

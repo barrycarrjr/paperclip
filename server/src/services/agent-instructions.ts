@@ -273,6 +273,23 @@ function deriveBundleState(agent: AgentLike): BundleState {
   };
 }
 
+/**
+ * Classify the configured bundle without touching the filesystem, as
+ * upstream does. A folder other than Paperclip's own managed one counts as
+ * external whatever mode is stored.
+ */
+export function agentInstructionsBundleMode(agent: AgentLike): BundleMode | null {
+  const state = deriveBundleState(agent);
+  if (state.mode === "external") return "external";
+  if (
+    state.rootPath
+    && path.resolve(state.rootPath) !== resolveManagedInstructionsRoot(agent)
+  ) {
+    return "external";
+  }
+  return state.mode;
+}
+
 async function recoverManagedBundleState(agent: AgentLike, state: BundleState): Promise<BundleState> {
   const managedRootPath = resolveManagedInstructionsRoot(agent);
   const stat = await statIfExists(managedRootPath);

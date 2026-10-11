@@ -165,6 +165,53 @@ describe.sequential("activity routes", () => {
     expect(mockActivityService.create).not.toHaveBeenCalled();
   });
 
+  it("records the caller, not an actor named in the body, when creating activity events", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "event-1", ...row }));
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({
+        actorType: "agent",
+        actorId: "33333333-3333-4333-8333-333333333333",
+        agentId: "33333333-3333-4333-8333-333333333333",
+        action: "secret.deleted",
+        entityType: "secret",
+        entityId: "secret-1",
+      }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockActivityService.create).toHaveBeenCalledTimes(1);
+    const row = mockActivityService.create.mock.calls[0]![0];
+    expect(row).toMatchObject({
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "user-1",
+      agentId: null,
+      action: "secret.deleted",
+      entityType: "secret",
+      entityId: "secret-1",
+    });
+    expect(res.body).toMatchObject({ actorType: "user", actorId: "user-1", agentId: null });
+  });
+
+  it("accepts an activity event that names no actor and records the caller", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "event-2", ...row }));
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "note.added", entityType: "issue", entityId: "issue-1" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockActivityService.create).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "user-1",
+      agentId: null,
+    }));
+  });
+
   it("requires company access before listing issues for another company's run", async () => {
     mockHeartbeatService.getRun.mockResolvedValue({
       id: "run-2",

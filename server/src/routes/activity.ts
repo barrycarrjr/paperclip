@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -98,13 +98,15 @@ function auditRowsToCsv(rows: AuditCsvRow[]): string {
   return `${lines.join("\r\n")}\r\n`;
 }
 
+// A posted row is recorded as the caller who posted it, so the body no longer
+// names an actor. Actor fields sent anyway are dropped, not stored.
 const createActivitySchema = z.object({
-  actorType: z.enum(["agent", "user", "system", "plugin"]).optional().default("system"),
-  actorId: z.string().min(1),
+  // actorType: z.enum(["agent", "user", "system", "plugin"]).optional().default("system"),
+  // actorId: z.string().min(1),
   action: z.string().min(1),
   entityType: z.string().min(1),
   entityId: z.string().min(1),
-  agentId: z.string().uuid().optional().nullable(),
+  // agentId: z.string().uuid().optional().nullable(),
   details: z.record(z.unknown()).optional().nullable(),
 });
 
@@ -388,9 +390,16 @@ export function activityRoutes(db: Db) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    // Recorded as the caller. Taking the actor from the body let a caller log
+    // a row as an agent or another person, and the Activity feed and the agent
+    // audit then showed it as that actor's own action.
+    const actor = getActorInfo(req);
     const event = await svc.create({
       companyId,
       ...req.body,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
       details: req.body.details ? sanitizeRecord(req.body.details) : null,
     });
     res.status(201).json(event);

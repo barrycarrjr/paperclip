@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentInstructionsService } from "../services/agent-instructions.js";
+import { agentInstructionsBundleMode, agentInstructionsService } from "../services/agent-instructions.js";
 
 type TestAgent = {
   id: string;
@@ -39,6 +39,38 @@ describe("agent instructions service", () => {
       await fs.rm(dir, { recursive: true, force: true });
       cleanupDirs.delete(dir);
     }));
+  });
+
+  it("calls a bundle external whenever its folder is outside Paperclip's managed folder", () => {
+    const paperclipHome = path.join(os.tmpdir(), "paperclip-bundle-mode-home");
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const managedRoot = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "agents",
+      "agent-1",
+      "instructions",
+    );
+    const outsideRoot = path.join(os.tmpdir(), "paperclip-bundle-mode-outside");
+    const bundle = (mode: string, rootPath: string) => makeAgent({
+      instructionsBundleMode: mode,
+      instructionsRootPath: rootPath,
+      instructionsEntryFile: "AGENTS.md",
+      instructionsFilePath: path.join(rootPath, "AGENTS.md"),
+    });
+
+    expect(agentInstructionsBundleMode(bundle("managed", managedRoot))).toBe("managed");
+    expect(agentInstructionsBundleMode(bundle("external", outsideRoot))).toBe("external");
+    expect(agentInstructionsBundleMode(bundle("managed", outsideRoot))).toBe("external");
+    expect(agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(outsideRoot, "AGENTS.md") })))
+      .toBe("external");
+    expect(agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(managedRoot, "AGENTS.md") })))
+      .toBe("managed");
+    expect(agentInstructionsBundleMode(makeAgent({}))).toBeNull();
   });
 
   it("copies the existing bundle into the managed root when switching to managed mode", async () => {
