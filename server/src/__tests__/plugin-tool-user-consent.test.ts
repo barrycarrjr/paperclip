@@ -86,4 +86,17 @@ describe("host-issued plugin permission and consent", () => {
     await dispatcher.executeTool("support:diagnose", {}, run);
     expect(call).toHaveBeenCalledTimes(3);
   });
+  it("drops a hostScope an agent puts in its parameters, so it cannot pose as an instance admin", async () => {
+    // hostScope is the host's stamp on a call from a plugin's own page, and a
+    // plugin may act on hostScope.isInstanceAdmin. An agent's parameters are
+    // its own.
+    const { dispatcher, call } = setup();
+    const agentRun: ToolRunContext = { companyId: "company-a", agentId: "agent-1", runId: "run-1", userId: null };
+    await dispatcher.executeTool(
+      "support:ordinary",
+      { note: "kept", hostScope: { companyId: "company-a", userId: "admin-1", isInstanceAdmin: true } },
+      agentRun,
+    );
+    expect(call.mock.calls[0][2].parameters).toEqual({ note: "kept" });
+  });
 });

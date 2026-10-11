@@ -1238,18 +1238,31 @@ export function buildHostServices(
           );
         }
 
+        // Who the plugin says asked. The host cannot check it, but the log is
+        // the one record of an apply that survives it: the activity log is
+        // replaced along with everything else.
+        const requestedByUserId = typeof params.requestedByUserId === "string" ? params.requestedByUserId : null;
+        const about = { pluginId, pluginKey, sizeBytes, requestedByUserId };
         if (params.mode === "apply") {
-          logger.warn({ pluginId, pluginKey, sizeBytes }, "plugin is replacing the instance database from a dump");
+          logger.warn(about, "plugin is replacing the instance database from a dump");
         } else {
-          logger.info({ pluginId, pluginKey, sizeBytes }, "plugin is checking a dump for a restore");
+          logger.info(about, "plugin is checking a dump for a restore");
         }
-        const result = await snapshots.restoreSnapshot({
-          mode: params.mode,
-          conflictMode,
-          bodyFilePath: params.filePath,
-        });
+        let result: Awaited<ReturnType<typeof snapshots.restoreSnapshot>>;
+        try {
+          result = await snapshots.restoreSnapshot({
+            mode: params.mode,
+            conflictMode,
+            bodyFilePath: params.filePath,
+          });
+        } catch (err) {
+          if (params.mode === "apply") {
+            logger.warn({ ...about, err }, "plugin's database restore failed; the database was not replaced");
+          }
+          throw err;
+        }
         if (result.applied) {
-          logger.warn({ pluginId, pluginKey, sizeBytes }, "plugin replaced the instance database from a dump");
+          logger.warn(about, "plugin replaced the instance database from a dump");
         }
         return {
           applied: result.applied,

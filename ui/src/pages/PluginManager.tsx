@@ -6,7 +6,13 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { PLUGIN_CATEGORIES, type PluginCategory, type PluginRecord } from "@paperclipai/shared";
+import {
+  PLUGIN_CAPABILITY_WARNINGS,
+  PLUGIN_CATEGORIES,
+  type PluginCapability,
+  type PluginCategory,
+  type PluginRecord,
+} from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -1275,12 +1281,14 @@ export function PluginManager() {
 }
 
 /**
- * Confirm dialog rendered when an upgrade request comes back with the
- * structured capability_escalation 409. Shows the operator the new
- * capabilities the plugin would gain, and on approval re-fires the install
- * mutation with `acknowledgeCapabilities` covering the escalated list.
+ * Confirm dialog rendered when an install or upgrade request comes back with
+ * the structured capability_escalation 409. Shows the operator the
+ * capabilities the plugin would gain, with a plain sentence for the ones that
+ * reach the whole instance, and on approval re-fires the install mutation with
+ * `acknowledgeCapabilities` covering the escalated list. A first install asks
+ * only for those, through the same 409.
  */
-function CapabilityApprovalDialog(props: {
+export function CapabilityApprovalDialog(props: {
   prompt:
     | { pluginKey: string; details: CapabilityEscalationDetails }
     | null;
@@ -1301,38 +1309,54 @@ function CapabilityApprovalDialog(props: {
   const displayName = row?.displayName ?? prompt?.pluginKey ?? "";
   const currentVersion = row?.installedPlugin?.version ?? null;
   const targetVersion = row?.libraryEntry?.version ?? null;
+  // Nothing installed yet: the server asked before a first install.
+  const firstInstall = !row?.installedPlugin;
   return (
     <Dialog open={prompt !== null} onOpenChange={(open) => { if (!open) onCancel(); }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-amber-600" />
-            New permissions required
+            {firstInstall ? "Permissions to approve" : "New permissions required"}
           </DialogTitle>
-          <DialogDescription>
-            {displayName}
-            {currentVersion && targetVersion
-              ? ` v${currentVersion} → v${targetVersion}`
-              : targetVersion
-                ? ` v${targetVersion}`
-                : ""}
-            {" "}is requesting capabilities the installed version does not have.
-            Review what the upgrade will be allowed to do before approving.
-          </DialogDescription>
+          {firstInstall ? (
+            <DialogDescription>
+              {displayName}
+              {targetVersion ? ` v${targetVersion}` : ""}
+              {" "}asks for capabilities that need your approval before it is installed.
+            </DialogDescription>
+          ) : (
+            <DialogDescription>
+              {displayName}
+              {currentVersion && targetVersion
+                ? ` v${currentVersion} → v${targetVersion}`
+                : targetVersion
+                  ? ` v${targetVersion}`
+                  : ""}
+              {" "}is requesting capabilities the installed version does not have.
+              Review what the upgrade will be allowed to do before approving.
+            </DialogDescription>
+          )}
         </DialogHeader>
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            New capabilities granted by this upgrade:
+            {firstInstall ? "Capabilities to approve:" : "New capabilities granted by this upgrade:"}
           </p>
           <ul className="space-y-1.5 text-sm">
-            {prompt?.details.escalated.map((cap) => (
-              <li
-                key={cap}
-                className="rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-xs text-foreground/85"
-              >
-                {cap}
-              </li>
-            ))}
+            {prompt?.details.escalated.map((cap) => {
+              const warning = PLUGIN_CAPABILITY_WARNINGS[cap as PluginCapability];
+              return (
+                <li
+                  key={cap}
+                  className="rounded-md border bg-muted/40 px-2.5 py-2 text-xs"
+                >
+                  <span className="font-mono text-foreground/85">{cap}</span>
+                  {warning ? (
+                    <span className="mt-1 block font-medium text-amber-700 dark:text-amber-400">{warning}</span>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
           {prompt?.details.previousCapabilities.length ? (
             <details className="text-xs text-muted-foreground">
@@ -1357,7 +1381,9 @@ function CapabilityApprovalDialog(props: {
             disabled={isPending}
           >
             <ShieldAlert className="h-4 w-4" />
-            {isPending ? "Upgrading…" : "Approve & upgrade"}
+            {firstInstall
+              ? (isPending ? "Installing…" : "Approve & install")
+              : (isPending ? "Upgrading…" : "Approve & upgrade")}
           </Button>
         </DialogFooter>
       </DialogContent>

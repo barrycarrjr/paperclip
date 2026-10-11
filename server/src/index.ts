@@ -58,12 +58,14 @@ import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
 } from "./routes/instance-database-backups.js";
-import type {
-  ProduceSnapshotResult,
-  RestoreSnapshotInput,
-  RestoreSnapshotResult,
-  SystemSnapshotManifest,
-  SystemSnapshotService,
+import {
+  reloadAccessCachesAfterRestore,
+  reloadingAfterRestore,
+  type ProduceSnapshotResult,
+  type RestoreSnapshotInput,
+  type RestoreSnapshotResult,
+  type SystemSnapshotManifest,
+  type SystemSnapshotService,
 } from "./routes/system-snapshot.js";
 
 type BetterAuthSessionUser = {
@@ -649,7 +651,9 @@ export async function startServer(): Promise<StartedServer> {
   // plugin schemas) for the backup-tools plugin and any other consumer. Shares
   // the `databaseBackupInFlight` flag with the manual-backup path so we don't
   // race two concurrent pg_dump-style runs against the same connection pool.
-  const systemSnapshotService: SystemSnapshotService = (() => {
+  // A successful restore reloads what the access checks keep in memory (see
+  // reloadingAfterRestore).
+  const systemSnapshotService: SystemSnapshotService = reloadingAfterRestore((() => {
     const snapshotTempDir = path.resolve(
       config.databaseBackupDir,
       "..",
@@ -853,7 +857,7 @@ export async function startServer(): Promise<StartedServer> {
         }
       },
     };
-  })();
+  })(), () => reloadAccessCachesAfterRestore(db as any));
 
   // HQ ships with the software: a brand-new instance gets one rather than
   // starting with nothing for the cross-company features to point at.

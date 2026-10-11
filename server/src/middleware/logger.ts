@@ -14,29 +14,38 @@ const sharedOpts = {
   singleLine: true,
 };
 
+// Every 4xx and 5xx line carries the full request headers (see customProps
+// below), so without `cookie` here a live session token is written to the log
+// file in plaintext on any failed request. Anything that can read the log
+// directory can then sign in as that user. `set-cookie` covers the response
+// side, which is how a freshly issued session would otherwise leak.
+// `reqBody.value` is the one that is easy to miss: the secrets API carries
+// the plaintext credential as `body.value`, and a 400 on that route writes
+// the whole body to the line. The viewer masks these too, but keeping them
+// out of the file is the real fix, since the file outlives the viewer and
+// gets copied around.
+// `passphrase` is a backup's passphrase or pasted instance key: a refused
+// restore writes it from the scoped API route's body, or from `params` on a
+// page action, which the bridge answers 502 for any refusal.
+export const LOG_REDACT_PATHS = [
+  "req.headers.authorization",
+  "req.headers.cookie",
+  "res.headers['set-cookie']",
+  "reqBody.value",
+  "reqBody.token",
+  "reqBody.secret",
+  "reqBody.password",
+  "reqBody.apiKey",
+  "reqBody.passphrase",
+  "reqBody.params.passphrase",
+  "errorContext.reqBody.value",
+  "errorContext.reqBody.passphrase",
+  "errorContext.reqBody.params.passphrase",
+];
+
 export const logger = pino({
   level: "debug",
-  // Every 4xx and 5xx line carries the full request headers (see customProps
-  // below), so without `cookie` here a live session token is written to the log
-  // file in plaintext on any failed request. Anything that can read the log
-  // directory can then sign in as that user. `set-cookie` covers the response
-  // side, which is how a freshly issued session would otherwise leak.
-  // `reqBody.value` is the one that is easy to miss: the secrets API carries
-  // the plaintext credential as `body.value`, and a 400 on that route writes
-  // the whole body to the line. The viewer masks these too, but keeping them
-  // out of the file is the real fix, since the file outlives the viewer and
-  // gets copied around.
-  redact: [
-    "req.headers.authorization",
-    "req.headers.cookie",
-    "res.headers['set-cookie']",
-    "reqBody.value",
-    "reqBody.token",
-    "reqBody.secret",
-    "reqBody.password",
-    "reqBody.apiKey",
-    "errorContext.reqBody.value",
-  ],
+  redact: LOG_REDACT_PATHS,
   // The explicit generic keeps TS from unifying every target's options into
   // one exact shape (pretty's options and pino-roll's options share nothing).
 }, pino.transport<Record<string, unknown>>({

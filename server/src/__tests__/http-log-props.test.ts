@@ -50,6 +50,43 @@ describe("failedRequestLogProps", () => {
   });
 });
 
+describe("a refused restore request", () => {
+  // A backup's passphrase, or the instance key pasted in its place. Any
+  // refusal is logged: the bridge answers 502 to a worker refusal and the
+  // restore API answers 400 or 409.
+  const PASSPHRASE = "pasted-instance-key-0123456789abcdef";
+
+  it("keeps the passphrase out of a page action's failed line", () => {
+    const props = failedRequestLogProps(
+      {
+        body: {
+          companyId: "company-1",
+          params: { destinationId: "local-1", archiveKey: "20261009T030700-a.pcback", passphrase: PASSPHRASE },
+        },
+        params: { pluginId: "backup-tools", key: "restore.preview" },
+      },
+      {},
+    );
+    const line = JSON.stringify(props);
+
+    expect(line).not.toContain(PASSPHRASE);
+    expect(line).toContain("20261009T030700-a.pcback");
+  });
+
+  it("keeps the passphrase out of a restore API call's failed line", () => {
+    const props = failedRequestLogProps({}, {
+      __errorContext: {
+        error: { message: "a restore is already running" },
+        reqBody: { destinationId: "local-1", archiveKey: "a.pcback", passphrase: PASSPHRASE },
+        reqParams: {},
+        reqQuery: { companyId: "company-1" },
+      },
+    });
+
+    expect(JSON.stringify(props)).not.toContain(PASSPHRASE);
+  });
+});
+
 describe("redactSensitive", () => {
   it("matches sensitive keys in any letter case and at any depth", () => {
     const out = JSON.stringify(

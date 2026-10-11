@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import pino from "pino";
+import { LOG_REDACT_PATHS } from "../middleware/logger.js";
 
 /**
  * The server logs the full request headers on any 4xx or 5xx response (see
@@ -69,5 +70,29 @@ describe("server log redaction", () => {
     );
 
     expect(written.join("")).not.toContain("NEW_SESSION");
+  });
+});
+
+describe("the server logger's own redact paths", () => {
+  function lineFor(props: Record<string, unknown>): string {
+    const written: string[] = [];
+    pino({ redact: LOG_REDACT_PATHS }, { write: (chunk: string) => written.push(chunk) }).warn(props, "failed");
+    return written.join("");
+  }
+
+  it("are all accepted, so the logger cannot throw at import time", () => {
+    expect(() => pino({ redact: LOG_REDACT_PATHS }, { write: () => {} })).not.toThrow();
+  });
+
+  it("keep a restore passphrase out of a failed line, wherever the request carried it", () => {
+    const passphrase = "pasted-instance-key-0123456789abcdef";
+    const pageAction = lineFor({ reqBody: { companyId: "c-1", params: { archiveKey: "a.pcback", passphrase } } });
+    const apiCall = lineFor({ reqBody: { archiveKey: "a.pcback", passphrase } });
+    const withContext = lineFor({
+      errorContext: { reqBody: { passphrase, params: { passphrase } } },
+    });
+
+    for (const line of [pageAction, apiCall, withContext]) expect(line).not.toContain(passphrase);
+    expect(pageAction).toContain("a.pcback");
   });
 });

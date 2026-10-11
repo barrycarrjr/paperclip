@@ -8,10 +8,16 @@
  * gate but lets the operator clear it after seeing the escalation set; these
  * tests lock in the four corners of that behaviour.
  */
-import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   computeCapabilityEscalation,
   PluginCapabilityEscalationError,
+  pluginLoader,
+  warnedCapabilitiesNeedingApproval,
 } from "../services/plugin-loader.js";
 
 describe("computeCapabilityEscalation", () => {
@@ -134,5 +140,69 @@ describe("PluginCapabilityEscalationError", () => {
     expect(err.previousCapabilities).toEqual(["issues.read"]);
     expect(err.nextCapabilities).toEqual(["issues.read", "issues.update"]);
     expect(err.escalated).toEqual(["issues.update"]);
+  });
+});
+
+describe("a first install of a plugin that can copy or replace the whole database", () => {
+  const SNAPSHOT_CAPABILITIES = ["system.snapshot.read", "system.snapshot.restore"];
+  let dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    dirs = [];
+  });
+
+  /** A plugin folder as the library install unpacks it, asking for both snapshot capabilities. */
+  async function snapshotPlugin() {
+    const dir = await mkdtemp(path.join(tmpdir(), "plugin-first-install-"));
+    const managedDir = await mkdtemp(path.join(tmpdir(), "plugin-first-install-managed-"));
+    dirs.push(dir, managedDir);
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({
+      name: "paperclip-plugin-snapshot-test",
+      version: "0.1.0",
+      type: "module",
+      paperclipPlugin: { manifest: "./manifest.js", worker: "./worker.js" },
+    }));
+    await writeFile(path.join(dir, "manifest.js"), `export default ${JSON.stringify({
+      id: "snapshot-test",
+      apiVersion: 1,
+      version: "0.1.0",
+      displayName: "Snapshot test",
+      description: "Asks for the whole database",
+      author: "Paperclip",
+      categories: ["automation"],
+      capabilities: ["issues.read", ...SNAPSHOT_CAPABILITIES],
+      entrypoints: { worker: "./worker.js" },
+    })};\n`);
+    await writeFile(path.join(dir, "worker.js"), "\n");
+    const loader = pluginLoader({} as never, { localPluginDir: managedDir, managedPluginDir: managedDir });
+    return { dir, managedDir, loader };
+  }
+
+  it("names the capabilities with a warning that are not approved yet", () => {
+    expect(warnedCapabilitiesNeedingApproval(["issues.read", ...SNAPSHOT_CAPABILITIES])).toEqual(SNAPSHOT_CAPABILITIES);
+    expect(warnedCapabilitiesNeedingApproval(SNAPSHOT_CAPABILITIES, ["system.snapshot.read"])).toEqual([
+      "system.snapshot.restore",
+    ]);
+    expect(warnedCapabilitiesNeedingApproval(["issues.read", "toString"])).toEqual([]);
+  });
+
+  it("asks before installing from the library, and installs nothing until approved", async () => {
+    const { dir, managedDir, loader } = await snapshotPlugin();
+
+    const asked = await loader.installPlugin({ localPath: dir, askBeforeWarnedCapabilities: true }).catch((err) => err);
+    expect(asked).toBeInstanceOf(PluginCapabilityEscalationError);
+    expect(asked).toMatchObject({ escalated: SNAPSHOT_CAPABILITIES, previousCapabilities: [] });
+    expect(asked.message).toContain('Installing "snapshot-test"');
+    expect(existsSync(path.join(managedDir, "snapshot-test"))).toBe(false);
+
+    // Approved, it goes on to install. This test has no database, so it
+    // stops there, at something other than the question.
+    const approved = await loader.installPlugin({
+      localPath: dir,
+      askBeforeWarnedCapabilities: true,
+      acknowledgeCapabilities: SNAPSHOT_CAPABILITIES,
+    }).catch((err) => err);
+    expect(approved).not.toBeInstanceOf(PluginCapabilityEscalationError);
   });
 });

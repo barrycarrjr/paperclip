@@ -39,6 +39,7 @@ import type {
   PluginRecord,
   PluginUiSlotDeclaration,
 } from "@paperclipai/shared";
+import { PLUGIN_CAPABILITY_WARNINGS } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { pluginManifestValidator } from "./plugin-manifest-validator.js";
 import { pluginCapabilityValidator } from "./plugin-capability-validator.js";
@@ -299,6 +300,18 @@ export interface PluginInstallOptions {
    * Defaults to the localPluginDir configured on the service.
    */
   installDir?: string;
+
+  /**
+   * Refuse with {@link PluginCapabilityEscalationError} when the plugin asks
+   * for a capability in `PLUGIN_CAPABILITY_WARNINGS` that
+   * `acknowledgeCapabilities` does not cover. The library install sets it, so
+   * the plugin manager's approval dialog comes up on a first install too, not
+   * only on an upgrade.
+   */
+  askBeforeWarnedCapabilities?: boolean;
+
+  /** Capabilities the operator approved, for `askBeforeWarnedCapabilities`. */
+  acknowledgeCapabilities?: string[];
 }
 
 /**
@@ -350,6 +363,21 @@ export function computeCapabilityEscalation(
 }
 
 /**
+ * The capabilities in `requested` that carry a warning
+ * (`PLUGIN_CAPABILITY_WARNINGS`, such as copying or replacing the whole
+ * database) and that `acknowledged` does not cover.
+ */
+export function warnedCapabilitiesNeedingApproval(
+  requested: readonly string[],
+  acknowledged: readonly string[] = [],
+): string[] {
+  const ackSet = new Set(acknowledged);
+  return requested.filter(
+    (cap) => Object.prototype.hasOwnProperty.call(PLUGIN_CAPABILITY_WARNINGS, cap) && !ackSet.has(cap),
+  );
+}
+
+/**
  * Thrown by `upgradePlugin` when the new manifest declares capabilities the
  * previously-installed version did not, and the caller has not acknowledged
  * those new capabilities. Surfaces the full escalation set so routes can
@@ -367,11 +395,16 @@ export class PluginCapabilityEscalationError extends Error {
     previousCapabilities: readonly string[];
     nextCapabilities: readonly string[];
     escalated: readonly string[];
+    /** A first install that asks for a capability needing approval, not an upgrade. */
+    firstInstall?: boolean;
   }) {
     super(
-      `Upgrade for "${args.pluginId}" introduces new capabilities that require approval: ${args.escalated.join(", ")}. `
-      + `The previous version declared [${args.previousCapabilities.join(", ")}]. `
-      + `Re-submit the upgrade with acknowledgeCapabilities covering the escalated set.`,
+      args.firstInstall
+        ? `Installing "${args.pluginId}" grants capabilities that require approval: ${args.escalated.join(", ")}. `
+          + `Re-submit the install with acknowledgeCapabilities covering them.`
+        : `Upgrade for "${args.pluginId}" introduces new capabilities that require approval: ${args.escalated.join(", ")}. `
+          + `The previous version declared [${args.previousCapabilities.join(", ")}]. `
+          + `Re-submit the upgrade with acknowledgeCapabilities covering the escalated set.`,
     );
     this.name = "PluginCapabilityEscalationError";
     this.pluginId = args.pluginId;
@@ -1469,6 +1502,26 @@ export function pluginLoader(
     async installPlugin(installOptions: PluginInstallOptions): Promise<DiscoveredPlugin> {
       const discovered = await fetchAndValidate(installOptions);
       const manifest = discovered.manifest!;
+
+      // An upgrade asks before granting a new capability. A first install
+      // granted everything without asking, including a copy or a replacement
+      // of the whole database. Ask for those, before anything is copied or
+      // recorded.
+      if (installOptions.askBeforeWarnedCapabilities) {
+        const escalated = warnedCapabilitiesNeedingApproval(
+          manifest.capabilities,
+          installOptions.acknowledgeCapabilities,
+        );
+        if (escalated.length > 0) {
+          throw new PluginCapabilityEscalationError({
+            pluginId: manifest.id,
+            previousCapabilities: [],
+            nextCapabilities: manifest.capabilities,
+            escalated,
+            firstInstall: true,
+          });
+        }
+      }
 
       // For local-path installs, copy artifacts into the managed plugin dir so
       // the running worker no longer depends on the operator's source folder

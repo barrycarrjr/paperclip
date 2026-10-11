@@ -598,7 +598,12 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         async restoreSnapshot(input) {
           return callHost(
             "system.restoreSnapshot",
-            { filePath: input.filePath, mode: input.mode, conflictMode: input.conflictMode },
+            {
+              filePath: input.filePath,
+              mode: input.mode,
+              conflictMode: input.conflictMode,
+              requestedByUserId: input.requestedByUserId,
+            },
             restoreRpcTimeoutMs,
           );
         },
@@ -1600,16 +1605,30 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     throw new Error(`No action or operation handler registered for key "${params.key}"`);
   }
 
+  /**
+   * A tool call's parameters without `hostScope`. That key is the host's stamp
+   * on a call from the plugin's own page, which a handler may trust; an
+   * agent's parameters are its own, so a `hostScope` there is forged. The host
+   * drops it as well; this covers a host that does not.
+   */
+  function withoutHostScope(parameters: unknown): unknown {
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return parameters;
+    if (!Object.prototype.hasOwnProperty.call(parameters, "hostScope")) return parameters;
+    const { hostScope: _forged, ...rest } = parameters as Record<string, unknown>;
+    return rest;
+  }
+
   async function handleExecuteTool(params: ExecuteToolParams): Promise<ToolResult> {
+    const parameters = withoutHostScope(params.parameters);
     const entry = toolHandlers.get(params.toolName);
     if (entry) {
-      return runWithFailureCapture(() => entry.fn(params.parameters, params.runContext));
+      return runWithFailureCapture(() => entry.fn(parameters, params.runContext));
     }
 
     const operation = operationHandlers.get(params.toolName);
     if (operation) {
       const runCtx = params.runContext;
-      return runWithFailureCapture(() => operation(params.parameters, {
+      return runWithFailureCapture(() => operation(parameters, {
         invokedBy: "agent",
         companyId: runCtx.companyId,
         projectId: runCtx.projectId,

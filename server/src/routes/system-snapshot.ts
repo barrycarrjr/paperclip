@@ -3,8 +3,11 @@ import { createReadStream, statSync, unlinkSync, existsSync, mkdirSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { Db } from "@paperclipai/db";
 import { assertInstanceAdmin } from "./authz.js";
 import { badRequest, conflict } from "../errors.js";
+import { loadPersonalCompanyIndex } from "../services/personal-companies.js";
+import { invalidatePortfolioRootCache } from "../services/portfolio-root-cache.js";
 
 /**
  * Manifest envelope for an instance snapshot. Returned as the response body
@@ -106,6 +109,55 @@ export function assertRestoreSupported(
       `[ESNAPSHOT_CONFLICT_MODE_UNSUPPORTED] conflict=${conflictMode} not yet supported (v0.1 ships overwrite only)`,
     );
   }
+}
+
+/**
+ * The same service, except that a successful apply then reloads what the
+ * running server keeps in memory from the database.
+ *
+ * A restore replaces the database under a server that goes on running, and
+ * anything it loaded at startup is wrong from that moment. The access checks
+ * read two such things: the list of Personal companies, on every request, and
+ * the HQ company's id. Left alone, a restored Personal company counts as an
+ * ordinary company until a restart, so its owner's privacy is not enforced.
+ *
+ * The HTTP route and a plugin's `ctx.system.restoreSnapshot` share the
+ * service, so wrapping it once covers both. A reload that fails cannot undo
+ * the restore, so the result says to restart instead.
+ */
+export function reloadingAfterRestore(
+  service: SystemSnapshotService,
+  reload: () => Promise<void>,
+): SystemSnapshotService {
+  return {
+    ...service,
+    async restoreSnapshot(input) {
+      const result = await service.restoreSnapshot(input);
+      if (!result.applied) return result;
+      try {
+        await reload();
+        return result;
+      } catch (err) {
+        return {
+          ...result,
+          warnings: [
+            ...result.warnings,
+            `[ESNAPSHOT_RELOAD_FAILED] the database was restored, but the server could not reload what it keeps in memory (${err instanceof Error ? err.message : String(err)}). Restart Paperclip now.`,
+          ],
+        };
+      }
+    },
+  };
+}
+
+/**
+ * What the access checks keep in memory, read again from the database.
+ * Everything else in the running server (plugin workers, schedules) still
+ * needs the restart the restore wizard asks for.
+ */
+export async function reloadAccessCachesAfterRestore(db: Db): Promise<void> {
+  invalidatePortfolioRootCache();
+  await loadPersonalCompanyIndex(db);
 }
 
 /**

@@ -346,7 +346,12 @@ export interface PerformActionParams {
 export interface ExecuteToolParams {
   /** Tool name (without plugin namespace prefix). */
   toolName: string;
-  /** Parsed parameters matching the tool's declared schema. */
+  /**
+   * Parsed parameters matching the tool's declared schema. They come from the
+   * agent, so they never carry the host's `hostScope` stamp: the host and the
+   * worker drop any the agent sends, and only page calls (`getData`,
+   * `performAction`) have one.
+   */
   parameters: unknown;
   /** Agent run context. */
   runContext: ToolRunContext;
@@ -1148,6 +1153,8 @@ export interface WorkerToHostMethods {
       mode: "preview" | "apply";
       /** Defaults to "overwrite", the only mode that can be applied today. */
       conflictMode?: "overwrite" | "skip" | "fail-on-conflict";
+      /** The person the plugin restores for. Logged by the host as given, not checked. */
+      requestedByUserId?: string | null;
     },
     result: {
       /** True once the database has been replaced. */

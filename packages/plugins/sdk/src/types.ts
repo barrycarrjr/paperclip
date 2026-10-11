@@ -742,7 +742,10 @@ export interface PluginSystemClient {
    * finishes. It can take minutes, so this call waits up to 30 minutes.
    *
    * The host does not know who asked for the restore. A plugin that offers it
-   * to people must check `params.hostScope.isInstanceAdmin` itself.
+   * to people must check `params.hostScope.isInstanceAdmin` itself. That flag
+   * counts only in `ctx.actions` and `ctx.data` handlers, which serve the
+   * plugin's own pages: an agent's tool or operation parameters never carry
+   * it, because the host and the worker drop any `hostScope` an agent sends.
    */
   restoreSnapshot(input: PluginSystemRestoreInput): Promise<PluginSystemRestoreResult>;
 }
@@ -754,6 +757,12 @@ export interface PluginSystemRestoreInput {
   mode: "preview" | "apply";
   /** Defaults to `"overwrite"`, the only mode that can be applied today. */
   conflictMode?: "overwrite" | "skip" | "fail-on-conflict";
+  /**
+   * The person the plugin is restoring for, such as `hostScope.userId`. The
+   * host writes it to its log as given, beside the plugin's name; it cannot
+   * check it.
+   */
+  requestedByUserId?: string | null;
 }
 
 /** What {@link PluginSystemClient.restoreSnapshot} hands back. */
