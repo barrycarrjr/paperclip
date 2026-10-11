@@ -83,11 +83,19 @@ export function getBufferedEventsSince(companyId: string, sinceId: number): Repl
   return { events: buffer.events.filter((event) => event.id > sinceId), bridged: true };
 }
 
-/** Buffered events after `sinceId` across every company, merged in id order. */
-export function getAllBufferedEventsSince(sinceId: number): ReplayResult {
+/**
+ * Buffered events after `sinceId` across every company the viewer may see,
+ * merged in id order. A company `includeCompany` turns down is skipped whole:
+ * it adds no events, and a gap in its buffer does not force a resync.
+ */
+export function getAllBufferedEventsSince(
+  sinceId: number,
+  includeCompany: (companyId: string) => boolean,
+): ReplayResult {
   const merged: LiveEvent[] = [];
   let bridged = true;
-  for (const buffer of replayBuffers.values()) {
+  for (const [companyId, buffer] of replayBuffers) {
+    if (!includeCompany(companyId)) continue;
     if (sinceId < buffer.trimmedBelowId) bridged = false;
     for (const event of buffer.events) {
       if (event.id > sinceId) merged.push(event);

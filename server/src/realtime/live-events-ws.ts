@@ -3,11 +3,14 @@ import type { IncomingMessage, Server as HttpServer } from "node:http";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { and, eq, isNull } from "drizzle-orm";
+import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
-import type { DeploymentMode } from "@paperclipai/shared";
+import type { DeploymentMode, LiveEvent } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
+import { hasActorCompanyAccess } from "../routes/authz.js";
+import { isPersonalCompany } from "../services/personal-companies.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 import {
   getAllBufferedEventsSince,
@@ -54,6 +57,13 @@ interface UpgradeContext {
   scope: "company" | "portfolio";
   actorType: "board" | "agent";
   actorId: string;
+  /**
+   * Who is connected, in the shape the company access check takes. Only the
+   * identity is filled in (the user, or the agent and its company): that is
+   * all the Personal company rule reads, and it is the one rule this feed
+   * asks the check about.
+   */
+  actor: Request["actor"];
   /** Replay cursor from the client, valid only when replayBootId matches. */
   replaySinceId: number | null;
   replayBootId: string | null;
@@ -117,6 +127,19 @@ function parseReplayParams(url: URL): { replaySinceId: number | null; replayBoot
   };
 }
 
+/**
+ * Whether `actor` may receive `companyId`'s events.
+ *
+ * Someone's Personal company is theirs alone: not an HQ agent's, not an HQ
+ * admin's, not an instance administrator's. The company access check is where
+ * that rule is written, and for a Personal company it decides on that rule
+ * alone, so it is asked here rather than the rule being copied. Any other
+ * company was settled when the feed was opened.
+ */
+function mayReceiveCompanyEvents(actor: Request["actor"], companyId: string): boolean {
+  return !isPersonalCompany(companyId) || hasActorCompanyAccess(actor, companyId, "read");
+}
+
 async function authorizeUpgrade(
   db: Db,
   req: IncomingMessage,
@@ -152,6 +175,8 @@ async function authorizeUpgrade(
         scope,
         actorType: "board",
         actorId: "board",
+        // The actor the REST middleware uses for a local_trusted install.
+        actor: { type: "board", userId: "local-board", source: "local_implicit" },
         ...replay,
       };
     }
@@ -185,6 +210,8 @@ async function authorizeUpgrade(
         ),
     ]);
 
+    const actor: Request["actor"] = { type: "board", userId, source: "session" };
+
     if (scope === "portfolio") {
       // Portfolio feed: instance admin, or owner/admin membership on the
       // HQ company - the same principals the REST portfolio guard accepts.
@@ -195,6 +222,10 @@ async function authorizeUpgrade(
       );
       if (!roleRow && !isHqAdmin) return null;
     } else {
+      // Someone's Personal company first, as the company access check does,
+      // so neither the instance-admin role nor the HQ-admin allowance below
+      // can open another person's Personal feed.
+      if (!mayReceiveCompanyEvents(actor, companyId)) return null;
       const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
       if (!roleRow && !hasCompanyMembership) {
         // Mirror REST's read bypass: an HQ owner/admin may read any
@@ -217,6 +248,7 @@ async function authorizeUpgrade(
       scope,
       actorType: "board",
       actorId: userId,
+      actor,
       ...replay,
     };
   }
@@ -259,6 +291,7 @@ async function authorizeUpgrade(
     scope,
     actorType: "agent",
     actorId: key.agentId,
+    actor: { type: "agent", agentId: key.agentId, companyId: key.companyId, source: "agent_key" },
     ...replay,
   };
 }
@@ -298,6 +331,14 @@ export function setupLiveEventsWebSocketServer(
       socket.send(JSON.stringify(event));
     };
 
+    // Every company event goes out through here, live or replayed, on either
+    // feed. The portfolio feed hears every company, Personal ones included,
+    // so this is what keeps someone's Personal away from everyone else.
+    const mayReceive = (companyId: string) => mayReceiveCompanyEvents(context.actor, companyId);
+    const deliverEvent = (event: LiveEvent) => {
+      if (mayReceive(event.companyId)) deliver(event);
+    };
+
     // Hello first: carries the boot id so the client can tell whether its
     // replay cursor is still meaningful (event ids reset every boot).
     deliver({
@@ -313,19 +354,19 @@ export function setupLiveEventsWebSocketServer(
     if (context.replaySinceId != null && context.replayBootId === LIVE_EVENTS_BOOT_ID) {
       const replay =
         context.scope === "portfolio"
-          ? getAllBufferedEventsSince(context.replaySinceId)
+          ? getAllBufferedEventsSince(context.replaySinceId, mayReceive)
           : getBufferedEventsSince(context.companyId, context.replaySinceId);
       if (!replay.bridged) {
         deliver({ kind: "resync" });
       } else {
-        for (const event of replay.events) deliver(event);
+        for (const event of replay.events) deliverEvent(event);
       }
     }
 
     const unsubscribe =
       context.scope === "portfolio"
-        ? subscribeAllCompanyLiveEvents(deliver)
-        : subscribeCompanyLiveEvents(context.companyId, deliver);
+        ? subscribeAllCompanyLiveEvents(deliverEvent)
+        : subscribeCompanyLiveEvents(context.companyId, deliverEvent);
 
     cleanupByClient.set(socket, unsubscribe);
     aliveByClient.set(socket, true);
