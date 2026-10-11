@@ -34,11 +34,19 @@ import type {
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { agentService } from "./agents.js";
 import { companySkillService } from "./company-skills.js";
+import { isPersonalCompany } from "./personal-companies.js";
 import { routineService } from "./routines.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
 
 type Actor = { userId?: string | null };
+
+/**
+ * Who is deploying. `refusalFor` says why they may not deploy into a company,
+ * or null when they may; the route works it out from the signed-in caller. A
+ * refused company gets an error row and nothing is made in it.
+ */
+type DeployActor = Actor & { refusalFor?: (companyId: string) => string | null };
 
 type RoutineVariableInput = CreateRoutineTemplate["variables"][number];
 
@@ -142,6 +150,27 @@ export function templateService(
           metadata,
         },
       });
+  }
+
+  /**
+   * The error row for a company this actor may not deploy into, or null when
+   * they may. Someone else's Personal company is named by its id alone, as an
+   * unknown company is, so its name stays private.
+   */
+  function refusedDeployment(
+    actor: DeployActor,
+    companyId: string,
+    companyName: string,
+  ): TemplateDeploymentResultItem | null {
+    const refusal = actor.refusalFor?.(companyId) ?? null;
+    if (!refusal) return null;
+    return {
+      companyId,
+      companyName: isPersonalCompany(companyId) ? companyId : companyName,
+      status: "error",
+      deployedEntityId: null,
+      message: refusal,
+    };
   }
 
   async function getExistingDeployment(
@@ -564,7 +593,7 @@ export function templateService(
   async function deployRoutine(
     templateId: string,
     body: DeployTemplate,
-    actor: Actor,
+    actor: DeployActor,
   ): Promise<TemplateDeploymentResult> {
     const template = await getRoutineTemplate(templateId);
     if (!template) throw notFound("Routine template not found");
@@ -585,6 +614,12 @@ export function templateService(
           deployedEntityId: null,
           message: "Company not found",
         });
+        continue;
+      }
+
+      const refused = refusedDeployment(actor, companyId, companyName);
+      if (refused) {
+        results.push(refused);
         continue;
       }
 
@@ -700,7 +735,7 @@ export function templateService(
   async function deployAgent(
     templateId: string,
     body: DeployTemplate,
-    actor: Actor,
+    actor: DeployActor,
   ): Promise<TemplateDeploymentResult> {
     const template = await getAgentTemplate(templateId);
     if (!template) throw notFound("Agent template not found");
@@ -721,6 +756,12 @@ export function templateService(
           deployedEntityId: null,
           message: "Company not found",
         });
+        continue;
+      }
+
+      const refused = refusedDeployment(actor, companyId, companyName);
+      if (refused) {
+        results.push(refused);
         continue;
       }
 
@@ -779,7 +820,7 @@ export function templateService(
   async function deploySkill(
     templateId: string,
     body: DeployTemplate,
-    actor: Actor,
+    actor: DeployActor,
   ): Promise<TemplateDeploymentResult> {
     const template = await getSkillTemplate(templateId);
     if (!template) throw notFound("Skill template not found");
@@ -800,6 +841,12 @@ export function templateService(
           deployedEntityId: null,
           message: "Company not found",
         });
+        continue;
+      }
+
+      const refused = refusedDeployment(actor, companyId, companyName);
+      if (refused) {
+        results.push(refused);
         continue;
       }
 
@@ -853,7 +900,7 @@ export function templateService(
     type: TemplateType,
     templateId: string,
     body: DeployTemplate,
-    actor: Actor,
+    actor: DeployActor,
   ): Promise<TemplateDeploymentResult> {
     if (type === "routine") return deployRoutine(templateId, body, actor);
     if (type === "agent") return deployAgent(templateId, body, actor);

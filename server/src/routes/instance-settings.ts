@@ -9,7 +9,7 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
-import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
+import { assertBoardOrgAccess, getActorInfo, isOthersPersonalCompany } from "./authz.js";
 
 function assertCanManageInstanceSettings(req: Request) {
   if (req.actor.type !== "board") {
@@ -146,6 +146,9 @@ export function instanceSettingsRoutes(db: Db) {
       assertCanManageInstanceSettings(req);
       res.json(await heartbeat.buildIssueGraphLivenessAutoRecoveryPreview({
         lookbackHours: req.body.lookbackHours,
+        // Stuck tasks in someone else's Personal company stay out, titles and
+        // counts alike: they are its owner's business, administrators included.
+        includeCompany: (companyId) => !isOthersPersonalCompany(req.actor, companyId),
       }));
     },
   );

@@ -2228,12 +2228,19 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   async function buildIssueGraphLivenessAutoRecoveryPreview(
-    opts?: { lookbackHours?: number; now?: Date },
+    opts?: {
+      lookbackHours?: number;
+      now?: Date;
+      /** Leaves out every finding in a company this returns false for, from the counts too. */
+      includeCompany?: (companyId: string) => boolean;
+    },
   ): Promise<IssueGraphLivenessAutoRecoveryPreview> {
     const now = opts?.now ?? new Date();
     const lookbackHours = normalizeIssueGraphLivenessAutoRecoveryLookbackHours(opts?.lookbackHours);
     const cutoff = new Date(now.getTime() - lookbackHours * 60 * 60 * 1000);
-    const findings = await collectIssueGraphLivenessFindings();
+    const includeCompany = opts?.includeCompany;
+    const findings = (await collectIssueGraphLivenessFindings())
+      .filter((finding) => !includeCompany || includeCompany(finding.companyId));
     const updatedAtByIssueKey = await loadLivenessDependencyUpdatedAtByIssue(findings);
     const issueIds = [...new Set(findings.map((finding) => finding.recoveryIssueId))];
     const recoveryRows = issueIds.length > 0

@@ -208,6 +208,7 @@ describe("instance settings routes", () => {
     expect(res.body).toMatchObject({ lookbackHours: 24, recoverableFindings: 1 });
     expect(mockHeartbeatService.buildIssueGraphLivenessAutoRecoveryPreview).toHaveBeenCalledWith({
       lookbackHours: 12,
+      includeCompany: expect.any(Function),
     });
   });
 

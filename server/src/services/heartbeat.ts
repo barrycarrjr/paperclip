@@ -5134,7 +5134,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return recovery.buildRunOutputSilence(run, now);
   }
 
-  async function buildIssueGraphLivenessAutoRecoveryPreview(opts?: { lookbackHours?: number; now?: Date }) {
+  async function buildIssueGraphLivenessAutoRecoveryPreview(opts?: {
+    lookbackHours?: number;
+    now?: Date;
+    includeCompany?: (companyId: string) => boolean;
+  }) {
     return recovery.buildIssueGraphLivenessAutoRecoveryPreview(opts);
   }
 

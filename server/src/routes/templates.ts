@@ -10,13 +10,21 @@ import {
   updateAgentTemplateSchema,
   updateRoutineTemplateSchema,
   updateSkillTemplateSchema,
+  type TemplateDeployment,
   type TemplateType,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { templateService } from "../services/index.js";
+import { isPersonalCompany } from "../services/personal-companies.js";
 import { templatesLibraryService } from "../services/templates-library.js";
 import { badRequest, forbidden } from "../errors.js";
-import { assertBoard, isUserDrivenActor } from "./authz.js";
+import {
+  assertBoard,
+  assertCompanyAccess,
+  hasInstanceAdminAccess,
+  isOthersPersonalCompany,
+  isUserDrivenActor,
+} from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 const libraryInstallSchema = z.object({
@@ -59,6 +67,39 @@ function actorUserId(req: Request): string | null {
   return null;
 }
 
+/**
+ * Why this caller may not deploy a template into `companyId`, or null when
+ * they may.
+ *
+ * Nobody but its owner deploys into a Personal company, administrators
+ * included. An instance admin may deploy into any other company. An HQ owner
+ * or admin who is not one may deploy only where they could make the change
+ * themselves: HQ lets them read every company, not change it. The company
+ * access check decides both, so its rules are not copied here.
+ */
+function deployRefusal(req: Request, companyId: string): string | null {
+  if (hasInstanceAdminAccess(req) && !isPersonalCompany(companyId)) return null;
+  try {
+    assertCompanyAccess(req, companyId, "write");
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : "You cannot deploy into this company";
+  }
+}
+
+/**
+ * Deployments into someone else's Personal company are left out. Whether a
+ * template went in there, and that company's name, are its owner's business,
+ * administrators included.
+ */
+function visibleDeployments(req: Request, deployments: TemplateDeployment[]): TemplateDeployment[] {
+  return deployments.filter((deployment) => !isOthersPersonalCompany(req.actor, deployment.companyId));
+}
+
+function withVisibleDeployments<T extends { deployments: TemplateDeployment[] }>(req: Request, detail: T): T {
+  return { ...detail, deployments: visibleDeployments(req, detail.deployments) };
+}
+
 export function templateRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
@@ -92,7 +133,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Routine template not found" });
       return;
     }
-    res.json(detail);
+    res.json(withVisibleDeployments(req, detail));
   });
 
   router.get("/templates/agent/:id", async (req, res) => {
@@ -102,7 +143,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Agent template not found" });
       return;
     }
-    res.json(detail);
+    res.json(withVisibleDeployments(req, detail));
   });
 
   router.get("/templates/skill/:id", async (req, res) => {
@@ -112,7 +153,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Skill template not found" });
       return;
     }
-    res.json(detail);
+    res.json(withVisibleDeployments(req, detail));
   });
 
   router.post("/templates/routine", validate(createRoutineTemplateSchema), async (req, res) => {
@@ -144,7 +185,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Routine template not found" });
       return;
     }
-    res.json(result);
+    res.json(withVisibleDeployments(req, result));
   });
 
   router.patch("/templates/agent/:id", validate(updateAgentTemplateSchema), async (req, res) => {
@@ -158,7 +199,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Agent template not found" });
       return;
     }
-    res.json(result);
+    res.json(withVisibleDeployments(req, result));
   });
 
   router.patch("/templates/skill/:id", validate(updateSkillTemplateSchema), async (req, res) => {
@@ -172,7 +213,7 @@ export function templateRoutes(
       res.status(404).json({ error: "Skill template not found" });
       return;
     }
-    res.json(result);
+    res.json(withVisibleDeployments(req, result));
   });
 
   router.delete("/templates/routine/:id", async (req, res) => {
@@ -215,7 +256,7 @@ export function templateRoutes(
         type,
         req.params.id as string,
         req.body,
-        { userId: actorUserId(req) },
+        { userId: actorUserId(req), refusalFor: (companyId) => deployRefusal(req, companyId) },
       );
       res.status(200).json(result);
     },
@@ -225,7 +266,7 @@ export function templateRoutes(
     assertCanManageTemplates(req);
     const type = parseType(req.params.type);
     const deployments = await svc.listDeployments(type, req.params.id as string);
-    res.json({ deployments });
+    res.json({ deployments: visibleDeployments(req, deployments) });
   });
 
   // ===========================================================================
@@ -265,7 +306,9 @@ export function templateRoutes(
     const { kind, name } = req.body as z.infer<typeof libraryInstallSchema>;
     try {
       const result = await lib.installSingle(kind, name, { userId: actorUserId(req) });
-      res.status(result.status === "created" ? 201 : 200).json(result);
+      res
+        .status(result.status === "created" ? 201 : 200)
+        .json({ ...result, template: withVisibleDeployments(req, result.template) });
     } catch (err) {
       if (err instanceof Error && "statusCode" in err) throw err;
       throw badRequest(err instanceof Error ? err.message : String(err));
@@ -276,7 +319,7 @@ export function templateRoutes(
     assertCanManageTemplates(req);
     const { kind, name } = req.body as z.infer<typeof libraryUpdateSchema>;
     const result = await lib.updateFromLibrary(kind, name, { userId: actorUserId(req) });
-    res.json({ status: "updated", template: result });
+    res.json({ status: "updated", template: withVisibleDeployments(req, result) });
   });
 
   router.post(
