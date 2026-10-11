@@ -143,10 +143,13 @@ export interface HostServices {
     }): Promise<void>;
   };
 
-  /** Provides `system.createSnapshot` / `system.releaseSnapshot`. */
+  /** Provides `system.createSnapshot` / `system.releaseSnapshot` / `system.restoreSnapshot`. */
   system: {
     createSnapshot(): Promise<WorkerToHostMethods["system.createSnapshot"][1]>;
     releaseSnapshot(params: { filePath: string }): Promise<void>;
+    restoreSnapshot(
+      params: WorkerToHostMethods["system.restoreSnapshot"][0],
+    ): Promise<WorkerToHostMethods["system.restoreSnapshot"][1]>;
   };
 
   /** Provides `metrics.write`. */
@@ -342,6 +345,8 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   // System snapshot — both sides of the borrow gated on the same capability
   "system.createSnapshot": "system.snapshot.read",
   "system.releaseSnapshot": "system.snapshot.read",
+  // Restoring replaces the database, so reading snapshots does not grant it
+  "system.restoreSnapshot": "system.snapshot.restore",
 
   // Metrics
   "metrics.write": "metrics.write",
@@ -546,6 +551,9 @@ export function createHostClientHandlers(
     }),
     "system.releaseSnapshot": gated("system.releaseSnapshot", async (params) => {
       return services.system.releaseSnapshot(params);
+    }),
+    "system.restoreSnapshot": gated("system.restoreSnapshot", async (params) => {
+      return services.system.restoreSnapshot(params);
     }),
 
     // Metrics

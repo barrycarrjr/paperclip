@@ -729,6 +729,50 @@ export interface PluginSystemClient {
    * @param filePath - The `filePath` from a previous `createSnapshot()`
    */
   releaseSnapshot(filePath: string): Promise<void>;
+
+  /**
+   * Check, or apply, a whole-instance dump: the restore half of
+   * {@link createSnapshot}. Requires the `system.snapshot.restore` capability.
+   *
+   * Write the gzipped SQL dump to a file first and pass its path; it stays
+   * yours to delete afterwards. `"preview"` changes nothing. `"apply"`
+   * replaces the instance's database with the dump in one transaction, so a
+   * failure leaves the database as it was. The host refuses it while a backup,
+   * a snapshot or another restore is running, and keeps those out until it
+   * finishes. It can take minutes, so this call waits up to 30 minutes.
+   *
+   * The host does not know who asked for the restore. A plugin that offers it
+   * to people must check `params.hostScope.isInstanceAdmin` itself. That flag
+   * counts only in `ctx.actions` and `ctx.data` handlers, which serve the
+   * plugin's own pages: an agent's tool or operation parameters never carry
+   * it, because the host and the worker drop any `hostScope` an agent sends.
+   */
+  restoreSnapshot(input: PluginSystemRestoreInput): Promise<PluginSystemRestoreResult>;
+}
+
+/** What {@link PluginSystemClient.restoreSnapshot} takes. */
+export interface PluginSystemRestoreInput {
+  /** Absolute path to the gzipped SQL dump, on the host's filesystem. */
+  filePath: string;
+  mode: "preview" | "apply";
+  /** Defaults to `"overwrite"`, the only mode that can be applied today. */
+  conflictMode?: "overwrite" | "skip" | "fail-on-conflict";
+  /**
+   * The person the plugin is restoring for, such as `hostScope.userId`. The
+   * host writes it to its log as given, beside the plugin's name; it cannot
+   * check it.
+   */
+  requestedByUserId?: string | null;
+}
+
+/** What {@link PluginSystemClient.restoreSnapshot} hands back. */
+export interface PluginSystemRestoreResult {
+  /** True once the database has been replaced. */
+  applied: boolean;
+  /** True for a preview, which changes nothing. */
+  dryRun: boolean;
+  touchedTables: string[];
+  warnings: string[];
 }
 
 /** What {@link PluginSystemClient.createSnapshot} hands back. */
@@ -2055,7 +2099,10 @@ export interface PluginContext {
   /** Write activity log entries. Requires `activity.log.write`. */
   activity: PluginActivityClient;
 
-  /** Whole-instance snapshots, for backup and migration. Requires `system.snapshot.read`. */
+  /**
+   * Whole-instance snapshots, for backup and migration. Requires
+   * `system.snapshot.read`, and `system.snapshot.restore` to restore one.
+   */
   system: PluginSystemClient;
 
   /** Read and write scoped plugin state. Requires `plugin.state.read` / `plugin.state.write`. */

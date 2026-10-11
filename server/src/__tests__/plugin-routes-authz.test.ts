@@ -610,7 +610,7 @@ describe.sequential("plugin tool and bridge authz", () => {
       key: "sync",
       // A global call still gets a stamp, with companyId null, so a worker that
       // requires a company refuses it instead of guessing one.
-      params: { hostScope: { companyId: null, userId: "admin-1" } },
+      params: { hostScope: { companyId: null, userId: "admin-1", isInstanceAdmin: true } },
       renderEnvironment: null,
     });
   });
@@ -642,7 +642,7 @@ describe.sequential("plugin tool and bridge authz", () => {
         key,
         params: {
           locationKey: "loc-1",
-          hostScope: { companyId: companyA, userId: "user-1" },
+          hostScope: { companyId: companyA, userId: "user-1", isInstanceAdmin: false },
         },
         renderEnvironment: null,
       });
@@ -653,7 +653,8 @@ describe.sequential("plugin tool and bridge authz", () => {
     "overwrites a browser-supplied params.hostScope on %s bridge calls instead of merging it",
     async (_name, path, method, key, body) => {
       // The worker trusts hostScope for scoping, so a browser must not be able
-      // to smuggle another company (or an extra field) in under that key.
+      // to smuggle another company, an admin claim or an extra field in under
+      // that key.
       readyPlugin();
       const call = vi.fn().mockResolvedValue({ ok: true });
       const { app } = await createApp(boardActor(), {}, {
@@ -665,17 +666,62 @@ describe.sequential("plugin tool and bridge authz", () => {
         .send({
           ...body,
           companyId: companyA,
-          params: { hostScope: { companyId: companyB, userId: "somebody-else", extra: true } },
+          params: {
+            hostScope: { companyId: companyB, userId: "somebody-else", isInstanceAdmin: true, extra: true },
+          },
         });
 
       expect(res.status).toBe(200);
       expect(call).toHaveBeenCalledWith(pluginId, method, {
         key,
-        params: { hostScope: { companyId: companyA, userId: "user-1" } },
+        params: { hostScope: { companyId: companyA, userId: "user-1", isInstanceAdmin: false } },
         renderEnvironment: null,
       });
     },
   );
+
+  it.each(scopedBridgeRoutes)(
+    "tells the worker the caller is an instance admin on %s bridge calls",
+    async (_name, path, method, key, body) => {
+      // Restoring a backup replaces the whole instance, so backup-tools keeps it
+      // to instance admins. Company access cannot tell it who those are.
+      readyPlugin();
+      const call = vi.fn().mockResolvedValue({ ok: true });
+      const { app } = await createApp(boardActor({ userId: "admin-1", isInstanceAdmin: true }), {}, {
+        bridgeDeps: { workerManager: { call } },
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ ...body, companyId: companyA, params: {} });
+
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(pluginId, method, {
+        key,
+        params: { hostScope: { companyId: companyA, userId: "admin-1", isInstanceAdmin: true } },
+        renderEnvironment: null,
+      });
+    },
+  );
+
+  it("counts the local board of a local_trusted instance as an instance admin", async () => {
+    readyPlugin();
+    const call = vi.fn().mockResolvedValue({ ok: true });
+    const { app } = await createApp(boardActor({ userId: "local-board", source: "local_implicit" }), {}, {
+      bridgeDeps: { workerManager: { call } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/actions/sync`)
+      .send({ companyId: companyA, params: {} });
+
+    expect(res.status).toBe(200);
+    expect(call).toHaveBeenCalledWith(pluginId, "performAction", {
+      key: "sync",
+      params: { hostScope: { companyId: companyA, userId: "local-board", isInstanceAdmin: true } },
+      renderEnvironment: null,
+    });
+  });
 
   it.each(scopedBridgeRoutes)(
     "answers 403 and never calls the worker when params.companyId names a company the caller cannot reach on %s bridge calls",
@@ -722,7 +768,7 @@ describe.sequential("plugin tool and bridge authz", () => {
         params: {
           companyId: companyB,
           mailbox: "ops",
-          hostScope: { companyId: companyA, userId: "user-1" },
+          hostScope: { companyId: companyA, userId: "user-1", isInstanceAdmin: false },
         },
         renderEnvironment: null,
       });
@@ -750,7 +796,7 @@ describe.sequential("plugin tool and bridge authz", () => {
         params: {
           companyId: companyA,
           page: 2,
-          hostScope: { companyId: companyA, userId: "user-1" },
+          hostScope: { companyId: companyA, userId: "user-1", isInstanceAdmin: false },
         },
         renderEnvironment: null,
       });

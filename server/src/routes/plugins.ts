@@ -83,6 +83,7 @@ import {
   assertInstanceAdmin,
   getActorInfo,
   hasBoardOrgAccess,
+  hasInstanceAdminAccess,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
 import { badRequest, forbidden, notFound, unauthorized, unprocessable, validationErrorMessage } from "../errors.js";
@@ -715,6 +716,13 @@ export function pluginRoutes(
     companyId: string | null;
     /** The authenticated board user, or null when there is none to name. */
     userId: string | null;
+    /**
+     * Whether the caller is an instance admin, by the same rule as
+     * assertInstanceAdmin. A plugin needs it to keep something instance-wide,
+     * such as restoring the database from a backup, to instance admins:
+     * company access says nothing about that.
+     */
+    isInstanceAdmin: boolean;
   }
 
   /**
@@ -751,6 +759,7 @@ export function pluginRoutes(
     const hostScope: PluginBridgeHostScope = {
       companyId: validatedCompanyId ?? null,
       userId: getActorInfo(req).actorId ?? null,
+      isInstanceAdmin: hasInstanceAdminAccess(req),
     };
     return { ...params, hostScope };
   }
@@ -1728,10 +1737,11 @@ export function pluginRoutes(
    *   - `id`: plugin id (e.g. `"email-tools"`). Required.
    *   - `acknowledgeCapabilities`: optional approved-capability list used
    *     when the install lands on the upgrade path for an already-installed
-   *     plugin and the new manifest introduces additional capabilities.
-   *     A first attempt without the list returns HTTP 409 with `code:
-   *     "capability_escalation"` and the escalation set; resubmit with the
-   *     escalated capabilities to proceed.
+   *     plugin and the new manifest introduces additional capabilities, and
+   *     on a first install of a plugin that asks for a capability in
+   *     `PLUGIN_CAPABILITY_WARNINGS`. A first attempt without the list
+   *     returns HTTP 409 with `code: "capability_escalation"` and the
+   *     escalation set; resubmit with the escalated capabilities to proceed.
    */
   router.post("/plugins/library/install", async (req, res) => {
     assertInstanceAdmin(req);
@@ -1860,7 +1870,14 @@ export function pluginRoutes(
         return;
       }
 
-      const discovered = await loader.installPlugin({ localPath: tempDir });
+      // A first install asks too, for the capabilities that need it (copying
+      // or replacing the whole database): the same 409 the upgrade path gives,
+      // so the plugin manager shows the same approval dialog.
+      const discovered = await loader.installPlugin({
+        localPath: tempDir,
+        askBeforeWarnedCapabilities: true,
+        acknowledgeCapabilities,
+      });
       if (!discovered.manifest) {
         res.status(500).json({ error: "Plugin installed but manifest is missing" });
         return;

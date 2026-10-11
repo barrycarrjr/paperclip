@@ -690,6 +690,17 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         const idx = snapshots.indexOf(filePath);
         if (idx >= 0) snapshots.splice(idx, 1);
       },
+      async restoreSnapshot(input) {
+        requireCapability(manifest, capabilitySet, "system.snapshot.restore");
+        // Changes nothing and reads nothing. A test that needs to see the dump
+        // it was handed should stub `restoreSnapshot` itself.
+        return {
+          applied: input.mode === "apply",
+          dryRun: input.mode === "preview",
+          touchedTables: [],
+          warnings: [],
+        };
+      },
     },
     state: {
       async get(input) {
@@ -1536,7 +1547,14 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
 
       throw new Error(`No action or operation handler registered for '${key}'`);
     },
-    async executeTool<T = ToolResult>(name: string, params: unknown, runCtx: Partial<ToolRunContext> = {}) {
+    async executeTool<T = ToolResult>(name: string, rawParams: unknown, runCtx: Partial<ToolRunContext> = {}) {
+      // Mirrors the worker: an agent's parameters never carry the host's
+      // `hostScope` stamp, whatever the caller put there.
+      let params = rawParams;
+      if (params && typeof params === "object" && !Array.isArray(params) && "hostScope" in params) {
+        const { hostScope: _forged, ...rest } = params as Record<string, unknown>;
+        params = rest;
+      }
       const ctxToPass: ToolRunContext = {
         agentId: runCtx.agentId ?? "agent-test",
         runId: runCtx.runId ?? randomUUID(),

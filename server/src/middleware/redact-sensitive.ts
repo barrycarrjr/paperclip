@@ -18,6 +18,10 @@ const SENSITIVE_KEYS = new Set<string>([
   "password_confirmation",
   "confirmpassword",
   "confirm_password",
+  // A backup's passphrase, or the instance key pasted in its place, travels in
+  // a restore request's body (backup-tools' Restore tab and API). A refused
+  // restore answers 4xx or 5xx, which writes the body to the log.
+  "passphrase",
   // Secret bodies and env bindings use a generic `value` field. Failure logs
   // must prefer losing that diagnostic value over keeping credential material.
   // `token` is likewise ambiguous but often carries a credential.

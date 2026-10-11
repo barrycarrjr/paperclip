@@ -1503,6 +1503,13 @@ export const PLUGIN_CAPABILITIES = [
   "secrets.store",
   "ai.complete",
   "system.snapshot.read",
+  // Replace the instance's whole database with a dump the plugin hands over:
+  // the restore half of a backup plugin, and even more powerful than
+  // system.snapshot.read. The host does not know who asked, so a plugin that
+  // offers it to people must keep it to instance admins itself, using
+  // params.hostScope.isInstanceAdmin. Only page calls (action and data
+  // handlers) carry that flag; the host drops it from an agent's parameters.
+  "system.snapshot.restore",
   "local.folders",
   // Agent Tools
   "agent.tools.register",
@@ -1516,6 +1523,17 @@ export const PLUGIN_CAPABILITIES = [
   "ui.action.register",
 ] as const;
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
+
+/**
+ * Capabilities an operator approves knowingly, with one plain sentence on
+ * what each lets a plugin do. The plugin manager shows the sentence when it
+ * asks for approval, and installing a plugin from the library that asks for
+ * one of these needs that approval even the first time.
+ */
+export const PLUGIN_CAPABILITY_WARNINGS: Partial<Record<PluginCapability, string>> = {
+  "system.snapshot.read": "Can copy this instance's whole database, every company's data included.",
+  "system.snapshot.restore": "Can replace this instance's whole database.",
+};
 
 
 export const PLUGIN_CONNECTOR_SURFACES = ["calendar"] as const;

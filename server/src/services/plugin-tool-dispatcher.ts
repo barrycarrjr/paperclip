@@ -270,6 +270,22 @@ export interface PluginToolDispatcher {
   getRegistry(): PluginToolRegistry;
 }
 
+/**
+ * A tool call's parameters without `hostScope`.
+ *
+ * `hostScope` is what the host stamps on a call from a plugin's own page, and
+ * a plugin may act on it: `isInstanceAdmin` keeps a database restore to
+ * instance admins. A tool call's parameters are the caller's own words, so a
+ * `hostScope` there is never the host's. Without this an agent could send
+ * `{ hostScope: { isInstanceAdmin: true } }` and pass that check.
+ */
+export function withoutHostScope(parameters: unknown): unknown {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return parameters;
+  if (!Object.prototype.hasOwnProperty.call(parameters, "hostScope")) return parameters;
+  const { hostScope: _forged, ...rest } = parameters as Record<string, unknown>;
+  return rest;
+}
+
 // ---------------------------------------------------------------------------
 // Factory: createPluginToolDispatcher
 // ---------------------------------------------------------------------------
@@ -646,7 +662,7 @@ export function createPluginToolDispatcher(
     ): Promise<ToolExecutionResult> {
       // Always erase caller-supplied consent. Only this dispatcher can issue it.
       // Bind the displayed proposal to the eventual call across the consent wait.
-      parameters = structuredClone(parameters);
+      parameters = withoutHostScope(structuredClone(parameters));
       runContext = { ...runContext, userConfirmed: false, userPermission: undefined };
       const declaredTool = registry.getTool(namespacedName);
       const checkUser = async () => {

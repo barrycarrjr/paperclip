@@ -165,6 +165,12 @@ export interface WorkerRpcHostOptions {
    * environment variable, then 120 000 ms.
    */
   snapshotRpcTimeoutMs?: number;
+
+  /**
+   * Timeout (ms) for the `system.restoreSnapshot` call, which replays a whole
+   * database. Defaults to 30 minutes.
+   */
+  restoreRpcTimeoutMs?: number;
 }
 
 /**
@@ -209,6 +215,12 @@ const APPROVAL_RESPOND_RPC_TIMEOUT_MS = 2 * 60_000;
 export const DEFAULT_SNAPSHOT_RPC_TIMEOUT_MS = 2 * 60_000;
 /** Environment variable that overrides the snapshot call timeout (milliseconds). */
 export const SNAPSHOT_RPC_TIMEOUT_ENV = "PAPERCLIP_PLUGIN_SNAPSHOT_RPC_TIMEOUT_MS";
+/**
+ * Default for `system.restoreSnapshot`: an apply replays the whole database,
+ * which takes longer than taking a snapshot. Giving up early would report a
+ * restore as failed while the host carries on with it.
+ */
+export const DEFAULT_RESTORE_RPC_TIMEOUT_MS = 30 * 60_000;
 
 /** Resolve the `system.createSnapshot` timeout: explicit option, then env var, then the default. */
 export function resolveSnapshotRpcTimeoutMs(
@@ -302,6 +314,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   const stdoutStream = options.stdout ?? process.stdout;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const snapshotRpcTimeoutMs = resolveSnapshotRpcTimeoutMs(options.snapshotRpcTimeoutMs);
+  const restoreRpcTimeoutMs = options.restoreRpcTimeoutMs ?? DEFAULT_RESTORE_RPC_TIMEOUT_MS;
 
   // -----------------------------------------------------------------------
   // State
@@ -581,6 +594,18 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         },
         async releaseSnapshot(filePath: string): Promise<void> {
           await callHost("system.releaseSnapshot", { filePath });
+        },
+        async restoreSnapshot(input) {
+          return callHost(
+            "system.restoreSnapshot",
+            {
+              filePath: input.filePath,
+              mode: input.mode,
+              conflictMode: input.conflictMode,
+              requestedByUserId: input.requestedByUserId,
+            },
+            restoreRpcTimeoutMs,
+          );
         },
       },
 
@@ -1580,16 +1605,30 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     throw new Error(`No action or operation handler registered for key "${params.key}"`);
   }
 
+  /**
+   * A tool call's parameters without `hostScope`. That key is the host's stamp
+   * on a call from the plugin's own page, which a handler may trust; an
+   * agent's parameters are its own, so a `hostScope` there is forged. The host
+   * drops it as well; this covers a host that does not.
+   */
+  function withoutHostScope(parameters: unknown): unknown {
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return parameters;
+    if (!Object.prototype.hasOwnProperty.call(parameters, "hostScope")) return parameters;
+    const { hostScope: _forged, ...rest } = parameters as Record<string, unknown>;
+    return rest;
+  }
+
   async function handleExecuteTool(params: ExecuteToolParams): Promise<ToolResult> {
+    const parameters = withoutHostScope(params.parameters);
     const entry = toolHandlers.get(params.toolName);
     if (entry) {
-      return runWithFailureCapture(() => entry.fn(params.parameters, params.runContext));
+      return runWithFailureCapture(() => entry.fn(parameters, params.runContext));
     }
 
     const operation = operationHandlers.get(params.toolName);
     if (operation) {
       const runCtx = params.runContext;
-      return runWithFailureCapture(() => operation(params.parameters, {
+      return runWithFailureCapture(() => operation(parameters, {
         invokedBy: "agent",
         companyId: runCtx.companyId,
         projectId: runCtx.projectId,
