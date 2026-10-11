@@ -67,9 +67,26 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   // agents can read the activity feed and Spaces are for people.
   "space.created": "created a Space",
   "space.updated": "changed a Space",
+  "space.archived": "archived a Space",
+  "space.unarchived": "unarchived a Space",
   "space.page_created": "added a page to a Space",
   "space.page_updated": "edited a page in a Space",
+  "space.page_version_restored": "restored an older version of a page in a Space",
+  "space.page_moved": "moved a page in a Space",
+  "space.page_deleted": "deleted a page from a Space",
+  "space.page_restored": "brought back a page from a Space's trash",
 };
+
+/** A Space row worded from its ids and numbers, for the ones that carry more than the plain verb says. */
+function formatSpaceVerb(action: string, details: ActivityDetails): string | null {
+  if (action === "space.page_moved" && details?.fromSpaceId && details.fromSpaceId !== details.spaceId) {
+    return "moved a page to another Space";
+  }
+  if (action === "space.page_version_restored" && typeof details?.restoredFromRevisionNumber === "number") {
+    return `restored version ${details.restoredFromRevisionNumber} of a page in a Space`;
+  }
+  return null;
+}
 
 const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.created": "created the issue",
@@ -314,6 +331,9 @@ export function formatActivityVerb(
     forIssueDetail: false,
   });
   if (structuredChange) return structuredChange;
+
+  const spaceVerb = formatSpaceVerb(action, details);
+  if (spaceVerb) return spaceVerb;
 
   return ACTIVITY_ROW_VERBS[action] ?? action.replace(/[._]/g, " ");
 }

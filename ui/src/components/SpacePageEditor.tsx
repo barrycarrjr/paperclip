@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Plus } from "lucide-react";
-import { SPACE_PAGE_TITLE_MAX, type Space, type SpacePage, type UpdateSpacePage } from "@paperclipai/shared";
+import { FileText, History, Plus } from "lucide-react";
+import {
+  SPACE_PAGE_TITLE_MAX,
+  type Space,
+  type SpacePage,
+  type SpacePageRevision,
+  type UpdateSpacePage,
+} from "@paperclipai/shared";
 import { ApiError } from "../api/client";
 import { spacesApi } from "../api/spaces";
 import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
 import { queryKeys } from "../lib/queryKeys";
+import { NEW_SPACE_PAGE_TITLE } from "../lib/space-pages";
 import { brandWarningText } from "../lib/status-colors";
 import { cn, relativeTime } from "../lib/utils";
 import { EmptyState } from "./EmptyState";
@@ -13,10 +20,10 @@ import { InfoPopoverButton } from "./InfoPopoverButton";
 import { InlineBanner } from "./InlineBanner";
 import { MarkdownBody } from "./MarkdownBody";
 import { MarkdownEditor } from "./MarkdownEditor";
+import { SpacePageHistory } from "./SpacePageHistory";
 import { Button } from "@/components/ui/button";
 
-/** The title a new page starts with. */
-export const NEW_SPACE_PAGE_TITLE = "Untitled";
+export { NEW_SPACE_PAGE_TITLE };
 
 /** How long after typing stops a change is saved. */
 export const SPACE_PAGE_AUTOSAVE_DELAY_MS = 900;
@@ -196,6 +203,8 @@ interface SpacePageEditorProps {
   currentUserId: string | null;
   onAddSubpage?: () => void;
   addingSubpage?: boolean;
+  /** The page's menu (move, delete), beside History. */
+  pageMenu?: ReactNode;
 }
 
 /**
@@ -213,8 +222,10 @@ export function SpacePageEditor({
   currentUserId,
   onAddSubpage,
   addingSubpage,
+  pageMenu,
 }: SpacePageEditorProps) {
   const queryClient = useQueryClient();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const pageQueryKey = queryKeys.spaces.page(space.id, pageId);
   const pageQuery = useQuery({
     queryKey: pageQueryKey,
@@ -448,6 +459,33 @@ export function SpacePageEditor({
     setConflict(null);
   };
 
+  // A restore is a save: it waits for any save on its way, then is written on
+  // the version that save made. Text that has not saved stops it, rather than
+  // being covered by the version brought back.
+  const restoreVersion = (version: SpacePageRevision) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+      void queueSave();
+    }
+    const job = async () => {
+      const saved = savedRef.current;
+      if (!saved?.revisionId || conflictRef.current || hasUnsavedText(draftRef.current, saved)) {
+        throw new Error("Your latest changes are not saved yet. Save them, then restore.");
+      }
+      const restored = await spacesApi.restoreRevision(space.id, pageId, version.id, { baseRevisionId: saved.revisionId });
+      savedRef.current = savedStateOf(restored);
+      queryClient.setQueryData(pageQueryKey, restored);
+      setDraft({ title: restored.title, body: restored.body });
+      forgetUsedDrafts();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spaces.pageTree(space.id) });
+      return restored;
+    };
+    const restoring = saveQueueRef.current.then(job, job);
+    saveQueueRef.current = restoring.then(() => undefined, () => undefined);
+    return restoring;
+  };
+
   if (pageQuery.isLoading || (page && !draft)) {
     return <p className="text-sm text-muted-foreground">Loading the page…</p>;
   }
@@ -525,6 +563,11 @@ export function SpacePageEditor({
               <span className="max-sm:sr-only">{addingSubpage ? "Adding…" : "Add a subpage"}</span>
             </Button>
           )}
+          <Button size="sm" variant="ghost" onClick={() => setHistoryOpen(true)} title="History">
+            <History className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="max-sm:sr-only">History</span>
+          </Button>
+          {pageMenu}
           <InfoPopoverButton
             title="Page versions"
             side="bottom"
@@ -536,7 +579,7 @@ export function SpacePageEditor({
                   of your writing: what you save in that time counts as one version, and your
                   next save after it starts a new one.
                 </p>
-                <p>Looking at and restoring older versions, and moving or deleting pages, come in a later update.</p>
+                <p>History lists them. Open one to read it, or restore it as the newest version.</p>
               </>
             }
           />
@@ -603,6 +646,16 @@ export function SpacePageEditor({
       ) : (
         <p className="text-sm text-muted-foreground">This page is empty.</p>
       )}
+
+      <SpacePageHistory
+        space={space}
+        pageId={pageId}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        currentRevisionId={page.latestRevisionId}
+        canRestore={canWrite}
+        onRestore={restoreVersion}
+      />
     </article>
   );
 }

@@ -17,9 +17,30 @@ import {
 const mockSpacesApi = vi.hoisted(() => ({
   getPage: vi.fn(),
   updatePage: vi.fn(),
+  restoreRevision: vi.fn(),
 }));
 
 vi.mock("../api/spaces", () => ({ spacesApi: mockSpacesApi }));
+
+// History stands in as one button that restores version 1, as its own would.
+vi.mock("./SpacePageHistory", () => ({
+  SpacePageHistory: ({
+    open,
+    canRestore,
+    onRestore,
+  }: {
+    open: boolean;
+    canRestore: boolean;
+    onRestore: (version: { id: string; revisionNumber: number }) => Promise<unknown>;
+  }) =>
+    open ? (
+      <div data-testid="history" data-can-restore={String(canRestore)}>
+        <button type="button" onClick={() => void onRestore({ id: "rev-1", revisionNumber: 1 }).catch(() => undefined)}>
+          Restore version 1
+        </button>
+      </div>
+    ) : null,
+}));
 
 // A textarea stands in for the rich editor, so each tab's editor can be typed into.
 vi.mock("./MarkdownEditor", () => ({
@@ -217,6 +238,7 @@ describe("SpacePageEditor", () => {
     vi.useFakeTimers({ now: new Date("2026-10-11T12:00:00.000Z") });
     mockSpacesApi.getPage.mockReset();
     mockSpacesApi.updatePage.mockReset();
+    mockSpacesApi.restoreRevision.mockReset();
     Object.defineProperty(window, "localStorage", { configurable: true, value: new MemoryStorage() });
     Object.defineProperty(window, "sessionStorage", { configurable: true, value: new MemoryStorage() });
   });
@@ -475,5 +497,44 @@ describe("SpacePageEditor", () => {
     expect(tab.container.querySelector('[data-testid="markdown-body"]')?.textContent).toBe("Within 30 days.");
     expect(tab.container.querySelector<HTMLInputElement>('input[aria-label="Page title"]')?.readOnly).toBe(true);
     expect(tab.container.textContent).toContain("Read only");
+
+    // History is there to read, without restoring.
+    await click(tab, "History");
+    expect(tab.container.querySelector('[data-testid="history"]')?.getAttribute("data-can-restore")).toBe("false");
+  });
+
+  it("restores a version from History after the save on its way, and shows its text", async () => {
+    const server = fakeServer();
+    mockSpacesApi.restoreRevision.mockImplementation(
+      async (_spaceId: string, _pageId: string, _revisionId: string, data: { baseRevisionId: string }) => {
+        if (data.baseRevisionId !== server.page.latestRevisionId) throw conflictError(server.page.latestRevisionId);
+        server.page = savedOver(server.page, { body: "Within 30 days." });
+        return { ...server.page };
+      },
+    );
+    const tab = await openTab("tab-a");
+
+    // History opens before typing has paused long enough to save.
+    await type(tab, "Within 45 days.");
+    await click(tab, "History");
+    expect(tab.container.querySelector('[data-testid="history"]')?.getAttribute("data-can-restore")).toBe("true");
+    await click(tab, "Restore version 1");
+    await advance(0);
+
+    // The waiting save went first, and the restore was written on the version it made.
+    expect(mockSpacesApi.updatePage).toHaveBeenCalledWith("space-1", "page-1", { baseRevisionId: "rev-1", body: "Within 45 days." });
+    expect(mockSpacesApi.restoreRevision).toHaveBeenCalledWith("space-1", "page-1", "rev-1", { baseRevisionId: "rev-2" });
+    expect(editor(tab)!.value).toBe("Within 30 days.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS * 2);
+    expect(mockSpacesApi.updatePage).toHaveBeenCalledTimes(1);
+    expect(kept("tab-a")).toBeNull();
+
+    // The next change is written on the restored version.
+    await type(tab, "Within 30 days, with a receipt.");
+    await advance(SPACE_PAGE_AUTOSAVE_DELAY_MS);
+    expect(mockSpacesApi.updatePage).toHaveBeenLastCalledWith("space-1", "page-1", {
+      baseRevisionId: "rev-3",
+      body: "Within 30 days, with a receipt.",
+    });
   });
 });

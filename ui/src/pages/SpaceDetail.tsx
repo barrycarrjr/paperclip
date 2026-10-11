@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, FileText, Library, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Library, Plus, Settings, Trash2 } from "lucide-react";
 import type { Space, SpacePageTreeNode } from "@paperclipai/shared";
 import { accessApi } from "@/api/access";
 import { spacesApi } from "@/api/spaces";
 import { EmptyState } from "@/components/EmptyState";
+import { InlineBanner } from "@/components/InlineBanner";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { NEW_SPACE_PAGE_TITLE, SpacePageEditor } from "@/components/SpacePageEditor";
+import { SpacePageMenu } from "@/components/SpacePageMenu";
+import { SpaceSettingsDialog, useUpdateSpace } from "@/components/SpaceSettingsDialog";
 import { Button } from "@/components/ui/button";
 import { useBreadcrumbs, type Breadcrumb } from "@/context/BreadcrumbContext";
 import { useActiveCompanyId } from "@/hooks/useRouteCompany";
@@ -14,39 +17,13 @@ import { useSaveMutation } from "@/hooks/useSaveMutation";
 import { canWriteCompany } from "@/lib/company-access";
 import { queryKeys } from "@/lib/queryKeys";
 import { Link, useNavigate, useParams } from "@/lib/router";
+import { findSpacePage, spacePageHref, spacePageIndentPx, spacePageSubtreeIds, spacePageTitle } from "@/lib/space-pages";
 import { cn } from "@/lib/utils";
 
-/** How far each level of subpages is set in: a full step for six levels, then a smaller one. */
-const TREE_INDENT_PX = 14;
-const TREE_INDENT_FULL_DEPTH = 6;
-const TREE_INDENT_DEEP_PX = 6;
-
-/**
- * How far a page at this depth is set in. Past six levels the step gets
- * smaller rather than stopping, so a subpage never sits level with its
- * parent and reads as its sibling.
- */
-export function spacePageIndentPx(depth: number): number {
-  const full = Math.min(depth, TREE_INDENT_FULL_DEPTH);
-  return full * TREE_INDENT_PX + Math.max(0, depth - TREE_INDENT_FULL_DEPTH) * TREE_INDENT_DEEP_PX;
-}
-
-export function spacePageHref(space: Pick<Space, "urlKey">, pageId: string) {
-  return `/spaces/${space.urlKey}/${pageId}`;
-}
-
-/** A page anywhere in the tree, or null when it is not there. */
-export function findSpacePage(nodes: SpacePageTreeNode[], pageId: string): SpacePageTreeNode | null {
-  for (const node of nodes) {
-    if (node.id === pageId) return node;
-    const below = findSpacePage(node.children, pageId);
-    if (below) return below;
-  }
-  return null;
-}
-
-function pageTitle(title: string) {
-  return title.trim() || NEW_SPACE_PAGE_TITLE;
+/** What a page's menu does to the page that is open, when it moves or goes to the trash with it. */
+interface PageMenuActions {
+  onMoved: (page: SpacePageTreeNode, to: Pick<Space, "id" | "urlKey">) => void;
+  onDeleted: (page: SpacePageTreeNode) => void;
 }
 
 /**
@@ -61,6 +38,7 @@ export function SpaceDetail() {
   const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const accessQuery = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
@@ -74,6 +52,8 @@ export function SpaceDetail() {
     enabled: !!companyId && !!spaceKey,
   });
   const space = spaceQuery.data ?? null;
+  // An archived Space is read only until it is unarchived.
+  const canEdit = canWrite && !!space && !space.archivedAt;
 
   const treeQuery = useQuery({
     queryKey: queryKeys.spaces.pageTree(space?.id ?? ""),
@@ -83,6 +63,22 @@ export function SpaceDetail() {
   const tree = useMemo(() => treeQuery.data ?? [], [treeQuery.data]);
   const currentPage = useMemo(() => (pageId ? findSpacePage(tree, pageId) : null), [tree, pageId]);
 
+  // An address names the page's Space, so a page moved to another Space is
+  // not found at its old address (a saved link, an activity row). Ask where
+  // it is now and go there.
+  const pageNotHere = !!pageId && (spaceQuery.isError || (!!space && treeQuery.isSuccess && !currentPage));
+  const locationQuery = useQuery({
+    queryKey: queryKeys.spaces.pageLocation(companyId ?? "", pageId ?? ""),
+    queryFn: () => spacesApi.locatePage(companyId!, pageId!),
+    enabled: !!companyId && pageNotHere,
+    retry: false,
+  });
+  const location = locationQuery.data;
+  useEffect(() => {
+    if (!pageId || !location || location.pageId !== pageId || location.spaceId === space?.id) return;
+    navigate(spacePageHref({ urlKey: location.spaceUrlKey }, pageId), { replace: true });
+  }, [location, navigate, pageId, space?.id]);
+
   useEffect(() => {
     const crumbs: Breadcrumb[] = [{ label: "Spaces", href: "/spaces" }];
     if (space && pageId) {
@@ -90,7 +86,7 @@ export function SpaceDetail() {
       // leaves no room for the page's own name on a phone. The pages above it
       // are in the Space's list of pages.
       crumbs.push({ label: space.name, href: `/spaces/${space.urlKey}` });
-      crumbs.push({ label: currentPage ? pageTitle(currentPage.title) : "Page" });
+      crumbs.push({ label: currentPage ? spacePageTitle(currentPage.title) : "Page" });
     } else if (space) {
       crumbs.push({ label: space.name });
     }
@@ -120,11 +116,14 @@ export function SpaceDetail() {
     },
   });
 
+  const unarchive = useUpdateSpace(space ?? { id: "", companyId: companyId ?? "" });
+
   if (!companyId) {
     return <EmptyState icon={Library} message="Select a company to see its Spaces." />;
   }
   if (spaceQuery.isLoading || accessQuery.isLoading) return <PageSkeleton variant="detail" />;
   if (!space) {
+    if (pageNotHere && (locationQuery.isLoading || location)) return <PageSkeleton variant="detail" />;
     return (
       <EmptyState
         icon={Library}
@@ -144,6 +143,40 @@ export function SpaceDetail() {
       return next;
     });
 
+  // The open page is followed where it went, with its own move or with a
+  // page above it, and left when it went to the trash.
+  const menuActions: PageMenuActions = {
+    onMoved: (moved, to) => {
+      if (pageId && to.id !== space.id && spacePageSubtreeIds(moved).has(pageId)) navigate(spacePageHref(to, pageId));
+    },
+    onDeleted: (deleted) => {
+      if (pageId && spacePageSubtreeIds(deleted).has(pageId)) navigate(`/spaces/${space.urlKey}`);
+    },
+  };
+  const findingPage = pageNotHere && (locationQuery.isLoading || (!!location && location.spaceId !== space.id));
+
+  const archivedNotice = space.archivedAt ? (
+    <InlineBanner
+      tone="info"
+      title="This Space is archived"
+      actions={
+        canWrite ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={unarchive.isPending}
+            onClick={() => unarchive.mutate({ archived: false })}
+          >
+            {unarchive.isPending ? "Unarchiving…" : "Unarchive"}
+          </Button>
+        ) : undefined
+      }
+    >
+      <p>It is read only until it is unarchived, and it is not in the list of Spaces.</p>
+      {unarchive.isError && <p className="text-destructive">Could not unarchive it. {unarchive.error.message}</p>}
+    </InlineBanner>
+  ) : null;
+
   const pageTree = treeQuery.error ? (
     <p className="px-2 py-3 text-sm text-destructive">{treeQuery.error.message}</p>
   ) : treeQuery.isLoading ? (
@@ -151,13 +184,15 @@ export function SpaceDetail() {
   ) : (
     <SpacePageTree
       space={space}
+      tree={tree}
       nodes={tree}
       currentPageId={pageId ?? null}
       collapsed={collapsed}
       onToggle={toggle}
-      canWrite={canWrite}
+      canEdit={canEdit}
       onAddSubpage={addPage}
       adding={createPage.isPending}
+      menuActions={menuActions}
     />
   );
 
@@ -169,23 +204,40 @@ export function SpaceDetail() {
             <h1 className="text-xl font-bold">{space.name}</h1>
             {space.description && <p className="text-sm text-muted-foreground">{space.description}</p>}
           </div>
-          {canWrite && (
-            <Button size="sm" onClick={() => addPage(null)} disabled={createPage.isPending}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              {createPage.isPending ? "Adding…" : "New page"}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild size="sm" variant="ghost">
+              {/* Not a task, even in a Space whose address is "issues". */}
+              <Link to={`/spaces/${space.urlKey}/trash`} disableIssueQuicklook>
+                <Trash2 className="h-3.5 w-3.5" />
+                Trash
+              </Link>
             </Button>
-          )}
+            {canWrite && (
+              <Button size="sm" variant="ghost" onClick={() => setSettingsOpen(true)}>
+                <Settings className="h-3.5 w-3.5" />
+                Settings
+              </Button>
+            )}
+            {canEdit && (
+              <Button size="sm" onClick={() => addPage(null)} disabled={createPage.isPending}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                {createPage.isPending ? "Adding…" : "New page"}
+              </Button>
+            )}
+          </div>
         </div>
+        {archivedNotice}
         {tree.length === 0 && !treeQuery.isLoading && !treeQuery.error ? (
           <EmptyState
             icon={FileText}
-            message={canWrite ? "No pages yet. Add the first one, then give it subpages as it grows." : "No pages yet."}
-            action={canWrite ? "New page" : undefined}
-            onAction={canWrite ? () => addPage(null) : undefined}
+            message={canEdit ? "No pages yet. Add the first one, then give it subpages as it grows." : "No pages yet."}
+            action={canEdit ? "New page" : undefined}
+            onAction={canEdit ? () => addPage(null) : undefined}
           />
         ) : (
           <div className="rounded-md border border-border bg-card p-1">{pageTree}</div>
         )}
+        {canWrite && <SpaceSettingsDialog space={space} open={settingsOpen} onOpenChange={setSettingsOpen} />}
       </div>
     );
   }
@@ -203,7 +255,7 @@ export function SpaceDetail() {
           >
             {space.name}
           </Link>
-          {canWrite && (
+          {canEdit && (
             <button
               type="button"
               aria-label={`Add a page to ${space.name}`}
@@ -218,44 +270,61 @@ export function SpaceDetail() {
         </div>
         {pageTree}
       </nav>
-      <SpacePageEditor
-        key={pageId}
-        space={space}
-        pageId={pageId}
-        canWrite={canWrite}
-        currentUserId={accessQuery.data?.userId ?? null}
-        onAddSubpage={canWrite ? () => addPage(pageId) : undefined}
-        addingSubpage={createPage.isPending}
-      />
+      <div className="min-w-0 space-y-3">
+        {archivedNotice}
+        {findingPage ? (
+          <p className="text-sm text-muted-foreground">Finding the page…</p>
+        ) : (
+          <SpacePageEditor
+            key={pageId}
+            space={space}
+            pageId={pageId}
+            canWrite={canEdit}
+            currentUserId={accessQuery.data?.userId ?? null}
+            onAddSubpage={canEdit ? () => addPage(pageId) : undefined}
+            addingSubpage={createPage.isPending}
+            pageMenu={
+              canEdit && currentPage ? (
+                <SpacePageMenu space={space} tree={tree} page={currentPage} {...menuActions} />
+              ) : undefined
+            }
+          />
+        )}
+      </div>
     </div>
   );
 }
 
 function SpacePageTree({
   space,
+  tree,
   nodes,
   currentPageId,
   collapsed,
   onToggle,
-  canWrite,
+  canEdit,
   onAddSubpage,
   adding,
+  menuActions,
   depth = 0,
 }: {
   space: Space;
+  /** The whole tree, for each page's menu. */
+  tree: SpacePageTreeNode[];
   nodes: SpacePageTreeNode[];
   currentPageId: string | null;
   collapsed: Set<string>;
   onToggle: (pageId: string) => void;
-  canWrite: boolean;
+  canEdit: boolean;
   onAddSubpage: (parentPageId: string) => void;
   adding: boolean;
+  menuActions: PageMenuActions;
   depth?: number;
-}) {
+}): ReactNode {
   return (
     <ul className="space-y-px">
       {nodes.map((node) => {
-        const title = pageTitle(node.title);
+        const title = spacePageTitle(node.title);
         const hasChildren = node.children.length > 0;
         const expanded = hasChildren && !collapsed.has(node.id);
         const current = node.id === currentPageId;
@@ -263,7 +332,8 @@ function SpacePageTree({
           <li key={node.id}>
             <div
               className={cn(
-                "group grid grid-cols-[1.75rem_minmax(0,1fr)_2.25rem] items-center rounded-md transition-colors hover:bg-accent/50",
+                "group grid items-center rounded-md transition-colors hover:bg-accent/50",
+                canEdit ? "grid-cols-[1.75rem_minmax(0,1fr)_2.25rem_2.25rem]" : "grid-cols-[1.75rem_minmax(0,1fr)]",
                 current && "bg-accent hover:bg-accent",
               )}
               style={{ paddingInlineStart: `${spacePageIndentPx(depth)}px` }}
@@ -297,31 +367,40 @@ function SpacePageTree({
               >
                 {title}
               </Link>
-              {canWrite ? (
-                <button
-                  type="button"
-                  onClick={() => onAddSubpage(node.id)}
-                  disabled={adding}
-                  aria-label={`Add a subpage to ${title}`}
-                  title="Add a subpage"
-                  className="flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground opacity-60 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              ) : (
-                <span aria-hidden />
+              {canEdit && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onAddSubpage(node.id)}
+                    disabled={adding}
+                    aria-label={`Add a subpage to ${title}`}
+                    title="Add a subpage"
+                    className="flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground opacity-60 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <SpacePageMenu
+                    space={space}
+                    tree={tree}
+                    page={node}
+                    {...menuActions}
+                    className="opacity-60 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                  />
+                </>
               )}
             </div>
             {expanded && (
               <SpacePageTree
                 space={space}
+                tree={tree}
                 nodes={node.children}
                 currentPageId={currentPageId}
                 collapsed={collapsed}
                 onToggle={onToggle}
-                canWrite={canWrite}
+                canEdit={canEdit}
                 onAddSubpage={onAddSubpage}
                 adding={adding}
+                menuActions={menuActions}
                 depth={depth + 1}
               />
             )}

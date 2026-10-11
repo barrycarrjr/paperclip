@@ -6,13 +6,17 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Space, SpacePage, SpacePageTreeNode } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findSpacePage, SpaceDetail, spacePageIndentPx } from "./SpaceDetail";
+import { findSpacePage, spacePageIndentPx } from "@/lib/space-pages";
+import { SpaceDetail } from "./SpaceDetail";
 
 const mockSpacesApi = vi.hoisted(() => ({
   get: vi.fn(),
   pageTree: vi.fn(),
   createPage: vi.fn(),
+  locatePage: vi.fn(),
 }));
+
+const updateSpace = vi.hoisted(() => vi.fn());
 
 const routeState = vi.hoisted(() => ({
   params: { spaceKey: "handbook" } as { spaceKey: string; pageId?: string },
@@ -63,17 +67,45 @@ vi.mock("@/lib/router", () => ({
 
 vi.mock("@/components/SpacePageEditor", () => ({
   NEW_SPACE_PAGE_TITLE: "Untitled",
-  SpacePageEditor: ({ pageId, onAddSubpage }: { pageId: string; onAddSubpage?: () => void }) => (
-    <div data-testid="page-editor" data-page-id={pageId}>
+  SpacePageEditor: ({
+    pageId,
+    canWrite,
+    onAddSubpage,
+    pageMenu,
+  }: { pageId: string; canWrite: boolean; onAddSubpage?: () => void; pageMenu?: ReactNode }) => (
+    <div data-testid="page-editor" data-page-id={pageId} data-can-write={String(canWrite)}>
       {onAddSubpage && <button type="button" onClick={onAddSubpage}>Add a subpage</button>}
+      {pageMenu}
     </div>
   ),
 }));
 
-vi.mock("@/components/ui/button", () => ({
-  Button: ({ children, onClick, type = "button", ...props }: ComponentProps<"button">) => (
-    <button type={type} onClick={onClick} {...props}>{children}</button>
+// Each page's menu, with what it reports once a move or a delete is done.
+vi.mock("@/components/SpacePageMenu", () => ({
+  SpacePageMenu: ({
+    page,
+    onMoved,
+    onDeleted,
+  }: {
+    page: SpacePageTreeNode;
+    onMoved: (page: SpacePageTreeNode, to: { id: string; urlKey: string }) => void;
+    onDeleted: (page: SpacePageTreeNode) => void;
+  }) => (
+    <span data-testid="page-menu" data-page-id={page.id}>
+      <button type="button" onClick={() => onMoved(page, { id: "space-2", urlKey: "other" })}>Moved {page.id}</button>
+      <button type="button" onClick={() => onDeleted(page)}>Deleted {page.id}</button>
+    </span>
   ),
+}));
+
+vi.mock("@/components/SpaceSettingsDialog", () => ({
+  SpaceSettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="space-settings" /> : null),
+  useUpdateSpace: () => ({ mutate: updateSpace, isPending: false, isError: false, error: null }),
+}));
+
+vi.mock("@/components/ui/button", () => ({
+  Button: ({ children, onClick, type = "button", asChild, ...props }: ComponentProps<"button"> & { asChild?: boolean }) =>
+    asChild ? children : <button type={type} onClick={onClick} {...props}>{children}</button>,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,6 +181,8 @@ describe("SpaceDetail", () => {
     mockSpacesApi.get.mockReset().mockResolvedValue(SPACE);
     mockSpacesApi.pageTree.mockReset().mockResolvedValue(TREE);
     mockSpacesApi.createPage.mockReset();
+    mockSpacesApi.locatePage.mockReset().mockRejectedValue(new Error("Page not found"));
+    updateSpace.mockReset();
     navigate.mockReset();
     setBreadcrumbs.mockReset();
     accessState.role = "owner";
@@ -249,13 +283,109 @@ describe("SpaceDetail", () => {
     expect(mockSpacesApi.createPage).toHaveBeenCalledWith("space-1", { title: "Untitled", parentPageId: "page-4" });
   });
 
-  it("offers a viewer nothing to add", async () => {
+  it("offers a viewer nothing that changes things, but the trash to look at", async () => {
     accessState.role = "viewer";
     await render();
 
     expect(linkTo(container, "/spaces/handbook/page-4")).not.toBeNull();
     expect(buttonLabelled(container, "New page")).toBeUndefined();
     expect(buttonLabelled(container, "Add a subpage to Hiring")).toBeUndefined();
+    expect(container.querySelectorAll('[data-testid="page-menu"]')).toHaveLength(0);
+    expect(buttonLabelled(container, "Settings")).toBeUndefined();
+    expect(linkTo(container, "/spaces/handbook/trash")).not.toBeNull();
+
+    routeState.params = { spaceKey: "handbook", pageId: "page-4" };
+    await render();
+    expect(container.querySelectorAll('[data-testid="page-menu"]')).toHaveLength(0);
+  });
+
+  it("offers a writer each page's menu, the Space's settings and its trash", async () => {
+    await render();
+
+    const menus = Array.from(container.querySelectorAll('[data-testid="page-menu"]'));
+    expect(menus.map((menu) => menu.getAttribute("data-page-id"))).toEqual(["page-1", "page-2", "page-3", "page-4"]);
+    expect(linkTo(container, "/spaces/handbook/trash")?.getAttribute("data-issue-quicklook")).toBe("off");
+    expect(container.querySelector('[data-testid="space-settings"]')).toBeNull();
+    await act(async () => {
+      buttonLabelled(container, "Settings")!.click();
+    });
+    expect(container.querySelector('[data-testid="space-settings"]')).not.toBeNull();
+
+    // The open page has its menu beside History too.
+    routeState.params = { spaceKey: "handbook", pageId: "page-4" };
+    await render();
+    const editor = container.querySelector('[data-testid="page-editor"]')!;
+    expect(editor.querySelector('[data-testid="page-menu"]')?.getAttribute("data-page-id")).toBe("page-4");
+  });
+
+  it("shows an archived Space read only, with a way to unarchive it", async () => {
+    mockSpacesApi.get.mockResolvedValue({ ...SPACE, archivedAt: new Date("2026-10-11T10:00:00.000Z") });
+    await render();
+
+    expect(container.textContent).toContain("This Space is archived");
+    expect(buttonLabelled(container, "New page")).toBeUndefined();
+    expect(buttonLabelled(container, "Add a subpage to Hiring")).toBeUndefined();
+    expect(container.querySelectorAll('[data-testid="page-menu"]')).toHaveLength(0);
+    // Still opens, and its settings are where it is unarchived too.
+    expect(linkTo(container, "/spaces/handbook/page-4")).not.toBeNull();
+    expect(buttonLabelled(container, "Settings")).toBeDefined();
+    await act(async () => {
+      buttonLabelled(container, "Unarchive")!.click();
+    });
+    expect(updateSpace).toHaveBeenCalledWith({ archived: false });
+
+    routeState.params = { spaceKey: "handbook", pageId: "page-4" };
+    await render();
+    const editor = container.querySelector('[data-testid="page-editor"]')!;
+    expect(editor.getAttribute("data-can-write")).toBe("false");
+    expect(editor.querySelector('[data-testid="page-menu"]')).toBeNull();
+    expect(container.textContent).toContain("This Space is archived");
+  });
+
+  it("takes an address naming the Space a page was in to the Space it is in now", async () => {
+    routeState.params = { spaceKey: "handbook", pageId: "page-moved" };
+    mockSpacesApi.locatePage.mockResolvedValue({ pageId: "page-moved", spaceId: "space-2", spaceUrlKey: "rules" });
+    await render();
+
+    expect(mockSpacesApi.locatePage).toHaveBeenCalledWith("company-1", "page-moved");
+    expect(navigate).toHaveBeenCalledWith("/spaces/rules/page-moved", { replace: true });
+
+    // A Space that is not there at all, as with a mistyped address.
+    navigate.mockReset();
+    mockSpacesApi.get.mockRejectedValue(new Error("Space not found"));
+    routeState.params = { spaceKey: "no-such-space", pageId: "page-moved" };
+    await render();
+    expect(navigate).toHaveBeenCalledWith("/spaces/rules/page-moved", { replace: true });
+  });
+
+  it("stays put for a page found nowhere, and says so", async () => {
+    routeState.params = { spaceKey: "handbook", pageId: "page-gone" };
+    await render();
+
+    expect(mockSpacesApi.locatePage).toHaveBeenCalledWith("company-1", "page-gone");
+    expect(navigate).not.toHaveBeenCalled();
+    // The editor says the page could not be found.
+    expect(container.querySelector('[data-testid="page-editor"]')?.getAttribute("data-page-id")).toBe("page-gone");
+  });
+
+  it("follows the open page when a page above it moves to another Space, and leaves it when one goes to the trash", async () => {
+    routeState.params = { spaceKey: "handbook", pageId: "page-4" };
+    await render();
+
+    // Another page moving changes nothing here.
+    await act(async () => {
+      buttonLabelled(container, "Moved page-1")!.click();
+    });
+    expect(navigate).not.toHaveBeenCalled();
+    // People holds Hiring, which holds the open page.
+    await act(async () => {
+      buttonLabelled(container, "Moved page-2")!.click();
+    });
+    expect(navigate).toHaveBeenLastCalledWith("/spaces/other/page-4");
+    await act(async () => {
+      buttonLabelled(container, "Deleted page-3")!.click();
+    });
+    expect(navigate).toHaveBeenLastCalledWith("/spaces/handbook");
   });
 
   it("never shows a page as a task, even in a Space whose address is issues", async () => {
@@ -263,8 +393,9 @@ describe("SpaceDetail", () => {
     mockSpacesApi.get.mockResolvedValue({ ...SPACE, name: "Issues", urlKey: "issues" });
     await render();
 
+    // Its four pages, and its trash.
     const pageLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="/spaces/issues/"]'));
-    expect(pageLinks).toHaveLength(4);
+    expect(pageLinks).toHaveLength(5);
     for (const link of pageLinks) {
       expect(link.getAttribute("data-issue-quicklook"), link.getAttribute("href") ?? "").toBe("off");
     }
