@@ -44,20 +44,35 @@ function firstMarker<T extends string>(
   return found?.marker;
 }
 
+type Join = NonNullable<ToMarkdownOptions["join"]>[number];
+
+/**
+ * An empty list item cannot come straight after a line of text. Read again, a
+ * lone "-" there underlines the text as a heading, and a lone "*", "+" or "1."
+ * becomes part of the text. The editor writes a sub-list straight under its
+ * item's text, so a sub-list that starts with an empty item (Enter, then Tab,
+ * makes one) gets a blank line above it instead. The editor reads that back
+ * the same. A page shows that list a little more spaced out until the new item
+ * has text.
+ */
+const blankLineBeforeEmptyItem: Join = (left, right) =>
+  left.type === "paragraph" && right.type === "list" && right.children[0]?.children.length === 0 ? 1 : undefined;
+
 /**
  * The rich editor writes markdown back out in one fixed style ("*" bullets,
  * "*" emphasis, "***" rules, backtick fences and so on), whatever the person
  * wrote. These options make it write the markers the markdown already uses
  * instead, so saving an edit keeps the person's own style. Each marker comes
  * from its first use. Anything the markdown does not use keeps the editor's
- * own default.
+ * own default. They also keep a new, empty sub-item from reading back as
+ * something else (see blankLineBeforeEmptyItem).
  *
  * `markdown` is what the editor holds, all of it markdown: the editor keeps a
  * file's front matter out itself. Skipping a block between dividers here as
  * well would skip text the editor holds, a "---" divider with it.
  */
 export function markdownStyleOptions(markdown: string): ToMarkdownOptions {
-  const options: ToMarkdownOptions = { listItemIndent: "one" };
+  const options: ToMarkdownOptions = { listItemIndent: "one", join: [blankLineBeforeEmptyItem] };
   const prose: string[] = [];
   let listIndentKnown = false;
   // The first numbered list, until its second item says whether the numbers count up.

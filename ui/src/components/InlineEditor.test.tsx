@@ -308,6 +308,54 @@ describe("InlineEditor", () => {
       root.unmount();
     });
   });
+
+  it("takes a newer value from elsewhere when the draft differs only by end whitespace", () => {
+    vi.useFakeTimers();
+    try {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const root = createRoot(container);
+
+      act(() => {
+        root.render(<InlineEditor value={"Original\n"} multiline onSave={onSave} />);
+      });
+      act(() => {
+        enterMultilineEdit(container);
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>('[data-testid="multiline-md-mock"]');
+      expect(textarea).not.toBeNull();
+      act(() => {
+        textarea!.focus();
+      });
+
+      // Type a letter and delete it: the editor now holds the trimmed text.
+      act(() => {
+        setNativeTextareaValue(textarea!, "Originalx");
+      });
+      act(() => {
+        setNativeTextareaValue(textarea!, "Original");
+      });
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      // An agent updates the description while the field is still open.
+      act(() => {
+        root.render(<InlineEditor value={"Changed by an agent.\n"} multiline onSave={onSave} />);
+      });
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      expect(textarea?.value).toBe("Changed by an agent.\n");
+      expect(onSave).not.toHaveBeenCalled();
+
+      act(() => {
+        root.unmount();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("queueContainedBlurCommit", () => {

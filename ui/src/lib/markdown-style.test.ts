@@ -3,8 +3,9 @@ import { markdownStyleOptions } from "./markdown-style";
 
 describe("markdownStyleOptions", () => {
   it("keeps the editor's own defaults for markdown that uses no markers", () => {
-    expect(markdownStyleOptions("")).toEqual({ listItemIndent: "one" });
-    expect(markdownStyleOptions("Just a sentence.")).toEqual({ listItemIndent: "one" });
+    const defaults = { listItemIndent: "one", join: [expect.any(Function)] };
+    expect(markdownStyleOptions("")).toEqual(defaults);
+    expect(markdownStyleOptions("Just a sentence.")).toEqual(defaults);
   });
 
   it("takes the bullet from the first bulleted list", () => {
