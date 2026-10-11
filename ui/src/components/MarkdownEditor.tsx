@@ -38,6 +38,7 @@ import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChi
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
 import { mentionDeletionPlugin } from "../lib/mention-deletion";
 import { looksLikeMarkdownPaste } from "../lib/markdownPaste";
+import { markdownStyleOptions } from "../lib/markdown-style";
 import { normalizeMarkdown } from "../lib/normalize-markdown";
 import { pasteNormalizationPlugin } from "../lib/paste-normalization";
 import { cn } from "../lib/utils";
@@ -507,6 +508,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   readOnly = false,
 }: MarkdownEditorProps, forwardedRef) {
   const editorValue = useMemo(() => prepareMarkdownForEditor(value), [value]);
+  // Writes edits back with the markers this markdown already uses ("-" lists,
+  // "_" emphasis and so on) rather than the editor's own.
+  const toMarkdownOptions = useMemo(() => markdownStyleOptions(editorValue), [editorValue]);
   const { slashCommands } = useEditorAutocomplete();
   const containerRef = useRef<HTMLDivElement>(null);
   const ref = useRef<MDXEditorMethods>(null);
@@ -1091,10 +1095,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       <MDXEditor
         ref={setEditorRef}
         markdown={editorValue}
+        toMarkdownOptions={toMarkdownOptions}
         suppressHtmlProcessing
         placeholder={placeholder}
         readOnly={readOnly}
-        onChange={(next) => {
+        onChange={(next, initialMarkdownNormalize) => {
           if (readOnly) return;
           const echo = echoIgnoreMarkdownRef.current;
           if (echo !== null && next === echo) {
@@ -1114,6 +1119,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               return;
             }
           }
+          // MDXEditor says this once when it writes the markdown it was given
+          // back out differently (table padding, escapes, spacing and so on).
+          // Nothing was edited, so the parent keeps the markdown as written and
+          // opening it never counts as a change.
+          if (initialMarkdownNormalize) return;
           latestValueRef.current = next;
           onChange(next);
         }}
