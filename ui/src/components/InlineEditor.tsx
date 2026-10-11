@@ -74,6 +74,11 @@ export function InlineEditor({
     reset,
     runSave,
   } = useAutosaveIndicator();
+  // Saving trims the text: whitespace at its ends shows nowhere, and the rich
+  // editor does not write any. So whitespace at either end of the saved text
+  // is not an edit either. Compared untrimmed, a description that ends in a
+  // newline was saved again, trimmed, as soon as it was clicked into.
+  const trimmedValue = value.trim();
 
   useEffect(() => {
     const previousValue = lastPropValueRef.current;
@@ -155,7 +160,7 @@ export function InlineEditor({
 
   const commit = useCallback(async (nextValue = draft) => {
     const valueToSave = nextValue.trim();
-    const valueChanged = valueToSave !== value;
+    const valueChanged = valueToSave !== trimmedValue;
     const shouldSave = nullable
       ? valueChanged
       : Boolean(valueToSave && valueChanged);
@@ -167,12 +172,12 @@ export function InlineEditor({
     if (!multiline) {
       setEditing(false);
     }
-  }, [draft, multiline, nullable, onSave, value]);
+  }, [draft, multiline, nullable, onSave, trimmedValue, value]);
 
   /** Multiline blur/submit: show autosave indicator when persisting */
   const finalizeMultilineBlurOrSubmit = useCallback(() => {
     const trimmed = draft.trim();
-    if (trimmed === value) {
+    if (trimmed === trimmedValue) {
       reset();
       void commit();
       return;
@@ -183,7 +188,7 @@ export function InlineEditor({
       return;
     }
     void runSave(() => commit());
-  }, [commit, draft, nullable, reset, runSave, value]);
+  }, [commit, draft, nullable, reset, runSave, trimmedValue]);
 
   const cancelPendingBlurCommit = useCallback(() => {
     if (blurCommitFrameRef.current === null) return;
@@ -232,7 +237,7 @@ export function InlineEditor({
     if (!multilineFocused) return;
     const trimmed = draft.trim();
     // Nullable: empty draft can still be a real edit (clearing); only skip debounce when unchanged or empty is invalid.
-    if (trimmed === value || (!trimmed && !nullable)) {
+    if (trimmed === trimmedValue || (!trimmed && !nullable)) {
       if (autosaveState !== "saved") {
         reset();
       }
@@ -251,7 +256,7 @@ export function InlineEditor({
         clearTimeout(autosaveDebounceRef.current);
       }
     };
-  }, [autosaveState, commit, draft, markDirty, multiline, multilineFocused, nullable, reset, runSave, value]);
+  }, [autosaveState, commit, draft, markDirty, multiline, multilineFocused, nullable, reset, runSave, trimmedValue]);
 
   if (multiline) {
     const previewValue = autosaveState === "saved" || autosaveState === "idle" ? draft : value;

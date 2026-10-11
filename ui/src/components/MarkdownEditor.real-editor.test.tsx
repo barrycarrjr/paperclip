@@ -198,6 +198,52 @@ describe("MarkdownEditor with the real rich editor", () => {
     }
   });
 
+  /** Presses a key in the rich text. */
+  async function press(key: string) {
+    await act(async () => {
+      editable().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+    await settle();
+  }
+
+  it.each([
+    {
+      name: '"-" lists',
+      markdown: "Steps:\n\n- Reproduce it.\n- Fix it.",
+      expected: "Steps:\n\n- Reproduce it.\n- Fix it.\n\n  -",
+    },
+    {
+      name: '"*" lists',
+      markdown: "Steps:\n\n* Reproduce it.\n* Fix it.",
+      expected: "Steps:\n\n* Reproduce it.\n* Fix it.\n\n  *",
+    },
+    {
+      name: "numbered lists",
+      markdown: "Steps:\n\n1. Reproduce it.\n2. Fix it.",
+      expected: "Steps:\n\n1. Reproduce it.\n2. Fix it.\n\n   1.",
+    },
+  ])("writes a new empty sub-item in $name so that it reads back the same", async ({ markdown, expected }) => {
+    const onChange = await open(markdown);
+    // Enter at the end of the last item, then Tab, starts a sub-item.
+    await act(async () => {
+      lexical().update(() => {
+        $getRoot().getAllTextNodes().at(-1)!.selectEnd();
+      });
+    });
+    await press("Enter");
+    await press("Tab");
+    const shown = editable().innerHTML;
+    const written = onChange.mock.lastCall?.[0] as string;
+
+    // Read again, a lone "-" under "Fix it." made it a heading, and a lone "*"
+    // or "1." became part of its text.
+    await open(written);
+    expect(editable().querySelector("h1, h2, h3, h4, h5, h6"), written).toBeNull();
+    expect(editable().innerHTML, written).toBe(shown);
+    // Written with a blank line above the new item.
+    expect(written).toBe(expected);
+  });
+
   it("pastes markdown once", async () => {
     const onChange = await open("Before.");
     const paste = pasteEvent("- Run the tests.\n- Ask first.");
