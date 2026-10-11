@@ -181,6 +181,34 @@ describeEmbeddedPostgres("project scan preview", () => {
       .toEqual(preview.candidates?.map((candidate) => [candidate.relativePath, candidate.status]));
   });
 
+  it("agrees with the import when two workspaces hold a skill with the same short name", async () => {
+    const firstWorkspace = await makeTempDir("paperclip-scan-preview-workspace-");
+    const secondWorkspace = await makeTempDir("paperclip-scan-preview-workspace-");
+    await writeSkill(path.join(firstWorkspace, "skills", "dup"), "Dup");
+    await writeSkill(path.join(secondWorkspace, "skills", "dup"), "Dup");
+    const { companyId, projectId, workspaceId } = await seedCompany(firstWorkspace);
+    const [second] = await db
+      .insert(projectWorkspaces)
+      .values({ companyId, projectId, name: "Second", cwd: secondWorkspace, isPrimary: false })
+      .returning();
+    const outcomes = (result: Awaited<ReturnType<typeof svc.scanProjectWorkspaces>>) =>
+      result.candidates?.map((candidate) => [candidate.workspaceId, candidate.relativePath, candidate.status]);
+
+    const preview = await svc.scanProjectWorkspaces(companyId, { mode: "preview" });
+
+    expect(outcomes(preview)).toEqual([
+      [workspaceId, "skills/dup", "new"],
+      [second!.id, "skills/dup", "conflict"],
+    ]);
+    expect(preview.conflicts.map((entry) => entry.path)).toEqual([path.join(secondWorkspace, "skills", "dup")]);
+    expect(await ownSkillRows(companyId)).toEqual([]);
+
+    const result = await svc.scanProjectWorkspaces(companyId);
+
+    expect(outcomes(result)).toEqual(outcomes(preview));
+    expect(result.imported.map((skill) => skill.sourceLocator)).toEqual([path.join(firstWorkspace, "skills", "dup")]);
+  });
+
   it("refuses a selection instead of importing every skill it finds", async () => {
     const workspace = await makeTempDir("paperclip-scan-preview-workspace-");
     await writeSkill(path.join(workspace, "skills", "wanted"), "Wanted");

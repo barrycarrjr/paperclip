@@ -1,10 +1,12 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  agents,
   companies,
   companySkills,
   createDb,
@@ -26,6 +28,11 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
+const FOLDER_OPEN = { status: 409, message: "The skill's folder is open in another program. Close it and try again." };
+
+type Db = ReturnType<typeof createDb>;
+type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
 function skillMarkdown(name: string) {
   return `---\nname: ${name}\n---\n\n# ${name}\n`;
 }
@@ -35,7 +42,7 @@ async function exists(target: string) {
 }
 
 describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
-  let db!: ReturnType<typeof createDb>;
+  let db!: Db;
   let svc!: ReturnType<typeof companySkillService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   const cleanupDirs = new Set<string>();
@@ -56,12 +63,14 @@ describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (originalPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
     else process.env.PAPERCLIP_HOME = originalPaperclipHome;
     if (originalPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
     else process.env.PAPERCLIP_INSTANCE_ID = originalPaperclipInstanceId;
 
     await db.delete(companySkills);
+    await db.delete(agents);
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(companies);
@@ -111,6 +120,38 @@ describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
     await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
     await fs.writeFile(path.join(skillDir, "references", "old.md"), "Old notes.\n", "utf8");
     return { skill, skillDir };
+  }
+
+  async function expectSkillKept(companyId: string, skillId: string, skillDir: string) {
+    await expect(svc.getById(companyId, skillId)).resolves.toMatchObject({ id: skillId });
+    await expect(fs.readFile(path.join(skillDir, "references", "old.md"), "utf8")).resolves.toBe("Old notes.\n");
+  }
+
+  // Holds a short name's lock, as a delete or a create that got there first
+  // would, after doing some work in that transaction.
+  async function holdShortNameLock(companyId: string, slug: string, work?: (tx: Transaction) => Promise<void>) {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => { markHeld = resolve; });
+    const finished = db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${companyId}:${slug}`}, 0))`);
+      await work?.(tx);
+      markHeld();
+      await released;
+    });
+    await Promise.race([held, finished]);
+    return { release, finished };
+  }
+
+  async function waitUntilSomethingWaitsForALock() {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [waiting] = await db.execute<{ count: number }>(sql`select count(*)::int as count from pg_locks where not granted`);
+      if ((waiting?.count ?? 0) > 0) return;
+      if (Date.now() > deadline) throw new Error("The delete never waited for the lock.");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
 
   it("removes the folder of a skill made here, so its short name can be used again without the old files", async () => {
@@ -226,8 +267,98 @@ describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
       await db.execute(sql`drop function refuse_skill_delete()`);
     }
 
-    await expect(svc.getById(companyId, skill.id)).resolves.toMatchObject({ id: skill.id });
+    await expectSkillKept(companyId, skill.id, skillDir);
+  });
+
+  it("keeps a folder another company's skill was imported from through a link", async () => {
+    const companyId = await createCompany();
+    const { skill, skillDir } = await createSkillWithExtraFile(companyId);
+    const otherCompanyId = await createCompany();
+    const linkPath = path.join(await makeTempDir("paperclip-delete-link-"), "shared-review");
+    await fs.symlink(skillDir, linkPath, "junction");
+    cleanupLinks.add(linkPath);
+    const { imported: [copy] } = await svc.importFromSource(otherCompanyId, linkPath);
+    expect(copy?.sourceLocator).toBe(linkPath);
+
+    await svc.deleteSkill(companyId, skill.id);
+
     await expect(fs.readFile(path.join(skillDir, "references", "old.md"), "utf8")).resolves.toBe("Old notes.\n");
+    // The other company's next skills list still has its skill.
+    expect((await svc.listFull(otherCompanyId)).map((entry) => entry.id)).toContain(copy!.id);
+  });
+
+  it.runIf(process.platform === "win32")("refuses with a 409 while a program is working in the folder, and loses nothing", async () => {
+    const companyId = await createCompany();
+    const { skill, skillDir } = await createSkillWithExtraFile(companyId);
+    const program = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+      cwd: skillDir,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const exited = new Promise((resolve) => program.once("exit", resolve));
+    try {
+      await new Promise((resolve) => program.stdout!.once("data", resolve));
+      await expect(svc.deleteSkill(companyId, skill.id)).rejects.toMatchObject(FOLDER_OPEN);
+    } finally {
+      program.kill();
+      await exited;
+    }
+
+    await expectSkillKept(companyId, skill.id, skillDir);
+    // Once the program is closed, the delete goes through.
+    await expect(svc.deleteSkill(companyId, skill.id)).resolves.toMatchObject({ id: skill.id });
+    expect(await exists(skillDir)).toBe(false);
+  });
+
+  it.each(["EBUSY", "EPERM", "EACCES"])("answers %s on moving the folder with a 409 and loses nothing", async (code) => {
+    const companyId = await createCompany();
+    const { skill, skillDir } = await createSkillWithExtraFile(companyId);
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(Object.assign(new Error(`${code}: the folder is in use`), { code }));
+
+    await expect(svc.deleteSkill(companyId, skill.id)).rejects.toMatchObject(FOLDER_OPEN);
+
+    await expectSkillKept(companyId, skill.id, skillDir);
+  });
+
+  it("removes folders earlier deletes left aside once their skill is gone", async () => {
+    const companyId = await createCompany();
+    const { skill: kept } = await createSkillWithExtraFile(companyId);
+    const other = await svc.createLocalSkill(companyId, { name: "Other" });
+    const asideRoot = path.join(path.dirname(other.sourceLocator!), ".deleted");
+    // Left by a delete that was saved but stopped before removing the folder.
+    const leftover = path.join(asideRoot, `${randomUUID()}-${randomUUID()}`);
+    // Moved by a delete of a skill that still exists, which may still be running.
+    const stillRunning = path.join(asideRoot, `${kept.id}-${randomUUID()}`);
+    // Not put there by a delete.
+    const unrelated = path.join(asideRoot, "notes");
+    for (const folder of [leftover, stillRunning, unrelated]) await writeSkill(folder, "Aside");
+
+    await expect(svc.deleteSkill(companyId, other.id)).resolves.toMatchObject({ id: other.id });
+
+    expect(await exists(leftover)).toBe(false);
+    expect(await exists(stillRunning)).toBe(true);
+    expect(await exists(unrelated)).toBe(true);
+  });
+
+  it("refuses the delete when an agent is given the skill while the delete waits", async () => {
+    const companyId = await createCompany();
+    const { skill, skillDir } = await createSkillWithExtraFile(companyId);
+    const lock = await holdShortNameLock(companyId, "code-review");
+
+    const pendingDelete = svc.deleteSkill(companyId, skill.id).catch((error: unknown) => error);
+    await waitUntilSomethingWaitsForALock();
+    await db.insert(agents).values({
+      companyId,
+      name: "Reviewer",
+      adapterConfig: { paperclipSkillSync: { desiredSkills: [skill.key] } },
+    });
+    lock.release();
+    await lock.finished;
+
+    expect(await pendingDelete).toMatchObject({
+      status: 422,
+      message: expect.stringContaining("still used by Reviewer"),
+    });
+    await expectSkillKept(companyId, skill.id, skillDir);
   });
 
   it("leaves a skill made again with the short name alone when an earlier delete finishes late", async () => {
@@ -235,14 +366,8 @@ describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
     const { skill, skillDir } = await createSkillWithExtraFile(companyId);
     const newMarkdown = skillMarkdown("Code review, made again");
 
-    // Holds the short name's lock while the skill is deleted and made again,
-    // as a delete and a create that got there first would.
-    let release!: () => void;
-    const released = new Promise<void>((resolve) => { release = resolve; });
-    let markRemade!: () => void;
-    const remade = new Promise<void>((resolve) => { markRemade = resolve; });
-    const deleteAndCreate = db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${companyId}:code-review`}, 0))`);
+    // The skill is deleted and made again while the lock is held.
+    const lock = await holdShortNameLock(companyId, "code-review", async (tx) => {
       await tx.delete(companySkills).where(eq(companySkills.id, skill.id));
       await fs.rm(skillDir, { recursive: true, force: true });
       await writeSkill(skillDir, "Code review, made again");
@@ -257,22 +382,13 @@ describeEmbeddedPostgres("companySkillService.deleteSkill", () => {
         fileInventory: [{ path: "SKILL.md", kind: "skill" }],
         metadata: { sourceKind: "managed_local" },
       });
-      markRemade();
-      await released;
     });
-    await remade;
 
     // This delete read the old skill before it was replaced.
     const lateDelete = svc.deleteSkill(companyId, skill.id);
-    const deadline = Date.now() + 10_000;
-    for (;;) {
-      const [waiting] = await db.execute<{ count: number }>(sql`select count(*)::int as count from pg_locks where not granted`);
-      if ((waiting?.count ?? 0) > 0) break;
-      if (Date.now() > deadline) throw new Error("The delete never waited for the lock.");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    release();
-    await deleteAndCreate;
+    await waitUntilSomethingWaitsForALock();
+    lock.release();
+    await lock.finished;
 
     await expect(lateDelete).resolves.toBeNull();
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toBe(newMarkdown);
