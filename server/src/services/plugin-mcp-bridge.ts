@@ -49,6 +49,7 @@ import type {
   AgentToolDescriptor,
 } from "./plugin-tool-dispatcher.js";
 import {
+  assertPluginToolAccess,
   executeChatTool,
   listChatToolSpecs,
   type ToolActor,
@@ -362,6 +363,10 @@ export function createPluginMcpBridge(
           input: request.params.arguments ?? {}, mutating: pluginToolDispatcher.getTool?.(namespacedName)?.writes ?? false,
         });
         try {
+          // Clippy runs a plugin tool as the person chatting, so not where
+          // they could not run one themselves. An agent run has no person
+          // behind it and keeps the company its token was given.
+          if (!session.agentRunContext) await assertPluginToolAccess(session.actor, session.companyId);
           const exec = await pluginToolDispatcher.executeTool(
             namespacedName,
             request.params.arguments ?? {},

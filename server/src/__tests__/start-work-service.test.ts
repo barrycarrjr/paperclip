@@ -810,6 +810,28 @@ describeEmbeddedPostgres("startWorkService.plan", () => {
     expect(again.issue.id).toBe(firstForOther.issue.id);
   });
 
+  it("counts one company once however its id is written, so another spelling is no fresh allowance", async () => {
+    const companyId = await seedCompany();
+    const ceo = await seedAgent(companyId, { name: "Ada", role: "ceo" });
+    mocks.completeOnce.mockResolvedValue(reply(plannerJson([
+      { clientKey: "t1", title: "One", why: "w", assigneeAgentId: ceo },
+    ])));
+    const svc = startWorkService(db);
+
+    for (let i = 0; i < 10; i += 1) {
+      await svc.plan(companyId, { text: `Thing number ${i}`, requestKey: randomUUID() }, { userId: USER_ID });
+    }
+
+    // Postgres reads every one of these as the same company.
+    for (const spelling of [companyId.toUpperCase(), companyId.replace(/-/g, ""), `{${companyId}}`]) {
+      await expect(
+        svc.plan(spelling, { text: "One thing too many", requestKey: randomUUID() }, { userId: USER_ID }),
+      ).rejects.toMatchObject({ status: 429, message: TOO_MANY_PLANS_MESSAGE });
+    }
+    expect(mocks.completeOnce).toHaveBeenCalledTimes(10);
+    expect(await issueRows(companyId)).toHaveLength(10);
+  });
+
   it("a repeated requestKey returns the same left-out list and the same recurring note as the first answer", async () => {
     const companyId = await seedCompany();
     const ceo = await seedAgent(companyId, { name: "Ada", role: "ceo" });

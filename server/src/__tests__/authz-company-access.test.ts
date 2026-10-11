@@ -105,19 +105,71 @@ describe("assertCompanyAccess", () => {
     expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
   });
 
-  it("allows tool_session writes within its own company", () => {
-    const req = makeReq({
-      method: "POST",
+  function personWith(
+    role: string | null,
+    overrides: Partial<Express.Request["actor"]> = {},
+  ): Express.Request["actor"] {
+    return {
+      type: "board",
+      userId: "user-1",
+      source: "tool_session_jwt",
+      companyIds: role ? ["company-1"] : [],
+      memberships: role ? [{ companyId: "company-1", membershipRole: role, status: "active" }] : [],
+      isInstanceAdmin: false,
+      ...overrides,
+    };
+  }
+
+  function toolSession(method: string, person: Express.Request["actor"] | undefined) {
+    return makeReq({
+      method,
       actor: {
         type: "tool_session",
         userId: "user-1",
         companyId: "company-1",
         toolSessionId: "clippy-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         source: "tool_session_jwt",
+        person,
       },
     });
+  }
+
+  it("allows tool_session writes within its own company", () => {
+    const req = toolSession("POST", personWith("member"));
 
     expect(() => assertCompanyAccess(req, "company-1", "write")).not.toThrow();
+  });
+
+  it("lets a viewer's tool_session read its company but not change it", () => {
+    expect(() => assertCompanyAccess(toolSession("GET", personWith("viewer")), "company-1")).not.toThrow();
+    expect(() => assertCompanyAccess(toolSession("POST", personWith("viewer")), "company-1")).toThrow(
+      "Viewer access is read-only",
+    );
+  });
+
+  it("refuses a tool_session once the person is no longer a member", () => {
+    expect(() => assertCompanyAccess(toolSession("GET", personWith(null)), "company-1", "read")).toThrow(
+      "User does not have access to this company",
+    );
+  });
+
+  it("gives a tool_session read only, in its own company, for an HQ owner or admin who is not a member there", () => {
+    const hqAdmin = personWith(null, { isPortfolioRootUserAdmin: true });
+    expect(() => assertCompanyAccess(toolSession("GET", hqAdmin), "company-1", "read")).not.toThrow();
+    expect(() => assertCompanyAccess(toolSession("POST", hqAdmin), "company-1", "write")).toThrow(
+      "User does not have access to this company",
+    );
+  });
+
+  it("keeps the instance admin's allowance in the tool_session's own company", () => {
+    const admin = personWith(null, { isInstanceAdmin: true });
+    expect(() => assertCompanyAccess(toolSession("POST", admin), "company-1", "write")).not.toThrow();
+  });
+
+  it("refuses a tool_session with no person behind it", () => {
+    expect(() => assertCompanyAccess(toolSession("GET", undefined), "company-1", "read")).toThrow(
+      "Tool session is not acting for a user",
+    );
   });
 
   it("rejects tool_session access to a different company", () => {

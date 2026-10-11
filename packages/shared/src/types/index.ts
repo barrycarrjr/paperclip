@@ -188,7 +188,18 @@ export type {
 export type { Goal } from "./goal.js";
 export type { Memory } from "./memory.js";
 export type { MemoryFolderRunResult, MemoryFolderSettings } from "./memory-folder.js";
-export type { Space, SpaceListItem, SpacePage, SpacePageSummary, SpacePageTreeNode } from "./space.js";
+export type {
+  Space,
+  SpaceListItem,
+  SpacePage,
+  SpacePageLocation,
+  SpacePageRevision,
+  SpacePageRevisionDetail,
+  SpacePageSummary,
+  SpacePageTreeNode,
+  SpaceTrashChange,
+  SpaceTrashItem,
+} from "./space.js";
 export type { WorkQueue, WorkQueueItem } from "./work-queue.js";
 export type { Approval, ApprovalComment } from "./approval.js";
 export type {

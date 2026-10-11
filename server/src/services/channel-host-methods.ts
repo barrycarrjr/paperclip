@@ -336,6 +336,8 @@ export function createChannelHostMethods(deps: ChannelHostDeps) {
       userId,
       isInstanceAdmin: actor.isInstanceAdmin === true,
       companyIds: actor.companyIds ?? [],
+      memberships: actor.memberships,
+      isPortfolioRootUserAdmin: actor.isPortfolioRootUserAdmin === true,
     };
     const chat = deps.chat();
 

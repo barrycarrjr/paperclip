@@ -498,10 +498,17 @@ export const queryKeys = {
     detail: (id: string) => ["goals", "detail", id] as const,
   },
   spaces: {
+    /** Also the start of every key below that names the company, so it refreshes them all. */
     list: (companyId: string) => ["spaces", companyId] as const,
+    archived: (companyId: string) => ["spaces", companyId, "archived"] as const,
     detail: (companyId: string, spaceRef: string) => ["spaces", companyId, "detail", spaceRef] as const,
+    pageLocation: (companyId: string, pageId: string) => ["spaces", companyId, "page-location", pageId] as const,
     pageTree: (spaceId: string) => ["spaces", "page-tree", spaceId] as const,
     page: (spaceId: string, pageId: string) => ["spaces", "page", spaceId, pageId] as const,
+    revisions: (spaceId: string, pageId: string) => ["spaces", "revisions", spaceId, pageId] as const,
+    revision: (spaceId: string, pageId: string, revisionId: string) =>
+      ["spaces", "revisions", spaceId, pageId, revisionId] as const,
+    trash: (spaceId: string) => ["spaces", "trash", spaceId] as const,
   },
   artifacts: {
     list: (

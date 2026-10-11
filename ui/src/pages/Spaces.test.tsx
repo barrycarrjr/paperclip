@@ -220,6 +220,58 @@ describe("Spaces", () => {
       .toHaveLength(1);
   });
 
+  it("shows archived Spaces when asked, apart from the others", async () => {
+    mockSpacesApi.list.mockImplementation(async (_companyId: string, options?: { archived?: boolean }) =>
+      options?.archived
+        ? [space({ id: "space-3", name: "Old rules", urlKey: "old-rules", archivedAt: new Date("2026-10-11T11:00:00.000Z") })]
+        : [space()],
+    );
+    await render();
+
+    // Asked for only when shown.
+    expect(mockSpacesApi.list).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("Old rules");
+    await act(async () => {
+      buttonNamed(container, "Show archived Spaces")!.click();
+    });
+    await flush();
+
+    expect(mockSpacesApi.list).toHaveBeenLastCalledWith("company-1", { archived: true });
+    const archived = container.querySelector('section[aria-label="Archived Spaces"]')!;
+    expect(archived.querySelector("a")?.getAttribute("href")).toBe("/spaces/old-rules");
+    expect(archived.textContent).toContain("Archived");
+    expect(Array.from(container.querySelectorAll("a")).map((link) => link.getAttribute("href"))).toEqual([
+      "/spaces/sales-handbook",
+      "/spaces/old-rules",
+    ]);
+
+    await act(async () => {
+      buttonNamed(container, "Hide archived Spaces")!.click();
+    });
+    expect(container.querySelector('section[aria-label="Archived Spaces"]')).toBeNull();
+  });
+
+  it("says every Space is archived, and shows them, rather than offering to make the first one", async () => {
+    mockSpacesApi.list.mockImplementation(async (_companyId: string, options?: { archived?: boolean }) =>
+      options?.archived
+        ? [space({ id: "space-3", name: "Old rules", urlKey: "old-rules", archivedAt: new Date("2026-10-11T11:00:00.000Z") })]
+        : [],
+    );
+    await render();
+    await flush();
+
+    expect(mockSpacesApi.list).toHaveBeenCalledWith("company-1", { archived: true });
+    expect(container.textContent).toContain("Every Space is archived.");
+    expect(container.textContent).not.toContain("No Spaces yet");
+    const archived = container.querySelector('section[aria-label="Archived Spaces"]')!;
+    expect(archived.querySelector("a")?.getAttribute("href")).toBe("/spaces/old-rules");
+    // Shown already, so there is nothing to show or hide.
+    expect(buttonNamed(container, "Show archived Spaces")).toBeUndefined();
+    // Only the header's button: a second under the list read as an empty shelf.
+    expect(Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "New Space"))
+      .toHaveLength(1);
+  });
+
   it("lets a viewer read the list but offers nothing to make", async () => {
     accessState.role = "viewer";
     mockSpacesApi.list.mockResolvedValue([space()]);
