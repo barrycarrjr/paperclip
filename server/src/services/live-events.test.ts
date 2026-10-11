@@ -52,9 +52,23 @@ describe("live-events replay buffer", () => {
     const b1 = publishLiveEvent({ companyId: "b", type: "agent.status" });
     const a2 = publishLiveEvent({ companyId: "a", type: "activity.logged" });
 
-    const replay = getAllBufferedEventsSince(0);
+    const replay = getAllBufferedEventsSince(0, () => true);
     expect(replay.bridged).toBe(true);
     expect(replay.events.map((e) => e.id)).toEqual([a1.id, b1.id, a2.id]);
+  });
+
+  it("leaves out companies the viewer may not see, gaps in their buffers included", () => {
+    const a1 = publishLiveEvent({ companyId: "a", type: "activity.logged" });
+    // Enough of b's events to push its oldest out of the buffer, which would
+    // otherwise make the merged replay unbridgeable from cursor 0.
+    for (let i = 0; i < 320; i += 1) {
+      publishLiveEvent({ companyId: "b", type: "activity.logged", payload: { i } });
+    }
+    const a2 = publishLiveEvent({ companyId: "a", type: "activity.logged" });
+
+    const replay = getAllBufferedEventsSince(0, (companyId) => companyId !== "b");
+    expect(replay.bridged).toBe(true);
+    expect(replay.events.map((e) => e.id)).toEqual([a1.id, a2.id]);
   });
 
   it("fans every company event out to the all-companies channel", () => {

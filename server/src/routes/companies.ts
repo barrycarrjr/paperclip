@@ -147,9 +147,21 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   router.get("/stats", async (req, res) => {
     assertAuthenticated(req);
     const stats = await svc.stats();
+
+    // Other people's personal companies come out here too, for the reason the
+    // list above gives: a company's issue count is already more than "you
+    // cannot see anything in my personal".
+    const mine = (byCompany: typeof stats) =>
+      Object.fromEntries(
+        excludeOthersPersonalCompanies(
+          Object.entries(byCompany).map(([id, counts]) => ({ id, counts })),
+          viewerUserIdForPersonalCheck(req.actor),
+        ).map(({ id, counts }) => [id, counts]),
+      );
+
     // HQ agent: full portfolio stats (cross-company read)
     if (req.actor.type === "agent" && req.actor.isPortfolioRootAgent) {
-      res.json(stats);
+      res.json(mine(stats));
       return;
     }
     assertBoard(req);
@@ -160,11 +172,12 @@ export function companyRoutes(db: Db, storage?: StorageService) {
         ? null
         : new Set(req.actor.companyIds ?? []);
     if (!allowed) {
-      res.json(stats);
+      // The single local operator still sees everything, as in the list above.
+      res.json(req.actor.source === "local_implicit" ? stats : mine(stats));
       return;
     }
     const filtered = Object.fromEntries(Object.entries(stats).filter(([companyId]) => allowed.has(companyId)));
-    res.json(filtered);
+    res.json(mine(filtered));
   });
 
   // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
