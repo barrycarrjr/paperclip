@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from "express";
+import type { Request, RequestHandler, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
 
@@ -30,6 +30,56 @@ function attachErrorContext(
   }
 }
 
+/**
+ * Errors the body reader (express.json) raises for a body it cannot use,
+ * keyed by its `type`. Each carries its own 4xx status; answering 500 blamed
+ * the server for the caller's request.
+ */
+const BODY_READER_ERRORS: Record<string, string> = {
+  "entity.parse.failed": "The request body is not valid JSON.",
+  "entity.too.large": "The request body is too large.",
+  "entity.verify.failed": "The request body could not be read.",
+  "encoding.unsupported": "The request body uses an encoding this server does not read.",
+  "charset.unsupported": "The request body uses a character set this server does not read.",
+  "request.aborted": "The request ended before its body arrived.",
+  "request.size.invalid": "The request body was not the size it said.",
+  "parameters.too.many": "The request has too many parameters.",
+};
+
+const BODY_READER_FALLBACK_MESSAGE = "The request body could not be read.";
+
+/**
+ * Wraps a body reader so every error it passes on is marked as its own. Some
+ * of its errors carry no `type`: a corrupt gzip, deflate or brotli body
+ * arrives as a bare 400.
+ */
+export function markBodyReaderErrors(reader: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    reader(req, res, (err?: unknown) => {
+      if (err && typeof err === "object") {
+        (err as { fromBodyReader?: boolean }).fromBodyReader = true;
+      }
+      next(err as Parameters<NextFunction>[0]);
+    });
+  };
+}
+
+function bodyReaderError(err: unknown): { status: number; message: string } | null {
+  if (!err || typeof err !== "object") return null;
+  const { type, status, statusCode, fromBodyReader } = err as {
+    type?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    fromBodyReader?: unknown;
+  };
+  const knownType = typeof type === "string" && Object.prototype.hasOwnProperty.call(BODY_READER_ERRORS, type);
+  if (!knownType && fromBodyReader !== true) return null;
+  const code = typeof status === "number" ? status : typeof statusCode === "number" ? statusCode : 400;
+  if (code < 400 || code >= 500) return null;
+  // Only fixed sentences: the reader's own message can quote the body.
+  return { status: code, message: knownType ? BODY_READER_ERRORS[type as string]! : BODY_READER_FALLBACK_MESSAGE };
+}
+
 export function errorHandler(
   err: unknown,
   req: Request,
@@ -58,6 +108,12 @@ export function errorHandler(
 
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Validation error", details: err.errors });
+    return;
+  }
+
+  const bodyError = bodyReaderError(err);
+  if (bodyError) {
+    res.status(bodyError.status).json({ error: bodyError.message });
     return;
   }
 

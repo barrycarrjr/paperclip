@@ -6,6 +6,7 @@ import type { Db } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
+import { markBodyReaderErrors } from "./middleware/error-handler.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
@@ -181,7 +182,12 @@ export async function createApp(
 ) {
   const app = express();
 
-  app.use(express.json({
+  // The request logger goes first, so a request the body reader refuses
+  // (malformed JSON, over the size limit) is still logged.
+  app.use(httpLogger);
+  // Marked so the error handler answers every body it refuses with a 4xx,
+  // including a corrupt compressed body that arrives as a bare 400.
+  app.use(markBodyReaderErrors(express.json({
     // Company import/export payloads can inline full portable packages.
     // Also has to accommodate plugin API requests that carry inline images
     // (e.g. phone-tools "describe these photos before placing the call"),
@@ -190,8 +196,8 @@ export async function createApp(
     verify: (req, _res, buf) => {
       (req as unknown as { rawBody: Buffer }).rawBody = buf;
     },
-  }));
-  app.use(httpLogger);
+  })));
+  // app.use(httpLogger); moved above express.json
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
     deploymentMode: opts.deploymentMode,
     deploymentExposure: opts.deploymentExposure,

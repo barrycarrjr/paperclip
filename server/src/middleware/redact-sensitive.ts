@@ -93,6 +93,12 @@ export function stripSecretBearingUrlParts(value: string): string {
 export function redactSensitive(value: unknown, depth = 0): unknown {
   if (depth > MAX_DEPTH) return undefined;
   if (value === null || typeof value !== "object") return value;
+  // A binary body (an uploaded file read with express.raw) is a Buffer, and
+  // walking it as an object gives one key per byte: a refused 45 MB upload
+  // ran the server out of memory. Its size is all a log line needs.
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return `[binary, ${value.byteLength} bytes]`;
+  }
   if (Array.isArray(value)) {
     if (depth + 1 > MAX_DEPTH) return undefined;
     return value.map((entry) => redactSensitive(entry, depth + 1));
