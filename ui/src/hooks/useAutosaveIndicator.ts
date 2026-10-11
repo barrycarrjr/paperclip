@@ -30,7 +30,11 @@ export function useAutosaveIndicator() {
     setState("idle");
   }, [clearTimers]);
 
+  // Newer text is waiting. A save already on its way is of older text, so its
+  // answer must not say "Saved": moving the counter on makes it ignored. Call
+  // it when the text changes, not on every render that finds unsaved text.
   const markDirty = useCallback(() => {
+    saveIdRef.current += 1;
     clearTimers();
     setState("idle");
   }, [clearTimers]);

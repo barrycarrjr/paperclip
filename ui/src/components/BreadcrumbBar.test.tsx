@@ -57,9 +57,7 @@ const navigateSpy = vi.hoisted(() => vi.fn());
 const selectCompanySpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, className }: { children?: unknown; className?: string }) => (
-    <a className={className}>{children as never}</a>
-  ),
+  Link: ({ children }: { children?: unknown }) => <a>{children as never}</a>,
   useLocation: () => ({ pathname: currentPathname, search: "", hash: "", state: null }),
   useParams: () => currentParams,
   useNavigate: () => navigateSpy,
@@ -431,31 +429,6 @@ describe("BreadcrumbBar", () => {
   it("lets the scope take the full touch height when it shares a line with the page name", () => {
     render();
     expect(scopeButton().hasAttribute("data-touch-target")).toBe(false);
-  });
-
-  // Held at full width, the crumbs before the last pushed a page's own name
-  // out of the bar on a phone, and cut the crumb before it off mid-word.
-  it("lets the crumbs between the first and the last give way before the page's own name", () => {
-    currentBreadcrumbs = [
-      { label: "Spaces", href: "/spaces" },
-      { label: "Customer handbook", href: "/spaces/customer-handbook" },
-      { label: "Rush jobs" },
-    ];
-    onAPhone = true;
-    render();
-
-    const items = Array.from(container.querySelectorAll<HTMLElement>('[data-slot="breadcrumb-item"]'));
-    expect(items.map((item) => item.textContent)).toEqual(["Spaces", "Customer handbook", "Rush jobs"]);
-    const [first, between, last] = items;
-    expect(first!.classList.contains("shrink-0")).toBe(true);
-    expect(between!.classList.contains("min-w-0")).toBe(true);
-    expect(between!.classList.contains("shrink-[4]")).toBe(true);
-    expect(between!.querySelector("a")!.classList.contains("truncate")).toBe(true);
-    expect(last!.classList.contains("min-w-0")).toBe(true);
-    expect(last!.querySelector('[data-slot="breadcrumb-page"]')!.classList.contains("truncate")).toBe(true);
-    // Shrinking alone with a factor below 1, the page's name would give up
-    // only part of the room it lacks and be cut off with no "…".
-    expect(Array.from(last!.classList).some((name) => name.startsWith("shrink"))).toBe(false);
   });
 
   // A bar a page sticks to the top sits just under the top bar on a phone

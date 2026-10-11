@@ -16,9 +16,20 @@ import { queryKeys } from "@/lib/queryKeys";
 import { Link, useNavigate, useParams } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
-/** How far each level of subpages is set in, and the deepest level that moves further. */
+/** How far each level of subpages is set in: a full step for six levels, then a smaller one. */
 const TREE_INDENT_PX = 14;
-const TREE_INDENT_MAX_DEPTH = 6;
+const TREE_INDENT_FULL_DEPTH = 6;
+const TREE_INDENT_DEEP_PX = 6;
+
+/**
+ * How far a page at this depth is set in. Past six levels the step gets
+ * smaller rather than stopping, so a subpage never sits level with its
+ * parent and reads as its sibling.
+ */
+export function spacePageIndentPx(depth: number): number {
+  const full = Math.min(depth, TREE_INDENT_FULL_DEPTH);
+  return full * TREE_INDENT_PX + Math.max(0, depth - TREE_INDENT_FULL_DEPTH) * TREE_INDENT_DEEP_PX;
+}
 
 export function spacePageHref(space: Pick<Space, "urlKey">, pageId: string) {
   return `/spaces/${space.urlKey}/${pageId}`;
@@ -212,6 +223,7 @@ export function SpaceDetail() {
         space={space}
         pageId={pageId}
         canWrite={canWrite}
+        currentUserId={accessQuery.data?.userId ?? null}
         onAddSubpage={canWrite ? () => addPage(pageId) : undefined}
         addingSubpage={createPage.isPending}
       />
@@ -254,7 +266,7 @@ function SpacePageTree({
                 "group grid grid-cols-[1.75rem_minmax(0,1fr)_2.25rem] items-center rounded-md transition-colors hover:bg-accent/50",
                 current && "bg-accent hover:bg-accent",
               )}
-              style={{ paddingInlineStart: `${Math.min(depth, TREE_INDENT_MAX_DEPTH) * TREE_INDENT_PX}px` }}
+              style={{ paddingInlineStart: `${spacePageIndentPx(depth)}px` }}
             >
               {hasChildren ? (
                 <button
@@ -271,8 +283,11 @@ function SpacePageTree({
                   <FileText className="h-3.5 w-3.5" />
                 </span>
               )}
+              {/* Not a task, even in a Space whose address is "issues": a
+                  path with "issues" in it is otherwise read as a task link. */}
               <Link
                 to={spacePageHref(space, node.id)}
+                disableIssueQuicklook
                 aria-current={current ? "page" : undefined}
                 title={title}
                 className={cn(

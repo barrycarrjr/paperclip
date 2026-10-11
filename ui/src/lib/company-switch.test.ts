@@ -48,6 +48,15 @@ describe("resolveCompanySwitchDestination", () => {
     expect(switchTo("/PAP/skills/skill-1/files/SKILL.md").path).toBe("/skills");
   });
 
+  it("leaves a Space and its page behind, and opens the new company's Spaces", () => {
+    const page = switchTo("/PAP/spaces/handbook/0b8a9f52-7c1d-4e3a-9f4b-2d6c8e1a5f70");
+    expect(page.path).toBe("/spaces");
+    expect(page.kind).toBe("record_left_behind");
+    expect(page.body).toBe("Opened Spaces. The Space you had open belongs to Paperclip.");
+    expect(switchTo("/PAP/spaces/handbook").path).toBe("/spaces");
+    expect(switchTo("/PAP/spaces").kind).toBe("same_page");
+  });
+
   it("names the company you left as unknown when it cannot be worked out", () => {
     const result = switchTo("/PAP/issues/PAP-12", acme, null);
     expect(result.body).toBe(

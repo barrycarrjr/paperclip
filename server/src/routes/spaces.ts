@@ -5,25 +5,33 @@ import {
   createSpaceSchema,
   updateSpacePageSchema,
   updateSpaceSchema,
+  type Space,
 } from "@paperclipai/shared";
 import { forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { logActivity, spaceService } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo, type AccessMode } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, getActorInfo, type AccessMode } from "./authz.js";
 
 /**
  * Spaces are for people in this first version. The company check alone would
  * let every agent of the company read and change every page, and agents are
  * to be given access one Space at a time instead, so until that exists they
  * are refused here. So are Clippy's tool sessions: page changes from a chat
- * are to come as proposals the person applies.
+ * are to come as proposals the person applies. Someone not signed in is told
+ * to sign in (401) first, rather than that they are not a person.
  */
 const requirePerson: RequestHandler = (req, _res, next) => {
+  assertAuthenticated(req);
   if (req.actor.type !== "board") {
     throw forbidden("Spaces are open to people only for now");
   }
   next();
 };
+
+/** The fields a Space update changed, by name, for its activity row. */
+function changedSpaceFields(before: Space, after: Space): string[] {
+  return (["name", "description", "sortOrder"] as const).filter((field) => before[field] !== after[field]);
+}
 
 export function spaceRoutes(db: Db) {
   const router = Router();
@@ -42,6 +50,11 @@ export function spaceRoutes(db: Db) {
     const actor = getActorInfo(req);
     return { actor, spaceActor: { agentId: null, userId: actor.actorId } };
   }
+
+  // Activity rows for Spaces carry ids only, never a name, a description or
+  // a page title. The activity feed, a person's profile and the live feed are
+  // open to every agent of the company (and HQ's agents read across
+  // companies), which Spaces are not.
 
   router.get("/companies/:companyId/spaces", requirePerson, async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -62,7 +75,7 @@ export function spaceRoutes(db: Db) {
       action: "space.created",
       entityType: "space",
       entityId: space.id,
-      details: { name: space.name, urlKey: space.urlKey },
+      details: { spaceId: space.id },
     });
     res.status(201).json(space);
   });
@@ -80,17 +93,20 @@ export function spaceRoutes(db: Db) {
     const existing = await loadSpace(req, "write");
     const space = await svc.update(existing.id, req.body);
     if (!space) throw notFound("Space not found");
-    const { actor } = personActor(req);
-    await logActivity(db, {
-      companyId: space.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      action: "space.updated",
-      entityType: "space",
-      entityId: space.id,
-      details: req.body,
-    });
+    const changed = changedSpaceFields(existing, space);
+    if (changed.length > 0) {
+      const { actor } = personActor(req);
+      await logActivity(db, {
+        companyId: space.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "space.updated",
+        entityType: "space",
+        entityId: space.id,
+        details: { spaceId: space.id, changed },
+      });
+    }
     res.json(space);
   });
 
@@ -111,7 +127,7 @@ export function spaceRoutes(db: Db) {
       action: "space.page_created",
       entityType: "space_page",
       entityId: page.id,
-      details: { spaceId: space.id, title: page.title, parentPageId: page.parentPageId },
+      details: { spaceId: space.id, pageId: page.id, parentPageId: page.parentPageId },
     });
     res.status(201).json(page);
   });
@@ -144,7 +160,7 @@ export function spaceRoutes(db: Db) {
           entityId: result.page.id,
           details: {
             spaceId: space.id,
-            title: result.page.title,
+            pageId: result.page.id,
             revisionNumber: result.page.latestRevisionNumber,
           },
         });

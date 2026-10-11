@@ -17,10 +17,12 @@ import {
 import { conflict, notFound, unprocessable } from "../errors.js";
 
 /**
- * One person's saves of a page this close together fold into one version.
- * Autosave saves a moment after typing stops, so without it an afternoon's
- * writing would leave hundreds of versions. The window runs from that
- * person's last save, so it holds for as long as they keep writing.
+ * How much of one person's writing a version holds. Autosave saves a moment
+ * after typing stops, so without folding an afternoon's writing would leave
+ * hundreds of versions. The window runs from the version's first save, not
+ * from the last one: a version that kept folding for as long as someone kept
+ * writing would hold hours of work, and a mistake at the end of them could
+ * not be undone back to the middle.
  */
 export const SPACE_PAGE_FOLD_WINDOW_MS = 10 * 60 * 1000;
 
@@ -32,11 +34,19 @@ export interface SpaceActor {
 
 const URL_KEY_DELIM_RE = /[^a-z0-9]+/g;
 const URL_KEY_TRIM_RE = /^-+|-+$/g;
+const URL_KEY_COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const URL_KEY_MAX = 60;
 
-/** The address key a Space name asks for: "Sales Handbook" gives "sales-handbook". */
+/**
+ * The address key a Space name asks for: "Sales Handbook" gives
+ * "sales-handbook". Accents are taken off their letters first, so "Café
+ * Règles" gives "cafe-regles" rather than "caf-r-gles". A name with no Latin
+ * letters at all still gets "space".
+ */
 export function spaceUrlKeyBase(name: string): string {
   const key = name
+    .normalize("NFKD")
+    .replace(URL_KEY_COMBINING_MARKS_RE, "")
     .trim()
     .toLowerCase()
     .replace(URL_KEY_DELIM_RE, "-")
@@ -136,18 +146,25 @@ export function spaceService(db: Db) {
         .then((rows) => rows[0] ?? null);
     },
 
-    /** A Space of this company by its address key, or by its id. */
+    /**
+     * A Space of this company by its id or its address key. Something shaped
+     * like an id is tried as one first: a Space named with another Space's id
+     * would otherwise take that Space's address over.
+     */
     getByRef: async (companyId: string, ref: string): Promise<Space | null> => {
-      const byKey = await db
-        .select()
-        .from(spaces)
-        .where(and(eq(spaces.companyId, companyId), eq(spaces.urlKey, ref.trim().toLowerCase())))
-        .then((rows) => rows[0] ?? null);
-      if (byKey || !isUuidLike(ref)) return byKey;
+      const trimmed = ref.trim();
+      if (isUuidLike(trimmed)) {
+        const byId = await db
+          .select()
+          .from(spaces)
+          .where(and(eq(spaces.companyId, companyId), eq(spaces.id, trimmed)))
+          .then((rows) => rows[0] ?? null);
+        if (byId) return byId;
+      }
       return db
         .select()
         .from(spaces)
-        .where(and(eq(spaces.companyId, companyId), eq(spaces.id, ref.trim())))
+        .where(and(eq(spaces.companyId, companyId), eq(spaces.urlKey, trimmed.toLowerCase())))
         .then((rows) => rows[0] ?? null);
     },
 
@@ -361,10 +378,13 @@ export function spaceService(db: Db) {
             .then((rows) => rows[0] ?? null)
           : null;
         // Only a person's plain save folds into their own recent one: never
-        // an agent's, and never into a version that says what it was (such as
-        // a restore), which has to stay as it is.
+        // an agent's, never into a version that says what it was (such as a
+        // restore), which has to stay as it is, and never a save that asked to
+        // keep the version before it ("Keep mine" after a conflict, where
+        // that version can be this same person's text from another tab).
         const folds = Boolean(
           latest
+          && !input.keepPrevious
           && actor.userId
           && !actor.agentId
           && latest.createdByUserId === actor.userId
@@ -375,11 +395,14 @@ export function spaceService(db: Db) {
         );
 
         let revisionNumber = current.latestRevisionNumber + 1;
+        let revisionCreatedAt = now;
         if (folds && latest) {
           // The folded version gets a new id, so a save still holding the
           // old one (another tab, say) is refused as out of date instead of
-          // passing the check above.
+          // passing the check above. It keeps the time of its first save,
+          // which the window above counts from.
           revisionNumber = latest.revisionNumber;
+          revisionCreatedAt = latest.createdAt;
           await tx.delete(documentRevisions).where(eq(documentRevisions.id, latest.id));
         }
 
@@ -394,7 +417,7 @@ export function spaceService(db: Db) {
             body,
             createdByAgentId: actor.agentId,
             createdByUserId: actor.userId,
-            createdAt: now,
+            createdAt: revisionCreatedAt,
           })
           .returning();
 

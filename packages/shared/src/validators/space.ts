@@ -37,6 +37,12 @@ export const updateSpacePageSchema = z.object({
   body: z.string().max(SPACE_PAGE_BODY_MAX).optional(),
   /** The version the change was written on. If the page has moved on since, the save is refused with 409. */
   baseRevisionId: z.string().uuid(),
+  /**
+   * Keep the version this save is written on as a version of its own, rather
+   * than folding this save into it. "Keep mine" sends it after a conflict:
+   * the version it lands on can be the same person's text from another tab.
+   */
+  keepPrevious: z.boolean().optional(),
 });
 
 export type UpdateSpacePage = z.infer<typeof updateSpacePageSchema>;

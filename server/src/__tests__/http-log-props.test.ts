@@ -132,4 +132,30 @@ describe("redactSensitive", () => {
     expect(props.reqBody).toBe("[binary, 1048576 bytes]");
     expect(JSON.stringify(props).length).toBeLessThan(200);
   });
+
+  it("logs a long text under body as its length only, on any route and at any depth", () => {
+    const text = "My private notes. ".repeat(30);
+
+    expect(redactSensitive({ title: "Diary", body: text, baseRevisionId: "rev-1" })).toEqual({
+      title: "Diary",
+      body: `[text, ${text.length} characters]`,
+      baseRevisionId: "rev-1",
+    });
+    expect(JSON.stringify(redactSensitive({ comment: { Body: text } }))).not.toContain("My private notes.");
+    // A short one still helps whoever reads the line, and is kept.
+    expect(redactSensitive({ body: "Short note" })).toEqual({ body: "Short note" });
+  });
+
+  it("keeps a refused page save's text out of its failed line", () => {
+    // A 409 when someone else saved first is a normal part of editing a page,
+    // and the log is read by instance admins, Personal companies' pages too.
+    const text = "My private medical history. ".repeat(20);
+    const props = failedRequestLogProps(
+      { body: { body: text, baseRevisionId: "rev-1" }, route: { path: "/spaces/:spaceId/pages/:pageId" } },
+      {},
+    );
+
+    expect(JSON.stringify(props)).not.toContain("medical history");
+    expect(props.reqBody).toEqual({ body: `[text, ${text.length} characters]`, baseRevisionId: "rev-1" });
+  });
 });

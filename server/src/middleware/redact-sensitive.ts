@@ -65,6 +65,14 @@ const URLISH_KEYS = new Set<string>(["href", "uri", "url", "source_url", "source
 const MAX_DEPTH = 6;
 const REDACTED = "[REDACTED]";
 
+/**
+ * Longer than this, a string under `body` is logged as its length only. It is
+ * what someone wrote: a page or a document's whole text, which a refused save
+ * (a 409 when someone else saved first) would otherwise copy into the log,
+ * where instance admins read it, Personal companies' pages included.
+ */
+const BODY_TEXT_LOGGED_MAX = 200;
+
 function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEYS.has(key.toLowerCase());
 }
@@ -111,6 +119,10 @@ export function redactSensitive(value: unknown, depth = 0): unknown {
     }
     if (typeof entry === "string" && isUrlishKey(key)) {
       out[key] = stripSecretBearingUrlParts(entry);
+      continue;
+    }
+    if (typeof entry === "string" && key.toLowerCase() === "body" && entry.length > BODY_TEXT_LOGGED_MAX) {
+      out[key] = `[text, ${entry.length} characters]`;
       continue;
     }
     out[key] = redactSensitive(entry, depth + 1);

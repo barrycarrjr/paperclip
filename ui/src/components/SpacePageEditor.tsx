@@ -21,49 +21,142 @@ export const NEW_SPACE_PAGE_TITLE = "Untitled";
 /** How long after typing stops a change is saved. */
 export const SPACE_PAGE_AUTOSAVE_DELAY_MS = 900;
 
+/** Kept text older than this is dropped when a page opens, so a closed tab's text does not stay for ever. */
+export const KEPT_DRAFT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 const KEPT_DRAFT_KEY_PREFIX = "paperclip:space-page-draft:";
+const TAB_ID_KEY = "paperclip:tab-id";
 
 /**
  * Text written on a page that has not reached the server yet, kept in this
  * browser so a failed save, a closed tab or a lost connection costs nothing.
+ *
+ * Each tab keeps its own, under the signed-in person's id. With one entry per
+ * page, a second tab's save threw away the first tab's unsaved text, and on a
+ * shared browser one person's text came back as the next person's.
  */
 export interface KeptSpacePageDraft {
   title: string;
   body: string;
   /** The version the text was written on. */
   baseRevisionId: string | null;
+  /** When it was kept, in milliseconds. */
+  keptAt: number;
 }
 
-export function readKeptSpacePageDraft(pageId: string): KeptSpacePageDraft | null {
+let fallbackTabId: string | null = null;
+
+function newTabId() {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** This tab's own id. It is kept in sessionStorage, so a reload of the tab keeps it and a new tab gets its own. */
+export function browserTabId(): string {
   try {
-    const raw = window.localStorage.getItem(KEPT_DRAFT_KEY_PREFIX + pageId);
+    const existing = window.sessionStorage.getItem(TAB_ID_KEY);
+    if (existing) return existing;
+    const created = newTabId();
+    window.sessionStorage.setItem(TAB_ID_KEY, created);
+    return created;
+  } catch {
+    fallbackTabId ??= newTabId();
+    return fallbackTabId;
+  }
+}
+
+function keptDraftKeyPrefix(userId: string, pageId: string) {
+  return `${KEPT_DRAFT_KEY_PREFIX}${encodeURIComponent(userId)}:${encodeURIComponent(pageId)}:`;
+}
+
+/** Where one tab keeps one person's unsaved text for one page. */
+export function keptSpacePageDraftKey(userId: string, pageId: string, tabId: string) {
+  return `${keptDraftKeyPrefix(userId, pageId)}${encodeURIComponent(tabId)}`;
+}
+
+function storedKeys(): string[] {
+  try {
+    const storage = window.localStorage;
+    if (typeof storage.length !== "number" || typeof storage.key !== "function") return [];
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key) keys.push(key);
+    }
+    return keys;
+  } catch {
+    return [];
+  }
+}
+
+function readKeptDraft(key: string): KeptSpacePageDraft | null {
+  try {
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<KeptSpacePageDraft>;
-    if (typeof parsed.title !== "string" || typeof parsed.body !== "string") return null;
+    if (typeof parsed.title !== "string" || typeof parsed.body !== "string" || typeof parsed.keptAt !== "number") {
+      return null;
+    }
     return {
       title: parsed.title,
       body: parsed.body,
       baseRevisionId: typeof parsed.baseRevisionId === "string" ? parsed.baseRevisionId : null,
+      keptAt: parsed.keptAt,
     };
   } catch {
     return null;
   }
 }
 
-function keepDraft(pageId: string, draft: KeptSpacePageDraft) {
+/** Keeps the text, and says whether it could: storage can be full or switched off. */
+function keepDraft(key: string, draft: KeptSpacePageDraft): boolean {
   try {
-    window.localStorage.setItem(KEPT_DRAFT_KEY_PREFIX + pageId, JSON.stringify(draft));
+    window.localStorage.setItem(key, JSON.stringify(draft));
+    return true;
   } catch {
-    // Storage is full or switched off. The text is still on screen.
+    return false;
   }
 }
 
-function clearKeptDraft(pageId: string) {
+function forgetDraft(key: string) {
   try {
-    window.localStorage.removeItem(KEPT_DRAFT_KEY_PREFIX + pageId);
+    window.localStorage.removeItem(key);
   } catch {
-    // Nothing kept, nothing to clear.
+    // Nothing kept, nothing to forget.
   }
+}
+
+/** Drops kept text older than KEPT_DRAFT_MAX_AGE_MS, and any that cannot be read. */
+export function dropOldKeptSpacePageDrafts(now = Date.now()) {
+  for (const key of storedKeys()) {
+    if (!key.startsWith(KEPT_DRAFT_KEY_PREFIX)) continue;
+    const kept = readKeptDraft(key);
+    if (!kept || now - kept.keptAt > KEPT_DRAFT_MAX_AGE_MS) forgetDraft(key);
+  }
+}
+
+/**
+ * The kept text to open a page with: this tab's own, or else the newest that
+ * another tab of the same person kept for the page (a tab that was closed, or
+ * crashed, before its text saved).
+ */
+export function findKeptSpacePageDraft(
+  userId: string,
+  pageId: string,
+  tabId: string,
+): { key: string; draft: KeptSpacePageDraft } | null {
+  const ownKey = keptSpacePageDraftKey(userId, pageId, tabId);
+  const own = readKeptDraft(ownKey);
+  if (own) return { key: ownKey, draft: own };
+  const prefix = keptDraftKeyPrefix(userId, pageId);
+  let newest: { key: string; draft: KeptSpacePageDraft } | null = null;
+  for (const key of storedKeys()) {
+    if (key === ownKey || !key.startsWith(prefix)) continue;
+    const draft = readKeptDraft(key);
+    if (draft && (!newest || draft.keptAt > newest.draft.keptAt)) newest = { key, draft };
+  }
+  return newest;
 }
 
 type Draft = { title: string; body: string };
@@ -99,6 +192,8 @@ interface SpacePageEditorProps {
   space: Space;
   pageId: string;
   canWrite: boolean;
+  /** The signed-in person, whose unsaved text this browser keeps. */
+  currentUserId: string | null;
   onAddSubpage?: () => void;
   addingSubpage?: boolean;
 }
@@ -111,7 +206,14 @@ interface SpacePageEditorProps {
  * version, or keep theirs and save it on top. Until a save works, the text is
  * also kept in this browser, and comes back the next time the page opens.
  */
-export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingSubpage }: SpacePageEditorProps) {
+export function SpacePageEditor({
+  space,
+  pageId,
+  canWrite,
+  currentUserId,
+  onAddSubpage,
+  addingSubpage,
+}: SpacePageEditorProps) {
   const queryClient = useQueryClient();
   const pageQueryKey = queryKeys.spaces.page(space.id, pageId);
   const pageQuery = useQuery({
@@ -123,6 +225,8 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [conflict, setConflictState] = useState<Conflict | null>(null);
+  // Set when this browser could not keep the text (storage full or off).
+  const [keepFailed, setKeepFailed] = useState(false);
   const draftRef = useRef<Draft | null>(draft);
   draftRef.current = draft;
   const conflictRef = useRef<Conflict | null>(conflict);
@@ -130,11 +234,30 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  // The next save comes straight after a conflict choice instead of after the
+  // usual pause, and keeps the version it lands on until it has worked.
+  const saveSoonRef = useRef(false);
+  const keepPreviousRef = useRef(false);
+
+  const [tabId] = useState(() => browserTabId());
+  const keepsText = canWrite && currentUserId !== null;
+  const ownKey = keptSpacePageDraftKey(currentUserId ?? "", pageId, tabId);
+  // The kept text this tab opened the page with: its own, or another tab's.
+  const usedKeyRef = useRef<string | null>(null);
 
   const setConflict = useCallback((next: Conflict | null) => {
     conflictRef.current = next;
     setConflictState(next);
   }, []);
+
+  // Lets go of this tab's kept text and of the text it opened the page with,
+  // and only those: another tab's text stays until that tab is done with it.
+  const forgetUsedDrafts = useCallback(() => {
+    forgetDraft(ownKey);
+    if (usedKeyRef.current && usedKeyRef.current !== ownKey) forgetDraft(usedKeyRef.current);
+    usedKeyRef.current = null;
+    setKeepFailed(false);
+  }, [ownKey]);
 
   // Keeps the text in this browser while it differs from what is saved, and
   // lets it go once it is saved. It records the version the text was written
@@ -142,30 +265,41 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
   const syncKeptDraft = useCallback(() => {
     const saved = savedRef.current;
     const current = draftRef.current;
-    if (!canWrite || !saved || !current) return;
+    if (!keepsText || !saved || !current) return;
     if (hasUnsavedText(current, saved)) {
-      keepDraft(pageId, { title: current.title, body: current.body, baseRevisionId: saved.revisionId });
+      const kept = keepDraft(ownKey, {
+        title: current.title,
+        body: current.body,
+        baseRevisionId: saved.revisionId,
+        keptAt: Date.now(),
+      });
+      setKeepFailed(!kept);
     } else {
-      clearKeptDraft(pageId);
+      forgetUsedDrafts();
     }
-  }, [canWrite, pageId]);
+  }, [forgetUsedDrafts, keepsText, ownKey]);
 
   useEffect(() => {
     if (!page) return;
     const saved = savedRef.current;
     if (!saved) {
       savedRef.current = savedStateOf(page);
-      const kept = canWrite ? readKeptSpacePageDraft(page.id) : null;
-      if (kept && (kept.title !== page.title || kept.body !== page.body)) {
-        setDraft({ title: kept.title, body: kept.body });
-        if (kept.baseRevisionId !== page.latestRevisionId) {
+      let kept: { key: string; draft: KeptSpacePageDraft } | null = null;
+      if (keepsText) {
+        dropOldKeptSpacePageDrafts();
+        kept = findKeptSpacePageDraft(currentUserId ?? "", page.id, tabId);
+      }
+      if (kept && (kept.draft.title !== page.title || kept.draft.body !== page.body)) {
+        usedKeyRef.current = kept.key;
+        setDraft({ title: kept.draft.title, body: kept.draft.body });
+        if (kept.draft.baseRevisionId !== page.latestRevisionId) {
           // The page moved on while this text waited in the browser. The
           // version it was written on stays the one it is kept against.
-          savedRef.current = { ...savedRef.current, revisionId: kept.baseRevisionId };
+          savedRef.current = { ...savedRef.current, revisionId: kept.draft.baseRevisionId };
           setConflict({ theirs: page, showTheirs: false });
         }
       } else {
-        if (kept) clearKeptDraft(page.id);
+        if (kept) forgetDraft(kept.key);
         setDraft({ title: page.title, body: page.body });
       }
       return;
@@ -182,7 +316,7 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
       savedRef.current = savedStateOf(page);
       setDraft({ title: page.title, body: page.body });
     }
-  }, [canWrite, page, setConflict]);
+  }, [currentUserId, keepsText, page, setConflict, tabId]);
 
   // A page just made starts with its title picked, ready to be typed over.
   const pickedFreshTitleRef = useRef(false);
@@ -202,8 +336,10 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
     const change: UpdateSpacePage = { baseRevisionId: saved.revisionId };
     if (title !== saved.title) change.title = title;
     if (current.body !== saved.body) change.body = current.body;
+    if (keepPreviousRef.current) change.keepPrevious = true;
     try {
       const updated = await spacesApi.updatePage(space.id, pageId, change);
+      keepPreviousRef.current = false;
       savedRef.current = savedStateOf(updated);
       queryClient.setQueryData(queryKeys.spaces.page(space.id, pageId), updated);
       if (change.title !== undefined) {
@@ -256,12 +392,14 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
   useEffect(() => {
     if (!canWrite || !draft) return;
     syncKeptDraft();
+    const soon = saveSoonRef.current;
+    saveSoonRef.current = false;
     if (conflict || !hasUnsavedText(draft, savedRef.current)) return;
     markDirty();
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
       void queueSaveRef.current();
-    }, SPACE_PAGE_AUTOSAVE_DELAY_MS);
+    }, soon ? 0 : SPACE_PAGE_AUTOSAVE_DELAY_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -286,22 +424,28 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
     if (!current) return;
     savedRef.current = savedStateOf(current.theirs);
     queryClient.setQueryData(pageQueryKey, current.theirs);
+    keepPreviousRef.current = false;
     setConflict(null);
     setDraft({ title: current.theirs.title, body: current.theirs.body });
-    clearKeptDraft(pageId);
+    forgetUsedDrafts();
     reset();
   };
 
   // Saves this person's text on top of the newer version, which stays as an
-  // older version of the page.
+  // older version of the page: the save says so (keepPrevious), because that
+  // version can be this same person's text from another tab, which a save
+  // within ten minutes of it would otherwise fold away.
   const keepMine = () => {
     const current = conflictRef.current;
     if (!current) return;
     savedRef.current = savedStateOf(current.theirs);
     queryClient.setQueryData(pageQueryKey, current.theirs);
+    keepPreviousRef.current = true;
+    if (usedKeyRef.current && usedKeyRef.current !== ownKey) forgetDraft(usedKeyRef.current);
+    usedKeyRef.current = null;
+    // The save goes straight away, from the effect that sees the choice made.
+    saveSoonRef.current = true;
     setConflict(null);
-    syncKeptDraft();
-    void queueSave();
   };
 
   if (pageQuery.isLoading || (page && !draft)) {
@@ -317,8 +461,13 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
   }
 
   const failed = autosaveState === "error";
+  // "Kept" only when this browser really kept a copy: storage can be full or
+  // switched off, and then the text is on this screen alone.
+  const notSavedLine = keepFailed
+    ? "Not saved. Keep this page open: this browser could not keep a copy."
+    : "Not saved, your text is kept";
   const saveLine = conflict || failed
-    ? "Not saved, your text is kept"
+    ? notSavedLine
     : autosaveState === "saving"
       ? "Saving…"
       : autosaveState === "saved"
@@ -383,8 +532,9 @@ export function SpacePageEditor({ space, pageId, canWrite, onAddSubpage, addingS
             info={
               <>
                 <p>
-                  Every saved version of this page is kept. Saves you make within ten minutes
-                  of each other count as one version.
+                  Every saved version of this page is kept. One version holds up to ten minutes
+                  of your writing: what you save in that time counts as one version, and your
+                  next save after it starts a new one.
                 </p>
                 <p>Looking at and restoring older versions, and moving or deleting pages, come in a later update.</p>
               </>

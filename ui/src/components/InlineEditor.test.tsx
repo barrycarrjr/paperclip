@@ -309,6 +309,49 @@ describe("InlineEditor", () => {
     });
   });
 
+  // The autosave line's counter now moves on whenever newer text is typed, so
+  // a save answered after it does not say "Saved". An ordinary autosave, with
+  // nothing typed while it is on its way, still does.
+  it("says Saved after a multiline autosave, with the saved text shown back", async () => {
+    vi.useFakeTimers();
+    try {
+      let value = "Original";
+      const root = createRoot(container);
+      // The page shows the saved text back, as an issue's cache does once saved.
+      const onSave = vi.fn(async (next: string) => {
+        value = next;
+        root.render(<InlineEditor value={value} multiline onSave={onSave} />);
+      });
+
+      act(() => {
+        root.render(<InlineEditor value={value} multiline onSave={onSave} />);
+      });
+      act(() => {
+        enterMultilineEdit(container);
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>('[data-testid="multiline-md-mock"]');
+      expect(textarea).not.toBeNull();
+      act(() => {
+        textarea!.focus();
+      });
+      act(() => {
+        setNativeTextareaValue(textarea!, "Original, longer");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(900);
+      });
+
+      expect(onSave).toHaveBeenCalledWith("Original, longer");
+      expect(container.textContent).toContain("Saved");
+
+      act(() => {
+        root.unmount();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes a newer value from elsewhere when the draft differs only by end whitespace", () => {
     vi.useFakeTimers();
     try {

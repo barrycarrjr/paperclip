@@ -147,6 +147,29 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
     expect((await request(app).get(`/api/companies/${companyId}/spaces/no-such-space`)).status).toBe(404);
   });
 
+  it("takes accents off a name's letters for its address, and falls back to space", async () => {
+    const companyId = await seedCompany();
+    const app = createApp(person("user-a", companyId));
+
+    expect((await createSpace(app, companyId, "Café Règles")).urlKey).toBe("cafe-regles");
+    expect((await createSpace(app, companyId, "Señor Ölçü Naïve")).urlKey).toBe("senor-olcu-naive");
+    expect((await createSpace(app, companyId, "Руководство")).urlKey).toBe("space");
+    expect((await createSpace(app, companyId, "!!!")).urlKey).toBe("space-2");
+  });
+
+  it("finds a Space by its id before any Space whose address is that id", async () => {
+    const companyId = await seedCompany();
+    const app = createApp(person("user-a", companyId));
+    const original = await createSpace(app, companyId, "Original");
+    const named = await createSpace(app, companyId, original.id);
+    expect(named.urlKey).toBe(original.id);
+
+    const res = await request(app).get(`/api/companies/${companyId}/spaces/${original.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(original.id);
+    expect(res.body.name).toBe("Original");
+  });
+
   it("renames a Space, changes its description and order, and keeps its address", async () => {
     const companyId = await seedCompany();
     const app = createApp(person("user-a", companyId));
@@ -290,7 +313,7 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
     expect(second.body.latestRevisionNumber).toBe(1);
     expect(second.body.latestRevisionId).not.toBe(first.body.latestRevisionId);
 
-    // More than 10 minutes after the last save, the next one is a new version.
+    // More than 10 minutes after the version's first save, the next one is a new version.
     await db
       .update(documentRevisions)
       .set({ createdAt: new Date(Date.now() - ELEVEN_MINUTES_MS) })
@@ -310,6 +333,74 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
       .from(activityLog)
       .where(and(eq(activityLog.action, "space.page_updated"), eq(activityLog.entityId, page.id)));
     expect(logged).toHaveLength(1);
+  });
+
+  /** Moves a page's whole history back, as if this much time had passed since. */
+  async function letTimePass(documentId: string, minutes: number) {
+    await db
+      .update(documentRevisions)
+      .set({ createdAt: sql`${documentRevisions.createdAt} - make_interval(mins => ${minutes})` })
+      .where(eq(documentRevisions.documentId, documentId));
+  }
+
+  it("starts a new version after 10 minutes of one person's writing, however close the saves", async () => {
+    const companyId = await seedCompany();
+    const app = createApp(person("user-a", companyId));
+    const space = await createSpace(app, companyId);
+    const page = await createPage(app, space.id, { title: "Notes", body: "Before today" });
+    await letTimePass(page.documentId, 60);
+
+    // Saves 9 minutes apart for 27 minutes.
+    let base = page.latestRevisionId;
+    for (const [index, body] of ["Hour 1", "Hour 1 and 2", "Hour 1, 2 and 3", ""].entries()) {
+      if (index > 0) await letTimePass(page.documentId, 9);
+      const res = await request(app)
+        .patch(`/api/spaces/${space.id}/pages/${page.id}`)
+        .send({ body, baseRevisionId: base });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      base = res.body.latestRevisionId;
+    }
+
+    // A slip at the end (the page wiped) leaves the earlier writing restorable.
+    const revisions = (await revisionsOf(page.documentId))
+      .map((row) => [row.revisionNumber, row.body])
+      .sort((a, b) => Number(a[0]) - Number(b[0]));
+    expect(revisions).toEqual([
+      [1, "Before today"],
+      [2, "Hour 1 and 2"],
+      [3, ""],
+    ]);
+  });
+
+  it("keeps both versions when a person keeps their own text over their other tab's save", async () => {
+    const companyId = await seedCompany();
+    const app = createApp(person("user-a", companyId));
+    const space = await createSpace(app, companyId);
+    const page = await createPage(app, space.id, { title: "Plan", body: "v1" });
+    await letTimePass(page.documentId, 30);
+    const save = (body: string, baseRevisionId: string, keepPrevious?: boolean) =>
+      request(app)
+        .patch(`/api/spaces/${space.id}/pages/${page.id}`)
+        .send({ body, baseRevisionId, ...(keepPrevious ? { keepPrevious } : {}) });
+
+    // Tab one (or the phone) saves first.
+    const tabOne = await save("Plan A, written in tab one", page.latestRevisionId);
+    expect(tabOne.body.latestRevisionNumber).toBe(2);
+    // Tab two still holds version 1, so its save is refused and it offers the choice.
+    expect((await save("Plan B, written in tab two", page.latestRevisionId)).status).toBe(409);
+    // "Keep mine": tab two's text on top of version 2, less than 10 minutes after it.
+    const keep = await save("Plan B, written in tab two", tabOne.body.latestRevisionId, true);
+    expect(keep.status).toBe(200);
+    expect(keep.body.latestRevisionNumber).toBe(3);
+
+    const revisions = (await revisionsOf(page.documentId))
+      .map((row) => [row.revisionNumber, row.body])
+      .sort((a, b) => Number(a[0]) - Number(b[0]));
+    expect(revisions).toEqual([
+      [1, "v1"],
+      [2, "Plan A, written in tab one"],
+      [3, "Plan B, written in tab two"],
+    ]);
   });
 
   it("makes a second save of the same page wait for the first, then refuses it", async () => {
@@ -416,5 +507,46 @@ describeEmbeddedPostgres("Spaces routes (HTTP)", () => {
       expect(edit.body.error).toBe("Spaces are open to people only for now");
     }
     expect(await revisionsOf(page.documentId)).toHaveLength(1);
+  });
+
+  it("tells someone who is not signed in to sign in, rather than that Spaces are for people", async () => {
+    const companyId = await seedCompany();
+    const app = createApp({ type: "none", source: "none" });
+
+    expect((await request(app).get(`/api/companies/${companyId}/spaces`)).status).toBe(401);
+    expect((await request(app).post(`/api/companies/${companyId}/spaces`).send({ name: "Rules" })).status).toBe(401);
+    expect((await request(app).get(`/api/spaces/${randomUUID()}/pages`)).status).toBe(401);
+  });
+
+  // The activity feed, a person's profile and the live feed are open to every
+  // agent of the company, and to HQ's agents, which Spaces are not.
+  it("keeps names, descriptions and page titles out of Spaces activity rows", async () => {
+    const companyId = await seedCompany();
+    const owner = createApp(person("user-a", companyId));
+    const editor = createApp(person("user-b", companyId, "operator"));
+    const created = await request(owner)
+      .post(`/api/companies/${companyId}/spaces`)
+      .send({ name: "Layoffs 2027", description: "Who goes in Q1 and why" });
+    expect(created.status).toBe(201);
+    const renamed = await request(owner)
+      .patch(`/api/spaces/${created.body.id}`)
+      .send({ name: "Restructuring 2027", description: "Final list: Ann, Bob" });
+    expect(renamed.status).toBe(200);
+    const page = await createPage(owner, created.body.id, { title: "Ann Smith severance terms", body: "Private" });
+    const saved = await request(editor)
+      .patch(`/api/spaces/${created.body.id}/pages/${page.id}`)
+      .send({ title: "Ann Smith, final terms", body: "Private, changed", baseRevisionId: page.latestRevisionId });
+    expect(saved.status).toBe(200);
+
+    const rows = await db.select().from(activityLog).where(eq(activityLog.companyId, companyId));
+    const logged = JSON.stringify(rows.map((row) => row.details));
+    for (const words of ["Layoffs", "layoffs", "Restructuring", "Who goes", "Final list", "Ann Smith", "Private"]) {
+      expect(logged, words).not.toContain(words);
+    }
+    const detailsOf = (action: string) => rows.find((row) => row.action === action)?.details;
+    expect(detailsOf("space.created")).toEqual({ spaceId: created.body.id });
+    expect(detailsOf("space.updated")).toEqual({ spaceId: created.body.id, changed: ["name", "description"] });
+    expect(detailsOf("space.page_created")).toEqual({ spaceId: created.body.id, pageId: page.id, parentPageId: null });
+    expect(detailsOf("space.page_updated")).toEqual({ spaceId: created.body.id, pageId: page.id, revisionNumber: 2 });
   });
 });

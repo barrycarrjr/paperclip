@@ -99,7 +99,9 @@ export function Spaces() {
 
       {spacesQuery.error && <p className="text-sm text-destructive">{spacesQuery.error.message}</p>}
 
-      {spaces.length === 0 ? (
+      {/* An empty list is only "no Spaces yet" when the list loaded: a failed
+          load offering to make the first one led to duplicate Spaces. */}
+      {spaces.length === 0 && spacesQuery.error ? null : spaces.length === 0 ? (
         <EmptyState
           icon={Library}
           message="No Spaces yet. A Space holds pages and subpages, like the chapters and sections of a handbook."

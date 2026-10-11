@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Space, SpacePage, SpacePageTreeNode } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findSpacePage, SpaceDetail } from "./SpaceDetail";
+import { findSpacePage, SpaceDetail, spacePageIndentPx } from "./SpaceDetail";
 
 const mockSpacesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -45,8 +45,17 @@ vi.mock("@/context/BreadcrumbContext", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ to, children, className, style, ...rest }: { to: string; children: ReactNode } & ComponentProps<"a">) => (
-    <a href={to} className={className} style={style} {...rest}>{children}</a>
+  Link: ({
+    to,
+    children,
+    className,
+    style,
+    disableIssueQuicklook,
+    ...rest
+  }: { to: string; children: ReactNode; disableIssueQuicklook?: boolean } & ComponentProps<"a">) => (
+    <a href={to} className={className} style={style} data-issue-quicklook={disableIssueQuicklook ? "off" : "on"} {...rest}>
+      {children}
+    </a>
   ),
   useNavigate: () => navigate,
   useParams: () => routeState.params,
@@ -247,6 +256,26 @@ describe("SpaceDetail", () => {
     expect(linkTo(container, "/spaces/handbook/page-4")).not.toBeNull();
     expect(buttonLabelled(container, "New page")).toBeUndefined();
     expect(buttonLabelled(container, "Add a subpage to Hiring")).toBeUndefined();
+  });
+
+  it("never shows a page as a task, even in a Space whose address is issues", async () => {
+    // Its pages live at /spaces/issues/<page>, which the app's links read as a task.
+    mockSpacesApi.get.mockResolvedValue({ ...SPACE, name: "Issues", urlKey: "issues" });
+    await render();
+
+    const pageLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="/spaces/issues/"]'));
+    expect(pageLinks).toHaveLength(4);
+    for (const link of pageLinks) {
+      expect(link.getAttribute("data-issue-quicklook"), link.getAttribute("href") ?? "").toBe("off");
+    }
+  });
+
+  it("keeps setting deeper pages further in past six levels, so none sits level with its parent", () => {
+    const indents = Array.from({ length: 12 }, (_, depth) => spacePageIndentPx(depth));
+    expect(indents.slice(0, 7)).toEqual([0, 14, 28, 42, 56, 70, 84]);
+    for (let depth = 1; depth < indents.length; depth += 1) {
+      expect(indents[depth], `depth ${depth}`).toBeGreaterThan(indents[depth - 1]!);
+    }
   });
 
   it("finds a page at any depth of the tree", () => {

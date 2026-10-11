@@ -208,6 +208,18 @@ describe("Spaces", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("says why the list did not load, and does not offer to make the first Space", async () => {
+    mockSpacesApi.list.mockRejectedValue(new Error("Paperclip is not answering"));
+
+    await render();
+
+    expect(container.textContent).toContain("Paperclip is not answering");
+    expect(container.textContent).not.toContain("No Spaces yet");
+    // Only the header's button: a second one under the error read as an empty shelf.
+    expect(Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "New Space"))
+      .toHaveLength(1);
+  });
+
   it("lets a viewer read the list but offers nothing to make", async () => {
     accessState.role = "viewer";
     mockSpacesApi.list.mockResolvedValue([space()]);
