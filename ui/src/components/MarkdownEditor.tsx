@@ -36,11 +36,20 @@ import { Boxes, User } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { frontMatterYamlText, joinFrontMatter, splitFrontMatter, withFrontMatterYaml } from "../lib/front-matter";
+import {
+  frontMatterYamlProblem,
+  frontMatterYamlText,
+  joinFrontMatter,
+  pastedFrontMatter,
+  splitFrontMatter,
+  withFrontMatterYaml,
+  type FrontMatter,
+  type FrontMatterYamlProblem,
+} from "../lib/front-matter";
 import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChipHref } from "../lib/mention-chips";
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
 import { mentionDeletionPlugin } from "../lib/mention-deletion";
-import { looksLikeMarkdownPaste } from "../lib/markdownPaste";
+import { looksLikeMarkdownPaste, normalizePastedMarkdown } from "../lib/markdownPaste";
 import { markdownStyleOptions } from "../lib/markdown-style";
 import { normalizeMarkdown } from "../lib/normalize-markdown";
 import { pasteNormalizationPlugin } from "../lib/paste-normalization";
@@ -82,6 +91,13 @@ interface MarkdownEditorProps {
   onSubmit?: () => void;
   /** Render the rich editor without allowing edits. */
   readOnly?: boolean;
+  /**
+   * The value is a whole file, such as agent instructions or a skill file. A
+   * YAML front matter block at its top is kept out of the rich editor, which
+   * would write it back broken, and shown above it to read and edit as text.
+   * Everything else (comments, descriptions, documents) is plain markdown.
+   */
+  frontMatter?: boolean;
 }
 
 export interface MarkdownEditorRef {
@@ -494,6 +510,16 @@ function applyMention(markdown: string, state: MentionState, option: Autocomplet
   return markdown.slice(0, idx) + replacement + markdown.slice(idx + search.length);
 }
 
+function hasFilePayload(evt: DragEvent<HTMLElement>) {
+  return Array.from(evt.dataTransfer?.types ?? []).includes("Files");
+}
+
+const FRONT_MATTER_PROBLEMS: Record<FrontMatterYamlProblem, string> = {
+  endsEarly: "Not saved: a line of only --- or ... would end the frontmatter there.",
+  codeFence: "Not saved: a line starting with ``` or ~~~ cannot go in the frontmatter.",
+  noKey: "Not saved: the frontmatter has to start with a line like name: value.",
+};
+
 /** The front matter above the rich editor, shown as written, with a way to edit it as plain text. */
 function FrontMatterBox({
   yaml,
@@ -504,16 +530,33 @@ function FrontMatterBox({
   yaml: string;
   readOnly: boolean;
   bordered: boolean;
-  /** Takes the edited YAML. False when a line of it would end the front matter, so it was not taken. */
-  onChange: (yaml: string) => boolean;
+  /** Takes YAML typed in the box, or says why it cannot be the front matter, and then nothing is sent. */
+  onChange: (yaml: string) => FrontMatterYamlProblem | null;
 }) {
   const [editing, setEditing] = useState(false);
-  const [refused, setRefused] = useState(false);
+  // What is typed in the box. It stays as typed while it cannot be saved.
+  const [draft, setDraft] = useState(yaml);
+  const [problem, setProblem] = useState<FrontMatterYamlProblem | null>(null);
+
+  // The file's front matter changed, to what was typed or from outside (a
+  // cancel, say), which replaces what was typed.
+  useEffect(() => {
+    setDraft(yaml);
+    setProblem(null);
+  }, [yaml]);
 
   return (
     <div
       data-testid="front-matter"
       className={cn("border-b border-border", bordered ? "px-2.5 py-1.5" : "mb-2 pb-2")}
+      // A file dropped here goes nowhere, and the browser must not open it in
+      // place of the page and its unsaved edits.
+      onDragOver={(event) => {
+        if (hasFilePayload(event)) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (hasFilePayload(event)) event.preventDefault();
+      }}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">Frontmatter</span>
@@ -524,8 +567,10 @@ function FrontMatterBox({
             size="xs"
             aria-label={editing ? "Done editing frontmatter" : "Edit frontmatter"}
             onClick={() => {
+              // Whatever could not be saved is not kept.
+              setDraft(yaml);
+              setProblem(null);
               setEditing((current) => !current);
-              setRefused(false);
             }}
           >
             {editing ? "Done" : "Edit"}
@@ -535,15 +580,18 @@ function FrontMatterBox({
       {editing && !readOnly ? (
         <>
           <Textarea
-            value={yaml}
+            value={draft}
             aria-label="Frontmatter"
             spellCheck={false}
             autoFocus
-            onChange={(event) => setRefused(!onChange(event.target.value))}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setProblem(onChange(event.target.value));
+            }}
             className="mt-1 font-mono text-xs md:text-xs"
           />
-          <p role="status" className={cn("text-xs", brandWarningText, refused && "mt-1")}>
-            {refused ? "A line of only --- or ... ends the frontmatter, so it cannot go here." : ""}
+          <p role="status" className={cn("text-xs", brandWarningText, problem && "mt-1")}>
+            {problem ? FRONT_MATTER_PROBLEMS[problem] : ""}
           </p>
         </>
       ) : (
@@ -551,6 +599,12 @@ function FrontMatterBox({
       )}
     </div>
   );
+}
+
+/** Whether a drop or other event happened inside the rich text itself. */
+function isInsideRichText(container: HTMLElement | null, target: EventTarget | null) {
+  const editable = container?.querySelector('[contenteditable="true"]');
+  return Boolean(editable && target instanceof Node && editable.contains(target));
 }
 
 /* ---- Component ---- */
@@ -569,17 +623,30 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   mentions,
   onSubmit,
   readOnly = false,
+  frontMatter: keepsFrontMatter = false,
 }: MarkdownEditorProps, forwardedRef) {
-  // A YAML front matter block at the top (agent instructions, skills) is not
-  // markdown, and the rich editor writes it back broken. It never reaches the
+  // In a whole file, a YAML front matter block at the top is not markdown,
+  // and the rich editor would write it back broken. It never reaches the
   // editor: it is shown above it, and every change is written out with it
   // exactly as it was.
-  const { frontMatter, body } = useMemo(() => splitFrontMatter(value), [value]);
+  //
+  // Only text from outside is split. Text this editor sent keeps the split it
+  // was sent with: read again, a "---" divider being edited could turn into
+  // front matter, and text would move out of the editor while it is in use.
+  const ownValueRef = useRef<{ value: string; frontMatter: FrontMatter | null; body: string } | null>(null);
+  const outsideSplit = useMemo(
+    () => (keepsFrontMatter ? splitFrontMatter(value) : { frontMatter: null, body: value }),
+    [keepsFrontMatter, value],
+  );
+  const { frontMatter, body } = ownValueRef.current?.value === value ? ownValueRef.current : outsideSplit;
   const frontMatterRef = useRef(frontMatter);
   frontMatterRef.current = frontMatter;
+  const bodyRef = useRef(body);
+  bodyRef.current = body;
   const editorValue = useMemo(() => prepareMarkdownForEditor(body), [body]);
   // Writes edits back with the markers this markdown already uses ("-" lists,
-  // "_" emphasis and so on) rather than the editor's own.
+  // "_" emphasis and so on) rather than the editor's own. They are read from
+  // the markdown the editor holds, so a divider at its top counts as one.
   const toMarkdownOptions = useMemo(() => markdownStyleOptions(editorValue), [editorValue]);
   const { slashCommands } = useEditorAutocomplete();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -604,14 +671,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   const imageUploadHandlerRef = useRef(imageUploadHandler);
   imageUploadHandlerRef.current = imageUploadHandler;
 
+  /** The text for this front matter and body, remembered as text this editor sent. */
+  const ownValue = useCallback((nextFrontMatter: FrontMatter | null, nextBody: string) => {
+    const next = joinFrontMatter(nextFrontMatter, nextBody);
+    ownValueRef.current = { value: next, frontMatter: nextFrontMatter, body: nextBody };
+    return next;
+  }, []);
+
   /** The whole text for markdown the rich editor wrote: the front matter, then that markdown. */
   const withFrontMatter = useCallback((markdown: string) => {
     const current = frontMatterRef.current;
-    if (!current) return markdown;
     // The editor writes "\n" line endings. A file with Windows ones keeps them.
-    const lineEnding = current.lineEnding;
-    return joinFrontMatter(current, lineEnding === "\n" ? markdown : markdown.replace(/\n/g, lineEnding));
-  }, []);
+    const lineEnding = current?.lineEnding ?? "\n";
+    return ownValue(current, lineEnding === "\n" ? markdown : markdown.replace(/\n/g, lineEnding));
+  }, [ownValue]);
 
   // Mention state (ref kept in sync so callbacks always see the latest value)
   const [mentionState, setMentionState] = useState<MentionState | null>(null);
@@ -986,10 +1059,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     }
   }, [selectMention]);
 
-  function hasFilePayload(evt: DragEvent<HTMLDivElement>) {
-    return Array.from(evt.dataTransfer?.types ?? []).includes("Files");
-  }
-
   const canDropFile = fileDropTarget === "editor" && Boolean(imageUploadHandler || onDropFile);
   const handlePasteCapture = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
     // A paste into the front matter's own text box stays there.
@@ -997,15 +1066,38 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     const clipboard = event.clipboardData;
     if (!clipboard || !ref.current) return;
     const types = new Set(Array.from(clipboard.types));
-    if (types.has("Files") || types.has("text/html")) return;
+    if (types.has("Files")) return;
     if (isSelectionInsideCodeLikeElement(containerRef.current)) return;
-
     const rawText = clipboard.getData("text/plain");
+
+    if (keepsFrontMatter) {
+      // A whole file pasted in: the front matter it starts with becomes the
+      // file's, and only the rest goes into the rich text.
+      const pasted = pastedFrontMatter(
+        { frontMatter: frontMatterRef.current, body: bodyRef.current },
+        normalizePastedMarkdown(rawText),
+      );
+      if (pasted) {
+        event.preventDefault();
+        // Lexical also handles paste on the editable element, and would put
+        // the whole file in again.
+        event.stopPropagation();
+        frontMatterRef.current = pasted.frontMatter;
+        onChange(ownValue(pasted.frontMatter, pasted.body));
+        if (pasted.rest.trim()) ref.current.insertMarkdown(normalizeMarkdown(pasted.rest));
+        return;
+      }
+    }
+
+    if (types.has("text/html")) return;
     if (!looksLikeMarkdownPaste(rawText)) return;
 
     event.preventDefault();
+    // Lexical also handles paste on the editable element. Once Markdown is
+    // inserted here, prevent that handler from inserting the plain text again.
+    event.stopPropagation();
     ref.current.insertMarkdown(normalizeMarkdown(rawText));
-  }, []);
+  }, [keepsFrontMatter, onChange, ownValue]);
 
   const mentionMenuPosition = mentionState
     ? computeMentionMenuPosition(
@@ -1152,6 +1244,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         if (readOnly) return;
         dragDepthRef.current = 0;
         setIsDragOver(false);
+        // A file dropped beside the rich text goes nowhere, and the browser
+        // must not open it in place of the page and its unsaved edits.
+        if (hasFilePayload(evt) && !isInsideRichText(containerRef.current, evt.target)) evt.preventDefault();
         if (!onDropFile) return;
         const files = evt.dataTransfer?.files;
         if (!files || files.length === 0) return;
@@ -1180,9 +1275,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
           bordered={bordered}
           onChange={(yaml) => {
             const next = withFrontMatterYaml(frontMatter, yaml);
-            if (!next) return false;
-            onChange(joinFrontMatter(next, body));
-            return true;
+            if (!next) return frontMatterYamlProblem(yaml);
+            onChange(ownValue(next, body));
+            return null;
           }}
         />
       )}

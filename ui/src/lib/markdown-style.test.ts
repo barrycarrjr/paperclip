@@ -71,10 +71,16 @@ describe("markdownStyleOptions", () => {
     expect(markdownStyleOptions("```\ncode\n```").fence).toBe("`");
   });
 
-  it("skips YAML front matter", () => {
-    const options = markdownStyleOptions("---\nname: skill\ndescription: does things\n---\n\n# Skill\n\n- step");
-    expect(options).toMatchObject({ bullet: "-", setext: false });
-    expect(options.rule).toBeUndefined();
+  // it("skips YAML front matter", () => {
+  //   const options = markdownStyleOptions("---\nname: skill\ndescription: does things\n---\n\n# Skill\n\n- step");
+  //   expect(options).toMatchObject({ bullet: "-", setext: false });
+  //   expect(options.rule).toBeUndefined();
+  // });
+  it("reads a divider at the top as a divider, since the editor keeps front matter out itself", () => {
+    // A file's body that opens with a divider, then a line that looks like a
+    // YAML key. Skipping it as front matter wrote every divider as "***".
+    expect(markdownStyleOptions("---\n\nOwner: the team\n\n---\n\nMore")).toMatchObject({ rule: "-", ruleRepetition: 3 });
+    expect(markdownStyleOptions("---\nname: skill\n---\n\n# Skill\n\n- step")).toMatchObject({ rule: "-", bullet: "-" });
   });
 
   it("reads Windows line endings", () => {
