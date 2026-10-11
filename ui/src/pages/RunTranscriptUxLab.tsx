@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDateTime } from "../lib/utils";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { Identity } from "../components/Identity";
 import { StatusBadge } from "../components/StatusBadge";
 import { RunTranscriptView, type TranscriptDensity, type TranscriptMode } from "../components/transcript/RunTranscriptView";
@@ -176,7 +177,7 @@ function DashboardPreview({
             {runTranscriptFixtureMeta.issueIdentifier} - {runTranscriptFixtureMeta.issueTitle}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className={cn("min-h-0 flex-1 overflow-y-auto p-4", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
           <RunTranscriptView
             entries={previewEntries("dashboard")}
             mode={mode}

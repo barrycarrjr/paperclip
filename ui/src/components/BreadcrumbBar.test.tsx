@@ -413,4 +413,20 @@ describe("BreadcrumbBar", () => {
     expect(box.className).not.toContain("flex-col");
     expect(box.textContent).toContain("·");
   });
+
+  // On a touch screen every button is stretched to 44 pixels tall. Stacked
+  // over the page name, the scope then made the two lines 60 pixels tall in a
+  // 48 pixel bar, and the bar's bottom line ran through the page name. So on
+  // a phone the scope keeps its own height, with its target in an area around
+  // it (index.css, src/touch-targets.test.ts). On one line it fits stretched.
+  it("keeps the scope its own height over the page name on a phone", () => {
+    onAPhone = true;
+    render();
+    expect(scopeButton().getAttribute("data-touch-target")).toBe("around");
+  });
+
+  it("lets the scope take the full touch height when it shares a line with the page name", () => {
+    render();
+    expect(scopeButton().hasAttribute("data-touch-target")).toBe(false);
+  });
 });

@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "../lib/utils";
 import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
-import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 
@@ -313,7 +313,7 @@ export function PortfolioApprovals() {
           <FilterPopover label="Company" options={companyOptions} selected={companyIdFilter} onChange={setCompanyIdFilter} />
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-3">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto px-6 py-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading && <p className="text-sm text-muted-foreground">Loading approvals…</p>}
         {!isLoading && approvals.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-3">

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Link } from "@/lib/router";
 import { timeAgo } from "../lib/timeAgo";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
 
 // Issue statuses that count as "the CEO has finished acting on this directive".
@@ -541,7 +542,7 @@ export function PortfolioDirectives() {
         onSubmit={(input) => broadcast.mutate(input)}
       />
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-3">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading && <p className="text-sm text-muted-foreground">Loading directives…</p>}
         {!isLoading && directives.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">

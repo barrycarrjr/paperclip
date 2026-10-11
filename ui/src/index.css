@@ -473,6 +473,43 @@
   [data-slot="toggle"] {
     min-height: 0;
   }
+
+  /* A control drawn smaller than a finger keeps its own size where it has to:
+     a checkbox, a tab, the company over the page name in the phone top bar,
+     a 16px dot or cross in a list row. Stretched to 44px like any button, a
+     checkbox was drawn as a tall thin bar on portfolio issues, the page name
+     was pushed down through the top bar's bottom line, and a tab stuck out
+     of the bar it sits in. Its 44px target comes from an area around it that
+     is not drawn instead. The shared Checkbox and tab are named here; any
+     other control opts in with data-touch-target="around". The area is drawn
+     with ::before because the tab draws its underline with ::after. A native
+     checkbox or radio keeps its size too; the label beside it is part of its
+     target. src/touch-targets.test.ts keeps this in place. */
+  [data-slot="checkbox"],
+  [data-slot="tabs-trigger"],
+  [data-touch-target="around"],
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: 0;
+  }
+
+  [data-slot="checkbox"],
+  [data-slot="tabs-trigger"],
+  [data-touch-target="around"] {
+    position: relative;
+  }
+
+  [data-slot="checkbox"]::before,
+  [data-slot="tabs-trigger"]::before,
+  [data-touch-target="around"]::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
 }
 
 /* Dark mode scrollbars */

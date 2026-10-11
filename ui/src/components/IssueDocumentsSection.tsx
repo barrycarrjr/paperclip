@@ -16,6 +16,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
 import { FoldCurtain } from "./FoldCurtain";
 import { PageSection } from "./PageSection";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "./PillText";
 import { MarkdownBody } from "./MarkdownBody";
 import { MarkdownEditor, type MentionOption } from "./MarkdownEditor";
 import { Button } from "@/components/ui/button";
@@ -860,8 +861,8 @@ export function IssueDocumentsSection({
                     >
                       {isFolded ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
-                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                      {doc.key}
+                    <span className={cn("rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground", PILL_HOLDING_TEXT_CLASS)}>
+                      <PillText text={doc.key} />
                     </span>
                     <DropdownMenu
                       open={revisionMenuOpenKey === doc.key}

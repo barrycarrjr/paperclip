@@ -55,10 +55,19 @@ describe("MobileBottomNav", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    // The bar tells lib/page-bottom-bar about itself, which measures on the
+    // next frame. Run frames at once, so no test leaves one waiting for the
+    // next test.
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
   });
 
   afterEach(() => {
     container.remove();
+    vi.unstubAllGlobals();
   });
 
   it("includes Email alongside the existing five destinations (B06)", () => {
@@ -170,36 +179,62 @@ describe("MobileBottomNav", () => {
   });
 
   // A page's own bar rests on top of this one on a phone (the agent Save bar,
-  // the selection bars). Counted with the bars along the bottom, it makes the
+  // the selection bars). Counted under the bars along the bottom, it makes the
   // stack the launcher and the toasts sit above start from its top, so a bar
   // resting there lifts them too. Left out, the Save bar resting on it was
   // too far up to count, and the launcher sat on its Save button.
-  it("counts itself with the bars along the bottom of the window", () => {
+  it("counts itself under the bars along the bottom of the window, while it shows", () => {
     const roomOnPage = () => document.documentElement.style.getPropertyValue(PAGE_BOTTOM_BAR_ROOM_PROPERTY);
     vi.stubGlobal("innerHeight", 844);
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      callback(0);
-      return 0;
-    });
-    vi.stubGlobal("cancelAnimationFrame", () => {});
+    // jsdom has no layout, so the bar is given its height on a phone by hand:
+    // 64 pixels and its top border.
+    const height = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.tagName === "NAV" ? 65 : 0;
+      });
     const root = createRoot(container);
     try {
       act(() => {
         root.render(<MobileBottomNav visible />);
       });
-      const nav = container.querySelector<HTMLElement>('nav[aria-label="Mobile navigation"]')!;
-      // jsdom has no layout, so the bar is given its place on a phone by hand.
-      const box = { top: 779, bottom: 844, left: 0, right: 390, width: 390, height: 65, x: 0, y: 779 };
-      nav.getBoundingClientRect = () => ({ ...box, toJSON: () => box }) as DOMRect;
-      document.dispatchEvent(new Event("scroll"));
       expect(roomOnPage()).toBe("65px");
+
+      act(() => {
+        root.render(<MobileBottomNav visible={false} />);
+      });
+      expect(roomOnPage()).toBe("");
 
       act(() => {
         root.unmount();
       });
       expect(roomOnPage()).toBe("");
     } finally {
-      vi.unstubAllGlobals();
+      height.mockRestore();
+    }
+  });
+
+  // It slides away and back as the page scrolls. Measured on every frame of
+  // the slide, the room was written to the page again on each one, which
+  // restyled the whole page about a dozen times a slide.
+  it("is not measured as it slides, only told whether it shows", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(<MobileBottomNav visible />);
+    });
+    const nav = container.querySelector<HTMLElement>('nav[aria-label="Mobile navigation"]')!;
+    const measured = vi.spyOn(nav, "getBoundingClientRect");
+    const setRoom = vi.spyOn(document.documentElement.style, "setProperty");
+    try {
+      for (let frame = 0; frame < 12; frame += 1) document.dispatchEvent(new Event("scroll"));
+      expect(measured).not.toHaveBeenCalled();
+      expect(setRoom).not.toHaveBeenCalled();
+    } finally {
+      measured.mockRestore();
+      setRoom.mockRestore();
+      act(() => {
+        root.unmount();
+      });
     }
   });
 });

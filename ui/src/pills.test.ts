@@ -19,6 +19,16 @@ import { describe, expect, it } from "vitest";
  *
  * This checks the rule is there, that it reaches each pill written in the
  * source files under src, and that only the chips in HOLDS_A_SENTENCE wrap.
+ *
+ * One line is wrong for text a person wrote, which can be any length: a long
+ * label name ran past the edge of the properties panel and into the next
+ * column of the board. A pill holding such text shows it through PillText
+ * (components/PillText), which cuts it short with "…" and keeps the whole of
+ * it as the tooltip, and lets the pill give way (PILL_HOLDING_TEXT_CLASS).
+ * Which text a person wrote cannot be told from the source for certain, so
+ * the check below goes by what is read: a `name`, `title`, `email` or `key`,
+ * which covers labels, agents, companies, issues and documents. Text read
+ * under another name, or put together outside the pill, is not seen.
  */
 
 // Under jsdom, `new URL(..., import.meta.url)` resolves against the test page
@@ -87,6 +97,94 @@ function pillClassLists(fileName: string, source: string): Array<{ line: number;
   return lists;
 }
 
+/** A name, a title, an email or a key read for showing: text a person wrote. */
+const USER_TEXT = /^(?:name|title|email|key)$|(?:Name|Title|Email|Key)$/;
+
+/**
+ * The pills in a file that show text a person wrote other than through
+ * PillText, or show it through PillText in a pill that cannot give way
+ * (without PILL_HOLDING_TEXT_CLASS, and no width of its own on the text), as
+ * the lines they start on.
+ */
+function userTextPillsNotCutShort(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // Class lists kept in a constant of the file and named by it.
+  const constants = new Map<string, string[]>();
+  const strings = (node: ts.Node): string[] => {
+    const found: string[] = [];
+    const collect = (inner: ts.Node) => {
+      if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) found.push(inner.text);
+      ts.forEachChild(inner, collect);
+    };
+    collect(node);
+    return found;
+  };
+  const findConstants = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      constants.set(node.name.text, strings(node.initializer));
+    }
+    ts.forEachChild(node, findConstants);
+  };
+  findConstants(sourceFile);
+
+  const attribute = (element: ts.JsxOpeningLikeElement, name: string) =>
+    element.attributes.properties.find(
+      (property): property is ts.JsxAttribute => ts.isJsxAttribute(property) && property.name.getText(sourceFile) === name,
+    );
+  const tagOf = (node: ts.Node) =>
+    ts.isJsxElement(node)
+      ? node.openingElement.tagName.getText(sourceFile)
+      : ts.isJsxSelfClosingElement(node)
+        ? node.tagName.getText(sourceFile)
+        : null;
+
+  /** Whether a pill's contents show user text outside PillText, and the PillText elements in it. */
+  const contents = (children: ts.Node) => {
+    let bare = false;
+    const pillTexts: ts.JsxSelfClosingElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxAttribute(node)) return;
+      const tag = tagOf(node);
+      if (tag === "PillText") {
+        if (ts.isJsxSelfClosingElement(node)) pillTexts.push(node);
+        return;
+      }
+      if (ts.isPropertyAccessExpression(node) && USER_TEXT.test(node.name.text)) bare = true;
+      ts.forEachChild(node, visit);
+    };
+    visit(children);
+    return { bare, pillTexts };
+  };
+
+  const lines: number[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node)) {
+      const initializer = attribute(node.openingElement, "className")?.initializer;
+      const classText = initializer?.getText(sourceFile) ?? "";
+      const classLists = initializer ? strings(initializer) : [];
+      for (const name of classText.match(/\b[A-Za-z_]\w*\b/g) ?? []) classLists.push(...(constants.get(name) ?? []));
+      const holdsText = classText.includes("PILL_HOLDING_TEXT_CLASS");
+      if (holdsText || classLists.some((list) => isPill(list.trim().split(/\s+/)))) {
+        let bare = false;
+        const pillTexts: ts.JsxSelfClosingElement[] = [];
+        for (const child of node.children) {
+          const found = contents(child);
+          bare ||= found.bare;
+          pillTexts.push(...found.pillTexts);
+        }
+        const textHasOwnWidth = (element: ts.JsxSelfClosingElement) =>
+          /\bmax-w-/.test(attribute(element, "className")?.initializer?.getText(sourceFile) ?? "");
+        if (bare || (pillTexts.length > 0 && !holdsText && !pillTexts.every(textHasOwnWidth))) {
+          lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(dir, entry.name);
@@ -149,5 +247,33 @@ describe("a pill", () => {
         !pills.some((pill) => pill.relative === relative && pill.classes.some((name) => WRAPS.test(name))),
     );
     expect(stale).toEqual([]);
+  });
+});
+
+describe("a pill holding text a person wrote", () => {
+  it("cuts it short with the whole of it as the tooltip, and gives way in its row", () => {
+    // On one line, a long label name ran past the edge of the properties
+    // panel, into the next column of the board, and made the issue page
+    // scroll sideways.
+    const offending = sourceFiles(srcDir).flatMap((file) => {
+      const relative = path.relative(srcDir, file).split(path.sep).join("/");
+      return userTextPillsNotCutShort(relative, readFileSync(file, "utf8")).map((line) => `${relative}:${line}`);
+    });
+    expect(offending, "show the text through PillText, in a pill with PILL_HOLDING_TEXT_CLASS").toEqual([]);
+  });
+
+  it("is told apart however the pill and its text are written", () => {
+    const page = [
+      'const a = <span className="inline-flex rounded-full border px-2 py-0.5">{label.name}</span>;',
+      'const b = <span className={cn("rounded-full border px-2", PILL_HOLDING_TEXT_CLASS)}><PillText text={label.name} /></span>;',
+      'const c = <span className="rounded-full px-2"><span className="truncate">{agent.name}</span></span>;',
+      'const d = <span className="rounded-full px-2 py-0.5">{count} agents</span>;',
+      'const e = <span className="rounded-full px-2"><PillText text={company.name} /></span>;',
+      'const f = <span className="rounded-full px-2"><PillText text={company.name} className="max-w-24" /></span>;',
+      'const chip = "inline-flex rounded-full px-1.5 text-[10px]";',
+      "const g = <span className={chip}>{file.documentKey}</span>;",
+      'const h = <span key={doc.key} className="rounded-full px-2" title={doc.title}>Current</span>;',
+    ].join("\n");
+    expect(userTextPillsNotCutShort("page.tsx", page)).toEqual([1, 3, 5, 8]);
   });
 });

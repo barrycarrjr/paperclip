@@ -679,8 +679,10 @@ export function Costs() {
 
               {/* Columns separated by underscores: written with a comma, the
                   value was one browsers drop, so these cards stacked at every
-                  width (arbitrary-values.test.ts). */}
-              <div className="grid gap-4 @4xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                  width (arbitrary-values.test.ts). items-start, so a card
+                  beside a taller one keeps its own height rather than
+                  stretching into an empty box. */}
+              <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
                 <Card>
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
@@ -739,7 +741,7 @@ export function Costs() {
                 />
               </div>
 
-              <div className="grid gap-4 @4xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.95fr)]">
+              <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.95fr)]">
                 <Card>
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">By agent</CardTitle>
@@ -1100,7 +1102,7 @@ export function Costs() {
                 eventCount={financeData?.summary.eventCount ?? 0}
               />
 
-              <div className="grid gap-4 @4xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)]">
+              <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)]">
                 <div className="space-y-4">
                   <Card>
                     <CardHeader className="px-5 pt-5 pb-2">

@@ -56,7 +56,7 @@ import {
 } from "../lib/mailboxTriageOverrides";
 import { useImapTriageOverrides } from "../hooks/useTriageOverrides";
 import { cn, ellipsize } from "../lib/utils";
-import { ABOVE_MOBILE_BOTTOM_NAV_CLASS, PAGE_CORNER_RIGHT_CLASS } from "../lib/narrow-layout";
+import { PAGE_CORNER_NOTICE_CLASS } from "../lib/narrow-layout";
 import { Z_PAGE_NOTICE } from "../lib/z-layers";
 import { PageFloating } from "../components/PageFloatingLayer";
 
@@ -755,13 +755,12 @@ export function PortfolioEmail() {
           <div
             role={actionToast.failed ? "alert" : "status"}
             // The page-notice layer, not z-50 (the dialog layer), where it drew
-            // over the Clippy window. See lib/z-layers. Where the launcher
-            // sits, so on a phone above the bottom bar: at `bottom-4` it
-            // covered the bar's last buttons.
+            // over the Clippy window. See lib/z-layers. On a phone above the
+            // bottom bar and beside the launcher, not over either
+            // (PAGE_CORNER_NOTICE_CLASS).
             className={cn(
               "fixed flex items-center gap-2 rounded px-4 py-2 text-sm shadow-lg",
-              ABOVE_MOBILE_BOTTOM_NAV_CLASS,
-              PAGE_CORNER_RIGHT_CLASS,
+              PAGE_CORNER_NOTICE_CLASS,
               Z_PAGE_NOTICE,
               actionToast.failed
                 ? "bg-destructive text-destructive-foreground"

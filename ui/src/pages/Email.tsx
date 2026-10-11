@@ -158,9 +158,8 @@ import {
 } from "../lib/email-pane-layout";
 import { followOpenRow, type ListRow, revealRowInList, sameListRow } from "../lib/reveal-in-list";
 import {
-  ABOVE_MOBILE_BOTTOM_NAV_CLASS,
   FILLS_OR_KEEPS_HEIGHT_CLASS,
-  PAGE_CORNER_RIGHT_CLASS,
+  PAGE_CORNER_NOTICE_CLASS,
   PHONE_MESSAGE_BODY_HEIGHT_CLASS,
 } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
@@ -3495,13 +3494,12 @@ export function Email() {
           <div
             role={actionToast.failed ? "alert" : "status"}
             // The page-notice layer, not z-50 (the dialog layer), where it drew
-            // over the Clippy window. See lib/z-layers. Where the launcher
-            // sits, so on a phone above the bottom bar: at `bottom-4` it
-            // covered the bar's last buttons.
+            // over the Clippy window. See lib/z-layers. On a phone above the
+            // bottom bar and beside the launcher, not over either
+            // (PAGE_CORNER_NOTICE_CLASS).
             className={cn(
               "fixed flex max-w-md items-start gap-2 rounded px-4 py-2 text-sm shadow-lg",
-              ABOVE_MOBILE_BOTTOM_NAV_CLASS,
-              PAGE_CORNER_RIGHT_CLASS,
+              PAGE_CORNER_NOTICE_CLASS,
               Z_PAGE_NOTICE,
               actionToast.failed
                 ? "bg-destructive text-destructive-foreground"

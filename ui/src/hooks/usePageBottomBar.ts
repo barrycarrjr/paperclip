@@ -1,5 +1,5 @@
-import { useCallback, type MutableRefObject, type RefCallback } from "react";
-import { registerPageBottomBar } from "../lib/page-bottom-bar";
+import { useCallback, useLayoutEffect, type MutableRefObject, type RefCallback, type RefObject } from "react";
+import { registerPageBottomBar, setPhoneBottomBar } from "../lib/page-bottom-bar";
 
 /**
  * A ref for a page's own bar pinned along the bottom of the window: a fixed
@@ -31,4 +31,18 @@ export function usePageBottomBarRef<T extends HTMLElement>(
     },
     [forwardTo],
   );
+}
+
+/**
+ * Tells lib/page-bottom-bar where the phone bottom bar is and whether it
+ * shows, so that a page's bar resting on it still lifts the launcher, the
+ * scroll buttons and the toasts (MobileBottomNav). The bar's share of the
+ * room comes from `shown`, not from measuring it as it slides.
+ */
+export function usePhoneBottomBar(ref: RefObject<HTMLElement | null>, shown: boolean) {
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+    return setPhoneBottomBar(element, shown);
+  }, [ref, shown]);
 }

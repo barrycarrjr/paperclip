@@ -14,6 +14,7 @@ import {
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
   PAGE_END_ROOM_CLASS,
+  PHONE_PAGE_END_ROOM_CLASS,
 } from "../lib/narrow-layout";
 
 const mockHealthApi = vi.hoisted(() => ({
@@ -864,6 +865,21 @@ describe("Layout", () => {
       }
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a phone's own room at the end of the page, and only on a phone", async () => {
+    // At 5rem the round launcher sat on the Wake button of the last card on
+    // Team, and two rows of selection buttons hid the end of the portfolio
+    // issues list. lib/narrow-layout works out how much room that takes.
+    for (const isMobile of [false, true]) {
+      sidebarState.isMobile = isMobile;
+      const { root } = await renderLayout();
+      const pageArea = container.querySelector<HTMLElement>("#main-content")!;
+      expect(pageArea.classList.contains(PHONE_PAGE_END_ROOM_CLASS), isMobile ? "on a phone" : "on a desktop").toBe(isMobile);
+      await act(async () => {
+        root.unmount();
+      });
     }
   });
 

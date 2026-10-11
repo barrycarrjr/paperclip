@@ -55,7 +55,11 @@ import { ScrollToBottom } from "../components/ScrollToBottom";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
-import { PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_BOTTOM_BAR_FLUSH_CLASS } from "../lib/narrow-layout";
+import {
+  PAGE_BOTTOM_BAR_FLOATING_CLASS,
+  PAGE_BOTTOM_BAR_FLUSH_CLASS,
+  pageBottomBarFlushPadding,
+} from "../lib/narrow-layout";
 import { buildRetryWakePayload, describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -977,7 +981,11 @@ export function AgentDetail() {
   const showConfigActionBar = (activeView === "configuration" || activeView === "instructions") && (configDirty || configSaving);
 
   return (
-    <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
+    // The room under the phone Save bar comes from the page area now, which
+    // keeps room at its end for any bar fixed over the page
+    // (PHONE_PAGE_END_ROOM_CLASS).
+    // <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
+    <div className="space-y-6">
       {/* Header. The buttons move to a line of their own when the page area
           is too narrow for them beside the name: they keep their width, so
           with Clippy docked the name used to be squeezed out of sight
@@ -1217,7 +1225,8 @@ export function AgentDetail() {
             ref={configActionBarRef}
             className={cn("fixed right-[calc(var(--clippy-dock-width,0px)+1.5rem)] z-30", PAGE_BOTTOM_BAR_FLOATING_CLASS)}
           >
-            <div className="flex items-center gap-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-3 py-1.5 shadow-lg">
+            {/* Solid, like every bar the page scrolls under. */}
+            <div className="flex items-center gap-2 bg-background border border-border rounded-lg px-3 py-1.5 shadow-lg">
               <Button
                 variant="ghost"
                 size="sm"
@@ -1248,11 +1257,11 @@ export function AgentDetail() {
         <PageFloating>
           <div
             ref={configActionBarRef}
-            className={cn("fixed inset-x-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm", PAGE_BOTTOM_BAR_FLUSH_CLASS)}
+            className={cn("fixed inset-x-0 z-30 border-t border-border bg-background", PAGE_BOTTOM_BAR_FLUSH_CLASS)}
           >
             <div
               className="flex items-center justify-end gap-2 px-3 py-2"
-              style={{ paddingBottom: "max(calc(env(safe-area-inset-bottom) - var(--mobile-bottom-nav-room, 0px)), 0.5rem)" }}
+              style={{ paddingBottom: pageBottomBarFlushPadding("0.5rem") }}
             >
               <Button
                 variant="ghost"

@@ -89,6 +89,7 @@ import { IssueChatThread as IssueChatThreadComponent } from "../components/Issue
 const IssueChatThread = IssueChatThreadComponent as any;
 import { MarkdownBody } from "../components/MarkdownBody";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "../components/PillText";
 import { PipelineHealthBar } from "../components/PipelineHealthWarnings";
 import { PipelineItemBodyDocument } from "../components/PipelineItemBodyDocument";
 import { PipelineLivenessBanner } from "../components/PipelineLivenessBanner";
@@ -1418,21 +1419,20 @@ function PipelineBoardColumn({
           {automationAgent && automationHref ? (
             <Link
               to={automationHref}
-              className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+              className={cn("gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground", PILL_HOLDING_TEXT_CLASS)}
               title={`Edit ${stage.name} automation`}
             >
               <AgentAvatar agent={automationAgent} size={16} className="h-3.5 w-3.5 shrink-0"/>
-              <span className="truncate">{automationAgent.name}</span>
+              <PillText text={automationAgent.name} />
             </Link>
           ) : null}
           {breakdownTarget ? (
             <Link
               to={`/pipelines/${breakdownTarget.pipelineId}`}
-              className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-              title={`Breaks into ${breakdownTarget.name}`}
+              className={cn("gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground", PILL_HOLDING_TEXT_CLASS)}
             >
               <span className="shrink-0">→</span>
-              <span className="truncate">Breaks into {breakdownTarget.name}</span>
+              <PillText text={`Breaks into ${breakdownTarget.name}`} />
             </Link>
           ) : null}
         </div>
@@ -1801,11 +1801,10 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
                 <Link
                   key={source.id}
                   to={`/pipelines/${source.id}`}
-                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-                  title={`Fed by ${source.name}`}
+                  className={cn("gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground", PILL_HOLDING_TEXT_CLASS)}
                 >
                   <span className="shrink-0">←</span>
-                  <span className="truncate">Fed by {source.name}</span>
+                  <PillText text={`Fed by ${source.name}`} />
                 </Link>
               ))}
             </div>

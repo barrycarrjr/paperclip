@@ -6,7 +6,9 @@ import { instanceLogsApi } from "@/api/instanceLogs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { queryKeys } from "../lib/queryKeys";
+import { cn } from "../lib/utils";
 import {
   describeLevelFilter,
   formatLogDay,
@@ -269,7 +271,7 @@ export function InstanceLogs() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border bg-card"
+        className={cn("min-h-0 flex-1 overflow-y-auto rounded-xl border border-border bg-card", PAGE_SCROLL_BOX_END_ROOM_CLASS)}
       >
         {query.isLoading ? (
           <div className="px-3 py-6 text-sm text-muted-foreground">Reading the log...</div>
@@ -294,7 +296,9 @@ export function InstanceLogs() {
             return (
               <div key={`${key}#${index}`}>
                 {startsNewDay ? (
-                  <div className="sticky top-0 z-10 border-b border-border bg-muted/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur">
+                  // Solid, like every bar the list scrolls under: see-through,
+                  // the log lines showed through it.
+                  <div className="sticky top-0 z-10 border-b border-border bg-muted px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {formatLogDay(entry.timeMs)}
                   </div>
                 ) : null}

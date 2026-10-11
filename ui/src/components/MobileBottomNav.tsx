@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { NavLink, useLocation } from "@/lib/router";
 import {
   House,
@@ -11,7 +11,7 @@ import {
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useActiveCompanyId } from "../hooks/useRouteCompany";
-import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+import { usePhoneBottomBar } from "../hooks/usePageBottomBar";
 import { MOBILE_BOTTOM_NAV_HEIGHT_CLASS } from "../lib/narrow-layout";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
@@ -112,16 +112,19 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
     [openNewIssue, inboxBadge.inbox, isPortfolioRoot],
   );
 
-  // Counted with the bars pinned along the bottom (lib/page-bottom-bar), so
+  // Counted under the bars pinned along the bottom (lib/page-bottom-bar), so
   // a page's own bar resting on top of this one still lifts the launcher,
-  // the scroll buttons and the toasts above it.
-  const navRef = usePageBottomBarRef<HTMLElement>();
+  // the scroll buttons and the toasts above it. Its share is taken from
+  // `visible`, not measured while it slides.
+  const navRef = useRef<HTMLElement | null>(null);
+  usePhoneBottomBar(navRef, visible);
 
   return (
     <nav
       ref={navRef}
       className={cn(
-        "fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-transform duration-200 ease-out md:hidden pb-[env(safe-area-inset-bottom)]",
+        // Solid: the page scrolls under it, and showed through at 85 per cent.
+        "fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background transition-transform duration-200 ease-out md:hidden pb-[env(safe-area-inset-bottom)]",
         visible ? "translate-y-0" : "translate-y-full",
       )}
       aria-label="Mobile navigation"

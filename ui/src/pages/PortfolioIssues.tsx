@@ -32,7 +32,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "../lib/utils";
 import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
-import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS } from "../lib/narrow-layout";
+import { PAGE_BOTTOM_BAR_CENTER_CLASS, PAGE_BOTTOM_BAR_FLOATING_CLASS, PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "../components/PillText";
 import { PageFloating } from "../components/PageFloatingLayer";
 import { Z_PAGE_FLOATING } from "../lib/z-layers";
 
@@ -169,15 +170,14 @@ function PortfolioIssueRow({
               {issueLabels.slice(0, 3).map((l) => (
                 <span
                   key={l.id}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-full border border-border bg-background"
-                  title={l.name}
+                  className={cn("gap-1 px-1.5 py-0.5 text-[10px] rounded-full border border-border bg-background", PILL_HOLDING_TEXT_CLASS)}
                 >
                   <span
-                    className="h-1.5 w-1.5 rounded-full"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
                     style={{ backgroundColor: l.color || "#888" }}
                     aria-hidden
                   />
-                  <span className="max-w-[80px] truncate">{l.name}</span>
+                  <PillText text={l.name} className="max-w-[80px]" />
                 </span>
               ))}
               {issueLabels.length > 3 && (
@@ -248,10 +248,10 @@ function PortfolioIssueRow({
               {issueLabels.map((l) => (
                 <span
                   key={l.id}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-full"
+                  className={cn("gap-1 px-1.5 py-0.5 text-[10px] rounded-full", PILL_HOLDING_TEXT_CLASS)}
                   style={{ backgroundColor: (l.color || "#888") + "33", color: l.color || "inherit" }}
                 >
-                  {l.name}
+                  <PillText text={l.name} />
                 </span>
               ))}
             </div>
@@ -877,7 +877,7 @@ export function PortfolioIssues() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto px-4 py-3", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading ? (
           <p className="text-sm text-muted-foreground px-2 py-4">Loading issues…</p>
         ) : companies.length === 0 ? (

@@ -35,7 +35,9 @@ import type {
 import type { ActiveRunForIssue, LiveRunForIssue } from "../api/heartbeats";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
 import { usePaperclipIssueRuntime, type PaperclipIssueRuntimeReassignment } from "../hooks/usePaperclipIssueRuntime";
-import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+// import { usePageBottomBarRef } from "../hooks/usePageBottomBar";
+import { useRightInsetRef } from "../hooks/useRightInset";
+import { CLEAR_OF_PHONE_LAUNCHER_CLASS } from "../lib/narrow-layout";
 import {
   buildIssueChatMessages,
   formatDurationWords,
@@ -1795,6 +1797,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
+  const actionRowRef = useRightInsetRef();
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canAcceptFiles = Boolean(onImageUpload || onAttachImage);
 
@@ -2121,7 +2124,13 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
+      {/* The Clippy launcher floats in the bottom right corner on a phone, and
+          the reply box scrolls through that corner: the launcher covered the
+          right end of Send whenever the bottom bar showed. The buttons keep
+          clear of it instead (CLEAR_OF_PHONE_LAUNCHER_CLASS). Counting the
+          reply box as the page's bottom bar lifted the launcher instead, and
+          made it jump each time the bottom bar came back. */}
+      <div ref={actionRowRef} className={cn("flex flex-wrap items-center justify-end gap-3", CLEAR_OF_PHONE_LAUNCHER_CLASS)}>
         {(onImageUpload || onAttachImage) ? (
           <div className="mr-auto flex items-center gap-3">
             <input
@@ -2240,10 +2249,14 @@ export function IssueChatThread({
   const hasScrolledRef = useRef(false);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
-  // The reply box that sticks to the foot of the thread is the page's bottom
-  // bar: while it is down there, the Clippy launcher, the scroll buttons and
-  // the toasts sit above it rather than on its Send button.
-  const composerDockRef = usePageBottomBarRef(composerViewportAnchorRef);
+  // The reply box used to register as the page's bottom bar, so that the
+  // Clippy launcher, the scroll buttons and the toasts sat above it. It sticks
+  // inside its own section on the issue page (PageSection cuts off what
+  // overflows it), so it never reaches the foot of the window, and counted on
+  // top of the phone bottom bar it lifted all three by about 170 pixels each
+  // time that bar came back. The room the page area keeps at its end now
+  // holds the Send button clear of the launcher instead.
+  // const composerDockRef = usePageBottomBarRef(composerViewportAnchorRef);
   const composerViewportSnapshotRef = useRef<ReturnType<typeof captureComposerViewportSnapshot>>(null);
   const preserveComposerViewportRef = useRef(false);
   const pendingSubmitScrollRef = useRef(false);
@@ -2562,7 +2575,8 @@ export function IssueChatThread({
 
         {showComposer ? (
           <div
-            ref={composerDockRef}
+            // ref={composerDockRef}
+            ref={composerViewportAnchorRef}
             data-testid="issue-chat-composer-dock"
             className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-linear-to-t from-background via-background/95 to-background/0 pt-6"
           >

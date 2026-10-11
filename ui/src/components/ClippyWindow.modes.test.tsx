@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClippyProvider } from "../context/ClippyContext";
 import { ClippyLauncher } from "./ClippyLauncher";
 import { ClippyWindow } from "./ClippyWindow";
+import { CLIPPY_LAUNCHER_RIGHT_CLASS } from "../lib/narrow-layout";
 
 const companyState = vi.hoisted(() => ({
   companies: [
@@ -238,6 +239,18 @@ describe("the Clippy window", () => {
     container.remove();
     window.localStorage.clear();
     document.documentElement.style.removeProperty("--clippy-dock-width");
+  });
+
+  // A row of buttons that scrolls through the corner on a phone keeps room
+  // for the launcher (CLEAR_OF_PHONE_LAUNCHER_CLASS), worked out from where
+  // the launcher sits, so the launcher must sit where lib/narrow-layout says.
+  it("sits as far in from the right edge as lib/narrow-layout says", async () => {
+    await renderClippy({ isPhone: true });
+    const launcher = findButton("Ask Clippy");
+    expect(launcher).toBeDefined();
+    const classes = launcher!.className.split(" ");
+    expect(classes).toContain(CLIPPY_LAUNCHER_RIGHT_CLASS);
+    expect(classes.filter((name) => /^right-/.test(name))).toEqual([CLIPPY_LAUNCHER_RIGHT_CLASS]);
   });
 
   it("opens from the launcher pill as a floating window that leaves the page usable", async () => {

@@ -14,6 +14,7 @@ import { cn } from "../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { User, Eye, ShieldCheck } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
+import { PillText } from "./PillText";
 
 type StageType = "review" | "approval";
 
@@ -105,9 +106,7 @@ export function ExecutionParticipantPicker({
         >
           <Icon className="h-3 w-3" />
           {values.length > 0 ? (
-            <span className="truncate max-w-[100px]">
-              {values.map(participantLabel).join(", ")}
-            </span>
+            <PillText text={values.map(participantLabel).join(", ")} className="max-w-[100px]" />
           ) : (
             <span>{label}</span>
           )}

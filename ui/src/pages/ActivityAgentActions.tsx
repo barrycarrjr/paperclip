@@ -19,6 +19,7 @@ import { auditApi, type AuditActionFilters, type AuditActionRecord } from "../ap
 import { ApiError } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { Identity } from "../components/Identity";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "../components/PillText";
 import { useToastActions } from "../context/ToastContext";
 import { activityEntityName, activityEntityTitle } from "../lib/activity-entity-names";
 import { formatActivityVerb } from "../lib/activity-format";
@@ -160,7 +161,9 @@ function AgentActionRow({
       ) : null}
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {showOnBehalf && responsibleLabel ? (
-          <span className="rounded-full bg-muted px-2 py-0.5">on behalf of {responsibleLabel}</span>
+          <span className={cn("rounded-full bg-muted px-2 py-0.5", PILL_HOLDING_TEXT_CLASS)}>
+            <PillText text={`on behalf of ${responsibleLabel}`} />
+          </span>
         ) : null}
         {record.runId && record.agentId ? (
           <Link to={`/agents/${record.agentId}/runs/${record.runId}`} className="hover:underline">

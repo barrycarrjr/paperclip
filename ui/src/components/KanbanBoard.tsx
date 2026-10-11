@@ -24,6 +24,8 @@ import type { Issue } from "@paperclipai/shared";
 import { DEFAULT_KANBAN_CARD_FIELDS, type KanbanCardField } from "../lib/inbox";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { timeAgo } from "../lib/timeAgo";
+import { cn } from "../lib/utils";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "./PillText";
 
 const boardStatuses = [
   "backlog",
@@ -251,18 +253,20 @@ function KanbanCard({
         {hasMeta && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
             {showLabels && (
-              <span className="flex items-center gap-1">
+              // min-w-0, so the labels give way inside the card rather than
+              // run past it into the next column.
+              <span className="flex min-w-0 max-w-full items-center gap-1">
                 {(issue.labels ?? []).slice(0, 2).map((label) => (
                   <span
                     key={label.id}
-                    className="inline-flex items-center rounded-full border px-1.5 py-0 text-[10px] font-medium"
+                    className={cn("rounded-full border px-1.5 py-0 text-[10px] font-medium", PILL_HOLDING_TEXT_CLASS)}
                     style={{
                       borderColor: label.color,
                       color: pickTextColorForPillBg(label.color, 0.12),
                       backgroundColor: `${label.color}1f`,
                     }}
                   >
-                    {label.name}
+                    <PillText text={label.name} />
                   </span>
                 ))}
                 {(issue.labels?.length ?? 0) > 2 && (

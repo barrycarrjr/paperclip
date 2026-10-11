@@ -29,13 +29,19 @@ import { describe, expect, it } from "vitest";
  * pressed; the selection bars, at `bottom-6`, sat over it instead. Such a bar
  * is placed with PAGE_BOTTOM_BAR_FLUSH_CLASS or PAGE_BOTTOM_BAR_FLOATING_CLASS
  * (lib/narrow-layout), or with a bottom offset of its own that adds the room
- * Layout publishes for the bottom bar, `--mobile-bottom-nav-room`.
+ * Layout publishes for the bottom bar, `--mobile-bottom-nav-room`. A bar flush
+ * with the edge also pads its contents above the safe area once the bottom bar
+ * has slid away (pageBottomBarFlushPadding), or an iPhone's home bar sits on
+ * its buttons.
  *
  * And nothing else fixed to the screen sits low enough to cover the phone
  * bottom bar: the toasts at `bottom-3` lay over all of it, from the highest
  * layer there is, and the Email page's notices at `bottom-4` over its last
  * buttons. A fixed class list may only name a bottom offset that knows about
  * the bars along the bottom; the rest take theirs from lib/narrow-layout.
+ *
+ * Last, a bar the page scrolls under (fixed or sticky) is solid: at 85 to 95
+ * per cent the page showed through the phone's top bar as it scrolled.
  */
 
 const srcDir = fileURLToPath(new URL(".", import.meta.url));
@@ -145,16 +151,14 @@ function fixedAtPlainBottom(fileName: string, source: string): number[] {
   return lines;
 }
 
-/** Files with a bar registered along the bottom that does not rest on the phone bottom bar, and why. */
-const NOT_ON_THE_BOTTOM_BAR: Record<string, string> = {
-  "components/MobileBottomNav.tsx": "the phone bottom bar itself, which the page's bars rest on",
-  // Its section on the issue page (PageSection) cuts off what overflows it,
-  // which also makes the section the box the reply box sticks inside, so it
-  // stays at the end of the thread and never reaches the foot of the window.
-  // Raised by the bottom bar's room, it only rose further over the thread.
-  // Look again if the reply box is made to stick to the window.
-  "components/IssueChatThread.tsx": "the reply box sticks inside its own section, not to the window",
-};
+/**
+ * Files with a bar registered along the bottom that does not rest on the
+ * phone bottom bar, and why. None today: the phone bottom bar itself tells
+ * lib/page-bottom-bar about itself another way (setPhoneBottomBar), and the
+ * issue reply box no longer registers, since it sticks inside its own section
+ * rather than to the window.
+ */
+const NOT_ON_THE_BOTTOM_BAR: Record<string, string> = {};
 
 /** What a bar's class list names to rest on the phone bottom bar. */
 const RESTS_ON_THE_BOTTOM_BAR = ["PAGE_BOTTOM_BAR_FLUSH_CLASS", "PAGE_BOTTOM_BAR_FLOATING_CLASS", "--mobile-bottom-nav-room"];
@@ -285,12 +289,34 @@ describe("a bar a page pins along the bottom", () => {
   });
 
   it("is found for every bar the app registers", () => {
-    // The agent Save bars (desktop and phone), four selection bars, the
-    // pipeline stage's unsaved changes bar and the issue reply box, and the
-    // phone bottom bar itself. Fewer would mean the check stopped reading
-    // some of them.
-    expect(registered.length).toBeGreaterThanOrEqual(9);
+    // The agent Save bars (desktop and phone), four selection bars and the
+    // pipeline stage's unsaved changes bar. Fewer would mean the check
+    // stopped reading some of them.
+    expect(registered.length).toBeGreaterThanOrEqual(7);
     expect(registered.filter(({ line }) => line === 0)).toEqual([]);
+  });
+
+  it("keeps its contents above the safe area once the phone bottom bar has gone, when it runs along the edge", () => {
+    // The pipeline stage's unsaved changes bar had no such padding, so an
+    // iPhone's home bar sat on its Save button with the bottom bar away.
+    const unpadded = files
+      .filter(({ relative }) => relative !== "lib/narrow-layout.ts")
+      .filter(({ file, relative }) => {
+        const sourceFile = ts.createSourceFile(relative, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+        let placedFlush = false;
+        let padded = false;
+        const visit = (node: ts.Node) => {
+          if (ts.isIdentifier(node) && node.text === "PAGE_BOTTOM_BAR_FLUSH_CLASS" && !ts.isImportSpecifier(node.parent)) {
+            placedFlush = true;
+          }
+          if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === "pageBottomBarFlushPadding") padded = true;
+          ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        return placedFlush && !padded;
+      })
+      .map(({ relative }) => relative);
+    expect(unpadded, "pad the bar's contents with pageBottomBarFlushPadding").toEqual([]);
   });
 
   it("is told apart however its classes are written", () => {
@@ -351,5 +377,138 @@ describe("what floats along the bottom of a phone", () => {
       (relative) => !plain.some((entry) => entry.relative === relative),
     );
     expect(stale).toEqual([]);
+  });
+});
+
+/**
+ * The lines of a file with a class list for a bar the page scrolls under
+ * (fixed or sticky, at any width) whose background lets the page show
+ * through: `bg-background/90`, `bg-muted/50` and the like, or a backdrop blur,
+ * which is only there to soften what shows through. A dimmed layer over the
+ * whole window (`inset-0`, behind a dialog) is meant to be seen through and
+ * is left out, as is a colour that only shows on hover or focus.
+ */
+function seeThroughBars(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const lines: number[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      const classes = node.text.trim().split(/\s+/);
+      const bar = classes.some((name) => /^(?:[\w-]+:)*(?:fixed|sticky)$/.test(name));
+      const overWholeWindow = classes.some((name) => /^(?:[\w-]+:)*inset-0$/.test(name));
+      const seeThrough = classes.some((name) => {
+        const variants = name.split(":").slice(0, -1);
+        if (variants.some((variant) => /^(?:hover|focus|focus-visible|active|group-hover|peer-hover)$/.test(variant))) return false;
+        const utility = name.split(":").at(-1)!;
+        return /^bg-[\w-]+\/\d+$/.test(utility) || /^backdrop-blur/.test(utility);
+      });
+      if (bar && !overWholeWindow && seeThrough) {
+        lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
+/**
+ * A page's own short notice in the corner, on the page notice layer
+ * (Z_PAGE_NOTICE): the line of each class list that places one, and whether
+ * it is placed with PAGE_CORNER_NOTICE_CLASS.
+ */
+function cornerNotices(fileName: string, source: string): Array<{ line: number; placed: boolean }> {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const notices: Array<{ line: number; placed: boolean }> = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "className" && node.initializer) {
+      const classList = node.initializer.getText(sourceFile);
+      if (/\bZ_PAGE_NOTICE\b/.test(classList)) {
+        notices.push({
+          line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          placed: /\bPAGE_CORNER_NOTICE_CLASS\b/.test(classList),
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return notices;
+}
+
+describe("a page's own notice in the corner", () => {
+  const notices = files.flatMap(({ file, relative }) =>
+    cornerNotices(relative, readFileSync(file, "utf8")).map((notice) => ({ ...notice, relative })),
+  );
+
+  it("sits beside the launcher on a phone rather than in its place", () => {
+    // In the launcher's own place, the Email pages' "Archived" lay over the
+    // round launcher for the seconds it showed.
+    const misplaced = notices.filter((notice) => !notice.placed).map(({ relative, line }) => `${relative}:${line}`);
+    expect(misplaced, "place these with PAGE_CORNER_NOTICE_CLASS").toEqual([]);
+  });
+
+  it("is found on each page that has one", () => {
+    // Email, Portfolio email and the Help Scout mailbox.
+    expect(notices.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("is told apart however its classes are written", () => {
+    const page = [
+      'const a = <div className={cn("fixed flex", ABOVE_MOBILE_BOTTOM_NAV_CLASS, PAGE_CORNER_RIGHT_CLASS, Z_PAGE_NOTICE)} />;',
+      'const b = <div className={cn("fixed flex", PAGE_CORNER_NOTICE_CLASS, Z_PAGE_NOTICE)} />;',
+      'const c = <div className="fixed bottom-4" />;',
+    ].join("\n");
+    expect(cornerNotices("page.tsx", page)).toEqual([
+      { line: 1, placed: false },
+      { line: 2, placed: true },
+    ]);
+  });
+});
+
+/** Sticky or fixed and see-through on purpose, by file, with the reason. */
+const SEE_THROUGH_ON_PURPOSE: Record<string, string> = {
+  "pages/PipelineSettings.tsx": "the list of a stage's sections sits beside the form, so nothing scrolls under it",
+};
+
+describe("a bar the page scrolls under", () => {
+  it("is solid, so the page does not show through it", () => {
+    // At 85 to 95 per cent the page showed through the phone's top bar, the
+    // bottom bar and the agent Save bar as it scrolled, and at half strength
+    // through the day headings in the Clippy session list.
+    const offending = files
+      .filter(({ relative }) => !(relative in SEE_THROUGH_ON_PURPOSE))
+      .flatMap(({ file, relative }) =>
+        seeThroughBars(relative, readFileSync(file, "utf8")).map((line) => `${relative}:${line}`),
+      );
+    expect(offending, "give the bar a solid background, such as bg-background").toEqual([]);
+  });
+
+  it("lists no file as see-through on purpose that has no such bar any more", () => {
+    const stale = Object.keys(SEE_THROUGH_ON_PURPOSE).filter((relative) => {
+      const file = files.find((entry) => entry.relative === relative);
+      return !file || seeThroughBars(relative, readFileSync(file.file, "utf8")).length === 0;
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it("is told apart however its classes are written", () => {
+    const page = [
+      'const a = <div className="sticky top-0 z-20 bg-background/95 backdrop-blur" />;',
+      'const b = <div className="md:sticky md:top-0 md:bg-background/95" />;',
+      'const c = <div className="fixed inset-x-0 bg-background border-t" />;',
+      'const d = <div className="rounded-md bg-background/60 px-2" />;',
+      'const e = <div className="sticky top-0 bg-muted/50 px-3" />;',
+      'const f = <div className="fixed bottom-0 bg-background backdrop-blur-sm" />;',
+      'const g = <div className="fixed inset-0 z-50 bg-black/50" />;',
+      'const h = <div className="sticky top-0 bg-background hover:bg-accent/50" />;',
+    ].join("\n");
+    expect(seeThroughBars("page.tsx", page)).toEqual([1, 2, 5, 6]);
   });
 });

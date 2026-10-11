@@ -13,6 +13,7 @@ import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { useNavigate } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
+import { PAGE_SCROLL_BOX_END_ROOM_CLASS } from "../lib/narrow-layout";
 import { cn } from "../lib/utils";
 import { readLsFilter, writeLsFilter } from "../lib/persistFilter";
 
@@ -339,7 +340,7 @@ export function PortfolioCosts() {
         <div className="w-16" />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className={cn("flex-1 min-h-0 overflow-y-auto", PAGE_SCROLL_BOX_END_ROOM_CLASS)}>
         {isLoading && <p className="text-sm text-muted-foreground px-6 py-4">Loading costs…</p>}
         {!isLoading && rows.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-3">

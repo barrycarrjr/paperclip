@@ -67,6 +67,7 @@ import { AgentIcon } from "./AgentIconPicker";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
 import { ModelPicker } from "./ModelPicker";
 import { SavedModelNotice } from "./SavedModelNotice";
+import { PILL_HOLDING_TEXT_CLASS, PillText } from "./PillText";
 
 const DRAFT_KEY = "paperclip:issue-draft";
 const DEBOUNCE_MS = 800;
@@ -1626,8 +1627,8 @@ export function NewIssueDialog() {
                       <div key={file.id} className="flex items-start justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                              {file.documentKey}
+                            <span className={cn("rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground", PILL_HOLDING_TEXT_CLASS)}>
+                              <PillText text={file.documentKey ?? ""} />
                             </span>
                             <span className="truncate text-sm">{file.file.name}</span>
                           </div>
