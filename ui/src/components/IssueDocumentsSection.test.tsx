@@ -632,6 +632,17 @@ describe("IssueDocumentsSection", () => {
     expect(heading?.parentElement?.className).toContain("flex-wrap");
     expect(heading?.nextElementSibling?.className).toContain("flex-wrap");
 
+    // A document's row: on a phone its "updated" time drops to its own line,
+    // so the key keeps its room instead of shrinking to nothing.
+    const updatedLink = Array.from(container.querySelectorAll("a")).find((link) =>
+      link.textContent?.trim().startsWith("updated"),
+    );
+    expect(updatedLink).toBeTruthy();
+    const row = updatedLink?.parentElement;
+    expect(row?.className).toContain("flex-wrap");
+    expect(row?.className).toContain("sm:flex-nowrap");
+    expect(updatedLink?.previousElementSibling?.className).toContain("min-w-0");
+
     await act(async () => {
       root.unmount();
     });
