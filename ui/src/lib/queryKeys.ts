@@ -497,6 +497,12 @@ export const queryKeys = {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
   },
+  spaces: {
+    list: (companyId: string) => ["spaces", companyId] as const,
+    detail: (companyId: string, spaceRef: string) => ["spaces", companyId, "detail", spaceRef] as const,
+    pageTree: (spaceId: string) => ["spaces", "page-tree", spaceId] as const,
+    page: (spaceId: string, pageId: string) => ["spaces", "page", spaceId, pageId] as const,
+  },
   artifacts: {
     list: (
       companyId: string,

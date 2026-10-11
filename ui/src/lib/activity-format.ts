@@ -63,6 +63,12 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "company.updated": "updated company",
   "company.archived": "archived",
   "company.budget_updated": "updated budget for",
+  // A Space's rows hold ids only, never its name or a page title, since
+  // agents can read the activity feed and Spaces are for people.
+  "space.created": "created a Space",
+  "space.updated": "changed a Space",
+  "space.page_created": "added a page to a Space",
+  "space.page_updated": "edited a page in a Space",
 };
 
 const ISSUE_ACTIVITY_LABELS: Record<string, string> = {

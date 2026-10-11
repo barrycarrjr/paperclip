@@ -47,6 +47,7 @@ export { issueReferenceService } from "./issue-references.js";
 export { goalService } from "./goals.js";
 export { memoryService, type MemoryService, type MemoryListFilter, type MemoryActor } from "./memories.js";
 export { memoryFolderService, type MemoryFolderService } from "./memory-folder-sync.js";
+export { spaceService, type SpaceService, type SpaceActor } from "./spaces.js";
 export {
   workQueueService,
   WorkQueueClaimRaceError,

@@ -127,6 +127,34 @@ describe("ActivityRow", () => {
     expect(html).not.toContain("Acme");
   });
 
+  it("says what happened in a Space in words, without its name, and links to it by id", () => {
+    const pageRow = renderToStaticMarkup(
+      <ActivityRow
+        event={buildEvent({
+          entityType: "space_page",
+          entityId: "page-1",
+          action: "space.page_updated",
+          details: { spaceId: "space-1", pageId: "page-1", revisionNumber: 3 },
+        })}
+        agentMap={new Map()}
+        entityNameMap={new Map()}
+      />,
+    );
+    expect(pageRow).toContain("edited a page in a Space");
+    expect(pageRow).toContain('href="/spaces/space-1/page-1"');
+
+    const spaceRow = renderToStaticMarkup(
+      <ActivityRow
+        event={buildEvent({ entityType: "space", entityId: "space-1", action: "space.created", details: { spaceId: "space-1" } })}
+        agentMap={new Map()}
+        entityNameMap={new Map()}
+        companyPrefix="/ACME"
+      />,
+    );
+    expect(spaceRow).toContain("created a Space");
+    expect(spaceRow).toContain('href="/ACME/spaces/space-1"');
+  });
+
   it("renders a non-link wrapper when the activity has no navigable entity", () => {
     const event = buildEvent({ entityType: "unknown", entityId: "x" });
     const html = renderToStaticMarkup(

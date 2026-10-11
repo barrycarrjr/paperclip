@@ -488,18 +488,22 @@ Each is a distinct page/route:
 
 ### Not V1
 
-- Knowledge base - a future plugin
+- Knowledge base (now in core as Spaces, section 11)
 - Advanced governance models (hiring budgets, multi-member boards)
 - Revenue/expense tracking beyond token costs - a future plugin
 - Public job board / open company features
 
 ---
 
-## 11. Knowledge Base
+## 11. Knowledge Base: Spaces
 
-**Anti-goal for core.** The knowledge base is not part of the Paperclip core — it will be a plugin. The task system + comments + agent descriptions provide sufficient shared context.
+**Core feature** (owner's decision, 2026-10-11; this section used to leave a knowledge base to a plugin). Each company keeps pages that are not tasks, such as handbooks, standing rules and reference notes, in Spaces. A Space holds pages, and any page can hold subpages.
 
-The architecture must support adding a knowledge base plugin later (clean API boundaries, hookable lifecycle events) but the core system explicitly does not include one.
+A page's text and every saved version live in the same document tables as task documents, so a task document can later move into a Space with its history. Every save names the version it was written on, and a save written on an older version is refused instead of overwriting a newer one.
+
+Everyone with access to the company can read its Spaces, and everyone but viewers can edit them. An agent sees a Space only after a person grants it that Space, to read or to edit.
+
+Search over outside sources and vector databases stay outside core, and can still come as plugins.
 
 ---
 
@@ -508,7 +512,7 @@ The architecture must support adding a knowledge base plugin later (clean API bo
 Things Paperclip explicitly does **not** do:
 
 - **Not an Agent runtime** — Paperclip orchestrates, Agents run elsewhere
-- **Not a knowledge base** — core has no wiki/docs/vector-DB (plugin territory)
+- **Not a search engine or vector database**: core keeps a company's own pages in Spaces (section 11), but search over outside sources and embeddings are plugin territory
 - **Not a SaaS** — single-tenant, self-hosted
 - **Not opinionated about Agent implementation** — any language, any framework, any runtime
 - **Not automatically self-healing** — surfaces problems, doesn't silently fix them

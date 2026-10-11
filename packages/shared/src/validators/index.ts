@@ -288,6 +288,20 @@ export {
   updateMemoryFolderSchema,
   type UpdateMemoryFolder,
 } from "./memory-folder.js";
+export {
+  SPACE_NAME_MAX,
+  SPACE_DESCRIPTION_MAX,
+  SPACE_PAGE_TITLE_MAX,
+  SPACE_PAGE_BODY_MAX,
+  createSpaceSchema,
+  updateSpaceSchema,
+  createSpacePageSchema,
+  updateSpacePageSchema,
+  type CreateSpace,
+  type UpdateSpace,
+  type CreateSpacePage,
+  type UpdateSpacePage,
+} from "./space.js";
 
 export {
   WORK_QUEUE_ITEM_STATUSES,

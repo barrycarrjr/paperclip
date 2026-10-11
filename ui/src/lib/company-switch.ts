@@ -103,6 +103,9 @@ const RECORD_ROUTE_ROOTS: Readonly<
   assistants: { landing: "/assistants", record: "assistant" },
   "execution-workspaces": { landing: "/workspaces", record: "workspace" },
   skills: { landing: "/skills", record: "skill" },
+  // A Space and its pages belong to one company. Another company's Space at
+  // the same address is a different Space, with none of these pages.
+  spaces: { landing: "/spaces", record: "Space" },
   // Company settings open the company you are in, so /company/settings is
   // kept. Everything else under /company (an import wizard, an export in
   // progress) belongs to the company that started it.

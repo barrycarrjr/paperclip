@@ -12,6 +12,7 @@ import {
   History,
   Inbox,
   Layers,
+  Library,
   Mail,
   Megaphone,
   MessageSquare,
@@ -186,6 +187,8 @@ export const CORE_WORKSPACE_CATALOG: WorkspaceCatalogEntry[] = [
   { id: "workspaces", label: "Workspaces", routeRoot: "workspaces", icon: GitBranch, requires: "isolatedWorkspaces" },
   { id: "clippy", label: "Clippy", routeRoot: "clippy", icon: MessageSquare },
   { id: "memories", label: "Memories", routeRoot: "memories", icon: Brain },
+  // Added 2026-10-11: a company's shelves of pages, kept apart from its tasks.
+  { id: "spaces", label: "Spaces", routeRoot: "spaces", icon: Library },
   { id: "skills", label: "Skills", routeRoot: "skills", icon: Boxes },
   { id: "approvals", label: "Approvals", routeRoot: "approvals", icon: ShieldCheck },
   { id: "receipts", label: "Receipts", routeRoot: "receipts", icon: Receipt },

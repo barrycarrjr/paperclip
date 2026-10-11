@@ -16,7 +16,7 @@ export function entityLink(
   entityType: string,
   entityId: string,
   name?: string | null,
-  opts?: { companyPrefix?: string | null },
+  opts?: { companyPrefix?: string | null; details?: Record<string, unknown> | null },
 ): string | null {
   const prefix = opts?.companyPrefix ?? "";
   switch (entityType) {
@@ -25,6 +25,12 @@ export function entityLink(
     case "project": return `${prefix}/projects/${deriveProjectUrlKey(name, entityId)}`;
     case "goal": return `${prefix}/goals/${entityId}`;
     case "approval": return `${prefix}/approvals/${entityId}`;
+    // By id: a Space's rows carry no name, and its address takes an id too.
+    case "space": return `${prefix}/spaces/${entityId}`;
+    case "space_page": {
+      const spaceId = opts?.details?.spaceId;
+      return typeof spaceId === "string" ? `${prefix}/spaces/${spaceId}/${entityId}` : null;
+    }
     default: return null;
   }
 }
@@ -62,7 +68,10 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
 
   const link = isHeartbeatEvent && heartbeatAgentId
     ? `${companyPrefix ?? ""}/agents/${heartbeatAgentId}/runs/${event.entityId}`
-    : entityLink(event.entityType, event.entityId, name, { companyPrefix });
+    : entityLink(event.entityType, event.entityId, name, {
+      companyPrefix,
+      details: event.details as Record<string, unknown> | null,
+    });
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;
