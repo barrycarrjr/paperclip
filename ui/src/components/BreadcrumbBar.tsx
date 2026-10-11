@@ -31,6 +31,8 @@ import {
   type ScopeChoice,
   type ScopeExplanation,
 } from "@/lib/scope-kind";
+import { TOP_BAR_HEIGHT_CLASS } from "@/lib/narrow-layout";
+import { cn } from "@/lib/utils";
 
 /**
  * The scope you are in, as a button you can open, and the scopes you can
@@ -387,7 +389,7 @@ export function BreadcrumbBar() {
 
   if (isMobile && mobileToolbar) {
     return (
-      <div className="border-b border-border px-2 h-12 shrink-0 flex items-center">
+      <div className={cn("border-b border-border px-2 shrink-0 flex items-center", TOP_BAR_HEIGHT_CLASS)}>
         {mobileToolbar}
       </div>
     );
@@ -453,7 +455,7 @@ export function BreadcrumbBar() {
     return (
       <div
         data-testid="top-bar"
-        className="border-b border-border px-4 h-12 shrink-0 flex items-center"
+        className={cn("border-b border-border px-4 shrink-0 flex items-center", TOP_BAR_HEIGHT_CLASS)}
       >
         {menuButton}
         <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden leading-tight">
@@ -469,7 +471,7 @@ export function BreadcrumbBar() {
   return (
     <div
       data-testid="top-bar"
-      className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center"
+      className={cn("border-b border-border px-4 md:px-6 shrink-0 flex items-center", TOP_BAR_HEIGHT_CLASS)}
     >
       {menuButton}
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">

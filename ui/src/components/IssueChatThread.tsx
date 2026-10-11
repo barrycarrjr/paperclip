@@ -1797,7 +1797,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
-  const actionRowRef = useRightInsetRef();
+  const clearOfLauncherRef = useRightInsetRef();
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canAcceptFiles = Boolean(onImageUpload || onAttachImage);
 
@@ -2059,140 +2059,146 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
         </div>
       ) : null}
 
-      <MarkdownEditor
-        ref={editorRef}
-        value={body}
-        onChange={setBody}
-        placeholder="Reply"
-        mentions={mentions}
-        onSubmit={handleSubmit}
-        imageUploadHandler={onImageUpload}
-        fileDropTarget="parent"
-        bordered={false}
-        contentClassName="max-h-[28dvh] overflow-y-auto pr-1 pb-2 text-sm scrollbar-auto-hide"
-      />
+      {/* The Clippy launcher and the scroll buttons above it float in the
+          bottom right corner on a phone, and the reply box scrolls through
+          that corner: the launcher covered the right end of Send whenever the
+          bottom bar showed, and with the thread a little above its end the
+          launcher and scroll-to-top sat over the end of the lines being
+          typed. Everything in the box keeps clear of them instead
+          (CLEAR_OF_PHONE_LAUNCHER_CLASS), and only the box's own edge passes
+          under them. Counting the reply box as the page's bottom bar lifted
+          the launcher instead, and made it jump each time the bottom bar
+          came back. */}
+      <div ref={clearOfLauncherRef} className={CLEAR_OF_PHONE_LAUNCHER_CLASS}>
+        <MarkdownEditor
+          ref={editorRef}
+          value={body}
+          onChange={setBody}
+          placeholder="Reply"
+          mentions={mentions}
+          onSubmit={handleSubmit}
+          imageUploadHandler={onImageUpload}
+          fileDropTarget="parent"
+          bordered={false}
+          contentClassName="max-h-[28dvh] overflow-y-auto pr-1 pb-2 text-sm scrollbar-auto-hide"
+        />
 
-      {composerHint ? (
-        // A sentence, so it may wrap, against the pill rule in index.css.
-        <div className="inline-flex items-center whitespace-normal rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
-          {composerHint}
-        </div>
-      ) : null}
-
-      {composerAttachments.length > 0 ? (
-        <div
-          data-testid="issue-chat-composer-attachments"
-          className="mb-3 mt-2 space-y-1.5 rounded-md border border-dashed border-border/80 bg-muted/20 p-2"
-        >
-          {composerAttachments.map((attachment) => {
-            const sizeLabel = formatAttachmentSize(attachment.size);
-            const statusLabel =
-              attachment.status === "uploading"
-                ? "Uploading to issue"
-                : attachment.status === "error"
-                  ? attachment.error ?? "Upload failed"
-                  : attachment.inline
-                    ? "Inserted inline"
-                    : "Attached to issue";
-            return (
-              <div
-                key={attachment.id}
-                className={cn(
-                  "flex min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
-                  attachment.status === "error"
-                    ? "bg-destructive/10 text-destructive"
-                    : "bg-background/70 text-muted-foreground",
-                )}
-              >
-                {attachment.status === "uploading" ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                ) : attachment.status === "attached" ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
-                ) : (
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-                  {attachment.name}
-                </span>
-                {sizeLabel ? (
-                  <span className="shrink-0 text-muted-foreground">{sizeLabel}</span>
-                ) : null}
-                <span className="shrink-0 text-muted-foreground">{statusLabel}</span>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {/* The Clippy launcher floats in the bottom right corner on a phone, and
-          the reply box scrolls through that corner: the launcher covered the
-          right end of Send whenever the bottom bar showed. The buttons keep
-          clear of it instead (CLEAR_OF_PHONE_LAUNCHER_CLASS). Counting the
-          reply box as the page's bottom bar lifted the launcher instead, and
-          made it jump each time the bottom bar came back. */}
-      <div ref={actionRowRef} className={cn("flex flex-wrap items-center justify-end gap-3", CLEAR_OF_PHONE_LAUNCHER_CLASS)}>
-        {(onImageUpload || onAttachImage) ? (
-          <div className="mr-auto flex items-center gap-3">
-            <input
-              ref={attachInputRef}
-              type="file"
-              className="hidden"
-              onChange={handleAttachFile}
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => attachInputRef.current?.click()}
-              disabled={attaching}
-              title="Attach file"
-            >
-              <Paperclip className="h-4 w-4" />
-            </Button>
+        {composerHint ? (
+          // A sentence, so it may wrap, against the pill rule in index.css.
+          <div className="inline-flex items-center whitespace-normal rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
+            {composerHint}
           </div>
         ) : null}
 
-        {enableReassign && reassignOptions.length > 0 ? (
-          <InlineEntitySelector
-            value={reassignTarget}
-            options={reassignOptions}
-            placeholder="Assignee"
-            noneLabel="No assignee"
-            searchPlaceholder="Search assignees..."
-            emptyMessage="No assignees found."
-            onChange={setReassignTarget}
-            className="h-8 text-xs"
-            renderTriggerValue={(option) => {
-              if (!option) return <span className="text-muted-foreground">Assignee</span>;
-              const agentId = option.id.startsWith("agent:") ? option.id.slice("agent:".length) : null;
-              const agent = agentId ? agentMap?.get(agentId) : null;
+        {composerAttachments.length > 0 ? (
+          <div
+            data-testid="issue-chat-composer-attachments"
+            className="mb-3 mt-2 space-y-1.5 rounded-md border border-dashed border-border/80 bg-muted/20 p-2"
+          >
+            {composerAttachments.map((attachment) => {
+              const sizeLabel = formatAttachmentSize(attachment.size);
+              const statusLabel =
+                attachment.status === "uploading"
+                  ? "Uploading to issue"
+                  : attachment.status === "error"
+                    ? attachment.error ?? "Upload failed"
+                    : attachment.inline
+                      ? "Inserted inline"
+                      : "Attached to issue";
               return (
-                <>
-                  {agent ? (
-                    <AgentIcon icon={agent.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <div
+                  key={attachment.id}
+                  className={cn(
+                    "flex min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
+                    attachment.status === "error"
+                      ? "bg-destructive/10 text-destructive"
+                      : "bg-background/70 text-muted-foreground",
+                  )}
+                >
+                  {attachment.status === "uploading" ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : attachment.status === "attached" ? (
+                    <Check className="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                    {attachment.name}
+                  </span>
+                  {sizeLabel ? (
+                    <span className="shrink-0 text-muted-foreground">{sizeLabel}</span>
                   ) : null}
-                  <span className="truncate">{option.label}</span>
-                </>
+                  <span className="shrink-0 text-muted-foreground">{statusLabel}</span>
+                </div>
               );
-            }}
-            renderOption={(option) => {
-              if (!option.id) return <span className="truncate">{option.label}</span>;
-              const agentId = option.id.startsWith("agent:") ? option.id.slice("agent:".length) : null;
-              const agent = agentId ? agentMap?.get(agentId) : null;
-              return (
-                <>
-                  {agent ? (
-                    <AgentIcon icon={agent.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  ) : null}
-                  <span className="truncate">{option.label}</span>
-                </>
-              );
-            }}
-          />
+            })}
+          </div>
         ) : null}
 
-        <Button size="sm" disabled={!canSubmit} onClick={() => void handleSubmit()}>
-          {submitting ? "Posting..." : "Send"}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {(onImageUpload || onAttachImage) ? (
+            <div className="mr-auto flex items-center gap-3">
+              <input
+                ref={attachInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleAttachFile}
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => attachInputRef.current?.click()}
+                disabled={attaching}
+                title="Attach file"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : null}
+
+          {enableReassign && reassignOptions.length > 0 ? (
+            <InlineEntitySelector
+              value={reassignTarget}
+              options={reassignOptions}
+              placeholder="Assignee"
+              noneLabel="No assignee"
+              searchPlaceholder="Search assignees..."
+              emptyMessage="No assignees found."
+              onChange={setReassignTarget}
+              className="h-8 text-xs"
+              renderTriggerValue={(option) => {
+                if (!option) return <span className="text-muted-foreground">Assignee</span>;
+                const agentId = option.id.startsWith("agent:") ? option.id.slice("agent:".length) : null;
+                const agent = agentId ? agentMap?.get(agentId) : null;
+                return (
+                  <>
+                    {agent ? (
+                      <AgentIcon icon={agent.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span className="truncate">{option.label}</span>
+                  </>
+                );
+              }}
+              renderOption={(option) => {
+                if (!option.id) return <span className="truncate">{option.label}</span>;
+                const agentId = option.id.startsWith("agent:") ? option.id.slice("agent:".length) : null;
+                const agent = agentId ? agentMap?.get(agentId) : null;
+                return (
+                  <>
+                    {agent ? (
+                      <AgentIcon icon={agent.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span className="truncate">{option.label}</span>
+                  </>
+                );
+              }}
+            />
+          ) : null}
+
+          <Button size="sm" disabled={!canSubmit} onClick={() => void handleSubmit()}>
+            {submitting ? "Posting..." : "Send"}
+          </Button>
+        </div>
       </div>
     </div>
   );

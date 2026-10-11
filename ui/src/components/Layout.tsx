@@ -51,6 +51,7 @@ import {
   MOBILE_BOTTOM_NAV_ROOM_PROPERTY,
   PAGE_AREA_CLIPS_SIDEWAYS_CLASS,
   PAGE_AREA_CONTAINER_CLASS,
+  PAGE_AREA_PADDING_CLASS,
   PAGE_END_ROOM_CLASS,
   PHONE_PAGE_END_ROOM_CLASS,
 } from "../lib/narrow-layout";
@@ -585,13 +586,17 @@ function LayoutShell() {
                 page without the window getting any narrower. And a page
                 that scrolls ends above the Clippy launcher, not under it
                 (PAGE_END_ROOM_CLASS, and PHONE_PAGE_END_ROOM_CLASS on a
-                phone, which also clears a bar fixed over the page). */}
+                phone, which also clears a bar fixed over the page). A bar
+                that sticks to the top of a page takes the area's padding
+                back (PAGE_STICKY_TOP_CLASS), so it sits right under the top
+                bar. */}
             <main
               id="main-content"
               ref={mainContentRef}
               tabIndex={-1}
               className={cn(
-                "flex-1 p-4 outline-none md:p-6",
+                "flex-1 outline-none",
+                PAGE_AREA_PADDING_CLASS,
                 PAGE_AREA_CONTAINER_CLASS,
                 PAGE_END_ROOM_CLASS,
                 isMobile

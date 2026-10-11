@@ -1200,11 +1200,14 @@ describe("IssueChatThread", () => {
     });
   });
 
-  // On a phone the Clippy launcher floats in the bottom right corner, and the
-  // reply box scrolls through that corner: the launcher covered the right end
-  // of Send whenever the bottom bar showed. The row of buttons keeps room for
-  // it, measured so it keeps only the room it needs.
-  it("keeps the reply box's buttons clear of the launcher's corner on a phone", () => {
+  // On a phone the Clippy launcher and the scroll buttons above it float in
+  // the bottom right corner, and the reply box scrolls through that corner:
+  // the launcher covered the right end of Send whenever the bottom bar showed,
+  // and with the thread a little above its end the launcher and scroll-to-top
+  // sat over the end of the lines being typed. Everything in the box, its text
+  // as well as its buttons, keeps room for them, measured so it keeps only the
+  // room it needs.
+  it("keeps the reply box's text and buttons clear of the launcher's corner on a phone", () => {
     const root = createRoot(container);
 
     act(() => {
@@ -1222,11 +1225,17 @@ describe("IssueChatThread", () => {
       );
     });
 
+    const composer = container.querySelector('[data-testid="issue-chat-composer"]');
     const send = Array.from(container.querySelectorAll("button")).find((element) => element.textContent === "Send");
+    const editor = container.querySelector('textarea[aria-label="Issue chat editor"]');
     expect(send).toBeDefined();
-    const row = send!.parentElement!;
-    expect(row.className.split(" ")).toContain(CLEAR_OF_PHONE_LAUNCHER_CLASS);
-    expect(row.style.getPropertyValue(RIGHT_INSET_PROPERTY)).not.toBe("");
+    expect(editor).not.toBeNull();
+    for (const [name, element] of [["Send", send!], ["the text", editor!]] as const) {
+      const clear = element.closest<HTMLElement>(`[class~="${CLEAR_OF_PHONE_LAUNCHER_CLASS}"]`);
+      expect(clear, `${name} keeps clear of the corner`).not.toBeNull();
+      expect(composer!.contains(clear!), `${name} keeps clear inside the reply box`).toBe(true);
+      expect(clear!.style.getPropertyValue(RIGHT_INSET_PROPERTY), `${name} is measured`).not.toBe("");
+    }
 
     act(() => {
       root.unmount();

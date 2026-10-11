@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "../components/HoverPreview";
 import { IssuePreviewSheet } from "../components/IssuePreviewSheet";
 import {
   DropdownMenu,
@@ -112,8 +112,8 @@ function PortfolioIssueRow({
       : null;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <HoverPreview>
+      <HoverPreviewTrigger>
         <div
           role="button"
           tabIndex={0}
@@ -221,8 +221,8 @@ function PortfolioIssueRow({
             {timeAgo(issue.updatedAt)}
           </span>
         </div>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" align="start" className="max-w-lg p-3 text-left whitespace-normal">
+      </HoverPreviewTrigger>
+      <HoverPreviewContent className="p-3 text-left whitespace-normal">
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-[11px] opacity-80">
             <span className="font-mono">{issue.identifier ?? ""}</span>
@@ -260,8 +260,8 @@ function PortfolioIssueRow({
             {assigneeLabel ? `Assigned to ${assigneeLabel}` : "Unassigned"} · updated {timeAgo(issue.updatedAt)}
           </div>
         </div>
-      </TooltipContent>
-    </Tooltip>
+      </HoverPreviewContent>
+    </HoverPreview>
   );
 }
 

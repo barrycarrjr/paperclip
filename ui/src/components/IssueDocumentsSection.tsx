@@ -851,7 +851,10 @@ export function IssueDocumentsSection({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
+                  {/* On a phone the time drops to its own line rather than
+                      squeezing the key to nothing; on wider screens one row. */}
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
                       className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
@@ -918,9 +921,12 @@ export function IssueDocumentsSection({
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
+                    {/* Keeps its size, and the key gives way instead: cut
+                        short beside a long key, it read "u…" on a phone. */}
                     <a
                       href={`#document-${encodeURIComponent(doc.key)}`}
-                      className="truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                      className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
                     >
                       updated {relativeTime(displayedUpdatedAt)}
                     </a>

@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
 import { AgentConfigForm } from "../components/AgentConfigForm";
 import { cn } from "../lib/utils";
+import { PAGE_STICKY_TOP_CLASS } from "../lib/narrow-layout";
 import {
   ArrowRight,
   Check,
@@ -1244,8 +1245,8 @@ export function CompanyImport() {
       {/* Preview results */}
       {importPreview && (
         <>
-          {/* Sticky import action bar */}
-          <div className="sticky top-0 z-10 border-b border-border bg-background px-5 py-3">
+          {/* Sticky import action bar, right under the top bar (PAGE_STICKY_TOP_CLASS) */}
+          <div className={cn("sticky z-10 border-b border-border bg-background px-5 py-3", PAGE_STICKY_TOP_CLASS)}>
             <div className="flex flex-wrap items-center gap-4 text-sm">
               <span className="font-medium">
                 Import preview

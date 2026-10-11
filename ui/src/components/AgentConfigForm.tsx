@@ -25,6 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { FolderOpen, Heart, ChevronDown, X } from "lucide-react";
 import { cn } from "../lib/utils";
+import { PAGE_STICKY_TOP_CLASS } from "../lib/narrow-layout";
 import { groupModelsByProvider } from "../lib/model-display";
 import { queryKeys } from "../lib/queryKeys";
 import { useAdapterModelDefault } from "../hooks/useAdapterModelDefault";
@@ -489,8 +490,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       {/* ---- Floating Save button (edit mode, when dirty) ---- */}
       {isDirty && !props.hideInlineSave && (
         // Solid, like every bar the page scrolls under: see-through, the form
-        // showed through it.
-        <div className="sticky top-0 z-10 flex items-center justify-end px-4 py-2 bg-background border-b border-primary/20">
+        // showed through it. Right under the top bar (PAGE_STICKY_TOP_CLASS).
+        <div className={cn("sticky z-10 flex items-center justify-end px-4 py-2 bg-background border-b border-primary/20", PAGE_STICKY_TOP_CLASS)}>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">Unsaved changes</span>
             <Button

@@ -13,6 +13,10 @@ import { cn } from "../lib/utils";
  * through PillText, which cuts it short with "…" and keeps the whole of it as
  * the tooltip. src/pills.test.ts checks pills that show a name, a title, an
  * email or a key do it this way.
+ *
+ * The rest of the pill's row keeps its size (`shrink-0`), so the pill is what
+ * gives way: a document's "updated" time, cut short beside a long key as
+ * well, read "u…" on a phone.
  */
 export const PILL_HOLDING_TEXT_CLASS = "inline-flex min-w-0 max-w-full items-center";
 

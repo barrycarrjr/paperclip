@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { Company } from "@paperclipai/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "../components/HoverPreview";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -1363,8 +1364,8 @@ export function MessageRow({
           msg.unseen ? "bg-blue-500" : "bg-transparent",
         )}
       />
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <HoverPreview>
+        <HoverPreviewTrigger>
           <div className="flex-1 min-w-0 overflow-hidden">
             <div className="flex items-baseline justify-between gap-2 min-w-0">
               <span className={cn("text-xs truncate min-w-0", msg.unseen && "font-semibold")}>
@@ -1381,16 +1382,16 @@ export function MessageRow({
               {ellipsize(msg.subject, MAX_SUBJECT_CHARS)}
             </div>
           </div>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="start" className="max-w-md">
+        </HoverPreviewTrigger>
+        <HoverPreviewContent width="md">
           <div className="text-xs font-semibold">{msg.subject}</div>
           {msg.snippet && (
             <div className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-words">
               {msg.snippet}
             </div>
           )}
-        </TooltipContent>
-      </Tooltip>
+        </HoverPreviewContent>
+      </HoverPreview>
       <RowHoverToolbar forceVisible={moreMenuOpen}>
         {msg.unseen ? (
           <Button

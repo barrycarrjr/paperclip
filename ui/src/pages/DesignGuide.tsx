@@ -129,6 +129,7 @@ import { MailSearchBar } from "@/components/MailSearchBar";
 import { EmailStateIcons } from "@/components/email/EmailStateIcons";
 import { EmailRecipientLines } from "@/components/email/EmailRecipientLines";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "@/components/email/RowHoverToolbar";
+import { HoverPreview, HoverPreviewContent, HoverPreviewTrigger } from "@/components/HoverPreview";
 import { ModelLifecycleBadge } from "@/components/ModelLifecycleBadge";
 import { ModelPicker } from "@/components/ModelPicker";
 import { SavedModelNotice } from "@/components/SavedModelNotice";
@@ -345,6 +346,7 @@ export function DesignGuide() {
                 "CommentThread", "MarkdownEditor", "PropertiesPanel", "Sidebar", "CommandPalette",
                 "ActivityRow", "PageTabBar", "ApprovalCard", "AttachmentChipList",
                 "AttachmentComposer", "AttachmentPreviewCard", "AttachmentViewerModal", "EmailStateIcons", "EmailRecipientLines", "RowHoverToolbar",
+                "HoverPreview",
                 "ModelPicker", "ModelLifecycleBadge", "SavedModelNotice",
                 "AgentStatusBadge", "TeamWorkStateBadge", "AgentErrorNote",
                 "ClippyLauncher", "ClippyEmptyState", "ClippyContextChip", "ClippyChatOptions", "ClippyChatRow",
@@ -1545,6 +1547,38 @@ export function DesignGuide() {
             <TooltipContent>Settings</TooltipContent>
           </Tooltip>
         </div>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  HOVER PREVIEW                                                */}
+      {/* ============================================================ */}
+      <Section title="Hover Preview">
+        <p className="text-sm text-muted-foreground">
+          A card of detail under a list row while the pointer rests on it, such as an issue's
+          description. A click or a tap on the row opens the whole thing. It only opens where the
+          pointer can hover, so never on a phone, and it is never wider than the screen.
+        </p>
+        <SubSection title="Point at the row">
+          <HoverPreview>
+            <HoverPreviewTrigger>
+              <div
+                role="button"
+                tabIndex={0}
+                className="w-72 truncate rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent/40"
+              >
+                Plan the enterprise onboarding release
+              </div>
+            </HoverPreviewTrigger>
+            <HoverPreviewContent className="p-3 text-left whitespace-normal">
+              <div className="space-y-1.5">
+                <div className="text-[13px] font-medium leading-snug">Plan the enterprise onboarding release</div>
+                <div className="text-[12px] leading-snug opacity-80">
+                  Agree the steps, owners and dates for the onboarding release.
+                </div>
+              </div>
+            </HoverPreviewContent>
+          </HoverPreview>
+        </SubSection>
       </Section>
 
       {/* ============================================================ */}

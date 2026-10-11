@@ -203,6 +203,21 @@ Always use in a responsive grid: `grid md:grid-cols-2 xl:grid-cols-4 gap-4`.
 </div>
 ```
 
+### HoverPreview (HoverPreviewTrigger, HoverPreviewContent)
+
+**File:** `HoverPreview.tsx`
+**Props:** `HoverPreview`: `children`. `HoverPreviewTrigger`: one element, the row. `HoverPreviewContent`: `width?: "md" | "lg"` (28rem or 32rem, default `lg`), `className?: string`, `children`.
+**Usage:** A card of detail under a list row while the pointer rests on it: an issue's description (Portfolio Issues), the opening lines of an email (Portfolio Email, the Help Scout panel, the review queues on Portfolio Brief and Morning Brief). A click or a tap on the row opens the whole thing. It only opens where the pointer can hover (`useCanHover`), so never on a phone, where it opened whenever the row took focus and ran past the right edge of the screen; and it is never wider than the room on screen. Write it the way a Tooltip is written. Any tooltip wider than 20rem goes through it: `HoverPreview.test.tsx` fails on one that does not.
+
+```tsx
+<HoverPreview>
+  <HoverPreviewTrigger>
+    <div role="button" tabIndex={0} onClick={() => onOpenPreview(issue)}>{issue.title}</div>
+  </HoverPreviewTrigger>
+  <HoverPreviewContent className="p-3 text-left whitespace-normal">{issue.description}</HoverPreviewContent>
+</HoverPreview>
+```
+
 ### Identity
 
 **File:** `Identity.tsx`

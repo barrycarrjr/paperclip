@@ -29,6 +29,10 @@ import { describe, expect, it } from "vitest";
  * the check below goes by what is read: a `name`, `title`, `email` or `key`,
  * which covers labels, agents, companies, issues and documents. Text read
  * under another name, or put together outside the pill, is not seen.
+ *
+ * Only the pill gives way in its row. A time, a count or a revision beside it
+ * keeps its size: cut short as well, a document's "updated" time read "u…"
+ * beside a long document key on a phone.
  */
 
 // Under jsdom, `new URL(..., import.meta.url)` resolves against the test page
@@ -185,6 +189,89 @@ function userTextPillsNotCutShort(fileName: string, source: string): number[] {
   return lines;
 }
 
+/** Classes that let an element in a row shrink below its own width. */
+const GIVES_WAY = /^(?:[\w@[\]-]+:)*(?:truncate|min-w-0|overflow(?:-x)?-(?:hidden|clip))$/;
+
+/**
+ * The elements in a file that share a row with a pill holding text a person
+ * wrote, which gives way in its row (PILL_HOLDING_TEXT_CLASS), and give way
+ * too though they hold no such text: a time, a count, a revision. As the lines
+ * they start on. Squeezed together, both lose: beside a long document key the
+ * "updated" time read "u…" on a phone.
+ */
+function rowMatesThatGiveWay(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const opening = (node: ts.Node) =>
+    ts.isJsxElement(node) ? node.openingElement : ts.isJsxSelfClosingElement(node) ? node : null;
+  const classInitializer = (node: ts.Node) =>
+    opening(node)?.attributes.properties.find(
+      (property): property is ts.JsxAttribute =>
+        ts.isJsxAttribute(property) && property.name.getText(sourceFile) === "className",
+    )?.initializer;
+  const classes = (node: ts.Node): string[] => {
+    const found: string[] = [];
+    const collect = (inner: ts.Node) => {
+      if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) found.push(...inner.text.trim().split(/\s+/));
+      ts.forEachChild(inner, collect);
+    };
+    const initializer = classInitializer(node);
+    if (initializer) collect(initializer);
+    return found;
+  };
+  const isTextPill = (node: ts.Node) => (classInitializer(node)?.getText(sourceFile) ?? "").includes("PILL_HOLDING_TEXT_CLASS");
+  /** Whether an element shows text a person wrote: through PillText, or a name, title, email or key read for showing. */
+  const holdsUserText = (node: ts.Node): boolean => {
+    let found = false;
+    const visit = (inner: ts.Node) => {
+      if (found || ts.isJsxAttribute(inner)) return;
+      if (opening(inner)?.tagName.getText(sourceFile) === "PillText") {
+        found = true;
+        return;
+      }
+      if (ts.isPropertyAccessExpression(inner) && USER_TEXT.test(inner.name.text)) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(inner, visit);
+    };
+    visit(node);
+    return found;
+  };
+  /** The elements laid out in a row: its children, and those a condition or a list puts there. */
+  const rowItems = (row: ts.JsxElement): ts.Node[] => {
+    const items: ts.Node[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        items.push(node);
+        return;
+      }
+      ts.forEachChild(node, collect);
+    };
+    for (const child of row.children) {
+      if (!ts.isJsxText(child)) collect(child);
+    }
+    return items;
+  };
+
+  const lines: number[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node)) {
+      const items = rowItems(node);
+      if (items.some(isTextPill)) {
+        for (const item of items) {
+          if (isTextPill(item) || holdsUserText(item)) continue;
+          if (classes(item).some((name) => GIVES_WAY.test(name))) {
+            lines.push(sourceFile.getLineAndCharacterOfPosition(item.getStart(sourceFile)).line + 1);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(dir, entry.name);
@@ -275,5 +362,37 @@ describe("a pill holding text a person wrote", () => {
       'const h = <span key={doc.key} className="rounded-full px-2" title={doc.title}>Current</span>;',
     ].join("\n");
     expect(userTextPillsNotCutShort("page.tsx", page)).toEqual([1, 3, 5, 8]);
+  });
+
+  it("gives way before the rest of its row, which keeps its size", () => {
+    // Both cut short, a document's "updated" time read "u…" beside a long
+    // document key on a phone. The key gives way; the time stays readable.
+    const offending = sourceFiles(srcDir).flatMap((file) => {
+      const relative = path.relative(srcDir, file).split(path.sep).join("/");
+      return rowMatesThatGiveWay(relative, readFileSync(file, "utf8")).map((line) => `${relative}:${line}`);
+    });
+    expect(offending, "let only the pill give way: shrink-0 on the rest of the row").toEqual([]);
+  });
+
+  it("is told apart from the rest of its row however the row is written", () => {
+    const page = [
+      "const a = (",
+      '  <div className="flex min-w-0 items-center gap-2">',
+      '    <span className={cn("rounded-full border px-2", PILL_HOLDING_TEXT_CLASS)}>',
+      "      <PillText text={doc.key} />",
+      "    </span>",
+      '    <a href={`#document-${doc.key}`} className="truncate text-[11px]">updated {relativeTime(updatedAt)}</a>',
+      '    <span className="shrink-0 text-[11px]">rev {revision}</span>',
+      '    <span className="truncate text-sm">{file.name}</span>',
+      '    {stale ? <span className="min-w-0 truncate">{count} waiting</span> : null}',
+      "  </div>",
+      ");",
+      "const b = (",
+      '  <div className="flex min-w-0">',
+      '    <span className="truncate">{relativeTime(updatedAt)}</span>',
+      "  </div>",
+      ");",
+    ].join("\n");
+    expect(rowMatesThatGiveWay("page.tsx", page)).toEqual([6, 9]);
   });
 });
