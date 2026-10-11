@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../context/ToastContext";
 import { ToastViewport } from "../components/ToastViewport";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ApiError } from "../api/client";
 import { PromptsTab } from "./AgentDetail";
 
 const mockAgentsApi = vi.hoisted(() => ({
@@ -490,5 +491,18 @@ describe("PromptsTab, saving instructions", () => {
     // Still external, with the folder that was typed.
     expect(rootPathInput()?.value).toBe("/srv/prompts");
     expect(saveAction).not.toBeNull();
+  });
+
+  it("says why the instructions cannot be opened, rather than offering an empty editor", async () => {
+    const refusal = "Only an instance admin can open or change instructions kept outside Paperclip.";
+    mockAgentsApi.instructionsBundle.mockRejectedValue(new ApiError(refusal, 403, { error: refusal }));
+    await render();
+
+    await vi.waitFor(() => expect(container.textContent).toContain(refusal));
+    // An empty editor here looked like a new file, and saving it wrote over
+    // the real one.
+    expect(editor()).toBeNull();
+    expect(saveAction).toBeNull();
+    expect(mockAgentsApi.instructionsFile).not.toHaveBeenCalled();
   });
 });

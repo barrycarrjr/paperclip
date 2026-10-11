@@ -25,8 +25,17 @@ import {
   companyService,
   logActivity,
 } from "../services/index.js";
+import { agentInstructionsBundleMode } from "../services/agent-instructions.js";
+import { resolvePortableExportAgentSelection } from "../services/company-portability-agent-selection.js";
 import type { StorageService } from "../storage/types.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import {
+  assertAuthenticated,
+  assertBoard,
+  assertCompanyAccess,
+  assertInstanceAdmin,
+  getActorInfo,
+  hasInstanceAdminAccess,
+} from "./authz.js";
 
 export function companyRoutes(db: Db, storage?: StorageService) {
   const router = Router();
@@ -72,6 +81,29 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     }
     if (actorAgent.role !== "ceo") {
       throw forbidden(`Only CEO agents can manage company ${capability}`);
+    }
+  }
+
+  // An export copies every file in each exported agent's instructions folder.
+  // A folder outside Paperclip's own storage can be anywhere on the host, so
+  // exporting such an agent needs an instance admin, as upstream. This judges
+  // the same agents the export will take.
+  async function assertExternalInstructionExportAllowed(
+    req: Request,
+    companyId: string,
+    input: { include?: { agents?: boolean }; agents?: string[] },
+  ) {
+    if (hasInstanceAdminAccess(req)) return;
+    const includesAgents = input.agents && input.agents.length > 0
+      ? true
+      : input.include?.agents ?? true;
+    if (!includesAgents) return;
+    const companyAgents = await agents.list(companyId, { includeTerminated: true });
+    const selection = resolvePortableExportAgentSelection(companyAgents, input.agents, includesAgents);
+    for (const agent of selection.agents) {
+      if (await agentInstructionsBundleMode(agent) === "external") {
+        throw forbidden("Only an instance admin can export an agent whose instructions are kept outside Paperclip.");
+      }
     }
   }
 
@@ -160,6 +192,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   router.post("/:companyId/export", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
+    await assertExternalInstructionExportAllowed(req, companyId, req.body);
     const result = await portability.exportBundle(companyId, req.body);
     res.json(result);
   });
@@ -198,6 +231,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   router.post("/:companyId/exports/preview", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
+    await assertExternalInstructionExportAllowed(req, companyId, req.body);
     const preview = await portability.previewExport(companyId, req.body);
     res.json(preview);
   });
@@ -205,6 +239,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   router.post("/:companyId/exports", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
+    await assertExternalInstructionExportAllowed(req, companyId, req.body);
     const result = await portability.exportBundle(companyId, req.body);
     res.json(result);
   });

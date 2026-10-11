@@ -41,36 +41,113 @@ describe("agent instructions service", () => {
     }));
   });
 
-  it("calls a bundle external whenever its folder is outside Paperclip's managed folder", () => {
-    const paperclipHome = path.join(os.tmpdir(), "paperclip-bundle-mode-home");
-    process.env.PAPERCLIP_HOME = paperclipHome;
-    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
-    const managedRoot = path.join(
-      paperclipHome,
-      "instances",
-      "test-instance",
-      "companies",
-      "company-1",
-      "agents",
-      "agent-1",
-      "instructions",
-    );
-    const outsideRoot = path.join(os.tmpdir(), "paperclip-bundle-mode-outside");
-    const bundle = (mode: string, rootPath: string) => makeAgent({
+  function managedRootUnder(paperclipHome: string) {
+    return path.join(paperclipHome, "instances", "test-instance", "companies", "company-1", "agents", "agent-1", "instructions");
+  }
+
+  function bundleAt(mode: string, rootPath: string) {
+    return makeAgent({
       instructionsBundleMode: mode,
       instructionsRootPath: rootPath,
       instructionsEntryFile: "AGENTS.md",
       instructionsFilePath: path.join(rootPath, "AGENTS.md"),
     });
+  }
 
-    expect(agentInstructionsBundleMode(bundle("managed", managedRoot))).toBe("managed");
-    expect(agentInstructionsBundleMode(bundle("external", outsideRoot))).toBe("external");
-    expect(agentInstructionsBundleMode(bundle("managed", outsideRoot))).toBe("external");
-    expect(agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(outsideRoot, "AGENTS.md") })))
+  it("calls a bundle external whenever its folder is outside Paperclip's managed folder", async () => {
+    const paperclipHome = path.join(os.tmpdir(), "paperclip-bundle-mode-home");
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const managedRoot = managedRootUnder(paperclipHome);
+    const outsideRoot = path.join(os.tmpdir(), "paperclip-bundle-mode-outside");
+
+    expect(await agentInstructionsBundleMode(bundleAt("managed", managedRoot))).toBe("managed");
+    expect(await agentInstructionsBundleMode(bundleAt("external", outsideRoot))).toBe("external");
+    expect(await agentInstructionsBundleMode(bundleAt("managed", outsideRoot))).toBe("external");
+    expect(await agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(outsideRoot, "AGENTS.md") })))
       .toBe("external");
-    expect(agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(managedRoot, "AGENTS.md") })))
+    expect(await agentInstructionsBundleMode(makeAgent({ instructionsFilePath: path.join(managedRoot, "AGENTS.md") })))
       .toBe("managed");
-    expect(agentInstructionsBundleMode(makeAgent({}))).toBeNull();
+    expect(await agentInstructionsBundleMode(makeAgent({}))).toBeNull();
+  });
+
+  it("calls the managed folder managed when its saved path differs only in letter case, where that is the same folder", async () => {
+    const paperclipHome = path.join(os.tmpdir(), "paperclip-bundle-mode-home");
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    // C: becomes c:, Users becomes uSERS, and so on.
+    const otherCase = [...managedRootUnder(paperclipHome)]
+      .map((char) => (char === char.toUpperCase() ? char.toLowerCase() : char.toUpperCase()))
+      .join("");
+
+    // Windows ignores letter case in paths. Elsewhere this really is another folder.
+    expect(await agentInstructionsBundleMode(bundleAt("managed", otherCase)))
+      .toBe(process.platform === "win32" ? "managed" : "external");
+  });
+
+  it("calls a managed folder saved before the instance moved managed once the service reads the current one", async () => {
+    const oldHome = path.join(os.tmpdir(), "paperclip-bundle-mode-old-home");
+    const paperclipHome = await makeTempDir("paperclip-bundle-mode-moved-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const agent = bundleAt("managed", managedRootUnder(oldHome));
+
+    // Nothing in the current managed folder: the service reads the saved
+    // path, which is outside this instance's storage now.
+    expect(await agentInstructionsBundleMode(agent)).toBe("external");
+
+    // With instructions in the current managed folder, the service reads
+    // those in its place, so the agent counts as managed.
+    const currentRoot = managedRootUnder(paperclipHome);
+    await fs.mkdir(currentRoot, { recursive: true });
+    await fs.writeFile(path.join(currentRoot, "AGENTS.md"), "# Agent\n", "utf8");
+    expect(await agentInstructionsBundleMode(agent)).toBe("managed");
+    await expect(agentInstructionsService().readFile(agent, "AGENTS.md")).resolves.toMatchObject({
+      content: "# Agent\n",
+    });
+  });
+
+  it("calls an old-style instructions file in a subfolder of the managed folder managed", async () => {
+    const paperclipHome = await makeTempDir("paperclip-bundle-mode-legacy-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const managedRoot = managedRootUnder(paperclipHome);
+    await fs.mkdir(path.join(managedRoot, "team"), { recursive: true });
+    await fs.writeFile(path.join(managedRoot, "team", "AGENTS.md"), "# Team agent\n", "utf8");
+    const agent = makeAgent({ instructionsFilePath: path.join(managedRoot, "team", "AGENTS.md") });
+
+    expect(await agentInstructionsBundleMode(agent)).toBe("managed");
+    // As upstream: the managed folder stays the root and the file keeps its subfolder.
+    const bundle = await agentInstructionsService().getBundle(agent);
+    expect(bundle.rootPath).toBe(managedRoot);
+    expect(bundle.entryFile).toBe("team/AGENTS.md");
+  });
+
+  it("refuses an import writing a file name that leaves the managed folder", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-import-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const svc = agentInstructionsService();
+
+    // A company import hands its file names to materializeManagedBundle.
+    // Rooted names on this drive come first: without the check they land
+    // inside the folder, so the test stops there and never writes elsewhere.
+    for (const filePath of [
+      "/escape-check.md",
+      "\\escape-check.md",
+      "\\\\server\\share\\escape-check.md",
+      "\\\\?\\C:\\escape-check.md",
+      "C:\\Windows\\paperclip-instructions-escape-check.md",
+      "E:/paperclip-instructions-escape-check.md",
+    ]) {
+      await expect(
+        svc.materializeManagedBundle(makeAgent({}), { "AGENTS.md": "# Agent\n", [filePath]: "x" }),
+        filePath,
+      ).rejects.toMatchObject({ status: 422 });
+    }
   });
 
   it("copies the existing bundle into the managed root when switching to managed mode", async () => {

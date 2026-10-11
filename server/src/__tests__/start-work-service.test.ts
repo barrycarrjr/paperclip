@@ -835,4 +835,39 @@ describeEmbeddedPostgres("startWorkService.plan", () => {
     expect(mocks.completeOnce).toHaveBeenCalledTimes(1);
     await expectNothingWoken();
   });
+
+  it("a repeated requestKey ignores a newer plan row another company logged against the same issue id", async () => {
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany("Other");
+    const ceo = await seedAgent(companyId, { name: "Ada", role: "ceo" });
+    mocks.completeOnce.mockResolvedValue(reply(plannerJson([
+      { clientKey: "t1", title: "Chase invoices", why: "w", assigneeAgentId: ceo },
+    ])));
+    const requestKey = randomUUID();
+    const svc = startWorkService(db);
+
+    const first = await svc.plan(companyId, { text: "Chase up unpaid invoices", requestKey }, { userId: USER_ID });
+    await db.insert(activityLog).values({
+      companyId: otherCompanyId,
+      actorType: "user",
+      actorId: "user-2",
+      action: "issue.start_work.planned",
+      entityType: "issue",
+      entityId: first.issue.id,
+      details: {
+        source: "start_work",
+        plan: {
+          leftOut: [{ title: "Forged", reason: "written by someone else" }],
+          soundsRecurring: true,
+          recurringNote: "Forged note",
+        },
+      },
+      createdAt: new Date(Date.now() + 60_000),
+    });
+
+    const second = await svc.plan(companyId, { text: "Chase up unpaid invoices", requestKey }, { userId: USER_ID });
+    expect(second.status).toBe("existing");
+    expect(second.leftOut).toEqual(first.leftOut);
+    expect(second.notes).toEqual(first.notes);
+  });
 });

@@ -1,6 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockCompanyService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -14,6 +16,7 @@ const mockCompanyService = vi.hoisted(() => ({
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
+  list: vi.fn(),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
@@ -128,8 +131,13 @@ function createExportResult() {
 }
 
 describe.sequential("company portability routes", () => {
+  const originalPaperclipHome = process.env.PAPERCLIP_HOME;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    // The export check looks for each agent's managed folder on disk.
+    process.env.PAPERCLIP_HOME = path.join(os.tmpdir(), "paperclip-company-portability-routes-home");
+    mockAgentService.list.mockResolvedValue([]);
     mockAgentService.getById.mockImplementation(async (id: string) => ({
       id,
       companyId,
@@ -150,6 +158,80 @@ describe.sequential("company portability routes", () => {
       company: { id: companyId, action: "created" },
       agents: [],
       warnings: [],
+    });
+  });
+
+  afterEach(() => {
+    if (originalPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = originalPaperclipHome;
+  });
+
+  describe.sequential("agents whose instructions are kept outside Paperclip", () => {
+    const outsideRoot = path.resolve("/srv/team-instructions");
+    const writer = { id: "agent-writer", companyId, name: "Writer", status: "idle", adapterConfig: {} };
+    const outsider = {
+      id: "agent-outsider",
+      companyId,
+      name: "Outsider",
+      status: "idle",
+      adapterConfig: {
+        instructionsBundleMode: "external",
+        instructionsRootPath: outsideRoot,
+        instructionsEntryFile: "AGENTS.md",
+        instructionsFilePath: path.join(outsideRoot, "AGENTS.md"),
+      },
+    };
+    const exportPaths = [
+      `/api/companies/${companyId}/export`,
+      `/api/companies/${companyId}/exports`,
+      `/api/companies/${companyId}/exports/preview`,
+    ];
+    const member = { type: "board", userId: "user-1", companyIds: [companyId], source: "session", isInstanceAdmin: false };
+    const ceoAgent = { type: "agent", agentId: ceoAgentId, companyId, source: "agent_key", runId: "run-1" };
+
+    beforeEach(() => {
+      mockAgentService.list.mockResolvedValue([writer, outsider]);
+    });
+
+    it.sequential("refuses a member and a CEO agent on all three export routes", async () => {
+      for (const actor of [member, ceoAgent]) {
+        const app = await createApp(actor);
+        for (const exportPath of exportPaths) {
+          const res = await request(app).post(exportPath).send(exportRequest);
+
+          expect(res.status, `${exportPath}: ${JSON.stringify(res.body)}`).toBe(403);
+          expect(res.body.error).toBe(
+            "Only an instance admin can export an agent whose instructions are kept outside Paperclip.",
+          );
+        }
+      }
+      expect(mockCompanyPortabilityService.exportBundle).not.toHaveBeenCalled();
+      expect(mockCompanyPortabilityService.previewExport).not.toHaveBeenCalled();
+    });
+
+    it.sequential("lets an instance admin export them", async () => {
+      const app = await createApp({ ...member, userId: "admin-1", isInstanceAdmin: true });
+
+      for (const exportPath of exportPaths) {
+        const res = await request(app).post(exportPath).send(exportRequest);
+        expect(res.status, `${exportPath}: ${JSON.stringify(res.body)}`).toBe(200);
+      }
+      expect(mockCompanyPortabilityService.exportBundle).toHaveBeenCalledTimes(2);
+      expect(mockCompanyPortabilityService.previewExport).toHaveBeenCalledTimes(1);
+    });
+
+    it.sequential("lets a member export when the export leaves those agents out", async () => {
+      const app = await createApp(member);
+
+      for (const body of [
+        { ...exportRequest, agents: ["Writer"] },
+        { include: { company: true, agents: false, projects: true } },
+      ]) {
+        for (const exportPath of exportPaths) {
+          const res = await request(app).post(exportPath).send(body);
+          expect(res.status, `${exportPath} ${JSON.stringify(body)}: ${JSON.stringify(res.body)}`).toBe(200);
+        }
+      }
     });
   });
 

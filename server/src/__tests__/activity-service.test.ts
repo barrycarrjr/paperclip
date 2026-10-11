@@ -117,6 +117,46 @@ describeEmbeddedPostgres("activity service", () => {
     expect(result.map((event) => event.action)).toEqual(["test.newest", "test.middle"]);
   });
 
+  it("shows an issue's timeline from its own company only, not a row another company logged against its id", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const issueId = randomUUID();
+    for (const id of [companyId, otherCompanyId]) {
+      await db.insert(companies).values({
+        id,
+        name: "Paperclip",
+        issuePrefix: `T${id.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+    }
+    await db.insert(issues).values({ id: issueId, companyId, title: "Fix run ledger", status: "todo", priority: "medium" });
+    await db.insert(activityLog).values([
+      {
+        companyId,
+        actorType: "user",
+        actorId: "user-1",
+        action: "issue.created",
+        entityType: "issue",
+        entityId: issueId,
+        createdAt: new Date("2026-04-21T10:00:00.000Z"),
+      },
+      {
+        // Logged in another company, naming this issue's id.
+        companyId: otherCompanyId,
+        actorType: "user",
+        actorId: "user-2",
+        action: "issue.updated",
+        entityType: "issue",
+        entityId: issueId,
+        createdAt: new Date("2026-04-21T11:00:00.000Z"),
+      },
+    ]);
+
+    const result = await activityService(db).forIssue(issueId, companyId);
+
+    expect(result.map((event) => event.action)).toEqual(["issue.created"]);
+  });
+
   it("returns compact usage and result summaries for issue runs", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

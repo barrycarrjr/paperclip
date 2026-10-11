@@ -416,12 +416,15 @@ export function startWorkService(db: Db) {
    * exactly this lookup, and this service already writes a row per plan. So
    * this needs no schema change and borrows no column from its real owner.
    */
-  async function storedPlanNotes(containerId: string): Promise<StoredPlanNotes> {
+  async function storedPlanNotes(companyId: string, containerId: string): Promise<StoredPlanNotes> {
     const row = await db
       .select({ details: activityLog.details })
       .from(activityLog)
       .where(
         and(
+          // The plan's own company only: a row logged in another company can
+          // name this issue's id too, and the newest row wins.
+          eq(activityLog.companyId, companyId),
           eq(activityLog.action, PLAN_NOTES_ACTION),
           eq(activityLog.entityType, "issue"),
           eq(activityLog.entityId, containerId),
@@ -462,7 +465,7 @@ export function startWorkService(db: Db) {
       pickAssigneeForCompany(db, companyId),
       usableRoster(companyId),
       instanceSettingsService(db).getGeneral(),
-      storedPlanNotes(container.id),
+      storedPlanNotes(companyId, container.id),
     ]);
     const originalText = (container.description ?? "").replace(CONTAINER_DESCRIPTION_FOOTER, "");
 

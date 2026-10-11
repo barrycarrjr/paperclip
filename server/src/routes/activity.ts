@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -387,7 +387,11 @@ export function activityRoutes(db: Db) {
   });
 
   router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {
-    assertBoard(req);
+    // assertBoard(req);
+    // Instance admins only. Nothing in Paperclip or its plugins posts here, and
+    // the rest of a row is free text that issue timelines and Start Work read
+    // back, so a member could otherwise add rows that pass for real events.
+    assertInstanceAdmin(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     // Recorded as the caller. Taking the actor from the body let a caller log
@@ -413,7 +417,7 @@ export function activityRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const result = await svc.forIssue(issue.id);
+    const result = await svc.forIssue(issue.id, issue.companyId);
     res.json(result);
   });
 

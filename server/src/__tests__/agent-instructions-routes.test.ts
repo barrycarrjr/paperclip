@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 const mockAgentService = vi.hoisted(() => ({
@@ -56,6 +58,7 @@ vi.mock("../services/index.js", () => ({
 }));
 
 vi.mock("../adapters/index.js", () => ({
+  findActiveServerAdapter: () => null,
   findServerAdapter: mockFindServerAdapter,
   listAdapterModels: vi.fn(),
 }));
@@ -78,6 +81,8 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../adapters/index.js", () => ({
+    // Null sends PATCH instructions-path to its built-in path keys.
+    findActiveServerAdapter: () => null,
     findServerAdapter: mockFindServerAdapter,
     listAdapterModels: vi.fn(),
   }));
@@ -184,15 +189,26 @@ const COMPANY_MEMBER = {
 };
 const INSTANCE_ADMIN = { ...COMPANY_MEMBER, userId: "admin-1", isInstanceAdmin: true };
 const SAME_AGENT = { type: "agent", agentId: AGENT_ID, companyId: "company-1", source: "agent_key" };
+const EXTERNAL_REFUSAL = "Only an instance admin can open or change instructions kept outside Paperclip.";
+const PATH_REFUSAL = "Instructions file path must stay within the bundle root";
 
 describe("agent instructions bundle routes", () => {
+  const originalPaperclipHome = process.env.PAPERCLIP_HOME;
+  const originalPaperclipInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
+
   beforeEach(() => {
+    // The routes look for the managed folder on disk, so point the instance
+    // somewhere of its own rather than at the real one.
+    process.env.PAPERCLIP_HOME = path.join(os.tmpdir(), "paperclip-agent-instructions-routes-home");
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
     vi.resetModules();
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
     registerModuleMocks();
     vi.clearAllMocks();
+    mockAccessService.canUser.mockReset();
+    mockAgentInstructionsService.deleteFile.mockReset();
     mockSyncInstructionsBundleConfigFromFilePath.mockImplementation((_agent, config) => config);
     mockFindServerAdapter.mockImplementation((_type: string) => ({ type: _type }));
     mockAgentService.getById.mockResolvedValue(makeAgent());
@@ -254,6 +270,13 @@ describe("agent instructions bundle routes", () => {
         instructionsFilePath: "/tmp/agent-1/AGENTS.md",
       },
     });
+  });
+
+  afterEach(() => {
+    if (originalPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = originalPaperclipHome;
+    if (originalPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+    else process.env.PAPERCLIP_INSTANCE_ID = originalPaperclipInstanceId;
   });
 
   it("returns bundle metadata", async () => {
@@ -464,7 +487,7 @@ describe("agent instructions bundle routes", () => {
 
       const file = await requestApp(app, (baseUrl) => request(baseUrl).get(fileUrl));
       expect(file.status, JSON.stringify(file.body)).toBe(403);
-      expect(file.body).toEqual({ error: "Instance admin access required" });
+      expect(file.body).toEqual({ error: EXTERNAL_REFUSAL });
 
       const bundle = await requestApp(app, (baseUrl) => request(baseUrl).get(bundleUrl));
       expect(bundle.status, JSON.stringify(bundle.body)).toBe(403);
@@ -520,6 +543,200 @@ describe("agent instructions bundle routes", () => {
         expect(bundle.status, JSON.stringify(bundle.body)).toBe(200);
       }
       expect(mockAgentInstructionsService.readFile).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("changing instructions kept outside Paperclip's own storage", () => {
+    const query = { companyId: "company-1" };
+    const bundleUrl = `/api/agents/${AGENT_ID}/instructions-bundle`;
+    const fileUrl = `/api/agents/${AGENT_ID}/instructions-bundle/file`;
+    const pathUrl = `/api/agents/${AGENT_ID}/instructions-path`;
+
+    beforeEach(async () => {
+      mockAccessService.canUser.mockResolvedValue(true);
+      // The real sync, so a changed file path turns into the bundle settings
+      // it does on the live server.
+      const actual = await vi.importActual<typeof import("../services/agent-instructions.js")>(
+        "../services/agent-instructions.js",
+      );
+      mockSyncInstructionsBundleConfigFromFilePath.mockImplementation(actual.syncInstructionsBundleConfigFromFilePath);
+      mockAgentInstructionsService.updateBundle.mockResolvedValue({
+        bundle: { mode: "external", rootPath: OUTSIDE_ROOT, entryFile: "AGENTS.md", files: [] },
+        adapterConfig: makeAgentWithInstructions("external", OUTSIDE_ROOT).adapterConfig,
+      });
+      mockAgentInstructionsService.deleteFile.mockResolvedValue({
+        bundle: { mode: "external", rootPath: OUTSIDE_ROOT, entryFile: "AGENTS.md", files: [] },
+        adapterConfig: makeAgentWithInstructions("external", OUTSIDE_ROOT).adapterConfig,
+      });
+    });
+
+    it("refuses a member switching an outside folder to managed, which copies its files in", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+
+      const res = await requestApp(await createApp(COMPANY_MEMBER), (baseUrl) => request(baseUrl)
+        .patch(bundleUrl).query(query).send({ mode: "managed", entryFile: "secret.txt" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body).toEqual({ error: EXTERNAL_REFUSAL });
+      expect(mockAgentInstructionsService.updateBundle).not.toHaveBeenCalled();
+    });
+
+    it("refuses a member pointing managed instructions at an outside folder", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("managed", managedInstructionsRoot()));
+      const app = await createApp(COMPANY_MEMBER);
+
+      const bundle = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(bundleUrl).query(query).send({ mode: "external", rootPath: OUTSIDE_ROOT }));
+      expect(bundle.status, JSON.stringify(bundle.body)).toBe(403);
+      expect(bundle.body).toEqual({ error: EXTERNAL_REFUSAL });
+      expect(mockAgentInstructionsService.updateBundle).not.toHaveBeenCalled();
+
+      const instructionsPath = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(pathUrl).query(query).send({ path: path.join(OUTSIDE_ROOT, "AGENTS.md") }));
+      expect(instructionsPath.status, JSON.stringify(instructionsPath.body)).toBe(403);
+      expect(instructionsPath.body).toEqual({ error: EXTERNAL_REFUSAL });
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a member writing, deleting or re-pointing an outside folder", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+      const app = await createApp(COMPANY_MEMBER);
+
+      const put = await requestApp(app, (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: "AGENTS.md", content: "# Overwritten\n" }));
+      expect(put.status, JSON.stringify(put.body)).toBe(403);
+      const del = await requestApp(app, (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: "notes.md" }));
+      expect(del.status, JSON.stringify(del.body)).toBe(403);
+      const cleared = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(pathUrl).query(query).send({ path: null }));
+      expect(cleared.status, JSON.stringify(cleared.body)).toBe(403);
+
+      for (const res of [put, del, cleared]) expect(res.body).toEqual({ error: EXTERNAL_REFUSAL });
+      expect(mockAgentInstructionsService.writeFile).not.toHaveBeenCalled();
+      expect(mockAgentInstructionsService.deleteFile).not.toHaveBeenCalled();
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("lets an instance admin change it", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("external", OUTSIDE_ROOT));
+      const app = await createApp(INSTANCE_ADMIN);
+
+      const bundle = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(bundleUrl).query(query).send({ mode: "external", rootPath: OUTSIDE_ROOT }));
+      expect(bundle.status, JSON.stringify(bundle.body)).toBe(200);
+      const put = await requestApp(app, (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: "AGENTS.md", content: "# Updated Agent\n" }));
+      expect(put.status, JSON.stringify(put.body)).toBe(200);
+      const del = await requestApp(app, (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: "notes.md" }));
+      expect(del.status, JSON.stringify(del.body)).toBe(200);
+    });
+
+    it("keeps the usual rules for a member changing Paperclip's own managed folder", async () => {
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("managed", managedInstructionsRoot()));
+      const app = await createApp(COMPANY_MEMBER);
+
+      const bundle = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(bundleUrl).query(query).send({ mode: "managed" }));
+      expect(bundle.status, JSON.stringify(bundle.body)).toBe(200);
+      const put = await requestApp(app, (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: "AGENTS.md", content: "# Updated Agent\n" }));
+      expect(put.status, JSON.stringify(put.body)).toBe(200);
+      const del = await requestApp(app, (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: "notes.md" }));
+      expect(del.status, JSON.stringify(del.body)).toBe(200);
+    });
+  });
+
+  describe("instruction file paths that leave the agent's folder", () => {
+    // Another drive, an absolute path on this one, a network share and a
+    // device path. A path on another drive used to be read, written and
+    // deleted there.
+    const ESCAPING_PATHS = [
+      "E:/paperclip-instructions-escape-check.md",
+      "C:\\Windows\\win.ini",
+      "\\\\server\\share\\secret.md",
+      "\\\\?\\C:\\Windows\\win.ini",
+    ];
+    const query = { companyId: "company-1" };
+    const fileUrl = `/api/agents/${AGENT_ID}/instructions-bundle/file`;
+    let paperclipHome = "";
+
+    beforeEach(async () => {
+      paperclipHome = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-instruction-paths-"));
+      process.env.PAPERCLIP_HOME = paperclipHome;
+      // The real service behind the mocked one, on a real managed folder.
+      const actual = await vi.importActual<typeof import("../services/agent-instructions.js")>(
+        "../services/agent-instructions.js",
+      );
+      const real = actual.agentInstructionsService();
+      mockAgentInstructionsService.readFile.mockImplementation(real.readFile);
+      mockAgentInstructionsService.writeFile.mockImplementation(real.writeFile);
+      mockAgentInstructionsService.deleteFile.mockImplementation(real.deleteFile);
+      const root = managedInstructionsRoot();
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(path.join(root, "AGENTS.md"), "# Agent\n", "utf8");
+      mockAgentService.getById.mockResolvedValue(makeAgentWithInstructions("managed", root));
+      mockAccessService.canUser.mockResolvedValue(true);
+    });
+
+    afterEach(async () => {
+      await fs.rm(paperclipHome, { recursive: true, force: true });
+    });
+
+    it.each(ESCAPING_PATHS)("refuses an agent and a member reading %s", async (filePath) => {
+      for (const actor of [SAME_AGENT, COMPANY_MEMBER]) {
+        const res = await requestApp(await createApp(actor), (baseUrl) => request(baseUrl)
+          .get(fileUrl).query({ ...query, path: filePath }));
+        expect(res.status, JSON.stringify(res.body)).toBe(422);
+        expect(res.body.error).toBe(PATH_REFUSAL);
+      }
+    });
+
+    it.each(ESCAPING_PATHS)("refuses a member writing %s", async (filePath) => {
+      const res = await requestApp(await createApp(COMPANY_MEMBER), (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: filePath, content: "# Overwritten\n" }));
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toBe(PATH_REFUSAL);
+    });
+
+    it.each(ESCAPING_PATHS)("refuses a member deleting %s", async (filePath) => {
+      const res = await requestApp(await createApp(COMPANY_MEMBER), (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: filePath }));
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toBe(PATH_REFUSAL);
+    });
+
+    it.each(ESCAPING_PATHS)("refuses an agent writing or deleting %s", async (filePath) => {
+      const app = await createApp(SAME_AGENT);
+      const put = await requestApp(app, (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: filePath, content: "# Overwritten\n" }));
+      expect(put.status, JSON.stringify(put.body)).toBe(403);
+      const del = await requestApp(app, (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: filePath }));
+      expect(del.status, JSON.stringify(del.body)).toBe(403);
+      expect(mockAgentInstructionsService.writeFile).not.toHaveBeenCalled();
+      expect(mockAgentInstructionsService.deleteFile).not.toHaveBeenCalled();
+    });
+
+    it("still writes, reads and deletes a file inside the folder, backslashes and all", async () => {
+      const app = await createApp(COMPANY_MEMBER);
+
+      const put = await requestApp(app, (baseUrl) => request(baseUrl)
+        .put(fileUrl).query(query).send({ path: "docs\\notes.md", content: "# Notes\n" }));
+      expect(put.status, JSON.stringify(put.body)).toBe(200);
+      expect(put.body).toMatchObject({ path: "docs/notes.md", content: "# Notes\n" });
+
+      const get = await requestApp(app, (baseUrl) => request(baseUrl)
+        .get(fileUrl).query({ ...query, path: "docs/notes.md" }));
+      expect(get.status, JSON.stringify(get.body)).toBe(200);
+      expect(get.body).toMatchObject({ content: "# Notes\n" });
+
+      const del = await requestApp(app, (baseUrl) => request(baseUrl)
+        .delete(fileUrl).query({ ...query, path: "docs\\notes.md" }));
+      expect(del.status, JSON.stringify(del.body)).toBe(200);
+      await expect(fs.stat(path.join(managedInstructionsRoot(), "docs", "notes.md"))).rejects.toThrow();
     });
   });
 });
