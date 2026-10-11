@@ -30,6 +30,31 @@ function attachErrorContext(
   }
 }
 
+/**
+ * Errors the body reader (express.json) raises for a body it cannot use,
+ * keyed by its `type`. Each carries its own 4xx status; answering 500 blamed
+ * the server for the caller's request.
+ */
+const BODY_READER_ERRORS: Record<string, string> = {
+  "entity.parse.failed": "The request body is not valid JSON.",
+  "entity.too.large": "The request body is too large.",
+  "entity.verify.failed": "The request body could not be read.",
+  "encoding.unsupported": "The request body uses an encoding this server does not read.",
+  "charset.unsupported": "The request body uses a character set this server does not read.",
+  "request.aborted": "The request ended before its body arrived.",
+  "request.size.invalid": "The request body was not the size it said.",
+  "parameters.too.many": "The request has too many parameters.",
+};
+
+function bodyReaderError(err: unknown): { status: number; message: string } | null {
+  if (!err || typeof err !== "object") return null;
+  const { type, status, statusCode } = err as { type?: unknown; status?: unknown; statusCode?: unknown };
+  if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(BODY_READER_ERRORS, type)) return null;
+  const code = typeof status === "number" ? status : typeof statusCode === "number" ? statusCode : 400;
+  if (code < 400 || code >= 500) return null;
+  return { status: code, message: BODY_READER_ERRORS[type]! };
+}
+
 export function errorHandler(
   err: unknown,
   req: Request,
@@ -58,6 +83,12 @@ export function errorHandler(
 
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Validation error", details: err.errors });
+    return;
+  }
+
+  const bodyError = bodyReaderError(err);
+  if (bodyError) {
+    res.status(bodyError.status).json({ error: bodyError.message });
     return;
   }
 

@@ -181,6 +181,9 @@ export async function createApp(
 ) {
   const app = express();
 
+  // The request logger goes first, so a request the body reader refuses
+  // (malformed JSON, over the size limit) is still logged.
+  app.use(httpLogger);
   app.use(express.json({
     // Company import/export payloads can inline full portable packages.
     // Also has to accommodate plugin API requests that carry inline images
@@ -191,7 +194,7 @@ export async function createApp(
       (req as unknown as { rawBody: Buffer }).rawBody = buf;
     },
   }));
-  app.use(httpLogger);
+  // app.use(httpLogger); moved above express.json
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
     deploymentMode: opts.deploymentMode,
     deploymentExposure: opts.deploymentExposure,
