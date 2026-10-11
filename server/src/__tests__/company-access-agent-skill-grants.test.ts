@@ -14,6 +14,7 @@ import {
   companyMemberships,
   companySkills,
   createDb,
+  environments,
   principalPermissionGrants,
 } from "@paperclipai/db";
 import type { PermissionKey } from "@paperclipai/shared";
@@ -37,7 +38,12 @@ if (!embeddedPostgresSupport.supported) {
 // The refusals each route gave before these grants were enforced.
 const MEMBER_REFUSAL = { error: "Missing permission: agents:create" };
 const AGENT_UPDATE_REFUSAL = { error: "Only CEO or agent creators can modify other agents" };
-const AGENT_SKILL_REFUSAL = { error: "Missing permission: can create agents" };
+const AGENT_CREATE_REFUSAL = { error: "Missing permission: can create agents" };
+// What PATCH tells an agent caller, and a config rollback now tells it too.
+const ROLE_REFUSAL = { error: "Only CEO or board members can change agent roles." };
+const INSTRUCTIONS_REFUSAL = {
+  error: "Agent-authenticated callers cannot modify instructions path or bundle configuration (instructionsFilePath)",
+};
 
 describeEmbeddedPostgres("Company Access agent and skill grants", () => {
   let db!: ReturnType<typeof createDb>;
@@ -71,6 +77,7 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(agents);
+    await db.delete(environments);
     await db.delete(companies);
     await Promise.all(Array.from(cleanupDirs, (dir) => fs.rm(dir, { recursive: true, force: true })));
     cleanupDirs.clear();
@@ -148,8 +155,12 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
   }
 
   // An agent's own permissions live on the agent: grants, or its flags.
-  async function agentActor(companyId: string, keys: PermissionKey[], permissions: Record<string, unknown> = {}) {
-    const agent = await seedAgent(companyId, { name: "Manager", permissions });
+  async function agentActor(
+    companyId: string,
+    keys: PermissionKey[],
+    values: Partial<typeof agents.$inferInsert> = {},
+  ) {
+    const agent = await seedAgent(companyId, { name: "Manager", ...values });
     await seedGrants(companyId, "agent", agent.id, keys);
     return { type: "agent", agentId: agent.id, companyId, source: "agent_key" };
   }
@@ -157,6 +168,40 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
   async function savedAgent(agentId: string) {
     const [row] = await db.select().from(agents).where(eq(agents.id, agentId));
     return row!;
+  }
+
+  // A saved revision of the agent's configuration, with these changes in it.
+  async function seedRevision(target: typeof agents.$inferSelect, changes: Record<string, unknown>) {
+    const snapshot = {
+      name: target.name,
+      role: target.role,
+      title: target.title,
+      reportsTo: target.reportsTo,
+      capabilities: target.capabilities,
+      adapterType: target.adapterType,
+      adapterConfig: target.adapterConfig,
+      runtimeConfig: target.runtimeConfig,
+      defaultEnvironmentId: target.defaultEnvironmentId,
+      budgetMonthlyCents: target.budgetMonthlyCents,
+      metadata: target.metadata,
+    };
+    const [revision] = await db.insert(agentConfigRevisions).values({
+      companyId: target.companyId,
+      agentId: target.id,
+      changedKeys: Object.keys(changes),
+      beforeConfig: snapshot,
+      afterConfig: { ...snapshot, ...changes },
+    }).returning();
+    return revision!;
+  }
+
+  async function seedEnvironment(companyId: string) {
+    const [environment] = await db.insert(environments).values({ companyId, name: "Sandbox" }).returning();
+    return environment!.id;
+  }
+
+  function rollback(http: ReturnType<typeof request>, agentId: string, revisionId: string) {
+    return http.post(`/api/agents/${agentId}/config-revisions/${revisionId}/rollback`).send({});
   }
 
   function clearInstructionsPath(agentId: string) {
@@ -196,14 +241,26 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
       expect((await savedAgent(target.id)).adapterConfig).not.toHaveProperty("instructionsFilePath");
     });
 
-    it("lets a member with only Suggest agent changes read configurations but not change an agent", async () => {
+    it("gives a member with only Suggest agent changes nothing yet", async () => {
       const companyId = await seedCompany();
       const target = await seedAgent(companyId);
       const http = request(app(await member(companyId, ["agents:suggest-changes"])));
 
       const configuration = await http.get(`/api/agents/${target.id}/configuration`);
-      expect(configuration.status, JSON.stringify(configuration.body)).toBe(200);
-      expect(configuration.body.adapterConfig).toMatchObject({ model: "writer-model" });
+      expect(configuration.status, JSON.stringify(configuration.body)).toBe(403);
+      expect(configuration.body).toEqual(MEMBER_REFUSAL);
+
+      const instructions = await http.get(`/api/agents/${target.id}/instructions-bundle/file`).query({ path: "AGENTS.md" });
+      expect(instructions.status, JSON.stringify(instructions.body)).toBe(403);
+      expect(instructions.body).toEqual(MEMBER_REFUSAL);
+
+      // The agent stays visible, without its configuration.
+      const detail = await http.get(`/api/agents/${target.id}`);
+      expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+      expect(detail.body.adapterConfig).toEqual({});
+      const list = await http.get(`/api/companies/${companyId}/agents`);
+      expect(list.status, JSON.stringify(list.body)).toBe(200);
+      expect(list.body.find((row: { id: string }) => row.id === target.id).adapterConfig).toEqual({});
 
       const patched = await http.patch(`/api/agents/${target.id}`).send({ title: "Lead writer" });
       expect(patched.status, JSON.stringify(patched.body)).toBe(403);
@@ -211,21 +268,46 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
       expect((await savedAgent(target.id)).title).toBeNull();
     });
 
-    it("lets an agent with only Configure agents change another agent, and refuses one without it", async () => {
+    it("gives an agent with only Suggest agent changes nothing yet", async () => {
       const companyId = await seedCompany();
       const target = await seedAgent(companyId);
+      const http = request(app(await agentActor(companyId, ["agents:suggest-changes"])));
 
-      const allowed = await request(app(await agentActor(companyId, ["agents:configure"])))
-        .patch(`/api/agents/${target.id}`)
-        .send({ title: "Lead writer" });
+      const configuration = await http.get(`/api/agents/${target.id}/configuration`);
+      expect(configuration.status, JSON.stringify(configuration.body)).toBe(403);
+      expect(configuration.body).toEqual(AGENT_CREATE_REFUSAL);
+
+      const detail = await http.get(`/api/agents/${target.id}`);
+      expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+      expect(detail.body.adapterConfig).toEqual({});
+      const list = await http.get(`/api/companies/${companyId}/agents`);
+      expect(list.status, JSON.stringify(list.body)).toBe(200);
+      expect(list.body.find((row: { id: string }) => row.id === target.id).adapterConfig).toEqual({});
+
+      const patched = await http.patch(`/api/agents/${target.id}`).send({ title: "Lead writer" });
+      expect(patched.status, JSON.stringify(patched.body)).toBe(403);
+      expect(patched.body).toEqual(AGENT_UPDATE_REFUSAL);
+    });
+
+    it("lets an agent with only Configure agents change another agent and read its configuration, and refuses one without it", async () => {
+      const companyId = await seedCompany();
+      const target = await seedAgent(companyId);
+      const configurer = request(app(await agentActor(companyId, ["agents:configure"])));
+      const other = request(app(await agentActor(companyId, [])));
+
+      const allowed = await configurer.patch(`/api/agents/${target.id}`).send({ title: "Lead writer" });
       expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
       expect((await savedAgent(target.id)).title).toBe("Lead writer");
+      const configuration = await configurer.get(`/api/agents/${target.id}/configuration`);
+      expect(configuration.status, JSON.stringify(configuration.body)).toBe(200);
+      expect(configuration.body.adapterConfig).toMatchObject({ model: "writer-model" });
 
-      const refused = await request(app(await agentActor(companyId, [])))
-        .patch(`/api/agents/${target.id}`)
-        .send({ title: "Someone else" });
+      const refused = await other.patch(`/api/agents/${target.id}`).send({ title: "Someone else" });
       expect(refused.status, JSON.stringify(refused.body)).toBe(403);
       expect(refused.body).toEqual(AGENT_UPDATE_REFUSAL);
+      const hidden = await other.get(`/api/agents/${target.id}/configuration`);
+      expect(hidden.status, JSON.stringify(hidden.body)).toBe(403);
+      expect(hidden.body).toEqual(AGENT_CREATE_REFUSAL);
     });
 
     it("refuses a member with neither grant the way it did before", async () => {
@@ -280,11 +362,11 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
 
     it.each([
       ["by grant", ["agents:create"] as PermissionKey[], {}],
-      ["by its canCreateAgents flag", [] as PermissionKey[], { canCreateAgents: true }],
-    ])("keeps an agent that can create agents %s changing other agents and reading their configuration", async (_label, keys, permissions) => {
+      ["by its canCreateAgents flag", [] as PermissionKey[], { permissions: { canCreateAgents: true } }],
+    ])("keeps an agent that can create agents %s changing other agents and reading their configuration", async (_label, keys, values) => {
       const companyId = await seedCompany();
       const target = await seedAgent(companyId);
-      const http = request(app(await agentActor(companyId, keys, permissions)));
+      const http = request(app(await agentActor(companyId, keys, values)));
 
       const patched = await http.patch(`/api/agents/${target.id}`).send({ title: "Lead writer" });
       expect(patched.status, JSON.stringify(patched.body)).toBe(200);
@@ -308,6 +390,161 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
         const configuration = await http.get(`/api/agents/${target.id}/configuration`);
         expect(configuration.status, JSON.stringify(configuration.body)).toBe(200);
       }
+    });
+  });
+
+  // The targets use a non-process adapter: for the process adapter every
+  // setting counts as a host command, which already refuses an agent rollback.
+  describe("Config rollback by an agent caller", () => {
+    it.each([
+      ["Configure agents", ["agents:configure"] as PermissionKey[]],
+      ["agents:create", ["agents:create"] as PermissionKey[]],
+    ])("refuses an agent holding %s a role change by rollback, as PATCH does", async (_label, keys) => {
+      const companyId = await seedCompany();
+      const target = await seedAgent(companyId, { adapterType: "claude_local" });
+      const revision = await seedRevision(target, { role: "cto" });
+      const http = request(app(await agentActor(companyId, keys)));
+
+      const patched = await http.patch(`/api/agents/${target.id}`).send({ role: "cto" });
+      expect(patched.status, JSON.stringify(patched.body)).toBe(403);
+      expect(patched.body).toEqual(ROLE_REFUSAL);
+
+      const rolledBack = await rollback(http, target.id, revision.id);
+      expect(rolledBack.status, JSON.stringify(rolledBack.body)).toBe(403);
+      expect(rolledBack.body).toEqual(ROLE_REFUSAL);
+      expect((await savedAgent(target.id)).role).toBe("general");
+    });
+
+    it("lets the CEO agent roll another agent back to a different role", async () => {
+      const companyId = await seedCompany();
+      const target = await seedAgent(companyId, { adapterType: "claude_local" });
+      const revision = await seedRevision(target, { role: "cto" });
+
+      const res = await rollback(request(app(await agentActor(companyId, [], { role: "ceo" }))), target.id, revision.id);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect((await savedAgent(target.id)).role).toBe("cto");
+    });
+
+    it("refuses an agent an instructions change by rollback, as PATCH does, and allows one that keeps them", async () => {
+      const companyId = await seedCompany();
+      const target = await seedAgent(companyId, {
+        adapterType: "claude_local",
+        adapterConfig: { model: "writer-model", instructionsFilePath: "docs/AGENTS.md" },
+      });
+      const moved = await seedRevision(target, {
+        adapterConfig: { model: "writer-model", instructionsFilePath: "docs/OTHER.md" },
+      });
+      const removed = await seedRevision(target, { adapterConfig: { model: "writer-model" } });
+      const retitled = await seedRevision(target, { title: "Lead writer" });
+      const http = request(app(await agentActor(companyId, ["agents:configure"])));
+
+      const patched = await http.patch(`/api/agents/${target.id}`).send({
+        adapterConfig: { instructionsFilePath: "docs/OTHER.md" },
+      });
+      expect(patched.status, JSON.stringify(patched.body)).toBe(403);
+      expect(patched.body).toEqual(INSTRUCTIONS_REFUSAL);
+
+      for (const revision of [moved, removed]) {
+        const res = await rollback(http, target.id, revision.id);
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body).toEqual(INSTRUCTIONS_REFUSAL);
+      }
+      expect((await savedAgent(target.id)).adapterConfig).toEqual({
+        model: "writer-model",
+        instructionsFilePath: "docs/AGENTS.md",
+      });
+
+      const kept = await rollback(http, target.id, retitled.id);
+      expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+      expect(await savedAgent(target.id)).toMatchObject({
+        title: "Lead writer",
+        adapterConfig: { model: "writer-model", instructionsFilePath: "docs/AGENTS.md" },
+      });
+    });
+
+    const selfChanges: Array<[string, (companyId: string) => Promise<Record<string, unknown>>, string]> = [
+      ["budgetMonthlyCents", async () => ({ budgetMonthlyCents: 1000 }), "'budgetMonthlyCents'"],
+      ["adapterType", async () => ({ adapterType: "codex_local" }), "'adapterType'"],
+      [
+        "defaultEnvironmentId",
+        async (companyId) => ({ defaultEnvironmentId: await seedEnvironment(companyId) }),
+        "'defaultEnvironmentId'",
+      ],
+      ["role", async () => ({ role: "cto" }), "'role'"],
+      [
+        "adapterConfig.dangerouslySkipPermissions",
+        async () => ({ adapterConfig: { model: "writer-model", dangerouslySkipPermissions: true } }),
+        "adapterConfig.dangerouslySkipPermissions",
+      ],
+    ];
+
+    it.each(selfChanges)("refuses an agent rolling itself back to a different %s, as PATCH does", async (_label, changesFor, what) => {
+      const companyId = await seedCompany();
+      const actor = await agentActor(companyId, [], { adapterType: "claude_local", budgetMonthlyCents: 5000 });
+      const self = await savedAgent(actor.agentId);
+      const changes = await changesFor(companyId);
+      const revision = await seedRevision(self, changes);
+      const http = request(app(actor));
+      const refusal = { error: `Agents cannot self-modify ${what}; ask a CEO or board member.` };
+
+      const patched = await http.patch(`/api/agents/${self.id}`).send(changes);
+      expect(patched.status, JSON.stringify(patched.body)).toBe(403);
+      expect(patched.body).toEqual(refusal);
+
+      const rolledBack = await rollback(http, self.id, revision.id);
+      expect(rolledBack.status, JSON.stringify(rolledBack.body)).toBe(403);
+      expect(rolledBack.body).toEqual(refusal);
+      expect(await savedAgent(self.id)).toEqual(self);
+    });
+
+    it("lets an agent roll itself back when only allowed fields change, and roll another agent's budget and adapter type back", async () => {
+      const companyId = await seedCompany();
+      const actor = await agentActor(companyId, ["agents:configure"], { adapterType: "claude_local" });
+      const self = await savedAgent(actor.agentId);
+      const http = request(app(actor));
+
+      const retitled = await seedRevision(self, { title: "Release manager" });
+      const own = await rollback(http, self.id, retitled.id);
+      expect(own.status, JSON.stringify(own.body)).toBe(200);
+      expect((await savedAgent(self.id)).title).toBe("Release manager");
+
+      const target = await seedAgent(companyId, { adapterType: "claude_local", budgetMonthlyCents: 5000 });
+      const revision = await seedRevision(target, { budgetMonthlyCents: 1000, adapterType: "codex_local" });
+      const other = await rollback(http, target.id, revision.id);
+      expect(other.status, JSON.stringify(other.body)).toBe(200);
+      expect(await savedAgent(target.id)).toMatchObject({ budgetMonthlyCents: 1000, adapterType: "codex_local" });
+    });
+
+    it("leaves rollbacks by people unchanged", async () => {
+      const companyId = await seedCompany();
+      const target = await seedAgent(companyId, {
+        adapterType: "claude_local",
+        adapterConfig: { model: "writer-model", instructionsFilePath: "docs/AGENTS.md" },
+      });
+      const roleRevision = await seedRevision(target, { role: "cto" });
+      const instructionsRevision = await seedRevision(target, {
+        adapterConfig: { model: "writer-model", instructionsFilePath: "docs/OTHER.md" },
+      });
+      const creator = request(app(await member(companyId, ["agents:create"])));
+      const localBoard = request(app({
+        type: "board",
+        userId: "local-board",
+        companyIds: [companyId],
+        source: "local_implicit",
+        isInstanceAdmin: false,
+      }));
+
+      const role = await rollback(creator, target.id, roleRevision.id);
+      expect(role.status, JSON.stringify(role.body)).toBe(200);
+      expect((await savedAgent(target.id)).role).toBe("cto");
+
+      const instructions = await rollback(localBoard, target.id, instructionsRevision.id);
+      expect(instructions.status, JSON.stringify(instructions.body)).toBe(200);
+      expect((await savedAgent(target.id)).adapterConfig).toEqual({
+        model: "writer-model",
+        instructionsFilePath: "docs/OTHER.md",
+      });
     });
   });
 
@@ -336,7 +573,7 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
         .post(`/api/companies/${companyId}/skills`)
         .send({ name: "Changelog" });
       expect(refused.status, JSON.stringify(refused.body)).toBe(403);
-      expect(refused.body).toEqual(AGENT_SKILL_REFUSAL);
+      expect(refused.body).toEqual(AGENT_CREATE_REFUSAL);
     });
 
     it.each([
@@ -358,7 +595,7 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
       const actors = [
         await member(companyId, ["agents:create"]),
         await agentActor(companyId, ["agents:create"]),
-        await agentActor(companyId, [], { canCreateAgents: true }),
+        await agentActor(companyId, [], { permissions: { canCreateAgents: true } }),
       ];
 
       for (const [index, actor] of actors.entries()) {

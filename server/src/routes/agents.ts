@@ -218,6 +218,27 @@ export function agentRoutes(
     "instructionsFilePath",
     "agentsMdPath",
   ] as const;
+  // What an agent may not change on itself, by PATCH or by config rollback.
+  const FORBIDDEN_SELF_FIELDS = [
+    "role",
+    "budgetMonthlyCents",
+    "spentMonthlyCents",
+    "defaultEnvironmentId",
+    "status",
+    "adapterType",
+  ] as const;
+  const FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS = [
+    "command",
+    "args",
+    "extraArgs",
+    "cwd",
+    "env",
+    "dangerouslySkipPermissions",
+    "dangerouslyBypassApprovalsAndSandbox",
+    "dangerouslyBypassSandbox",
+    "secretBindings",
+    "secrets",
+  ] as const;
 
   const router = Router();
   const svc = agentService(db);
@@ -372,15 +393,14 @@ export function agentRoutes(
     }
   }
 
-  // "Configure agents" (agents:configure) and "Suggest agent changes"
-  // (agents:suggest-changes) from Company Access, decided by the shared
-  // authorization rules. They add to agents:create and never replace it.
-  // Applying a suggested change needs a person to accept it first, and this
-  // server has no check for that, so a suggest grant on its own only reads.
+  // "Configure agents" (agents:configure) from Company Access, decided by the
+  // shared authorization rules. It adds to agents:create and never replaces
+  // it. "Suggest agent changes" grants nothing yet: applying a suggestion
+  // needs a person to accept it first, and this server has no check for that.
   async function canReadConfigurationsByGrant(req: Request, companyId: string) {
     const decision = await access.decide({
       actor: req.actor as AuthorizationActor,
-      action: "agent_config:read",
+      action: "agents:configure",
       resource: { type: "company", companyId },
     });
     return decision.allowed;
@@ -890,6 +910,62 @@ export function agentRoutes(
     throw forbidden(
       `Agent-authenticated callers cannot modify instructions path or bundle configuration (${changedSensitiveKeys.join(", ")})`,
     );
+  }
+
+  // A rollback restores a whole saved configuration, so an agent caller gets
+  // the refusals PATCH gives for the same changes. Each changed adapter setting
+  // holds the restored value, or null where the rollback removes it. A value
+  // the snapshot lacks or holds badly is left to the rollback, which refuses an
+  // invalid snapshot.
+  async function assertAgentCanRestoreConfigSnapshot(
+    req: Request,
+    existing: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
+    snapshot: Record<string, unknown>,
+  ) {
+    if (req.actor.type !== "agent") return;
+    const restoredFields = {
+      role: typeof snapshot.role === "string" && snapshot.role.length > 0 ? snapshot.role : existing.role,
+      budgetMonthlyCents:
+        typeof snapshot.budgetMonthlyCents === "number" && Number.isFinite(snapshot.budgetMonthlyCents)
+          ? Math.max(0, Math.floor(snapshot.budgetMonthlyCents))
+          : existing.budgetMonthlyCents,
+      defaultEnvironmentId: typeof snapshot.defaultEnvironmentId === "string" ? snapshot.defaultEnvironmentId : null,
+      adapterType:
+        typeof snapshot.adapterType === "string" && snapshot.adapterType.length > 0
+          ? snapshot.adapterType
+          : existing.adapterType,
+    };
+    const changedFields = new Set<string>(
+      (Object.keys(restoredFields) as Array<keyof typeof restoredFields>).filter(
+        (field) => restoredFields[field] !== (existing[field] ?? null),
+      ),
+    );
+    const currentConfig = asRecord(existing.adapterConfig) ?? {};
+    const restoredConfig = asRecord(snapshot.adapterConfig) ?? {};
+    const changedConfig = Object.fromEntries(
+      [...new Set([...Object.keys(currentConfig), ...Object.keys(restoredConfig)])]
+        .filter((key) => JSON.stringify(currentConfig[key]) !== JSON.stringify(restoredConfig[key]))
+        .map((key) => [key, restoredConfig[key] ?? null]),
+    );
+
+    if (req.actor.agentId === existing.id) {
+      const field = FORBIDDEN_SELF_FIELDS.find((name) => changedFields.has(name));
+      if (field) {
+        throw forbidden(`Agents cannot self-modify '${field}'; ask a CEO or board member.`);
+      }
+      const key = FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS.find((name) => hasOwn(changedConfig, name));
+      if (key) {
+        throw forbidden(`Agents cannot self-modify adapterConfig.${key}; ask a CEO or board member.`);
+      }
+    }
+    if (changedFields.has("role")) {
+      const actorAgent = await svc.getById(req.actor.agentId!);
+      if (!actorAgent || actorAgent.role !== "ceo") {
+        throw forbidden("Only CEO or board members can change agent roles.");
+      }
+    }
+    assertNoAgentInstructionsConfigMutation(req, changedConfig);
+    assertNoAgentHostWorkspaceCommandMutation(req, collectAgentAdapterWorkspaceCommandPaths(changedConfig));
   }
 
   function summarizeAgentUpdateDetails(patch: Record<string, unknown>) {
@@ -1680,6 +1756,7 @@ export function agentRoutes(
       const revision = await svc.getConfigRevision(id, revisionId);
       const snapshot = asRecord(revision?.afterConfig);
       if (snapshot) {
+        await assertAgentCanRestoreConfigSnapshot(req, existing, snapshot);
         assertNoAgentHostExecutionMutation(
           req,
           collectAgentAdapterHostExecutionPaths(
@@ -2623,14 +2700,6 @@ export function agentRoutes(
     const isSelfPatch =
       req.actor.type === "agent" && req.actor.agentId === existing.id;
     if (isSelfPatch) {
-      const FORBIDDEN_SELF_FIELDS = [
-        "role",
-        "budgetMonthlyCents",
-        "spentMonthlyCents",
-        "defaultEnvironmentId",
-        "status",
-        "adapterType",
-      ] as const;
       for (const field of FORBIDDEN_SELF_FIELDS) {
         if (hasOwn(req.body as object, field)) {
           throw forbidden(
@@ -2647,18 +2716,6 @@ export function agentRoutes(
 
       if (hasOwn(req.body as object, "adapterConfig")) {
         const incomingAdapterConfig = asRecord((req.body as Record<string, unknown>).adapterConfig) ?? {};
-        const FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS = [
-          "command",
-          "args",
-          "extraArgs",
-          "cwd",
-          "env",
-          "dangerouslySkipPermissions",
-          "dangerouslyBypassApprovalsAndSandbox",
-          "dangerouslyBypassSandbox",
-          "secretBindings",
-          "secrets",
-        ] as const;
         for (const key of FORBIDDEN_SELF_ADAPTER_CONFIG_KEYS) {
           if (hasOwn(incomingAdapterConfig, key)) {
             throw forbidden(
