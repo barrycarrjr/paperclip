@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -19,6 +20,7 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { calendarRoutes } from "../routes/calendar.js";
 import { internalNotificationRoutes } from "../routes/internal-notifications.js";
+import { rememberPersonalCompany } from "../services/personal-companies.js";
 
 /**
  * HTTP-level (supertest) runtime verification of the calendar/event routes.
@@ -53,6 +55,7 @@ if (!embeddedPostgresSupport.supported) {
 
 const USER_A = "user-a";
 const USER_B = "user-b";
+const OWNER = "owner-user";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -93,6 +96,63 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
       isPortfolioRoot: opts.isPortfolioRoot ?? false,
     });
     return companyId;
+  }
+
+  /** A Personal company, registered with the in-memory owner index the access check reads. */
+  async function seedPersonalCompany(ownerUserId: string) {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Personal",
+      issuePrefix: `P${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+      kind: "personal",
+      ownerUserId,
+    });
+    rememberPersonalCompany(companyId, ownerUserId);
+    return companyId;
+  }
+
+  /** A person signed in to the web app with a browser session. */
+  function boardSessionActor(
+    userId: string,
+    companyIds: string[],
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      type: "board",
+      userId,
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds,
+      memberships: companyIds.map((companyId) => ({ companyId, membershipRole: "owner", status: "active" })),
+      ...extra,
+    };
+  }
+
+  /** Creates a one-off desktop reminder, fires it, and returns its pending delivery id. */
+  async function fireDesktopReminder(actor: Record<string, unknown>, companyId: string, title: string) {
+    const app = createApp(actor);
+    const createRes = await request(app)
+      .post(`/api/companies/${companyId}/events`)
+      .send({ title, scheduleKind: "once", channels: ["desktop"], anchorAt: "2026-08-03T09:00:00-04:00" });
+    expect(createRes.status, JSON.stringify(createRes.body)).toBe(201);
+    expect((await request(app).post(`/api/events/${createRes.body.id}/fire`)).status).toBe(200);
+    const [delivery] = await db
+      .select({ id: calendarEventDeliveries.id, channel: calendarEventDeliveries.channel })
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.eventId, createRes.body.id as string))
+      .then((rows) => rows.filter((row) => row.channel === "desktop"));
+    expect(delivery).toBeDefined();
+    return delivery!.id;
+  }
+
+  async function desktopDeliveryStatus(deliveryId: string) {
+    const [row] = await db
+      .select({ status: calendarEventDeliveries.status })
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.id, deliveryId));
+    return row?.status;
   }
 
   /**
@@ -537,6 +597,88 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     const app = createApp({ type: "none", source: "none" }, { remoteAddress: "203.0.113.7" });
     const res = await request(app).get("/api/internal/desktop-notifications/pending");
     expect(res.status).toBe(401);
+  });
+
+  it("shows and dismisses only the signed-in person's own desktop reminders", async () => {
+    const companyId = await seedCompany();
+    const bobPersonalId = await seedPersonalCompany(USER_B);
+    const mine = await fireDesktopReminder(toolSessionActor(USER_A, companyId), companyId, "Viewer's own reminder");
+    const bobs = await fireDesktopReminder(
+      toolSessionActor(USER_B, bobPersonalId),
+      bobPersonalId,
+      "Divorce lawyer, 3pm",
+    );
+
+    // A viewer of one company, signed in from another machine.
+    const viewerApp = createApp(
+      boardSessionActor(USER_A, [companyId], {
+        memberships: [{ companyId, membershipRole: "viewer", status: "active" }],
+      }),
+      { remoteAddress: "203.0.113.7" },
+    );
+
+    const pendingRes = await request(viewerApp).get("/api/internal/desktop-notifications/pending");
+    expect(pendingRes.status).toBe(200);
+    const ids = (pendingRes.body.notifications as Array<{ id: string }>).map((n) => n.id);
+    expect(ids).toContain(mine);
+    expect(ids).not.toContain(bobs);
+    expect(JSON.stringify(pendingRes.body)).not.toContain("Divorce lawyer");
+
+    const ackRes = await request(viewerApp)
+      .post("/api/internal/desktop-notifications/ack")
+      .send({ ids: [bobs, mine] });
+    expect(ackRes.status).toBe(200);
+    expect(ackRes.body.acknowledged).toEqual([mine]);
+    // Bob's reminder is still waiting for Bob.
+    expect(await desktopDeliveryStatus(bobs)).toBe("pending");
+  });
+
+  it("refuses a Clippy session that carries no person", async () => {
+    const companyId = await seedCompany();
+    const app = createApp({ type: "tool_session", companyId, source: "tool_session" });
+
+    const res = await request(app).get("/api/internal/desktop-notifications/pending");
+    expect(res.status).toBe(403);
+  });
+
+  it("leaves the owner's reminders as they were, on the keyless tray and signed in", async () => {
+    // The owner: an instance admin, the HQ owner, and the owner of his own Personal.
+    const hqId = await seedCompany({ isPortfolioRoot: true });
+    const workId = await seedCompany();
+    const ownerPersonalId = await seedPersonalCompany(OWNER);
+    const otherPersonalId = await seedPersonalCompany(USER_B);
+    const owner = boardSessionActor(OWNER, [hqId, workId, ownerPersonalId], {
+      isInstanceAdmin: true,
+      isPortfolioRootUserAdmin: true,
+    });
+    const fromPersonal = await fireDesktopReminder(owner, ownerPersonalId, "Owner's personal reminder");
+    const fromWork = await fireDesktopReminder(owner, workId, "Owner's work reminder");
+    const someoneElses = await fireDesktopReminder(
+      toolSessionActor(USER_B, otherPersonalId),
+      otherPersonalId,
+      "Someone else's reminder",
+    );
+
+    // The tray he runs today polls keyless over loopback, and still gets his reminders.
+    const trayApp = createApp({ type: "none", source: "none" }, { remoteAddress: "127.0.0.1" });
+    const trayRes = await request(trayApp).get("/api/internal/desktop-notifications/pending");
+    expect(trayRes.status).toBe(200);
+    const trayIds = (trayRes.body.notifications as Array<{ id: string }>).map((n) => n.id);
+    expect(trayIds).toEqual(expect.arrayContaining([fromPersonal, fromWork]));
+
+    // Signed in as himself, he sees and dismisses his own, from every company.
+    const ownerApp = createApp(owner, { remoteAddress: "203.0.113.7" });
+    const ownRes = await request(ownerApp).get("/api/internal/desktop-notifications/pending");
+    expect(ownRes.status).toBe(200);
+    const ownIds = (ownRes.body.notifications as Array<{ id: string }>).map((n) => n.id);
+    expect([...ownIds].sort()).toEqual([fromPersonal, fromWork].sort());
+
+    const ackRes = await request(ownerApp)
+      .post("/api/internal/desktop-notifications/ack")
+      .send({ ids: [fromPersonal, fromWork] });
+    expect(ackRes.status).toBe(200);
+    expect([...(ackRes.body.acknowledged as string[])].sort()).toEqual([fromPersonal, fromWork].sort());
+    expect(await desktopDeliveryStatus(someoneElses)).toBe("pending");
   });
 
   // --- 5. Portfolio gating ----------------------------------------------------

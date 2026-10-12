@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import express, { Router } from "express";
 import type { Request, Response } from "express";
 import JSZip from "jszip";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, notInArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -38,7 +38,11 @@ import {
   projects,
 } from "@paperclipai/db";
 import type {
+  JsonSchema,
   PluginApiRouteDeclaration,
+  PluginConfig,
+  PluginConfigCopy,
+  PluginConfigCoverage,
   PluginStatus,
   PaperclipPluginManifestV1,
   PluginBridgeErrorCode,
@@ -58,6 +62,12 @@ import {
 } from "@paperclipai/shared";
 import type { PluginOperationPolicy } from "@paperclipai/shared";
 import { pluginConnectorService } from "../services/plugin-connectors.js";
+import {
+  type ConfigViewer,
+  keepUnseenParts,
+  pluginConfigVisibleTo,
+} from "../services/plugin-config-visibility.js";
+import { isPersonalCompany, personalCompanyIds } from "../services/personal-companies.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import {
   getPluginUiContributionMetadata,
@@ -83,6 +93,7 @@ import {
   assertInstanceAdmin,
   getActorInfo,
   hasBoardOrgAccess,
+  hasCompanyAccess,
   hasInstanceAdminAccess,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
@@ -447,6 +458,66 @@ interface PluginToolExecuteRequest {
 }
 
 /**
+ * Whether a company named in plugin data may be shown to this caller.
+ *
+ * A plugin serves every company from one instance-wide config, so its connector
+ * lists, config, logs and run history name companies the caller may not be in.
+ * A caller sees the companies they can read. An instance admin looks after
+ * plugins for everyone, so also sees every other company, except someone
+ * else's Personal.
+ */
+function canSeePluginCompany(req: Request, companyId: string): boolean {
+  if (hasCompanyAccess(req, companyId, "read")) return true;
+  return hasInstanceAdminAccess(req) && !isPersonalCompany(companyId);
+}
+
+/** Personal companies whose plugin rows this caller must not see: everyone else's. */
+function othersPersonalCompanyIds(req: Request): string[] {
+  return [...personalCompanyIds()].filter((companyId) => !hasCompanyAccess(req, companyId, "read"));
+}
+
+/**
+ * Who a copy of a plugin's config is cut for. Given the `coverage` a save sends
+ * back, it is also no wider than the copy that was edited, so the save
+ * replaces only what that copy showed, whatever the caller's role is by the
+ * time they save.
+ */
+function configViewer(
+  req: Request,
+  companyIds: ReadonlySet<string>,
+  coverage: PluginConfigCoverage | null,
+): ConfigViewer {
+  const admin = hasInstanceAdminAccess(req);
+  const covered = coverage ? new Set(coverage.companyIds) : null;
+  return {
+    canSeeCompany: (companyId) => {
+      if (!canSeePluginCompany(req, companyId)) return false;
+      if (!coverage || !covered) return true;
+      // An id that is no company's was only ever shown to an instance admin.
+      return companyIds.has(companyId) ? covered.has(companyId) : coverage.admin;
+    },
+    isCompanyId: (value) => companyIds.has(value),
+    // Entries not yet given a company are being set up, which is an admin's job.
+    seesUnassigned: admin && (!coverage || coverage.admin),
+  };
+}
+
+/** The `coverage` a config save sends back, or null when it sends none. */
+function readConfigCoverage(raw: unknown): PluginConfigCoverage | null {
+  if (raw === undefined || raw === null) return null;
+  const candidate = raw as { companyIds?: unknown; admin?: unknown };
+  if (
+    typeof raw !== "object" ||
+    !Array.isArray(candidate.companyIds) ||
+    !candidate.companyIds.every((companyId) => typeof companyId === "string") ||
+    typeof candidate.admin !== "boolean"
+  ) {
+    throw badRequest('"coverage" must be the coverage the config copy came with');
+  }
+  return { companyIds: candidate.companyIds as string[], admin: candidate.admin };
+}
+
+/**
  * Create Express router for plugin management API.
  *
  * Routes provided:
@@ -507,6 +578,37 @@ export function pluginRoutes(
     workerManager: bridgeDeps?.workerManager ?? webhookDeps?.workerManager,
   });
   const issuesSvc = issueService(db);
+
+  async function allCompanyIds(): Promise<Set<string>> {
+    return new Set((await db.select({ id: companies.id }).from(companies)).map((row) => row.id));
+  }
+
+  /**
+   * A plugin's config as this caller may see it, saying what the copy holds,
+   * which a save of it sends back.
+   */
+  async function configCopyFor(
+    req: Request,
+    config: PluginConfig,
+    schema: JsonSchema | undefined,
+  ): Promise<PluginConfigCopy> {
+    const companyIds = await allCompanyIds();
+    const viewer = configViewer(req, companyIds, null);
+    const stored = config.configJson ?? {};
+    const configJson = pluginConfigVisibleTo(stored, schema, viewer);
+    const admin = hasInstanceAdminAccess(req);
+    const seen = [...companyIds].filter((companyId) => viewer.canSeeCompany(companyId));
+    const coverage = admin && seen.length === companyIds.size ? null : { companyIds: seen, admin };
+    return {
+      ...config,
+      configJson,
+      // Free text from the plugin, which can be about any part, so only on a copy holding every part.
+      lastError: coverage === null ? config.lastError : null,
+      editable: admin,
+      trimmed: JSON.stringify(configJson) !== JSON.stringify(stored),
+      coverage,
+    };
+  }
 
   function matchScopedApiRoute(route: PluginApiRouteDeclaration, method: string, requestPath: string) {
     if (route.method !== method) return null;
@@ -1072,6 +1174,9 @@ export function pluginRoutes(
    * An empty array means no installed plugin declares a connector for the
    * surface, and the calling page should render nothing at all.
    *
+   * Each connector lists only the companies the caller may see, and only the
+   * accounts serving one of them (see `canSeePluginCompany`).
+   *
    * Response: PluginConnectorStatus[]
    */
   router.get("/plugins/connectors", async (req, res) => {
@@ -1086,7 +1191,11 @@ export function pluginRoutes(
       return;
     }
 
-    res.json(await connectors.listForSurface(surface));
+    res.json(await connectors.listForSurface(surface, {
+      canSeeCompany: (companyId) => canSeePluginCompany(req, companyId),
+      // Accounts not yet given a company are being set up, which is an admin's job.
+      seesUnassignedAccounts: hasInstanceAdminAccess(req),
+    }));
   });
 
   // ===========================================================================
@@ -2934,10 +3043,13 @@ export function pluginRoutes(
    * - level: Filter by log level (info, warn, error, debug)
    * - since: ISO timestamp to filter logs newer than this time
    *
+   * Instance admins only: a plugin logs for every company it serves. Lines
+   * from someone else's Personal company are left out even then.
+   *
    * Response: Array of log entries, newest first.
    */
   router.get("/plugins/:pluginId/logs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -2951,6 +3063,10 @@ export function pluginRoutes(
     const since = req.query.since as string | undefined;
 
     const conditions = [eq(pluginLogs.pluginId, plugin.id)];
+    const hiddenCompanyIds = othersPersonalCompanyIds(req);
+    if (hiddenCompanyIds.length > 0) {
+      conditions.push(or(isNull(pluginLogs.companyId), notInArray(pluginLogs.companyId, hiddenCompanyIds))!);
+    }
     if (level) {
       conditions.push(eq(pluginLogs.level, level));
     }
@@ -3256,10 +3372,17 @@ export function pluginRoutes(
    *
    * Retrieve the current instance configuration for a plugin.
    *
-   * Returns the `PluginConfig` record if one exists, or `null` if the plugin
-   * has not yet been configured.
+   * Returns the caller's copy of the config (`PluginConfigCopy`) if one
+   * exists, or `null` if the plugin has not yet been configured.
    *
-   * Response: `PluginConfig | null`
+   * Company pages read this to see whether their company has an account, so
+   * anyone in a company may call it. Each caller gets only the parts for
+   * companies they can see (see `canSeePluginCompany`): instance admins get
+   * everything except other people's Personal parts. The copy says what it
+   * holds (`coverage`), and a save of it sends that back, so the save replaces
+   * only that part and keeps the rest.
+   *
+   * Response: `PluginConfigCopy | null`
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/config", async (req, res) => {
@@ -3273,7 +3396,7 @@ export function pluginRoutes(
     }
 
     const config = await registry.getConfig(plugin.id);
-    res.json(config);
+    res.json(config ? await configCopyFor(req, config, plugin.manifestJson?.instanceConfigSchema) : null);
   });
 
   /**
@@ -3281,16 +3404,22 @@ export function pluginRoutes(
    *
    * Save (create or replace) the instance configuration for a plugin.
    *
-   * The caller provides the full `configJson` object. The server persists it
-   * via `registry.upsertConfig()`.
+   * The caller provides their whole copy of the config, as `GET` gave it to
+   * them and with their changes, and the `coverage` that copy came with. Only
+   * the part the copy held is replaced: everything it left out is kept, even
+   * if the caller could see more by the time they save (see
+   * `keepUnseenParts`). Without `coverage` the copy counts as one made for the
+   * caller as they are now, so a copy holding everything replaces everything.
    *
    * Request body:
    * - `configJson`: Configuration values matching the plugin's `instanceConfigSchema`
+   * - `coverage` (optional): The `coverage` of the copy being saved
    *
-   * Response: `PluginConfig`
+   * Response: `PluginConfigCopy`, the caller's copy of what was saved
    * Errors:
    * - 400 if request validation fails
    * - 404 if plugin not found
+   * - 409 if the save would remove parts the copy left out
    */
   router.post("/plugins/:pluginId/config", async (req, res) => {
     assertInstanceAdmin(req);
@@ -3302,11 +3431,12 @@ export function pluginRoutes(
       return;
     }
 
-    const body = req.body as { configJson?: Record<string, unknown> } | undefined;
+    const body = req.body as { configJson?: Record<string, unknown>; coverage?: unknown } | undefined;
     if (!body?.configJson || typeof body.configJson !== "object") {
       res.status(400).json({ error: '"configJson" is required and must be an object' });
       return;
     }
+    const coverage = readConfigCoverage(body.coverage);
 
     // Strip devUiUrl unless the caller is an instance admin. devUiUrl activates
     // a dev-proxy in the static file route that could be abused for SSRF if any
@@ -3318,12 +3448,23 @@ export function pluginRoutes(
       delete body.configJson.devUiUrl;
     }
 
-    // Validate configJson against the plugin's instanceConfigSchema (if declared).
-    // This ensures CLI/API callers get the same validation the UI performs client-side.
+    // Put back everything the saved copy left out, so a save never removes
+    // what the saver was not shown.
     const schema = plugin.manifestJson?.instanceConfigSchema;
+    const stored = await registry.getConfig(plugin.id);
+    const companyIds = await allCompanyIds();
+    const configJson = stored
+      ? keepUnseenParts(stored.configJson ?? {}, body.configJson, schema, configViewer(req, companyIds, coverage))
+      : body.configJson;
+
+    // Validate against the plugin's instanceConfigSchema (if declared). This
+    // ensures CLI/API callers get the same validation the UI performs
+    // client-side. Either the copy as sent or the config as it will be stored
+    // may pass: a part the saver cannot see must not stop them saving, and a
+    // required field their copy left out is still there once put back.
     if (schema && Object.keys(schema).length > 0) {
       const validation = validateInstanceConfig(body.configJson, schema);
-      if (!validation.valid) {
+      if (!validation.valid && !validateInstanceConfig(configJson, schema).valid) {
         res.status(400).json({
           error: "Configuration does not match the plugin's instanceConfigSchema",
           fieldErrors: validation.errors,
@@ -3334,12 +3475,12 @@ export function pluginRoutes(
 
     try {
       const result = await registry.upsertConfig(plugin.id, {
-        configJson: body.configJson,
+        configJson,
       });
       await logPluginMutationActivity(req, "plugin.config.updated", plugin.id, {
         pluginId: plugin.id,
         pluginKey: plugin.pluginKey,
-        configKeyCount: Object.keys(body.configJson).length,
+        configKeyCount: Object.keys(configJson).length,
       });
 
       // Notify the running worker about the config change (PLUGIN_SPEC §25.4.4).
@@ -3351,7 +3492,7 @@ export function pluginRoutes(
           await bridgeDeps.workerManager.call(
             plugin.id,
             "configChanged",
-            { config: body.configJson },
+            { config: configJson },
           );
         } catch (rpcErr) {
           if (
@@ -3370,7 +3511,8 @@ export function pluginRoutes(
         }
       }
 
-      res.json(result);
+      // The caller's own copy: the stored config also holds what was kept for them.
+      res.json(await configCopyFor(req, result, schema));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: message });
@@ -3537,11 +3679,14 @@ export function pluginRoutes(
    * Query params:
    * - `limit` (optional): Maximum number of runs to return (default: 50)
    *
+   * Instance admins only, like the logs: a run's errors and log lines can be
+   * about any company. Runs for someone else's Personal company are left out.
+   *
    * Response: PluginJobRunRecord[]
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/jobs/:jobId/runs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     if (!jobDeps) {
       res.status(501).json({ error: "Job scheduling is not enabled" });
       return;
@@ -3567,7 +3712,7 @@ export function pluginRoutes(
     }
 
     try {
-      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
+      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit, othersPersonalCompanyIds(req));
       res.json(runs);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -3791,12 +3936,16 @@ export function pluginRoutes(
    * runs, recent webhook deliveries, and the current health check result —
    * all in a single response to avoid multiple round-trips.
    *
+   * Instance admins only, like the logs, and without runs or deliveries for
+   * someone else's Personal company.
+   *
    * Response: PluginDashboardData
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/dashboard", async (req, res) => {
-    assertBoardOrgAccess(req);
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
+    const hiddenCompanyIds = othersPersonalCompanyIds(req);
 
     const plugin = await resolvePlugin(registry, pluginId);
     if (!plugin) {
@@ -3851,7 +4000,7 @@ export function pluginRoutes(
 
     if (jobDeps) {
       try {
-        const runs = await jobDeps.jobStore.listRunsByPlugin(plugin.id, undefined, 10);
+        const runs = await jobDeps.jobStore.listRunsByPlugin(plugin.id, undefined, 10, hiddenCompanyIds);
         // Also fetch job definitions so we can include jobKey
         const jobs = await jobDeps.jobStore.listJobs(plugin.id);
         const jobKeyMap = new Map(jobs.map((j) => [j.id, j.jobKey]));
@@ -3900,7 +4049,17 @@ export function pluginRoutes(
           createdAt: pluginWebhookDeliveries.createdAt,
         })
         .from(pluginWebhookDeliveries)
-        .where(eq(pluginWebhookDeliveries.pluginId, plugin.id))
+        .where(
+          hiddenCompanyIds.length > 0
+            ? and(
+                eq(pluginWebhookDeliveries.pluginId, plugin.id),
+                or(
+                  isNull(pluginWebhookDeliveries.companyId),
+                  notInArray(pluginWebhookDeliveries.companyId, hiddenCompanyIds),
+                ),
+              )
+            : eq(pluginWebhookDeliveries.pluginId, plugin.id),
+        )
         .orderBy(desc(pluginWebhookDeliveries.createdAt))
         .limit(10);
 

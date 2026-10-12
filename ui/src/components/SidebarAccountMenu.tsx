@@ -23,6 +23,7 @@ import { authApi } from "@/api/auth";
 import { systemApi, type SystemActionResponse } from "@/api/system";
 import { describeWaitingAccounts } from "@/lib/account-approval";
 import { queryKeys } from "@/lib/queryKeys";
+import { forgetSignedInData } from "@/lib/signed-in-cache";
 import { useAccountRequests } from "../hooks/useAccountRequests";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
@@ -287,7 +288,7 @@ export function SidebarAccountMenu({
     mutationFn: () => authApi.signOut(),
     onSuccess: async () => {
       setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
+      await forgetSignedInData(queryClient);
     },
   });
 

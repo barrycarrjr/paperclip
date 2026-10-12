@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { queryKeys } from "@/lib/queryKeys";
 
 const mockAuthApi = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -98,6 +99,58 @@ describe("SidebarAccountMenu", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
+  });
+
+  it("forgets everything loaded for the person who signs out", async () => {
+    mockAuthApi.signOut.mockResolvedValue(undefined);
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    // A member's cut-down copy of a plugin's config, as any company page loads it.
+    queryClient.setQueryData(queryKeys.plugins.config("plugin-1"), {
+      configJson: { mailboxes: [] },
+      editable: false,
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+          <SidebarAccountMenu
+            deploymentMode="authenticated"
+            instanceSettingsTarget="/instance/settings/general"
+            version="1.2.3"
+          />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const trigger = container.querySelector('button[aria-label="Open account menu"]');
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    const signOut = Array.from(document.body.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Sign out"),
+    );
+    expect(signOut).toBeDefined();
+    await act(async () => {
+      signOut?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockAuthApi.signOut).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(queryKeys.plugins.config("plugin-1"))).toBeUndefined();
+    // And it asks again who is signed in, so the app moves to the sign-in page.
+    expect(mockAuthApi.getSession).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      root.unmount();
+    });
   });
 
   it("renders the signed-in user and opens the account card menu", async () => {

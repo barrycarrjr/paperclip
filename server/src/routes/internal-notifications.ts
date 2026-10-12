@@ -14,6 +14,13 @@
  * still refused and cannot drain the tray. Non-loopback callers must be a
  * user-driven (board / tool-session) actor. In `local_trusted` mode every request
  * is already an implicit board actor, so this simply passes through.
+ *
+ * Whose reminders: a signed-in person, or Clippy acting for one, sees and
+ * dismisses only their own. The tokenless tray still gets everyone's, because it
+ * cannot yet say whose desktop it is; that ends when the tray is given a key of
+ * its own and the loopback exemption goes. The implicit board of a
+ * `local_trusted` install is the single local operator, so it gets everyone's
+ * too.
  */
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
@@ -27,17 +34,27 @@ function isLoopbackRequest(req: Request): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
-function assertLocalTrayAccess(req: Request) {
+/**
+ * Refuses a caller that may not use the desktop queue, and says whose reminders
+ * the rest may see and dismiss: a user id, or undefined for every user's.
+ */
+function assertLocalTrayAccess(req: Request): string | undefined {
   // A tokenless loopback request is the local desktop tray (which has no way to
   // present a login). Allow it. This is the only way desktop popups work in
   // `authenticated` mode, where an unauthenticated request is actor.type "none".
-  if (req.actor.type === "none" && isLoopbackRequest(req)) return;
+  if (req.actor.type === "none" && isLoopbackRequest(req)) return undefined;
   // Otherwise require a real user-driven actor: this refuses agent keys (so an
   // agent can't drain the tray) and rejects external unauthenticated callers.
   assertAuthenticated(req);
   if (!isUserDrivenActor(req)) {
     throw forbidden("Desktop notifications are only available to the local user");
   }
+  if (req.actor.type === "board" && req.actor.source === "local_implicit") return undefined;
+  // Without a person there is nobody's queue to show.
+  if (!req.actor.userId) {
+    throw forbidden("Desktop notifications are only available to the local user");
+  }
+  return req.actor.userId;
 }
 
 export function internalNotificationRoutes(db: Db) {
@@ -45,16 +62,16 @@ export function internalNotificationRoutes(db: Db) {
   const svc = calendarService(db);
 
   router.get("/internal/desktop-notifications/pending", async (req, res) => {
-    assertLocalTrayAccess(req);
+    const userId = assertLocalTrayAccess(req);
     const limit = Number(req.query.limit) || 20;
-    res.json({ notifications: await svc.listPendingDesktopNotifications(limit) });
+    res.json({ notifications: await svc.listPendingDesktopNotifications(limit, userId) });
   });
 
   router.post("/internal/desktop-notifications/ack", async (req, res) => {
-    assertLocalTrayAccess(req);
+    const userId = assertLocalTrayAccess(req);
     const rawIds = (req.body as { ids?: unknown } | undefined)?.ids;
     const ids = Array.isArray(rawIds) ? rawIds.filter((id): id is string => typeof id === "string") : [];
-    res.json({ acknowledged: await svc.ackDesktopNotifications(ids) });
+    res.json({ acknowledged: await svc.ackDesktopNotifications(ids, userId) });
   });
 
   return router;

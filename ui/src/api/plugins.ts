@@ -15,7 +15,8 @@ import type {
   PluginLauncherRenderContextSnapshot,
   PluginUiSlotDeclaration,
   PluginRecord,
-  PluginConfig,
+  PluginConfigCopy,
+  PluginConfigCoverage,
   PluginConnectorStatus,
   PluginConnectorSurface,
   PluginStatus,
@@ -459,25 +460,32 @@ export const pluginsApi = {
   /**
    * Fetch the current configuration for a plugin.
    *
-   * Returns the `PluginConfig` record if one exists, or `null` if the plugin
-   * has not yet been configured.
+   * Returns the caller's copy of it (`PluginConfigCopy`), which leaves out the
+   * parts for companies they cannot see, or `null` if the plugin has not yet
+   * been configured.
    *
    * @param pluginId - UUID of the plugin.
    */
   getConfig: (pluginId: string) =>
-    api.get<PluginConfig | null>(`/plugins/${pluginId}/config`),
+    api.get<PluginConfigCopy | null>(`/plugins/${pluginId}/config`),
 
   /**
    * Save (create or update) the configuration for a plugin.
    *
    * The server validates `configJson` against the plugin's `instanceConfigSchema`
-   * and returns the persisted `PluginConfig` record on success.
+   * and returns the caller's copy of what was saved.
    *
    * @param pluginId - UUID of the plugin.
    * @param configJson - Configuration values matching the plugin's `instanceConfigSchema`.
+   * @param coverage - The `coverage` of the copy these values were edited from,
+   *   so the save replaces only what that copy held and keeps everything it left out.
    */
-  saveConfig: (pluginId: string, configJson: Record<string, unknown>) =>
-    api.post<PluginConfig>(`/plugins/${pluginId}/config`, { configJson }),
+  saveConfig: (
+    pluginId: string,
+    configJson: Record<string, unknown>,
+    coverage?: PluginConfigCoverage | null,
+  ) =>
+    api.post<PluginConfigCopy>(`/plugins/${pluginId}/config`, { configJson, coverage: coverage ?? null }),
 
   /**
    * Call the plugin's `validateConfig` RPC method to test the configuration

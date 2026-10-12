@@ -9,7 +9,7 @@ import { pluginsApi } from "@/api/plugins";
 import { secretsApi } from "@/api/secrets";
 import { companiesApi } from "@/api/companies";
 import { queryKeys } from "@/lib/queryKeys";
-import type { CompanySecret } from "@paperclipai/shared";
+import type { CompanySecret, PluginConfigCoverage } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -349,9 +349,15 @@ export function PluginSettings() {
               </div>
               {hasConfigSchema ? (
                 <PluginConfigForm
+                  // A copy that can be saved replaces one that could not, and
+                  // anything typed over the old one, rather than inheriting it.
+                  key={configData?.editable === false ? "read-only" : "editable"}
                   pluginId={pluginId!}
                   schema={configSchema!}
                   initialValues={configData?.configJson}
+                  editable={configData?.editable !== false}
+                  trimmed={configData?.trimmed === true}
+                  coverage={configData?.coverage ?? null}
                   isLoading={configLoading}
                   pluginStatus={plugin.status}
                   supportsConfigTest={(plugin as unknown as { supportsConfigTest?: boolean }).supportsConfigTest === true}
@@ -780,6 +786,12 @@ interface PluginConfigFormProps {
   pluginId: string;
   schema: JsonSchemaNode;
   initialValues?: Record<string, unknown>;
+  /** False when the person cannot save, so the form is shown read-only. */
+  editable?: boolean;
+  /** True when parts for companies the person cannot see were left out of the copy. */
+  trimmed?: boolean;
+  /** What the loaded copy holds, sent back with a save so only that part is replaced. */
+  coverage?: PluginConfigCoverage | null;
   isLoading?: boolean;
   /** Current plugin lifecycle status — "Test Configuration" only available when `ready`. */
   pluginStatus?: string;
@@ -796,7 +808,18 @@ interface PluginConfigFormProps {
  * Separated from PluginSettings to isolate re-render scope — only the form
  * re-renders on field changes, not the entire page.
  */
-function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginStatus, supportsConfigTest, secrets }: PluginConfigFormProps) {
+function PluginConfigForm({
+  pluginId,
+  schema,
+  initialValues,
+  editable = true,
+  trimmed = false,
+  coverage = null,
+  isLoading,
+  pluginStatus,
+  supportsConfigTest,
+  secrets,
+}: PluginConfigFormProps) {
   const queryClient = useQueryClient();
 
   // The canonical saved config merged with schema defaults. Recomputed when the
@@ -819,14 +842,19 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
   // false-positive "required field is empty" errors even though the input
   // visibly showed the saved value.
   const lastSyncedRef = useRef<string>(JSON.stringify(savedSnapshot));
+  // What the copy the form's values came from holds. A save sends it back, so
+  // the save replaces only that part, even when a copy holding more has
+  // arrived since (the person was made an instance admin, say).
+  const baseCoverageRef = useRef<PluginConfigCoverage | null>(coverage);
   useEffect(() => {
     const savedStr = JSON.stringify(savedSnapshot);
     if (savedStr === lastSyncedRef.current) return; // saved config unchanged
     const hasUnsavedEdits = JSON.stringify(values) !== lastSyncedRef.current;
     if (hasUnsavedEdits) return; // preserve in-progress edits
     lastSyncedRef.current = savedStr;
+    baseCoverageRef.current = coverage;
     setValues(savedSnapshot);
-  }, [savedSnapshot, values]);
+  }, [savedSnapshot, values, coverage]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saveMessage, setSaveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -838,7 +866,7 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
   // Save mutation
   const saveMutation = useMutation({
     mutationFn: (configJson: Record<string, unknown>) =>
-      pluginsApi.saveConfig(pluginId, configJson),
+      pluginsApi.saveConfig(pluginId, configJson, baseCoverageRef.current),
     onSuccess: (_data, configJson) => {
       // Adopt what we just saved as the synced baseline so the refetch the
       // invalidation triggers isn't mistaken for an external change with
@@ -926,12 +954,23 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
 
   return (
     <div className="space-y-4">
+      {!editable ? (
+        <p className="text-sm text-muted-foreground">
+          Only an instance admin can change these settings.
+          {trimmed ? " Settings for companies you cannot see are left out." : null}
+        </p>
+      ) : trimmed ? (
+        <p className="text-sm text-muted-foreground">
+          Settings for other people's Personal companies are left out. Saving keeps them as they are.
+        </p>
+      ) : null}
+
       <JsonSchemaForm
         schema={schema}
         values={values}
         onChange={handleChange}
         errors={errors}
-        disabled={saveMutation.isPending}
+        disabled={!editable || saveMutation.isPending}
         pluginId={pluginId}
         secrets={secrets}
       />
@@ -961,40 +1000,42 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-2 pt-2">
-        <Button
-          onClick={handleSave}
-          disabled={saveMutation.isPending || !isDirty}
-          size="sm"
-        >
-          {saveMutation.isPending ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            "Save Configuration"
-          )}
-        </Button>
-        {pluginStatus === "ready" && supportsConfigTest && (
+      {/* Action buttons, only for someone who can save */}
+      {editable && (
+        <div className="flex items-center gap-2 pt-2">
           <Button
-            variant="outline"
-            onClick={handleTestConnection}
-            disabled={testMutation.isPending}
+            onClick={handleSave}
+            disabled={saveMutation.isPending || !isDirty}
             size="sm"
           >
-            {testMutation.isPending ? (
+            {saveMutation.isPending ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Testing...
+                Saving...
               </>
             ) : (
-              "Test Configuration"
+              "Save Configuration"
             )}
           </Button>
-        )}
-      </div>
+          {pluginStatus === "ready" && supportsConfigTest && (
+            <Button
+              variant="outline"
+              onClick={handleTestConnection}
+              disabled={testMutation.isPending}
+              size="sm"
+            >
+              {testMutation.isPending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                "Test Configuration"
+              )}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

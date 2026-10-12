@@ -73,7 +73,22 @@ describe("GET /api/plugins/connectors", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(payload);
-    expect(mockConnectorService.listForSurface).toHaveBeenCalledWith("calendar");
+    expect(mockConnectorService.listForSurface).toHaveBeenCalledWith(
+      "calendar",
+      expect.objectContaining({ seesUnassignedAccounts: false }),
+    );
+  });
+
+  it("asks the service only for the companies the caller may see", async () => {
+    mockConnectorService.listForSurface.mockResolvedValue([]);
+
+    await request(await createApp(BOARD_ACTOR)).get("/api/plugins/connectors?surface=calendar");
+
+    const viewer = mockConnectorService.listForSurface.mock.calls[0]![1] as {
+      canSeeCompany: (companyId: string) => boolean;
+    };
+    expect(viewer.canSeeCompany("company-a")).toBe(true);
+    expect(viewer.canSeeCompany("company-b")).toBe(false);
   });
 
   it("returns an empty list when nothing declares a connector", async () => {

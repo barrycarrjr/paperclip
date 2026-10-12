@@ -30,7 +30,7 @@
  * @see PLUGIN_SPEC.md §21.3 — `plugin_jobs` / `plugin_job_runs` tables
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, notInArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { plugins, pluginJobs, pluginJobRuns } from "@paperclipai/db";
 import type {
@@ -425,15 +425,21 @@ export function pluginJobStore(db: Db) {
      *
      * @param jobId - UUID of the job
      * @param limit - Maximum number of rows to return (default: 50)
+     * @param excludeCompanyIds - Companies whose runs to leave out
      */
     async listRunsByJob(
       jobId: string,
       limit = 50,
+      excludeCompanyIds: string[] = [],
     ): Promise<(typeof pluginJobRuns.$inferSelect)[]> {
+      const conditions = [eq(pluginJobRuns.jobId, jobId)];
+      if (excludeCompanyIds.length > 0) {
+        conditions.push(or(isNull(pluginJobRuns.companyId), notInArray(pluginJobRuns.companyId, excludeCompanyIds))!);
+      }
       return db
         .select()
         .from(pluginJobRuns)
-        .where(eq(pluginJobRuns.jobId, jobId))
+        .where(and(...conditions))
         .orderBy(desc(pluginJobRuns.createdAt))
         .limit(limit);
     },
@@ -444,15 +450,20 @@ export function pluginJobStore(db: Db) {
      * @param pluginId - UUID of the owning plugin
      * @param status - Optional status filter
      * @param limit - Maximum number of rows to return (default: 50)
+     * @param excludeCompanyIds - Companies whose runs to leave out
      */
     async listRunsByPlugin(
       pluginId: string,
       status?: PluginJobRunStatus,
       limit = 50,
+      excludeCompanyIds: string[] = [],
     ): Promise<(typeof pluginJobRuns.$inferSelect)[]> {
       const conditions = [eq(pluginJobRuns.pluginId, pluginId)];
       if (status) {
         conditions.push(eq(pluginJobRuns.status, status));
+      }
+      if (excludeCompanyIds.length > 0) {
+        conditions.push(or(isNull(pluginJobRuns.companyId), notInArray(pluginJobRuns.companyId, excludeCompanyIds))!);
       }
       return db
         .select()

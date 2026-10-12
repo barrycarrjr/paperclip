@@ -76,6 +76,26 @@ interface ResolvedAccount {
   finished: boolean;
 }
 
+/**
+ * Who is asking. One instance-wide config serves every company, so a caller is
+ * shown only the companies they may see, and only the accounts serving one of
+ * them: an account's label is often an email address.
+ */
+export interface ConnectorViewer {
+  canSeeCompany: (companyId: string) => boolean;
+  /** Whether accounts not yet given any company are shown (to whoever sets them up). */
+  seesUnassignedAccounts: boolean;
+}
+
+/** The accounts that serve a company this viewer may see, or every company. */
+export function accountsVisibleTo(accounts: ResolvedAccount[], viewer: ConnectorViewer): ResolvedAccount[] {
+  return accounts.filter((account) => {
+    if (account.portfolioWide) return true;
+    if (account.companyIds.length === 0) return viewer.seesUnassignedAccounts;
+    return account.companyIds.some((companyId) => viewer.canSeeCompany(companyId));
+  });
+}
+
 /** Pull the account list named by the connector out of saved config. */
 export function readConnectorAccounts(
   connector: PluginConnectorDeclaration,
@@ -137,12 +157,16 @@ export function resolveConnectorCompanies(
 export function pluginConnectorService(db: Db) {
   return {
     /**
-     * Every connector declared for `surface`, resolved against saved config.
+     * Every connector declared for `surface`, resolved against saved config,
+     * as `viewer` may see it.
      *
      * Returns an empty array when no installed plugin declares one, which is
      * how a board page decides not to render its status control at all.
      */
-    async listForSurface(surface: PluginConnectorSurface): Promise<PluginConnectorStatus[]> {
+    async listForSurface(
+      surface: PluginConnectorSurface,
+      viewer: ConnectorViewer,
+    ): Promise<PluginConnectorStatus[]> {
       const [pluginRows, configRows, companyRows] = await Promise.all([
         db.select().from(plugins).where(ne(plugins.status, "uninstalled")).orderBy(asc(plugins.installOrder)),
         db.select().from(pluginConfig),
@@ -154,7 +178,9 @@ export function pluginConnectorService(db: Db) {
       ]);
 
       // The portfolio root is a container, not a company an account serves.
-      const realCompanies = companyRows.filter((company) => !company.isPortfolioRoot);
+      const realCompanies = companyRows.filter(
+        (company) => !company.isPortfolioRoot && viewer.canSeeCompany(company.id),
+      );
       const configByPluginId = new Map(configRows.map((row) => [row.pluginId, row.configJson]));
 
       const statuses: PluginConnectorStatus[] = [];
@@ -170,7 +196,7 @@ export function pluginConnectorService(db: Db) {
         for (const connector of declared) {
           if (connector.surface !== surface) continue;
 
-          const accounts = readConnectorAccounts(connector, configJson);
+          const accounts = accountsVisibleTo(readConnectorAccounts(connector, configJson), viewer);
           const resolved = resolveConnectorCompanies(connector, accounts, realCompanies);
 
           statuses.push({

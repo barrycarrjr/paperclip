@@ -600,6 +600,8 @@ export type {
   PluginMigrationRecord,
   PluginStateRecord,
   PluginConfig,
+  PluginConfigCopy,
+  PluginConfigCoverage,
   PluginEntityRecord,
   PluginEntityQuery,
   PluginJobRecord,
