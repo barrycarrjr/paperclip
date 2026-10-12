@@ -38,7 +38,8 @@ export function AgentModelSelectionSection({
   labelNames,
 }: {
   value: AgentModelSelection;
-  onChange: (next: AgentModelSelection) => void;
+  /** Gets the change as a function of the latest setting, so edits landing together all survive. */
+  onChange: (apply: (current: AgentModelSelection) => AgentModelSelection) => void;
   /** The adapter's model list, used for names and suggestions. */
   models: AdapterModel[];
   /** The agent's own Model setting, the fallback when none is chosen. */
@@ -52,26 +53,30 @@ export function AgentModelSelectionSection({
   }, [value]);
   const labelFor = (id: string) => models.find((model) => model.id === id)?.label ?? id;
 
-  function update(patch: Partial<AgentModelSelection>) {
-    onChange({ ...value, ...patch });
+  function update(patch: (current: AgentModelSelection) => Partial<AgentModelSelection>) {
+    onChange((current) => ({ ...current, ...patch(current) }));
   }
 
   function removeAllowedModel(id: string) {
-    update({
-      allowedModels: value.allowedModels.filter((model) => model !== id),
-      fallbackModel: value.fallbackModel === id ? null : value.fallbackModel,
-    });
+    update((current) => ({
+      allowedModels: current.allowedModels.filter((model) => model !== id),
+      fallbackModel: current.fallbackModel === id ? null : current.fallbackModel,
+    }));
   }
 
   function updateRule(index: number, patch: Partial<ModelSelectionRule>) {
-    update({ rules: value.rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)) });
+    update((current) => ({
+      rules: current.rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)),
+    }));
   }
 
   function moveRule(index: number, offset: -1 | 1) {
-    const rules = [...value.rules];
-    const [rule] = rules.splice(index, 1);
-    rules.splice(index + offset, 0, rule!);
-    update({ rules });
+    update((current) => {
+      const rules = [...current.rules];
+      const [rule] = rules.splice(index, 1);
+      rules.splice(index + offset, 0, rule!);
+      return { rules };
+    });
   }
 
   return (
@@ -80,7 +85,7 @@ export function AgentModelSelectionSection({
         label="Pick the model per task"
         hint={help.enabled}
         checked={value.enabled}
-        onChange={(enabled) => update({ enabled })}
+        onChange={(enabled) => update(() => ({ enabled }))}
         toggleTestId="agent-model-selection-toggle"
       />
       {value.enabled && (
@@ -110,7 +115,7 @@ export function AgentModelSelectionSection({
               </div>
               <AddModelInput
                 models={models.filter((model) => !value.allowedModels.includes(model.id))}
-                onAdd={(id) => update({ allowedModels: [...value.allowedModels, id] })}
+                onAdd={(id) => update((current) => ({ allowedModels: [...current.allowedModels, id] }))}
               />
             </div>
           </Field>
@@ -129,7 +134,7 @@ export function AgentModelSelectionSection({
                   isLast={index === value.rules.length - 1}
                   onChange={(patch) => updateRule(index, patch)}
                   onMove={(offset) => moveRule(index, offset)}
-                  onRemove={() => update({ rules: value.rules.filter((_, i) => i !== index) })}
+                  onRemove={() => update((current) => ({ rules: current.rules.filter((_, i) => i !== index) }))}
                 />
               ))}
               <Button
@@ -138,7 +143,9 @@ export function AgentModelSelectionSection({
                 size="sm"
                 disabled={value.allowedModels.length === 0}
                 onClick={() =>
-                  update({ rules: [...value.rules, { labels: [], priorities: [], model: value.allowedModels[0]! }] })
+                  update((current) => ({
+                    rules: [...current.rules, { labels: [], priorities: [], model: current.allowedModels[0]! }],
+                  }))
                 }
               >
                 <Plus className="h-3.5 w-3.5 mr-1" /> Add rule
@@ -151,7 +158,10 @@ export function AgentModelSelectionSection({
               className={selectClass}
               data-testid="agent-model-selection-fallback"
               value={value.fallbackModel ?? ""}
-              onChange={(event) => update({ fallbackModel: event.target.value || null })}
+              onChange={(event) => {
+                const fallbackModel = event.target.value || null;
+                update(() => ({ fallbackModel }));
+              }}
             >
               <option value="">Agent's own model{agentModel ? ` (${labelFor(agentModel)})` : ""}</option>
               {value.allowedModels.map((id) => (

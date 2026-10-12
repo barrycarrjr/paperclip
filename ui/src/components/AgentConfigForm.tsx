@@ -495,10 +495,10 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     enabled: Boolean(selectedCompanyId) && !isCreate && isLocal,
   });
   const companyLabelNames = useMemo(() => companyLabels.map((label) => label.name), [companyLabels]);
-  const effectiveModelSelection: AgentModelSelection =
-    overlay.modelSelection
-    ?? (runtimeConfig.modelSelection as AgentModelSelection | null | undefined)
+  const savedModelSelection: AgentModelSelection =
+    (runtimeConfig.modelSelection as AgentModelSelection | null | undefined)
     ?? initialModelSelection(String(config.model ?? ""));
+  const effectiveModelSelection = overlay.modelSelection ?? savedModelSelection;
   const currentDefaultEnvironmentId = isCreate
     ? val!.defaultEnvironmentId ?? ""
     : eff("identity", "defaultEnvironmentId", props.agent.defaultEnvironmentId ?? "");
@@ -1064,7 +1064,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           <div className={cn(cards ? "border border-border rounded-lg p-4" : "px-4 pb-3")}>
             <AgentModelSelectionSection
               value={effectiveModelSelection}
-              onChange={(next) => setOverlay((prev) => ({ ...prev, modelSelection: next }))}
+              onChange={(apply) =>
+                setOverlay((prev) => ({ ...prev, modelSelection: apply(prev.modelSelection ?? savedModelSelection) }))
+              }
               models={models}
               agentModel={currentModelId}
               labelNames={companyLabelNames}
