@@ -31,6 +31,7 @@ import {
   Maximize2,
   ListChecks,
   ChevronLeft,
+  BookUser,
   MoreHorizontal,
   PanelBottom,
   PanelRight,
@@ -129,6 +130,9 @@ import { actionFailureText, inlineFailureText } from "../components/email/action
 import { resolveActionHeader } from "../components/email/emailActionHeader";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
 import { EmailRecipientLines } from "../components/email/EmailRecipientLines";
+import { RecipientAutoSuggest } from "../components/email/RecipientAutoSuggest";
+import { AddressBookDialog } from "../components/email/AddressBookDialog";
+import { parseAddress } from "../components/email/emailRecipients";
 import { openEmailLinksInNewTab } from "../components/email/emailLinks";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
 import { sendOutcomeText } from "../components/email/sendOutcome";
@@ -734,6 +738,21 @@ export function Email() {
   // Compose dialog state. Same isolation pattern as reply — field contents
   // live inside DraftInput / DraftTextarea; the parent only tracks the
   // has-content flags and the initial values to seed each field on mount.
+  const [addressBookOpen, setAddressBookOpen] = useState(false);
+
+  function handleAddContact(raw: string) {
+    const { name, email } = parseAddress(raw);
+    if (!email || !emailApi) return;
+    emailApi
+      .saveContact({ email, name: name || undefined })
+      .then(() => {
+        showToast("Added contact to address book");
+      })
+      .catch((err) => {
+        showFailure("Save contact", err);
+      });
+  }
+
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeInitial, setComposeInitial] = useState<{ to: string; cc: string; bcc: string; subject: string; body: string }>(
     { to: "", cc: "", bcc: "", subject: "", body: "" },
@@ -2173,6 +2192,16 @@ export function Email() {
             <Pencil className="h-3.5 w-3.5" />
           </Button>
         )}
+        {emailApi && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setAddressBookOpen(true)}
+            title="Address book"
+          >
+            <BookUser className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -3328,7 +3357,7 @@ export function Email() {
                 {/* Message header */}
                 <div className="shrink-0 px-4 py-3 border-b border-border space-y-0.5">
                   <div className="font-medium text-sm">{fullMessage.subject}</div>
-                  <EmailRecipientLines from={fullMessage.from} to={fullMessage.to} cc={fullMessage.cc} />
+                  <EmailRecipientLines from={fullMessage.from} to={fullMessage.to} cc={fullMessage.cc} onAddContact={emailApi ? handleAddContact : undefined} />
                   <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                     <span>{new Date(fullMessage.date).toLocaleString()}</span>
                     <EmailStateIcons
@@ -3469,32 +3498,38 @@ export function Email() {
                     {showReplyCc && (
                       <div className="flex items-center gap-2 text-xs">
                         <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
-                        <Input
+                        <RecipientAutoSuggest
                           value={replyCc}
-                          onChange={(e) => {
-                            setReplyCc(e.target.value);
+                          onChange={(val) => {
+                            setReplyCc(val);
                             if (selectedMailbox && selectedUid !== null) {
-                              saveDraft(replyCcDraftKey(selectedMailbox, selectedUid), e.target.value);
+                              saveDraft(replyCcDraftKey(selectedMailbox, selectedUid), val);
                             }
                           }}
                           placeholder="recipient@example.com"
                           className="h-7 text-xs flex-1"
+                          emailApi={emailApi}
+                          companyId={selectedCompanyId}
+                          
                         />
                       </div>
                     )}
                     {showReplyBcc && (
                       <div className="flex items-center gap-2 text-xs">
                         <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
-                        <Input
+                        <RecipientAutoSuggest
                           value={replyBcc}
-                          onChange={(e) => {
-                            setReplyBcc(e.target.value);
+                          onChange={(val) => {
+                            setReplyBcc(val);
                             if (selectedMailbox && selectedUid !== null) {
-                              saveDraft(replyBccDraftKey(selectedMailbox, selectedUid), e.target.value);
+                              saveDraft(replyBccDraftKey(selectedMailbox, selectedUid), val);
                             }
                           }}
                           placeholder="recipient@example.com"
                           className="h-7 text-xs flex-1"
+                          emailApi={emailApi}
+                          companyId={selectedCompanyId}
+                          
                         />
                       </div>
                     )}
@@ -3678,7 +3713,7 @@ export function Email() {
                   )}
                 </div>
               </div>
-              <DraftInput
+              <RecipientAutoSuggest
                 key={`to:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                 ref={composeToRef}
                 initialValue={composeInitial.to}
@@ -3686,12 +3721,15 @@ export function Email() {
                 placeholder="recipient@example.com"
                 className="text-sm"
                 onContentChange={setComposeToHasContent}
+                emailApi={emailApi}
+                companyId={selectedCompanyId}
+                
               />
             </div>
             {showComposeCc && (
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Cc</label>
-                <DraftInput
+                <RecipientAutoSuggest
                   key={`cc:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                   ref={composeCcRef}
                   initialValue={composeInitial.cc}
@@ -3704,13 +3742,16 @@ export function Email() {
                   }
                   placeholder="recipient@example.com"
                   className="text-sm"
+                  emailApi={emailApi}
+                  companyId={selectedCompanyId}
+                  
                 />
               </div>
             )}
             {showComposeBcc && (
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Bcc</label>
-                <DraftInput
+                <RecipientAutoSuggest
                   key={`bcc:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                   ref={composeBccRef}
                   initialValue={composeInitial.bcc}
@@ -3723,6 +3764,9 @@ export function Email() {
                   }
                   placeholder="recipient@example.com"
                   className="text-sm"
+                  emailApi={emailApi}
+                  companyId={selectedCompanyId}
+                  
                 />
               </div>
             )}

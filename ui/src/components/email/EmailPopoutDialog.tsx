@@ -47,6 +47,10 @@ import { SendingIdentityLine } from "./SendingIdentityLine";
 import { describeSendingIdentity, findSelectedMailbox } from "./sendingIdentity";
 import { EmailStateIcons } from "./EmailStateIcons";
 import { EmailRecipientLines } from "./EmailRecipientLines";
+import { RecipientAutoSuggest } from "./RecipientAutoSuggest";
+import { AddressBookDialog } from "./AddressBookDialog";
+import { parseAddress } from "./emailRecipients";
+import { useToastActions } from "@/context/ToastContext";
 import { openEmailLinksInNewTab } from "./emailLinks";
 import { cn } from "@/lib/utils";
 
@@ -126,6 +130,30 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   // taken when the dialog opened and never updates, so the read/unread toggle
   // and a reply (which marks read) have to record the new state themselves.
   const [readStateChange, setReadStateChange] = useState<boolean | null>(null);
+  const [addressBookOpen, setAddressBookOpen] = useState(false);
+  const { pushToast } = useToastActions();
+
+  const api = useMemo(
+    () => (request ? makeEmailToolsApi(request.pluginId, request.companyId) : null),
+    [request?.pluginId, request?.companyId],
+  );
+
+  function handleAddContact(raw: string) {
+    const { name, email } = parseAddress(raw);
+    if (!email || !api) return;
+    api
+      .saveContact({ email, name: name || undefined })
+      .then(() => {
+        pushToast({ title: "Added contact to address book" });
+      })
+      .catch((err: unknown) => {
+        pushToast({
+          title: "Failed to add contact",
+          body: (err as Error).message,
+          tone: "error",
+        });
+      });
+  }
   // Steering text for AI Draft. Kept apart from the reply itself so it
   // survives drafting, and a second click refines rather than starting over.
   const [draftInstructions, setDraftInstructions] = useState("");
@@ -172,11 +200,6 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     const timer = setTimeout(() => setPrintNote(null), 4000);
     return () => clearTimeout(timer);
   }, [printNote]);
-
-  const api = useMemo(
-    () => (request ? makeEmailToolsApi(request.pluginId, request.companyId) : null),
-    [request?.pluginId, request?.companyId],
-  );
 
   const { data: message, isLoading } = useQuery({
     queryKey: [
@@ -337,7 +360,7 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
             </DialogTitle>
             {message && (
               <>
-                <EmailRecipientLines from={message.from} to={message.to} cc={message.cc} />
+                <EmailRecipientLines from={message.from} to={message.to} cc={message.cc} onAddContact={api ? handleAddContact : undefined} />
                 <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                   <span>
                     {new Date(message.date).toLocaleString()}
@@ -548,22 +571,28 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
             {showReplyCc && (
               <div className="flex items-center gap-2 text-xs">
                 <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
-                <Input
+                <RecipientAutoSuggest
                   value={replyCc}
-                  onChange={(e) => setReplyCc(e.target.value)}
+                  onChange={setReplyCc}
                   placeholder="recipient@example.com"
                   className="h-7 text-xs flex-1"
+                  emailApi={api}
+                  companyId={request?.companyId}
+                  companyName={request?.companyName}
                 />
               </div>
             )}
             {showReplyBcc && (
               <div className="flex items-center gap-2 text-xs">
                 <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
-                <Input
+                <RecipientAutoSuggest
                   value={replyBcc}
-                  onChange={(e) => setReplyBcc(e.target.value)}
+                  onChange={setReplyBcc}
                   placeholder="recipient@example.com"
                   className="h-7 text-xs flex-1"
+                  emailApi={api}
+                  companyId={request?.companyId}
+                  companyName={request?.companyName}
                 />
               </div>
             )}
@@ -679,31 +708,40 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               </div>
             </div>
             {sendingIdentity && <SendingIdentityLine identity={sendingIdentity} />}
-            <Input
+            <RecipientAutoSuggest
               value={forwardTo}
-              onChange={(e) => setForwardTo(e.target.value)}
+              onChange={setForwardTo}
               placeholder="to@example.com"
-              autoFocus
+              className="h-9 text-sm"
+              emailApi={api}
+              companyId={request?.companyId}
+              companyName={request?.companyName}
             />
             {showForwardCc && (
               <div className="flex items-center gap-2 text-xs">
                 <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
-                <Input
+                <RecipientAutoSuggest
                   value={forwardCc}
-                  onChange={(e) => setForwardCc(e.target.value)}
+                  onChange={setForwardCc}
                   placeholder="recipient@example.com"
                   className="h-7 text-xs flex-1"
+                  emailApi={api}
+                  companyId={request?.companyId}
+                  companyName={request?.companyName}
                 />
               </div>
             )}
             {showForwardBcc && (
               <div className="flex items-center gap-2 text-xs">
                 <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
-                <Input
+                <RecipientAutoSuggest
                   value={forwardBcc}
-                  onChange={(e) => setForwardBcc(e.target.value)}
+                  onChange={setForwardBcc}
                   placeholder="recipient@example.com"
                   className="h-7 text-xs flex-1"
+                  emailApi={api}
+                  companyId={request?.companyId}
+                  companyName={request?.companyName}
                 />
               </div>
             )}
@@ -800,6 +838,13 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
           </div>
         )}
       </DialogContent>
+      <AddressBookDialog
+        open={addressBookOpen}
+        onOpenChange={setAddressBookOpen}
+        emailApi={api}
+        companyId={request?.companyId}
+        companyName={request?.companyName}
+      />
     </Dialog>
   );
 }

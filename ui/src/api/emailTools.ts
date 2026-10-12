@@ -145,6 +145,22 @@ export interface SearchMessagesResult {
   errors: Array<{ mailbox: string; folder?: string; message: string }>;
 }
 
+export interface EmailContact {
+  id: string;
+  companyId: string;
+  email: string;
+  name: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListContactsOptions {
+  query?: string;
+  limit?: number;
+  companyIds?: string[];
+}
+
 export interface SenderRule {
   senderPattern: string;
   ruleType: "auto-triage" | "keep-always" | "mute";
@@ -362,6 +378,40 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.dismiss-review-entry",
         { companyId, mailbox, sender },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    listContacts: async (opts?: ListContactsOptions): Promise<{ contacts: EmailContact[] }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "email.list-contacts",
+        { companyId, ...opts },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    saveContact: async (contact: {
+      email: string;
+      name?: string;
+      notes?: string;
+    }): Promise<{ ok: boolean; contact: EmailContact }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.save-contact",
+        { companyId, ...contact },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    deleteContact: async (id: string): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.delete-contact",
+        { companyId, id },
         companyId,
       );
       return extract(result);

@@ -426,6 +426,13 @@ export function PortfolioEmail() {
   // move them off the portfolio view, so this is an overlay rather than the
   // company-switching navigation that `openInCompany` performs.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
+  const [addressBookOpen, setAddressBookOpen] = useState(false);
+  const portfolioCompanyIds = useMemo(() => companies.map((c) => c.id), [companies]);
+  const primaryEmailApi = useMemo(() => {
+    if (!pluginId) return null;
+    const firstCompanyId = selectedCompanyId || resolvedMailboxes[0]?.primaryCompanyId || companies[0]?.id;
+    return firstCompanyId ? makeEmailToolsApi(pluginId, firstCompanyId) : null;
+  }, [pluginId, selectedCompanyId, resolvedMailboxes, companies]);
 
   // What the last email action did, shown bottom-right for a few seconds. This
   // page used to pass the pop-out no `onToast` at all, so every action here was

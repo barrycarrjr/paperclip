@@ -48,3 +48,14 @@ export function recipientDisplayName(recipient: string): string {
   const address = match[2].trim();
   return name || address || recipient.trim();
 }
+
+/**
+ * Splits a raw header address into name and email parts.
+ */
+export function parseAddress(raw: string): { name: string; email: string } {
+  const match = /^(.*?)\s*<([^>]*)>\s*$/.exec(raw.trim());
+  if (!match) return { name: "", email: raw.trim() };
+  const name = match[1].trim().replace(/^"(.*)"$/, "$1").replace(/\\(.)/g, "$1").trim();
+  const email = match[2].trim();
+  return { name, email };
+}

@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { UserPlus } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { recipientDisplayName, splitAddressList } from "./emailRecipients";
 
@@ -7,6 +8,7 @@ interface EmailRecipientLinesProps {
   to?: readonly string[];
   cc?: readonly string[];
   className?: string;
+  onAddContact?: (rawEmail: string) => void;
 }
 
 /**
@@ -19,10 +21,22 @@ interface EmailRecipientLinesProps {
  * two cannot drift apart. Before this, both showed To only, and a message
  * copied to the operator looked as though it had been sent to someone else.
  */
-export function EmailRecipientLines({ from, to, cc, className }: EmailRecipientLinesProps) {
+export function EmailRecipientLines({ from, to, cc, className, onAddContact }: EmailRecipientLinesProps) {
   return (
     <div className={cn("space-y-0.5 text-xs text-muted-foreground", className)}>
-      <div className="break-words font-medium text-foreground">{from}</div>
+      <div className="flex items-center gap-1.5 break-words font-medium text-foreground">
+        <span>{from}</span>
+        {onAddContact && (
+          <button
+            type="button"
+            onClick={() => onAddContact(from)}
+            className="text-muted-foreground hover:text-foreground inline-flex items-center p-0.5 rounded hover:bg-muted/50 transition-colors"
+            title="Add sender to address book"
+          >
+            <UserPlus className="h-3 w-3" />
+          </button>
+        )}
+      </div>
       <RecipientRow label="To" recipients={splitAddressList(to)} />
       <RecipientRow label="Cc" recipients={splitAddressList(cc)} />
     </div>
