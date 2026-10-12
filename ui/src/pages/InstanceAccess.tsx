@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Shield, ShieldCheck } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
+import { AccountRequestsPanel } from "@/components/AccountRequestsPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -122,6 +123,8 @@ export function InstanceAccess() {
           Search users, manage instance-admin status, and control which companies they can access.
         </p>
       </div>
+
+      <AccountRequestsPanel />
 
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <section className="space-y-4 rounded-xl border border-border bg-card p-4">

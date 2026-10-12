@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import {
   agentApiKeys,
   agents,
+  authUsers,
   companies,
   companyMemberships,
   createDb,
@@ -80,6 +81,18 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-live-feed-personal-");
     db = createDb(tempDb.connectionString);
+    // Approved accounts: a feed is refused to one still waiting for approval.
+    const now = new Date();
+    await db.insert(authUsers).values(
+      [ALICE, BOB, CAROL].map((id) => ({
+        id,
+        name: id,
+        email: `${id}@example.com`,
+        approvalStatus: "approved",
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
     authenticatedPort = await startFeedServer("authenticated");
     localTrustedPort = await startFeedServer("local_trusted");
   }, 90_000);

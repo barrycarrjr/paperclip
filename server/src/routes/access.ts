@@ -71,6 +71,7 @@ import {
   resolveHumanInviteRole,
 } from "../services/company-member-roles.js";
 import { humanJoinGrantsFromDefaults } from "../services/invite-grants.js";
+import { approveWaitingAccount } from "../services/account-approvals.js";
 import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
@@ -3304,6 +3305,11 @@ export function accessRoutes(
         if (!existingAdmin) {
           await access.promoteInstanceAdmin(userId);
         }
+        // The bootstrap invite comes from the server's own command line and
+        // makes its taker the first admin, so the taker skips the wait.
+        if (req.actor.awaitingApproval) {
+          await approveWaitingAccount(db, userId, userId);
+        }
         const updatedInvite = await db
           .update(invites)
           .set({ acceptedAt: new Date(), updatedAt: new Date() })
@@ -3542,6 +3548,19 @@ export function accessRoutes(
 
       if (!created) {
         throw conflict("Join request not found");
+      }
+
+      // An invite an instance admin sent lets the account in as well:
+      // sending it was the admin's yes. Anyone else's invite only asks to join
+      // the company, and the account goes on waiting for an instance admin.
+      if (
+        requestType === "human" &&
+        req.actor.awaitingApproval &&
+        req.actor.userId &&
+        invite.invitedByUserId &&
+        (await access.isInstanceAdmin(invite.invitedByUserId))
+      ) {
+        await approveWaitingAccount(db, req.actor.userId, invite.invitedByUserId);
       }
 
       if (
@@ -4373,6 +4392,8 @@ export function accessRoutes(
     await assertInstanceAdmin(req);
     const query = searchAdminUsersQuerySchema.parse(req.query);
     const needle = query.query.trim().toLowerCase();
+    // Approved accounts only. One still waiting is answered from its own list
+    // (routes/account-requests.ts), and a declined one cannot sign in.
     const users = await db
       .select({
         id: authUsers.id,
@@ -4381,6 +4402,7 @@ export function accessRoutes(
         image: authUsers.image,
       })
       .from(authUsers)
+      .where(eq(authUsers.approvalStatus, "approved"))
       .orderBy(desc(authUsers.updatedAt));
     const filteredUsers = needle
       ? users.filter((user) =>

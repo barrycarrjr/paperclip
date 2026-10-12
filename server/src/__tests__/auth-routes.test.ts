@@ -78,7 +78,25 @@ describe.sequential("auth routes", () => {
         userId: "user-1",
       },
       user: baseUser,
+      accountStatus: "approved",
     });
+  });
+
+  it("tells an account still waiting for approval that it is waiting", async () => {
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "user-1",
+        source: "session",
+        awaitingApproval: true,
+      },
+      baseUser,
+    );
+
+    const res = await request(app).get("/api/auth/get-session");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ user: baseUser, accountStatus: "pending" });
   });
 
   it("updates the signed-in profile", async () => {

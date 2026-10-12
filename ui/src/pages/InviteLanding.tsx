@@ -11,6 +11,7 @@ import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { healthApi } from "../api/health";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { isAccountWaitingError } from "../lib/account-approval";
 import { statusFailureMessage } from "../lib/error-message";
 import { clearPendingInviteToken, rememberPendingInviteToken } from "../lib/invite-memory";
 import { queryKeys } from "../lib/queryKeys";
@@ -138,6 +139,8 @@ type AwaitingJoinApprovalPanelProps = {
   claimSecret?: string | null;
   claimApiKeyPath?: string | null;
   onboardingTextUrl?: string | null;
+  /** The account itself still waits for an instance admin, as well as the request to join. */
+  accountWaiting?: boolean;
 };
 
 function InviteCompanyLogo({
@@ -170,6 +173,7 @@ function AwaitingJoinApprovalPanel({
   claimSecret = null,
   claimApiKeyPath = null,
   onboardingTextUrl = null,
+  accountWaiting = false,
 }: AwaitingJoinApprovalPanelProps) {
   const approvalUrl = `${window.location.origin}/company/settings/access`;
   const approverLabel = invitedByUserName ?? "A company admin";
@@ -190,6 +194,11 @@ function AwaitingJoinApprovalPanel({
           <p className="text-sm text-zinc-400">
             Your request is still awaiting approval. {approverLabel} must approve your request to join.
           </p>
+          {accountWaiting ? (
+            <p className="text-sm text-zinc-400" data-testid="invite-account-waiting">
+              Your new account also needs an instance admin to approve it.
+            </p>
+          ) : null}
           <div className="border border-zinc-800 p-3">
             <p className="text-xs text-zinc-500 mb-1">Approval page</p>
             <a
@@ -258,10 +267,13 @@ export function InviteLandingPage() {
     retry: false,
   });
 
+  // A new account waiting for approval is refused the company list, and
+  // belongs to no company yet anyway.
+  const accountWaiting = sessionQuery.data?.accountStatus === "pending";
   const companiesQuery = useQuery({
     queryKey: queryKeys.companies.all,
     queryFn: () => companiesApi.list(),
-    enabled: !!sessionQuery.data && !!inviteQuery.data?.companyId,
+    enabled: !!sessionQuery.data && !accountWaiting && !!inviteQuery.data?.companyId,
     retry: false,
   });
 
@@ -386,11 +398,19 @@ export function InviteLandingPage() {
       setAuthFeedback(null);
       rememberPendingInviteToken(token);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      const companies = await queryClient.fetchQuery({
-        queryKey: queryKeys.companies.all,
-        queryFn: () => companiesApi.list(),
-        retry: false,
-      });
+      const companies = await queryClient
+        .fetchQuery({
+          queryKey: queryKeys.companies.all,
+          queryFn: () => companiesApi.list(),
+          retry: false,
+        })
+        .catch((fetchError: unknown) => {
+          // A new account waits for an instance admin and is refused the
+          // list. It belongs to no company yet, and accepting the invite is
+          // still open to it.
+          if (isAccountWaitingError(fetchError)) return [];
+          throw fetchError;
+        });
 
       if (invite?.companyId && companies.some((company) => company.id === invite.companyId)) {
         clearPendingInviteToken(token);
@@ -469,6 +489,7 @@ export function InviteLandingPage() {
         companyLogoUrl={companyLogoUrl}
         companyBrandColor={companyBrandColor}
         invitedByUserName={invitedByUserName}
+        accountWaiting={accountWaiting}
       />
     );
   }
@@ -543,6 +564,7 @@ export function InviteLandingPage() {
           claimSecret={claimSecret}
           claimApiKeyPath={claimApiKeyPath}
           onboardingTextUrl={onboardingTextUrl}
+          accountWaiting={accountWaiting}
         />
       )
     );

@@ -49,6 +49,9 @@ export function authRoutes(db: Db) {
         userId: req.actor.userId,
       },
       user,
+      // The one thing the waiting screen needs to know. A declined account
+      // never gets here: it has no identity at all (middleware/auth.ts).
+      accountStatus: req.actor.awaitingApproval ? "pending" : "approved",
     }));
   });
 

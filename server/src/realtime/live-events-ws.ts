@@ -10,6 +10,7 @@ import type { DeploymentMode, LiveEvent } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
 import { hasActorCompanyAccess } from "../routes/authz.js";
+import { loadAccountApprovalStatus } from "../services/account-approvals.js";
 import { isPersonalCompany } from "../services/personal-companies.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 import {
@@ -189,7 +190,7 @@ async function authorizeUpgrade(
     const userId = session?.user?.id;
     if (!userId) return null;
 
-    const [roleRow, memberships] = await Promise.all([
+    const [roleRow, memberships, approvalStatus] = await Promise.all([
       db
         .select({ id: instanceUserRoles.id })
         .from(instanceUserRoles)
@@ -208,7 +209,12 @@ async function authorizeUpgrade(
             eq(companyMemberships.status, "active"),
           ),
         ),
+      loadAccountApprovalStatus(db, userId),
     ]);
+
+    // An account an instance admin has not approved gets no feed, whatever
+    // memberships it may hold, as it gets nothing from the REST routes.
+    if (approvalStatus !== "approved") return null;
 
     const actor: Request["actor"] = { type: "board", userId, source: "session" };
 
