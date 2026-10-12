@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
+import { personalCompanyOwner } from "./services/personal-companies.js";
 import { markWaitingAccountApproved, provisionApprovedAccount } from "./services/account-approvals.js";
 import { isLoopbackHost } from "./url-utils.js";
 
@@ -114,6 +115,11 @@ export async function claimBoardOwnership(
 
     const allCompanies = await tx.select({ id: companies.id }).from(companies);
     for (const company of allCompanies) {
+      // Someone else's Personal company is theirs alone. An owner row there
+      // grants nothing, but it would still read as a seat in it.
+      const personalOwner = personalCompanyOwner(company.id);
+      if (personalOwner && personalOwner !== opts.userId) continue;
+
       const existing = await tx
         .select({ id: companyMemberships.id, status: companyMemberships.status })
         .from(companyMemberships)

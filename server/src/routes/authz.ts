@@ -239,3 +239,15 @@ export function hasActorCompanyAccess(
     return false;
   }
 }
+
+/**
+ * Whether `companyId` is someone's Personal company that this actor may not
+ * enter. For tools that reach across companies on purpose, such as an
+ * instance admin's screens or a template deploy, which must still stop at
+ * another person's Personal. The company access check decides, so its
+ * Personal rule is not copied: the owner gets in, and so does the single
+ * local operator.
+ */
+export function isOthersPersonalCompany(actor: Request["actor"], companyId: string): boolean {
+  return personalCompanyOwner(companyId) !== null && !hasActorCompanyAccess(actor, companyId, "read");
+}

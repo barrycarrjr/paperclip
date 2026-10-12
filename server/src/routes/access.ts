@@ -76,7 +76,7 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
-import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, isOthersPersonalCompany } from "./authz.js";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -1383,8 +1383,9 @@ async function loadUserCompanyAccessResponse(
   db: Db,
   access: ReturnType<typeof accessService>,
   userId: string,
+  viewer: Request["actor"],
 ) {
-  const [memberships, user, isInstanceAdmin] = await Promise.all([
+  const [allMemberships, user, isInstanceAdmin] = await Promise.all([
     access.listUserCompanyAccess(userId),
     db
       .select({
@@ -1398,6 +1399,13 @@ async function loadUserCompanyAccessResponse(
       .then((rows) => rows[0] ?? null),
     access.isInstanceAdmin(userId),
   ]);
+  // An admin looking at someone else does not see their Personal company, or
+  // a stray row on anyone else's: those are their owners' business. An admin
+  // looking at themselves still sees their own. Saving the list is unaffected:
+  // the access service never drops a person's own Personal from it.
+  const memberships = allMemberships.filter(
+    (membership) => !isOthersPersonalCompany(viewer, membership.companyId),
+  );
   const companyIds = [...new Set(memberships.map((membership) => membership.companyId))];
   const companyRows = companyIds.length
     ? await db
@@ -4465,7 +4473,7 @@ export function accessRoutes(
   router.get("/admin/users/:userId/company-access", async (req, res) => {
     await assertInstanceAdmin(req);
     const userId = req.params.userId as string;
-    res.json(await loadUserCompanyAccessResponse(db, access, userId));
+    res.json(await loadUserCompanyAccessResponse(db, access, userId, req.actor));
   });
 
   router.put(
@@ -4479,7 +4487,7 @@ export function accessRoutes(
         req.body.companyIds ?? [],
         { actorUserId: req.actor.userId ?? null },
       );
-      res.json(await loadUserCompanyAccessResponse(db, access, userId));
+      res.json(await loadUserCompanyAccessResponse(db, access, userId, req.actor));
     }
   );
 

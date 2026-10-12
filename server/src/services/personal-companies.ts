@@ -317,10 +317,17 @@ async function nextPersonalIssuePrefix(db: Db): Promise<string> {
 }
 
 /**
- * Refuse to let anyone else in. Used by the membership and invite paths.
- * Personal companies reject these outright rather than relying on a
- * permission check further down, so there is no ordering in which a member
- * could be added and then filtered out.
+ * Refuses outright for any Personal company, the owner's own included.
+ *
+ * Nothing calls this today, and the invite, join-request and member routes do
+ * not need it. Each of them starts with the company access check, which keeps
+ * everyone out of a Personal company except its owner, the owner's own agents
+ * there, and the single local operator. So only they can invite anyone in, and
+ * a membership row there grants nothing anyway, because that check ignores
+ * memberships for a Personal company. Calling this on invites would also stop
+ * the owner inviting an outside agent into their own Personal. The admin
+ * editor for a user's company access has its own Personal check, in
+ * `setUserCompanyAccess`.
  */
 export function assertNotPersonalCompany(companyId: string, action: string): void {
   if (isPersonalCompany(companyId)) {

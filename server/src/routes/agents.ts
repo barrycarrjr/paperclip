@@ -63,7 +63,14 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo, hasInstanceAdminAccess } from "./authz.js";
+import {
+  assertBoard,
+  assertCompanyAccess,
+  assertInstanceAdmin,
+  getActorInfo,
+  hasInstanceAdminAccess,
+  isOthersPersonalCompany,
+} from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -1547,6 +1554,9 @@ export function agentRoutes(
       .orderBy(companies.name, agentsTable.name);
 
     const items: InstanceSchedulerHeartbeatAgent[] = rows
+      // Every company's agents, but not those in someone else's Personal
+      // company: what runs there, and when, is its owner's business.
+      .filter((row) => !isOthersPersonalCompany(req.actor, row.companyId))
       .map((row) => {
         const policy = parseSchedulerHeartbeatPolicy(row.runtimeConfig);
         const statusEligible =
@@ -2263,6 +2273,11 @@ export function agentRoutes(
       }
 
       assertInstanceAdmin(req);
+      // Any company's agent, but not one in someone else's Personal company:
+      // that is its owner's alone, administrators included.
+      if (isOthersPersonalCompany(req.actor, existing.companyId)) {
+        throw forbidden("This is someone's personal company");
+      }
 
       const before = Array.isArray(existing.forbiddenWritePaths)
         ? [...existing.forbiddenWritePaths]

@@ -2119,7 +2119,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return Boolean(contextRun || issueRun);
   }
 
-  async function retireObsoleteLivenessRecoveryIssues(findings: IssueLivenessFinding[]) {
+  async function retireObsoleteLivenessRecoveryIssues(
+    findings: IssueLivenessFinding[],
+    reported: (companyId: string) => boolean = () => true,
+  ) {
     const currentIncidentKeys = new Set(findings.map((finding) => finding.incidentKey));
     const currentLeafKeys = new Set(
       findings.map((finding) =>
@@ -2140,12 +2143,16 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           notInArray(issues.status, ["done", "cancelled"]),
         ),
       );
-    const result = {
+    const emptyTally = () => ({
       retired: 0,
       activeSkipped: 0,
       blockerRelationsRemoved: 0,
       retiredIssueIds: [] as string[],
-    };
+    });
+    const result = emptyTally();
+    // Every recovery is retired as before; one in a company left out of the
+    // report is counted here and thrown away.
+    const unreported = emptyTally();
 
     for (const recovery of openRecoveries) {
       if (recovery.originId && currentIncidentKeys.has(recovery.originId)) continue;
@@ -2158,16 +2165,17 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       ) {
         continue;
       }
+      const tally = reported(recovery.companyId) ? result : unreported;
       if (await removeRecoveryBlockerFromSource(recovery)) {
-        result.blockerRelationsRemoved += 1;
+        tally.blockerRelationsRemoved += 1;
       }
       if (await hasActiveRunForIssueId(recovery.companyId, recovery.id)) {
-        result.activeSkipped += 1;
+        tally.activeSkipped += 1;
         continue;
       }
       await issuesSvc.update(recovery.id, { status: "cancelled" });
-      result.retired += 1;
-      result.retiredIssueIds.push(recovery.id);
+      tally.retired += 1;
+      tally.retiredIssueIds.push(recovery.id);
     }
 
     return result;
@@ -2228,12 +2236,19 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   async function buildIssueGraphLivenessAutoRecoveryPreview(
-    opts?: { lookbackHours?: number; now?: Date },
+    opts?: {
+      lookbackHours?: number;
+      now?: Date;
+      /** Leaves out every finding in a company this returns false for, from the counts too. */
+      includeCompany?: (companyId: string) => boolean;
+    },
   ): Promise<IssueGraphLivenessAutoRecoveryPreview> {
     const now = opts?.now ?? new Date();
     const lookbackHours = normalizeIssueGraphLivenessAutoRecoveryLookbackHours(opts?.lookbackHours);
     const cutoff = new Date(now.getTime() - lookbackHours * 60 * 60 * 1000);
-    const findings = await collectIssueGraphLivenessFindings();
+    const includeCompany = opts?.includeCompany;
+    const findings = (await collectIssueGraphLivenessFindings())
+      .filter((finding) => !includeCompany || includeCompany(finding.companyId));
     const updatedAtByIssueKey = await loadLivenessDependencyUpdatedAtByIssue(findings);
     const issueIds = [...new Set(findings.map((finding) => finding.recoveryIssueId))];
     const recoveryRows = issueIds.length > 0
@@ -2548,7 +2563,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     runId?: string | null;
     force?: boolean;
     lookbackHours?: number;
+    /**
+     * Leaves every company this returns false for out of what is reported,
+     * counts and ids alike. It is still acted on like any other.
+     */
+    includeCompany?: (companyId: string) => boolean;
   }) {
+    const reported = (companyId: string) => !opts?.includeCompany || opts.includeCompany(companyId);
     const findings = await collectIssueGraphLivenessFindings();
     const experimentalSettings = await instanceSettings.getExperimental();
     const autoRecoveryEnabled = asBoolean(
@@ -2560,10 +2581,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     );
     const now = new Date();
     const cutoff = new Date(now.getTime() - lookbackHours * 60 * 60 * 1000);
-    const obsoleteRecoveryCleanup = await retireObsoleteLivenessRecoveryIssues(findings);
+    const obsoleteRecoveryCleanup = await retireObsoleteLivenessRecoveryIssues(findings, reported);
     const updatedAtByIssueKey = await loadLivenessDependencyUpdatedAtByIssue(findings);
     const result = {
-      findings: findings.length,
+      findings: findings.filter((finding) => reported(finding.companyId)).length,
       autoRecoveryEnabled,
       lookbackHours,
       cutoff: cutoff.toISOString(),
@@ -2581,14 +2602,25 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     };
 
     if (!autoRecoveryEnabled) {
-      result.skippedAutoRecoveryDisabled = findings.length;
+      result.skippedAutoRecoveryDisabled = result.findings;
       return result;
     }
 
+    // Every finding is acted on as before; one in a company left out of the
+    // report is counted here and thrown away.
+    const unreported = {
+      escalationsCreated: 0,
+      existingEscalations: 0,
+      skipped: 0,
+      skippedOutsideLookback: 0,
+      issueIds: [] as string[],
+      escalationIssueIds: [] as string[],
+    };
     for (const finding of findings) {
+      const tally = reported(finding.companyId) ? result : unreported;
       if (!isLivenessFindingInsideAutoRecoveryLookback(finding, cutoff, updatedAtByIssueKey)) {
-        result.skippedOutsideLookback += 1;
-        result.skipped += 1;
+        tally.skippedOutsideLookback += 1;
+        tally.skipped += 1;
         continue;
       }
       const escalation = await createIssueGraphLivenessEscalation({
@@ -2596,15 +2628,15 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         runId: opts?.runId ?? null,
       });
       if (escalation.kind === "created") {
-        result.escalationsCreated += 1;
-        result.issueIds.push(finding.issueId);
-        result.escalationIssueIds.push(escalation.escalationIssueId);
+        tally.escalationsCreated += 1;
+        tally.issueIds.push(finding.issueId);
+        tally.escalationIssueIds.push(escalation.escalationIssueId);
       } else if (escalation.kind === "existing") {
-        result.existingEscalations += 1;
-        result.issueIds.push(finding.issueId);
-        result.escalationIssueIds.push(escalation.escalationIssueId);
+        tally.existingEscalations += 1;
+        tally.issueIds.push(finding.issueId);
+        tally.escalationIssueIds.push(escalation.escalationIssueId);
       } else {
-        result.skipped += 1;
+        tally.skipped += 1;
       }
     }
 
