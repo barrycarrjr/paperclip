@@ -238,6 +238,11 @@ Invariants:
 - `error` text null
 - `external_run_id` text null
 - `context_snapshot` jsonb null
+- `model` text null (the model the run was started with; null when the adapter picked its own)
+- `model_source` text null: `manual | rule | fallback | agent-default`
+- `model_reason` text null (short human-readable reason, e.g. "label `legal` matched rule 2")
+
+Model selection: an agent may turn on automatic model selection (`runtime_config.modelSelection`: allowed models, ordered rules matching issue labels and priority, optional fallback). For a run on an issue, a model set on the issue (`assignee_adapter_overrides.adapterConfig.model`) wins; otherwise the first matching rule picks the model, then the fallback, and the pick is never outside the agent's allowed list. With selection off, or for a run with no issue, the agent's own model is used.
 
 ## 7.9 `cost_events`
 

@@ -105,4 +105,23 @@ describe("buildAgentUpdatePatch", () => {
       replaceAdapterConfig: true,
     });
   });
+
+  it("saves the model selection setting alongside the heartbeat settings", () => {
+    const modelSelection = {
+      enabled: true,
+      allowedModels: ["claude-haiku-4-5", "claude-opus-4-6"],
+      rules: [{ labels: ["legal"], model: "claude-opus-4-6" }],
+      fallbackModel: null,
+    };
+    const patch = buildAgentUpdatePatch(
+      makeAgent(),
+      makeOverlay({ heartbeat: { cooldownSec: 30 }, modelSelection }),
+    );
+
+    expect(patch.runtimeConfig).toEqual({
+      ...makeAgent().runtimeConfig,
+      heartbeat: { ...(makeAgent().runtimeConfig.heartbeat as Record<string, unknown>), cooldownSec: 30 },
+      modelSelection,
+    });
+  });
 });

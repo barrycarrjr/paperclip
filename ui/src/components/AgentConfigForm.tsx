@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   Agent,
+  AgentModelSelection,
   AdapterEnvironmentTestResult,
   EnvBinding,
   Environment,
@@ -14,6 +15,7 @@ import {
 import type { AdapterModel } from "../api/agents";
 import { agentsApi } from "../api/agents";
 import { environmentsApi } from "../api/environments";
+import { issuesApi } from "../api/issues";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { secretsApi } from "../api/secrets";
 import { assetsApi } from "../api/assets";
@@ -56,6 +58,7 @@ import { listAdapterOptions, listVisibleAdapterTypes } from "../adapters/metadat
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, type AgentConfigOverlay } from "../lib/agent-config-patch";
+import { AgentModelSelectionSection, initialModelSelection } from "./AgentModelSelectionSection";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
 
 /* ---- Create mode values ---- */
@@ -97,6 +100,9 @@ type AgentConfigFormProps = {
 
 /* ---- Edit mode overlay (dirty tracking) ---- */
 
+/** The overlay groups edited field by field. */
+type OverlayGroup = Exclude<keyof AgentConfigOverlay, "adapterType" | "modelSelection">;
+
 const emptyOverlay: AgentConfigOverlay = {
   identity: {},
   adapterConfig: {},
@@ -113,6 +119,7 @@ function isOverlayDirty(o: AgentConfigOverlay): boolean {
     o.adapterType !== undefined ||
     Object.keys(o.adapterConfig).length > 0 ||
     Object.keys(o.heartbeat).length > 0 ||
+    o.modelSelection !== undefined ||
     Object.keys(o.runtime).length > 0
   );
 }
@@ -231,14 +238,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const isDirty = !isCreate && isOverlayDirty(overlay);
 
   /** Read effective value: overlay if dirty, else original */
-  function eff<T>(group: keyof Omit<AgentConfigOverlay, "adapterType">, field: string, original: T): T {
+  function eff<T>(group: OverlayGroup, field: string, original: T): T {
     const o = overlay[group];
     if (field in o) return o[field] as T;
     return original;
   }
 
   /** Mark field dirty in overlay */
-  function mark(group: keyof Omit<AgentConfigOverlay, "adapterType">, field: string, value: unknown) {
+  function mark(group: OverlayGroup, field: string, value: unknown) {
     setOverlay((prev) => ({
       ...prev,
       [group]: { ...prev[group], [field]: value },
@@ -482,6 +489,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       heartbeat: mergedHeartbeat,
     };
   }, [isCreate, overlay.heartbeat, runtimeConfig, val]);
+  const { data: companyLabels = [] } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.issues.labels(selectedCompanyId) : ["issues", "none", "labels"],
+    queryFn: () => issuesApi.listLabels(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId) && !isCreate && isLocal,
+  });
+  const companyLabelNames = useMemo(() => companyLabels.map((label) => label.name), [companyLabels]);
+  const effectiveModelSelection: AgentModelSelection =
+    overlay.modelSelection
+    ?? (runtimeConfig.modelSelection as AgentModelSelection | null | undefined)
+    ?? initialModelSelection(String(config.model ?? ""));
   const currentDefaultEnvironmentId = isCreate
     ? val!.defaultEnvironmentId ?? ""
     : eff("identity", "defaultEnvironmentId", props.agent.defaultEnvironmentId ?? "");
@@ -1036,6 +1053,25 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           </div>
         </div>
       ) : null}
+
+      {/* ---- Model Selection (edit only) ---- */}
+      {!isCreate && isLocal && (
+        <div className={cn(!cards && "border-b border-border")}>
+          {cards
+            ? <h3 className="text-sm font-medium mb-3">Model Selection</h3>
+            : <div className="px-4 py-2 text-xs font-medium text-muted-foreground">Model Selection</div>
+          }
+          <div className={cn(cards ? "border border-border rounded-lg p-4" : "px-4 pb-3")}>
+            <AgentModelSelectionSection
+              value={effectiveModelSelection}
+              onChange={(next) => setOverlay((prev) => ({ ...prev, modelSelection: next }))}
+              models={models}
+              agentModel={currentModelId}
+              labelNames={companyLabelNames}
+            />
+          </div>
+        </div>
+      )}
 
     </div>
   );

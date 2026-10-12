@@ -1344,6 +1344,7 @@ export * from "./validators/chat-github.js";
 export * from "./validators/secret.js";
 export * from "./types/secrets.js";
 export * from "./mcp-remote-headers.js";
+export * from "./model-selection.js";
 export type {
   SourceTrustMetadata,
 } from "./trust-policy.js";
