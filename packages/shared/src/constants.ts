@@ -1079,6 +1079,17 @@ export type JoinRequestType = (typeof JOIN_REQUEST_TYPES)[number];
 export const JOIN_REQUEST_STATUSES = ["pending_approval", "approved", "rejected"] as const;
 export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
+/**
+ * Where a person's account stands with the instance admins. A new account
+ * starts as "pending": it can sign in, but it sees only a waiting screen until
+ * an instance admin approves or declines it.
+ */
+export const ACCOUNT_APPROVAL_STATUSES = ["pending", "approved", "declined"] as const;
+export type AccountApprovalStatus = (typeof ACCOUNT_APPROVAL_STATUSES)[number];
+
+/** The `code` on every refusal a waiting account gets, so a client can tell it apart. */
+export const ACCOUNT_PENDING_APPROVAL_CODE = "account_pending_approval";
+
 export const PERMISSION_KEYS = [
   "agents:create",
   "agents:configure",

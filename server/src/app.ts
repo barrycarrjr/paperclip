@@ -8,6 +8,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { markBodyReaderErrors } from "./middleware/error-handler.js";
 import { actorMiddleware } from "./middleware/auth.js";
+import { accountApprovalGuard } from "./middleware/account-approval-guard.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { healthRoutes } from "./routes/health.js";
@@ -43,6 +44,7 @@ import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { instanceLogsRoutes } from "./routes/instance-logs.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { accountRequestRoutes } from "./routes/account-requests.js";
 import { systemRoutes } from "./routes/system.js";
 import {
   instanceDatabaseBackupRoutes,
@@ -220,6 +222,9 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
+  // Before every route, the sign-in library's included: an account an
+  // instance admin has not approved yet is refused nearly everywhere.
+  app.use(accountApprovalGuard());
   app.use("/api/auth", authRoutes(db));
   if (opts.betterAuthHandler) {
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
@@ -322,6 +327,7 @@ export async function createApp(
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
+  api.use(accountRequestRoutes(db));
   api.use(instanceLogsRoutes());
   api.use(systemRoutes());
   api.use(emailDraftRoutes());

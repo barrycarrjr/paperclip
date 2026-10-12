@@ -167,6 +167,78 @@ describe("claude execute", () => {
     }
   });
 
+  it("passes the agent's forbiddenWritePaths to the CLI as deny rules", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-forbidden-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
+    try {
+      await execute({
+        runId: "run-forbidden",
+        agent: {
+          id: "agent-1",
+          companyId: "co-1",
+          name: "Test",
+          adapterType: "claude_local",
+          adapterConfig: {},
+          forbiddenWritePaths: ["**/AGENTS.md"],
+        },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath },
+          promptTemplate: "Do work.",
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+        onMeta: async () => {},
+      });
+      const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
+      const settingsIndex = captured.argv.indexOf("--settings");
+      expect(settingsIndex).toBeGreaterThanOrEqual(0);
+      expect(JSON.parse(captured.argv[settingsIndex + 1]!)).toEqual({
+        permissions: { deny: ["Edit(**/AGENTS.md)", "Edit(//**/AGENTS.md)"] },
+      });
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes no --settings when the agent has no forbiddenWritePaths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-noforbidden-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
+    try {
+      await execute({
+        runId: "run-noforbidden",
+        agent: {
+          id: "agent-1",
+          companyId: "co-1",
+          name: "Test",
+          adapterType: "claude_local",
+          adapterConfig: {},
+          forbiddenWritePaths: [],
+        },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath },
+          promptTemplate: "Do work.",
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+        onMeta: async () => {},
+      });
+      const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
+      expect(captured.argv).not.toContain("--settings");
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("omits --append-system-prompt-file on a resumed session even when instructionsFile is set", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-resume-"));
     const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);

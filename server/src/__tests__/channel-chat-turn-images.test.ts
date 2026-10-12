@@ -103,6 +103,8 @@ describeEmbeddedPostgres("chat.turn images through the host", () => {
       id: userId,
       name: "Pat",
       email: `${userId}@example.com`,
+      // A paired chat app gets nothing for an account still waiting for approval.
+      approvalStatus: "approved",
       createdAt: new Date(),
       updatedAt: new Date(),
     });

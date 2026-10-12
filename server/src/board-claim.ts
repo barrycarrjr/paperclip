@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import { personalCompanyOwner } from "./services/personal-companies.js";
+import { markWaitingAccountApproved, provisionApprovedAccount } from "./services/account-approvals.js";
 import { isLoopbackHost } from "./url-utils.js";
 
 const LOCAL_BOARD_USER_ID = "local-board";
@@ -91,7 +92,11 @@ export async function claimBoardOwnership(
   const status = getChallengeStatus(opts.token, opts.code);
   if (status !== "available") return { status };
 
-  await db.transaction(async (tx) => {
+  const approvedAccount = await db.transaction(async (tx) => {
+    // Whoever claims the board becomes its admin, so they skip the wait for
+    // one. Only someone holding the server's startup output has the code.
+    const approved = await markWaitingAccountApproved(tx, opts.userId, opts.userId);
+
     const existingTargetAdmin = await tx
       .select({ id: instanceUserRoles.id })
       .from(instanceUserRoles)
@@ -145,7 +150,10 @@ export async function claimBoardOwnership(
           .where(eq(companyMemberships.id, existing.id));
       }
     }
+
+    return approved;
   });
+  if (approvedAccount) await provisionApprovedAccount(db, approvedAccount);
 
   if (activeChallenge && activeChallenge.token === opts.token) {
     activeChallenge.claimedAt = new Date();
