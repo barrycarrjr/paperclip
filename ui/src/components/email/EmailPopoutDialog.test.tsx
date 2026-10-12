@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ToastProvider } from "../../context/ToastContext";
 import type { MailHeader } from "../../api/emailTools";
 import { EmailPopoutDialog, type EmailPopoutRequest } from "./EmailPopoutDialog";
 
@@ -74,7 +75,9 @@ async function renderDialog(
       <QueryClientProvider client={queryClient!}>
         {/* main.tsx wraps the whole app in one; the dialog inherits it. */}
         <TooltipProvider>
-          <EmailPopoutDialog request={req} onClose={onClose} actionHooks={actionHooks} />
+          <ToastProvider>
+            <EmailPopoutDialog request={req} onClose={onClose} actionHooks={actionHooks} />
+          </ToastProvider>
         </TooltipProvider>
       </QueryClientProvider>,
     );
