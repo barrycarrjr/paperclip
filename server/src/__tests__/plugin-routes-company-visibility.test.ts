@@ -43,6 +43,7 @@ const VIEWER = "viewer-user";
 const ADMIN = "admin-user";
 const BOB = "bob-user";
 const OWNER = "owner-user";
+const STORED_LAST_ERROR = "bob.private@example.com: token expired";
 
 describeEmbeddedPostgres("plugin routes show each caller only the companies they may see", () => {
   let db!: ReturnType<typeof createDb>;
@@ -159,7 +160,7 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
         },
       ],
     };
-    await db.insert(pluginConfig).values({ pluginId, configJson: storedConfig, lastError: "bob.private@example.com: token expired" });
+    await db.insert(pluginConfig).values({ pluginId, configJson: storedConfig, lastError: STORED_LAST_ERROR });
 
     const rowsFor = [
       { companyId: workId, label: "work" },
@@ -203,7 +204,16 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
     await tempDb?.cleanup();
   });
 
-  function createApp(actor: Record<string, unknown>) {
+  /** `workerConfigs` collects the config a running worker is told about after a save. */
+  function createApp(actor: Record<string, unknown>, workerConfigs: unknown[] = []) {
+    const workerManager = {
+      isRunning: () => true,
+      getWorker: () => undefined,
+      call: async (_pluginId: string, method: string, params: { config?: unknown }) => {
+        if (method === "configChanged") workerConfigs.push(params.config);
+        return {};
+      },
+    };
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
@@ -212,13 +222,54 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
     });
     app.use(
       "/api",
-      pluginRoutes(db, { installPlugin: vi.fn() } as never, {
-        scheduler: {} as never,
-        jobStore: pluginJobStore(db),
-      }),
+      pluginRoutes(
+        db,
+        { installPlugin: vi.fn() } as never,
+        { scheduler: {} as never, jobStore: pluginJobStore(db) },
+        undefined,
+        undefined,
+        { workerManager } as never,
+      ),
     );
     app.use(errorHandler);
     return app;
+  }
+
+  async function storedConfigNow() {
+    const [row] = await db
+      .select({ configJson: pluginConfig.configJson })
+      .from(pluginConfig)
+      .where(eq(pluginConfig.pluginId, pluginId));
+    return row?.configJson;
+  }
+
+  async function restoreStoredConfig() {
+    await db
+      .update(pluginConfig)
+      .set({ configJson: storedConfig, lastError: STORED_LAST_ERROR })
+      .where(eq(pluginConfig.pluginId, pluginId));
+  }
+
+  async function configCopy(actor: Record<string, unknown>) {
+    const res = await request(createApp(actor)).get(`/api/plugins/${pluginId}/config`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return res.body as {
+      configJson: Record<string, any>;
+      lastError: string | null;
+      editable: boolean;
+      trimmed: boolean;
+      coverage: { companyIds: string[]; admin: boolean } | null;
+    };
+  }
+
+  /** The stored config as it should look once someone has changed `pollMinutes` and added `extra`. */
+  function storedConfigWith(changes: { pollMinutes?: number; extra?: Record<string, unknown> }) {
+    const accounts = storedConfig.accounts as unknown[];
+    return {
+      ...storedConfig,
+      pollMinutes: changes.pollMinutes ?? storedConfig.pollMinutes,
+      accounts: changes.extra ? [...accounts, changes.extra] : accounts,
+    };
   }
 
   function signedIn(userId: string, companyIds: string[], extra: Record<string, unknown> = {}) {
@@ -286,21 +337,37 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
     expect(JSON.stringify(connector)).not.toContain("bob.");
   });
 
-  it("gives a viewer only the parts of the config that serve her company", async () => {
-    const res = await request(createApp(viewer())).get(`/api/plugins/${pluginId}/config`);
+  it("gives a viewer only the parts of the config that serve her company, as a copy she cannot save", async () => {
+    const copy = await configCopy(viewer());
 
-    expect(res.status).toBe(200);
-    expect(res.body.configJson).toEqual({
+    expect(copy.configJson).toEqual({
       pollMinutes: 5,
       accounts: [
         { key: "work", userEmail: "books@northwind.example", refreshTokenRef: "s1", allowedCompanies: [workId] },
         { key: "everyone", userEmail: "shared@example.com", refreshTokenRef: "s5", allowedCompanies: ["*"] },
       ],
     });
-    expect(res.body.lastError).toBeNull();
-    const text = JSON.stringify(res.body);
+    expect(copy.lastError).toBeNull();
+    expect(copy).toMatchObject({ editable: false, trimmed: true, coverage: { companyIds: [workId], admin: false } });
+    const text = JSON.stringify(copy);
     for (const hidden of [printId, bobPersonalId, ownerPersonalId, "bob.private", "ops@print"]) {
       expect(text).not.toContain(hidden);
+    }
+  });
+
+  it("keeps every other company's settings when a member's copy is saved after she is made an instance admin", async () => {
+    const copy = await configCopy(viewer());
+    const promoted = { ...viewer(), isInstanceAdmin: true };
+
+    try {
+      const res = await request(createApp(promoted))
+        .post(`/api/plugins/${pluginId}/config`)
+        .send({ configJson: copy.configJson, coverage: copy.coverage });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(await storedConfigNow()).toEqual(storedConfig);
+    } finally {
+      await restoreStoredConfig();
     }
   });
 
@@ -333,11 +400,75 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
     });
   });
 
-  it("gives an instance admin the whole config, because the settings page saves it back", async () => {
-    const res = await request(createApp(admin())).get(`/api/plugins/${pluginId}/config`);
+  it("gives an instance admin every part of the config except other people's Personal ones", async () => {
+    const copy = await configCopy(admin());
 
-    expect(res.status).toBe(200);
-    expect(res.body.configJson).toEqual(storedConfig);
+    expect(copy.configJson).toEqual({
+      pollMinutes: 5,
+      accounts: [
+        { key: "work", userEmail: "books@northwind.example", refreshTokenRef: "s1", allowedCompanies: [workId] },
+        { key: "print", userEmail: "ops@print.example", refreshTokenRef: "s2", allowedCompanies: [printId] },
+        { key: "everyone", userEmail: "shared@example.com", refreshTokenRef: "s5", allowedCompanies: ["*"] },
+      ],
+    });
+    expect(copy.editable).toBe(true);
+    expect(copy.trimmed).toBe(true);
+    expect(copy.coverage?.admin).toBe(true);
+    expect([...copy.coverage!.companyIds].sort()).toEqual([hqId, printId, workId].sort());
+    const text = JSON.stringify(copy);
+    for (const hidden of [bobPersonalId, ownerPersonalId, "bob.", "owner.private"]) {
+      expect(text).not.toContain(hidden);
+    }
+  });
+
+  it("keeps someone else's Personal parts when an admin saves a changed copy", async () => {
+    const workerConfigs: unknown[] = [];
+    const app = createApp(admin(), workerConfigs);
+    const copy = await configCopy(admin());
+    const added = { key: "new", userEmail: "new@print.example", refreshTokenRef: "s6", allowedCompanies: [printId] };
+    const changed = structuredClone(copy.configJson);
+    changed.pollMinutes = 10;
+    changed.accounts.push(added);
+
+    try {
+      const res = await request(app)
+        .post(`/api/plugins/${pluginId}/config`)
+        .send({ configJson: changed, coverage: copy.coverage });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const expected = storedConfigWith({ pollMinutes: 10, extra: added });
+      expect(await storedConfigNow()).toEqual(expected);
+      // The running plugin gets the whole config; the admin gets back only their own copy.
+      expect(workerConfigs).toEqual([expected]);
+      expect(res.body.configJson).toEqual(changed);
+      expect(JSON.stringify(res.body)).not.toContain(bobPersonalId);
+    } finally {
+      await restoreStoredConfig();
+    }
+  });
+
+  it("keeps them for a save that sends no coverage, as plugin pages that read the config and save it do", async () => {
+    const copy = await configCopy(admin());
+
+    try {
+      const res = await request(createApp(admin()))
+        .post(`/api/plugins/${pluginId}/config`)
+        .send({ configJson: copy.configJson });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(await storedConfigNow()).toEqual(storedConfig);
+    } finally {
+      await restoreStoredConfig();
+    }
+  });
+
+  it("refuses coverage that is not the shape a copy comes with", async () => {
+    const res = await request(createApp(admin()))
+      .post(`/api/plugins/${pluginId}/config`)
+      .send({ configJson: { pollMinutes: 5 }, coverage: { companyIds: "all" } });
+
+    expect(res.status).toBe(400);
+    expect(await storedConfigNow()).toEqual(storedConfig);
   });
 
   it("leaves the owner everything he had, except inside someone else's Personal", async () => {
@@ -349,10 +480,24 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
       "owner.private@example.com",
     );
 
-    const configRes = await request(createApp(owner())).get(`/api/plugins/${pluginId}/config`);
-    expect(configRes.status).toBe(200);
-    expect(configRes.body.configJson).toEqual(storedConfig);
-    expect(configRes.body.lastError).toBe("bob.private@example.com: token expired");
+    const copy = await configCopy(owner());
+    expect(copy.configJson).toEqual({
+      pollMinutes: 5,
+      accounts: [
+        { key: "work", userEmail: "books@northwind.example", refreshTokenRef: "s1", allowedCompanies: [workId] },
+        { key: "print", userEmail: "ops@print.example", refreshTokenRef: "s2", allowedCompanies: [printId] },
+        {
+          key: "owner",
+          userEmail: "owner.private@example.com",
+          refreshTokenRef: "s4",
+          allowedCompanies: [ownerPersonalId],
+        },
+        { key: "everyone", userEmail: "shared@example.com", refreshTokenRef: "s5", allowedCompanies: ["*"] },
+      ],
+    });
+    expect(copy.editable).toBe(true);
+    // The plugin's own error text can be about Bob's account, so it comes only with a copy of everything.
+    expect(copy.lastError).toBeNull();
 
     expect(await logLabels(owner())).toEqual(["instance", "owner", "print", "work"]);
     expect(await runLabels(owner())).toEqual(["instance", "owner", "print", "work"]);
@@ -360,5 +505,27 @@ describeEmbeddedPostgres("plugin routes show each caller only the companies they
       runs: ["instance", "owner", "print", "work"],
       deliveries: ["instance", "owner", "print", "work"],
     });
+  });
+
+  it("lets the owner change his own Personal settings and keeps everyone else's", async () => {
+    const copy = await configCopy(owner());
+    const changed = structuredClone(copy.configJson);
+    changed.accounts.find((account: { key: string }) => account.key === "owner").userEmail = "owner.new@example.com";
+
+    try {
+      const res = await request(createApp(owner()))
+        .post(`/api/plugins/${pluginId}/config`)
+        .send({ configJson: changed, coverage: copy.coverage });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(await storedConfigNow()).toEqual({
+        ...storedConfig,
+        accounts: (storedConfig.accounts as Array<Record<string, unknown>>).map((account) =>
+          account.key === "owner" ? { ...account, userEmail: "owner.new@example.com" } : account,
+        ),
+      });
+    } finally {
+      await restoreStoredConfig();
+    }
   });
 });

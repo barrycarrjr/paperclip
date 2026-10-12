@@ -21,6 +21,7 @@ import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { systemApi, type SystemActionResponse } from "@/api/system";
 import { queryKeys } from "@/lib/queryKeys";
+import { forgetSignedInData } from "@/lib/signed-in-cache";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
 import { useToastActions } from "../context/ToastContext";
@@ -284,7 +285,7 @@ export function SidebarAccountMenu({
     mutationFn: () => authApi.signOut(),
     onSuccess: async () => {
       setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
+      await forgetSignedInData(queryClient);
     },
   });
 

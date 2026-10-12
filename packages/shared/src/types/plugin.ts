@@ -698,6 +698,30 @@ export interface PluginConfig {
 }
 
 /**
+ * Which part of a plugin's config a copy holds. The copy hands it out, and a
+ * save of that copy sends it back, so the save replaces only that part.
+ */
+export interface PluginConfigCoverage {
+  /** The companies whose parts the copy holds. */
+  companyIds: string[];
+  /** True when the copy was made for an instance admin, who also sees entries not yet given a company. */
+  admin: boolean;
+}
+
+/**
+ * A plugin's config as one caller may see it (`GET /api/plugins/:pluginId/config`).
+ * Parts for companies the caller cannot see are left out.
+ */
+export interface PluginConfigCopy extends PluginConfig {
+  /** False when the caller cannot save, so pages show it read-only. */
+  editable: boolean;
+  /** True when parts were left out of this copy. */
+  trimmed: boolean;
+  /** What the copy holds, to send back with a save of it; null when it holds everything. */
+  coverage: PluginConfigCoverage | null;
+}
+
+/**
  * Query filter for `ctx.entities.list`.
  */
 export interface PluginEntityQuery {

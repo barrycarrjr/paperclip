@@ -38,7 +38,11 @@ import {
   projects,
 } from "@paperclipai/db";
 import type {
+  JsonSchema,
   PluginApiRouteDeclaration,
+  PluginConfig,
+  PluginConfigCopy,
+  PluginConfigCoverage,
   PluginStatus,
   PaperclipPluginManifestV1,
   PluginBridgeErrorCode,
@@ -58,7 +62,11 @@ import {
 } from "@paperclipai/shared";
 import type { PluginOperationPolicy } from "@paperclipai/shared";
 import { pluginConnectorService } from "../services/plugin-connectors.js";
-import { pluginConfigVisibleTo } from "../services/plugin-config-visibility.js";
+import {
+  type ConfigViewer,
+  keepUnseenParts,
+  pluginConfigVisibleTo,
+} from "../services/plugin-config-visibility.js";
 import { isPersonalCompany, personalCompanyIds } from "../services/personal-companies.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import {
@@ -469,6 +477,47 @@ function othersPersonalCompanyIds(req: Request): string[] {
 }
 
 /**
+ * Who a copy of a plugin's config is cut for. Given the `coverage` a save sends
+ * back, it is also no wider than the copy that was edited, so the save
+ * replaces only what that copy showed, whatever the caller's role is by the
+ * time they save.
+ */
+function configViewer(
+  req: Request,
+  companyIds: ReadonlySet<string>,
+  coverage: PluginConfigCoverage | null,
+): ConfigViewer {
+  const admin = hasInstanceAdminAccess(req);
+  const covered = coverage ? new Set(coverage.companyIds) : null;
+  return {
+    canSeeCompany: (companyId) => {
+      if (!canSeePluginCompany(req, companyId)) return false;
+      if (!coverage || !covered) return true;
+      // An id that is no company's was only ever shown to an instance admin.
+      return companyIds.has(companyId) ? covered.has(companyId) : coverage.admin;
+    },
+    isCompanyId: (value) => companyIds.has(value),
+    // Entries not yet given a company are being set up, which is an admin's job.
+    seesUnassigned: admin && (!coverage || coverage.admin),
+  };
+}
+
+/** The `coverage` a config save sends back, or null when it sends none. */
+function readConfigCoverage(raw: unknown): PluginConfigCoverage | null {
+  if (raw === undefined || raw === null) return null;
+  const candidate = raw as { companyIds?: unknown; admin?: unknown };
+  if (
+    typeof raw !== "object" ||
+    !Array.isArray(candidate.companyIds) ||
+    !candidate.companyIds.every((companyId) => typeof companyId === "string") ||
+    typeof candidate.admin !== "boolean"
+  ) {
+    throw badRequest('"coverage" must be the coverage the config copy came with');
+  }
+  return { companyIds: candidate.companyIds as string[], admin: candidate.admin };
+}
+
+/**
  * Create Express router for plugin management API.
  *
  * Routes provided:
@@ -529,6 +578,37 @@ export function pluginRoutes(
     workerManager: bridgeDeps?.workerManager ?? webhookDeps?.workerManager,
   });
   const issuesSvc = issueService(db);
+
+  async function allCompanyIds(): Promise<Set<string>> {
+    return new Set((await db.select({ id: companies.id }).from(companies)).map((row) => row.id));
+  }
+
+  /**
+   * A plugin's config as this caller may see it, saying what the copy holds,
+   * which a save of it sends back.
+   */
+  async function configCopyFor(
+    req: Request,
+    config: PluginConfig,
+    schema: JsonSchema | undefined,
+  ): Promise<PluginConfigCopy> {
+    const companyIds = await allCompanyIds();
+    const viewer = configViewer(req, companyIds, null);
+    const stored = config.configJson ?? {};
+    const configJson = pluginConfigVisibleTo(stored, schema, viewer);
+    const admin = hasInstanceAdminAccess(req);
+    const seen = [...companyIds].filter((companyId) => viewer.canSeeCompany(companyId));
+    const coverage = admin && seen.length === companyIds.size ? null : { companyIds: seen, admin };
+    return {
+      ...config,
+      configJson,
+      // Free text from the plugin, which can be about any part, so only on a copy holding every part.
+      lastError: coverage === null ? config.lastError : null,
+      editable: admin,
+      trimmed: JSON.stringify(configJson) !== JSON.stringify(stored),
+      coverage,
+    };
+  }
 
   function matchScopedApiRoute(route: PluginApiRouteDeclaration, method: string, requestPath: string) {
     if (route.method !== method) return null;
@@ -3292,16 +3372,17 @@ export function pluginRoutes(
    *
    * Retrieve the current instance configuration for a plugin.
    *
-   * Returns the `PluginConfig` record if one exists, or `null` if the plugin
-   * has not yet been configured.
+   * Returns the caller's copy of the config (`PluginConfigCopy`) if one
+   * exists, or `null` if the plugin has not yet been configured.
    *
    * Company pages read this to see whether their company has an account, so
-   * anyone in a company may call it, and gets only the parts for companies
-   * they can read. Instance admins get the whole config: the settings page
-   * saves back exactly what it loaded, so a trimmed copy would delete
-   * everything it did not show.
+   * anyone in a company may call it. Each caller gets only the parts for
+   * companies they can see (see `canSeePluginCompany`): instance admins get
+   * everything except other people's Personal parts. The copy says what it
+   * holds (`coverage`), and a save of it sends that back, so the save replaces
+   * only that part and keeps the rest.
    *
-   * Response: `PluginConfig | null`
+   * Response: `PluginConfigCopy | null`
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/config", async (req, res) => {
@@ -3315,23 +3396,7 @@ export function pluginRoutes(
     }
 
     const config = await registry.getConfig(plugin.id);
-    if (!config || hasInstanceAdminAccess(req)) {
-      res.json(config);
-      return;
-    }
-
-    const companyIds = new Set(
-      (await db.select({ id: companies.id }).from(companies)).map((row) => row.id),
-    );
-    res.json({
-      ...config,
-      configJson: pluginConfigVisibleTo(config.configJson ?? {}, plugin.manifestJson?.instanceConfigSchema, {
-        canSeeCompany: (companyId) => canSeePluginCompany(req, companyId),
-        isCompanyId: (value) => companyIds.has(value),
-      }),
-      // Free text from the plugin, which can name any company's account.
-      lastError: null,
-    });
+    res.json(config ? await configCopyFor(req, config, plugin.manifestJson?.instanceConfigSchema) : null);
   });
 
   /**
@@ -3339,16 +3404,22 @@ export function pluginRoutes(
    *
    * Save (create or replace) the instance configuration for a plugin.
    *
-   * The caller provides the full `configJson` object. The server persists it
-   * via `registry.upsertConfig()`.
+   * The caller provides their whole copy of the config, as `GET` gave it to
+   * them and with their changes, and the `coverage` that copy came with. Only
+   * the part the copy held is replaced: everything it left out is kept, even
+   * if the caller could see more by the time they save (see
+   * `keepUnseenParts`). Without `coverage` the copy counts as one made for the
+   * caller as they are now, so a copy holding everything replaces everything.
    *
    * Request body:
    * - `configJson`: Configuration values matching the plugin's `instanceConfigSchema`
+   * - `coverage` (optional): The `coverage` of the copy being saved
    *
-   * Response: `PluginConfig`
+   * Response: `PluginConfigCopy`, the caller's copy of what was saved
    * Errors:
    * - 400 if request validation fails
    * - 404 if plugin not found
+   * - 409 if the save would remove parts the copy left out
    */
   router.post("/plugins/:pluginId/config", async (req, res) => {
     assertInstanceAdmin(req);
@@ -3360,11 +3431,12 @@ export function pluginRoutes(
       return;
     }
 
-    const body = req.body as { configJson?: Record<string, unknown> } | undefined;
+    const body = req.body as { configJson?: Record<string, unknown>; coverage?: unknown } | undefined;
     if (!body?.configJson || typeof body.configJson !== "object") {
       res.status(400).json({ error: '"configJson" is required and must be an object' });
       return;
     }
+    const coverage = readConfigCoverage(body.coverage);
 
     // Strip devUiUrl unless the caller is an instance admin. devUiUrl activates
     // a dev-proxy in the static file route that could be abused for SSRF if any
@@ -3376,12 +3448,23 @@ export function pluginRoutes(
       delete body.configJson.devUiUrl;
     }
 
-    // Validate configJson against the plugin's instanceConfigSchema (if declared).
-    // This ensures CLI/API callers get the same validation the UI performs client-side.
+    // Put back everything the saved copy left out, so a save never removes
+    // what the saver was not shown.
     const schema = plugin.manifestJson?.instanceConfigSchema;
+    const stored = await registry.getConfig(plugin.id);
+    const companyIds = await allCompanyIds();
+    const configJson = stored
+      ? keepUnseenParts(stored.configJson ?? {}, body.configJson, schema, configViewer(req, companyIds, coverage))
+      : body.configJson;
+
+    // Validate against the plugin's instanceConfigSchema (if declared). This
+    // ensures CLI/API callers get the same validation the UI performs
+    // client-side. Either the copy as sent or the config as it will be stored
+    // may pass: a part the saver cannot see must not stop them saving, and a
+    // required field their copy left out is still there once put back.
     if (schema && Object.keys(schema).length > 0) {
       const validation = validateInstanceConfig(body.configJson, schema);
-      if (!validation.valid) {
+      if (!validation.valid && !validateInstanceConfig(configJson, schema).valid) {
         res.status(400).json({
           error: "Configuration does not match the plugin's instanceConfigSchema",
           fieldErrors: validation.errors,
@@ -3392,12 +3475,12 @@ export function pluginRoutes(
 
     try {
       const result = await registry.upsertConfig(plugin.id, {
-        configJson: body.configJson,
+        configJson,
       });
       await logPluginMutationActivity(req, "plugin.config.updated", plugin.id, {
         pluginId: plugin.id,
         pluginKey: plugin.pluginKey,
-        configKeyCount: Object.keys(body.configJson).length,
+        configKeyCount: Object.keys(configJson).length,
       });
 
       // Notify the running worker about the config change (PLUGIN_SPEC §25.4.4).
@@ -3409,7 +3492,7 @@ export function pluginRoutes(
           await bridgeDeps.workerManager.call(
             plugin.id,
             "configChanged",
-            { config: body.configJson },
+            { config: configJson },
           );
         } catch (rpcErr) {
           if (
@@ -3428,7 +3511,8 @@ export function pluginRoutes(
         }
       }
 
-      res.json(result);
+      // The caller's own copy: the stored config also holds what was kept for them.
+      res.json(await configCopyFor(req, result, schema));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: message });

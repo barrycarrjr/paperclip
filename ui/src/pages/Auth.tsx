@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
+import { forgetSignedInData } from "../lib/signed-in-cache";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
 import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
@@ -50,8 +51,8 @@ export function AuthPage() {
     },
     onSuccess: async () => {
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // Nothing loaded for whoever used this tab before may carry over.
+      await forgetSignedInData(queryClient);
       navigate(nextPath, { replace: true });
     },
     onError: (err) => {
