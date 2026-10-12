@@ -324,5 +324,28 @@ describe("makeEmailToolsApi", () => {
       );
       expect(result.ok).toBe(true);
     });
+
+    it("importContacts calls bridgePerformAction with batch contacts", async () => {
+      mockBridgePerformAction.mockResolvedValue({
+        data: { total: 2, imported: 2, failed: 0, errors: [] },
+      });
+      const result = await api.importContacts([
+        { email: "alice@example.com", name: "Alice" },
+        { email: "bob@example.com", name: "Bob" },
+      ]);
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.import-contacts",
+        {
+          companyId: COMPANY_ID,
+          contacts: [
+            { email: "alice@example.com", name: "Alice" },
+            { email: "bob@example.com", name: "Bob" },
+          ],
+        },
+        COMPANY_ID,
+      );
+      expect(result.imported).toBe(2);
+    });
   });
 });

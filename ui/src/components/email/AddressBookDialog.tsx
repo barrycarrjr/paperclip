@@ -1,4 +1,4 @@
-﻿import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Search,
@@ -8,9 +8,14 @@ import {
   BookUser,
   Loader2,
   X,
-  Check,
   Mail,
   User,
+  Download,
+  Upload,
+  ChevronDown,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import {
   Dialog,
@@ -19,10 +24,23 @@ import {
   DialogTitle,
   DialogDescription,
 } from "../ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../ui/dropdown-menu";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
-import type { EmailToolsApi, EmailContact } from "../../api/emailTools";
+import type { EmailToolsApi, EmailContact, ImportContactItem } from "../../api/emailTools";
+import {
+  exportContactsAsCsv,
+  exportContactsAsVCard,
+  exportContactsAsJson,
+  parseContactsFile,
+  downloadFile,
+} from "./contactFormatters";
 
 export interface AddressBookDialogProps {
   open: boolean;
@@ -55,6 +73,8 @@ export function AddressBookDialog({
   onSelectContact,
 }: AddressBookDialogProps) {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [search, setSearch] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -63,6 +83,15 @@ export function AddressBookDialog({
   const [formNotes, setFormNotes] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Import flow state
+  const [importPreview, setImportPreview] = useState<{
+    filename: string;
+    format: "csv" | "vcard" | "json";
+    contacts: ImportContactItem[];
+    errors: string[];
+  } | null>(null);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
 
   const queryKey = useMemo(
     () => ["email-contacts", companyId, companyIds, search],
@@ -113,6 +142,26 @@ export function AddressBookDialog({
     },
   });
 
+  const importMutation = useMutation({
+    mutationFn: async (items: ImportContactItem[]) => {
+      if (!emailApi) throw new Error("Email API not available");
+      return emailApi.importContacts(items);
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["email-contacts"] });
+      setImportPreview(null);
+      setImportStatus(
+        `Successfully imported ${result.imported} contact(s)${
+          result.failed > 0 ? ` (${result.failed} failed)` : ""
+        }.`,
+      );
+      setTimeout(() => setImportStatus(null), 5000);
+    },
+    onError: (err) => {
+      setFormError((err as Error).message);
+    },
+  });
+
   function resetForm() {
     setIsEditing(false);
     setEditingId(null);
@@ -124,11 +173,13 @@ export function AddressBookDialog({
 
   function startCreate() {
     resetForm();
+    setImportPreview(null);
     setIsEditing(true);
   }
 
   function startEdit(contact: EmailContact) {
     setIsEditing(true);
+    setImportPreview(null);
     setEditingId(contact.id);
     setFormName(contact.name ?? "");
     setFormEmail(contact.email);
@@ -147,6 +198,61 @@ export function AddressBookDialog({
     saveMutation.mutate();
   }
 
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (!content) return;
+
+      const parsed = parseContactsFile(content, file.name);
+      if (parsed.contacts.length === 0) {
+        setFormError(
+          parsed.errors.length > 0
+            ? parsed.errors[0]
+            : "No valid contacts could be found in the selected file.",
+        );
+        return;
+      }
+
+      setFormError(null);
+      setImportPreview({
+        filename: file.name,
+        format: parsed.format,
+        contacts: parsed.contacts,
+        errors: parsed.errors,
+      });
+    };
+    reader.readAsText(file);
+
+    // Reset file input value so selecting the same file again works
+    e.target.value = "";
+  }
+
+  const exportPrefix = useMemo(() => {
+    return (companyName || "address-book")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+  }, [companyName]);
+
+  function handleExportCsv() {
+    const csv = exportContactsAsCsv(contacts);
+    downloadFile(csv, `${exportPrefix}-contacts.csv`, "text/csv;charset=utf-8;");
+  }
+
+  function handleExportVCard() {
+    const vcf = exportContactsAsVCard(contacts);
+    downloadFile(vcf, `${exportPrefix}-contacts.vcf`, "text/vcard;charset=utf-8;");
+  }
+
+  function handleExportJson() {
+    const json = exportContactsAsJson(contacts);
+    downloadFile(json, `${exportPrefix}-contacts.json`, "application/json;charset=utf-8;");
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] w-[90vw] max-w-2xl flex-col gap-0 p-0 overflow-hidden sm:max-w-2xl">
@@ -161,16 +267,150 @@ export function AddressBookDialog({
                 </DialogDescription>
               </div>
             </div>
-            {!isEditing && (
-              <Button size="sm" onClick={startCreate} className="h-8 gap-1.5 text-xs">
-                <Plus className="h-3.5 w-3.5" />
-                Add Contact
-              </Button>
+            {!isEditing && !importPreview && (
+              <div className="flex items-center gap-2">
+                {/* Invisible file input */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  accept=".csv,.vcf,.vcard,.json,text/csv,text/vcard,application/json"
+                  className="hidden"
+                />
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import
+                </Button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={contacts.length === 0}
+                      className="h-8 gap-1 text-xs"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export
+                      <ChevronDown className="h-3 w-3 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem onClick={handleExportCsv} className="text-xs cursor-pointer">
+                      <FileText className="mr-2 h-3.5 w-3.5" />
+                      Export CSV (.csv)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportVCard} className="text-xs cursor-pointer">
+                      <FileText className="mr-2 h-3.5 w-3.5" />
+                      Export vCard (.vcf)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportJson} className="text-xs cursor-pointer">
+                      <FileText className="mr-2 h-3.5 w-3.5" />
+                      Export JSON (.json)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button size="sm" onClick={startCreate} className="h-8 gap-1.5 text-xs">
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Contact
+                </Button>
+              </div>
             )}
           </div>
         </DialogHeader>
 
-        {isEditing ? (
+        {importStatus && (
+          <div className="flex items-center gap-2 bg-emerald-500/10 border-b border-emerald-500/20 px-5 py-2.5 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{importStatus}</span>
+          </div>
+        )}
+
+        {formError && !isEditing && (
+          <div className="flex items-center gap-2 bg-destructive/10 border-b border-destructive/20 px-5 py-2.5 text-xs text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="flex-1">{formError}</span>
+            <button onClick={() => setFormError(null)}>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {importPreview ? (
+          <div className="flex flex-col flex-1 min-h-0 p-5 gap-4">
+            <div className="flex items-center justify-between border-b border-border pb-2">
+              <div>
+                <h3 className="text-sm font-semibold">Import Contacts</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Found <span className="font-semibold text-foreground">{importPreview.contacts.length}</span> contact(s) in <span className="font-medium text-foreground">{importPreview.filename}</span> ({importPreview.format.toUpperCase()})
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setImportPreview(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="rounded-md border border-border/70 bg-muted/40 p-3 text-xs space-y-1">
+              <p className="font-medium text-foreground">Merge policy:</p>
+              <p className="text-muted-foreground">
+                Contacts will be merged by email address. Existing contacts will be updated with imported name and notes.
+              </p>
+              {importPreview.errors.length > 0 && (
+                <p className="text-amber-600 dark:text-amber-400 pt-1">
+                  ⚠️ {importPreview.errors.length} item(s) skipped due to missing or invalid email format.
+                </p>
+              )}
+            </div>
+
+            {/* Preview list */}
+            <div className="flex-1 overflow-y-auto max-h-56 rounded-md border border-border/60 divide-y divide-border/40">
+              {importPreview.contacts.map((c, i) => (
+                <div key={i} className="flex items-center justify-between p-2.5 text-xs">
+                  <div className="min-w-0">
+                    <span className="font-medium text-foreground">{c.name || c.email}</span>
+                    {c.name && <span className="text-muted-foreground ml-2 text-[11px]">&lt;{c.email}&gt;</span>}
+                    {c.notes && <div className="text-[10px] text-muted-foreground/80 italic mt-0.5">{c.notes}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setImportPreview(null)}
+                disabled={importMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs gap-1.5"
+                onClick={() => importMutation.mutate(importPreview.contacts)}
+                disabled={importMutation.isPending}
+              >
+                {importMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                Import {importPreview.contacts.length} Contact(s)
+              </Button>
+            </div>
+          </div>
+        ) : isEditing ? (
           <form onSubmit={handleSave} className="flex flex-col gap-4 p-5">
             <div className="flex items-center justify-between border-b border-border pb-2">
               <h3 className="text-sm font-semibold">
@@ -309,18 +549,28 @@ export function AddressBookDialog({
                     {search ? "No contacts match your search." : "No contacts in address book yet."}
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    {search ? "Try searching for another name or email." : "Add frequently emailed contacts for auto-suggestions."}
+                    {search ? "Try searching for another name or email." : "Add frequently emailed contacts or import an address book."}
                   </p>
                   {!search && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={startCreate}
-                      className="mt-3 h-7 text-xs gap-1"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Add your first contact
-                    </Button>
+                    <div className="flex items-center gap-2 mt-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="h-7 text-xs gap-1"
+                      >
+                        <Upload className="h-3 w-3" />
+                        Import
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={startCreate}
+                        className="h-7 text-xs gap-1"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Add contact
+                      </Button>
+                    </div>
                   )}
                 </div>
               ) : (

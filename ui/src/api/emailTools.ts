@@ -155,6 +155,19 @@ export interface EmailContact {
   updatedAt: string;
 }
 
+export interface ImportContactItem {
+  email: string;
+  name?: string | null;
+  notes?: string | null;
+}
+
+export interface ImportContactsResult {
+  total: number;
+  imported: number;
+  failed: number;
+  errors: Array<{ email?: string; error: string }>;
+}
+
 export interface ListContactsOptions {
   query?: string;
   limit?: number;
@@ -412,6 +425,18 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.delete-contact",
         { companyId, id },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    importContacts: async (
+      contacts: ImportContactItem[],
+    ): Promise<ImportContactsResult> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.import-contacts",
+        { companyId, contacts },
         companyId,
       );
       return extract(result);
