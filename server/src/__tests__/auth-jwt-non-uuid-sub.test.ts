@@ -70,7 +70,7 @@ describe("actorMiddleware: local agent JWT sub handling", () => {
     const { app, select } = buildApp([
       [], // boardApiKeys: no match
       [], // agentApiKeys: no match
-      [{ id: userId, name: "Pat", email: null }], // the user the key acts for
+      [{ id: userId, name: "Pat", email: null, approvalStatus: "approved" }], // the user the key acts for
       [{ companyId, membershipRole: "viewer", status: "active" }], // their memberships
       [], // instance admin role: none
       failOnAgentsLookup,
