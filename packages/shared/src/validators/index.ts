@@ -380,7 +380,9 @@ export {
   updateEventSchema,
   type CalendarRecurrence,
   type CreateCalendarEvent,
+  createGoogleCalendarEventSchema,
   type UpdateCalendarEvent,
+  type CreateGoogleCalendarEventInput,
 } from "./calendar.js";
 
 export {

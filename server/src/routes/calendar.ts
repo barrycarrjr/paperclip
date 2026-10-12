@@ -1,8 +1,9 @@
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
-import { createEventSchema, updateEventSchema } from "@paperclipai/shared";
+import { createEventSchema, createGoogleCalendarEventSchema, updateEventSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { accessService, calendarService, companyService, logActivity } from "../services/index.js";
+import type { CalendarSourceOptions } from "../services/calendar-sources.js";
 import { assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
@@ -28,9 +29,9 @@ function currentMonthRange(now = new Date()): { from: Date; to: Date } {
   return { from, to };
 }
 
-export function calendarRoutes(db: Db) {
+export function calendarRoutes(db: Db, options: CalendarSourceOptions = {}) {
   const router = Router();
-  const svc = calendarService(db);
+  const svc = calendarService(db, options);
   const companySvc = companyService(db);
   const access = accessService(db);
 
@@ -146,6 +147,43 @@ export function calendarRoutes(db: Db) {
     }
 
     res.json({ events: allEvents, companies: targetCompanies });
+  });
+
+
+  router.post("/companies/:companyId/calendar/google-events", validate(createGoogleCalendarEventSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const created = await svc.createGoogleEvent(companyId, req.body);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      action: "calendar_google_event.created",
+      entityType: "calendar_event",
+      entityId: (created as any)?.id ?? "external",
+      details: { summary: req.body.summary },
+    });
+    res.status(201).json({ event: created });
+  });
+
+  router.delete("/companies/:companyId/calendar/google-events/:eventId", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const eventId = req.params.eventId as string;
+    assertCompanyAccess(req, companyId);
+    const calendarId = (req.query.calendarId as string) || "primary";
+    const result = await svc.deleteGoogleEvent(companyId, eventId, calendarId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      action: "calendar_google_event.deleted",
+      entityType: "calendar_event",
+      entityId: eventId,
+      details: { eventId },
+    });
+    res.json(result);
   });
 
   router.get("/companies/:companyId/calendar", async (req, res) => {

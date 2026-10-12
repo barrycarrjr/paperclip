@@ -212,6 +212,7 @@ export function PortfolioCalendar() {
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailEventId, setDetailEventId] = useState<string | null>(null);
+  const [detailOccurrence, setDetailOccurrence] = useState<CalendarOccurrence | null>(null);
   const [pending, setPending] = useState<{ id: string; kind: "fire" | "delete" } | null>(null);
   /** Day the operator picked on the grid, seeded into a new reminder. */
   const [createOnDay, setCreateOnDay] = useState<Date | null>(null);
@@ -491,6 +492,7 @@ export function PortfolioCalendar() {
                     return;
                   }
                   setDetailEventId(occ.eventId);
+                  setDetailOccurrence(occ);
                   setDetailOpen(true);
                 }}
                 onAddOnDay={(day) => openCreate(day)}
@@ -515,6 +517,7 @@ export function PortfolioCalendar() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         eventId={detailEventId}
+        occurrence={detailOccurrence}
         currentUserId={currentUserId}
         companyLabel={
           detailEventId

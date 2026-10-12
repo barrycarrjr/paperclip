@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, isNotNull, lte, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { calendarEvents, calendarEventDeliveries } from "@paperclipai/db";
+import { calendarEvents, calendarEventDeliveries, pluginConfig, plugins } from "@paperclipai/db";
 import type {
   CalendarEvent,
   CalendarEventDetail,
@@ -8,10 +8,11 @@ import type {
   CalendarOccurrence,
   CreateCalendarEvent,
   UpdateCalendarEvent,
+  CreateGoogleCalendarEventInput,
 } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 import { type CalendarScheduleInput, computeNextRun } from "./calendar-schedule.js";
-import { aggregateOccurrences } from "./calendar-sources.js";
+import { aggregateOccurrences, type CalendarSourceOptions } from "./calendar-sources.js";
 import { sendEventSlackDm } from "./event-slack.js";
 import { publishLiveEvent } from "./live-events.js";
 
@@ -84,7 +85,7 @@ function assertRecurrenceCoherent(input: CalendarScheduleInput): void {
   }
 }
 
-export function calendarService(db: Db) {
+export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
   async function getById(id: string): Promise<CalendarEvent | null> {
     return db
       .select()
@@ -432,7 +433,7 @@ export function calendarService(db: Db) {
       to: Date,
       opts?: { kinds?: string[] },
     ): Promise<CalendarOccurrence[]> => {
-      return aggregateOccurrences(db, companyId, from, to, opts);
+      return aggregateOccurrences(db, companyId, from, to, opts, options);
     },
 
     listPendingDesktopNotifications: async (
@@ -477,6 +478,166 @@ export function calendarService(db: Db) {
         .where(and(...conditions))
         .returning({ id: calendarEventDeliveries.id });
       return updated.map((row) => row.id);
+    },
+
+
+    createGoogleEvent: async (
+      companyId: string,
+      input: CreateGoogleCalendarEventInput,
+    ) => {
+      const [plugin] = await db
+        .select()
+        .from(plugins)
+        .where(and(eq(plugins.pluginKey, "google-workspace"), eq(plugins.status, "ready")))
+        .limit(1);
+
+      if (!plugin) {
+        throw unprocessable("Google Workspace plugin is not installed or active");
+      }
+
+      const [cfg] = await db
+        .select()
+        .from(pluginConfig)
+        .where(eq(pluginConfig.pluginId, plugin.id))
+        .limit(1);
+
+      const configJson = (cfg?.configJson as Record<string, unknown>) ?? {};
+      const accounts = Array.isArray(configJson.accounts)
+        ? (configJson.accounts as Array<Record<string, unknown>>)
+        : [];
+      const matchingAccount = accounts.find((acc) => {
+        if (!acc.refreshTokenRef) return false;
+        const allowed = Array.isArray(acc.allowedCompanies)
+          ? (acc.allowedCompanies as string[])
+          : [];
+        return allowed.includes("*") || allowed.includes(companyId);
+      });
+
+      if (!matchingAccount || typeof matchingAccount.key !== "string") {
+        throw unprocessable("No connected Google Calendar account found for this company");
+      }
+
+      const toolParams = {
+        account: matchingAccount.key,
+        calendarId: input.calendarId || "primary",
+        summary: input.summary,
+        description: input.description ?? undefined,
+        location: input.location ?? undefined,
+        start: input.start,
+        end: input.end,
+      };
+
+      const runContext = {
+        companyId,
+        agentId: "",
+        runId: "",
+        projectId: "",
+        userId: null,
+      };
+
+      let result: any;
+      const dispatcher = options.getToolDispatcher?.();
+      if (dispatcher) {
+        const res = await dispatcher.executeTool(
+          "google-workspace:gcal_create_event",
+          toolParams,
+          runContext as any,
+          { bypassDraftGate: true, localTrustedUser: true },
+        );
+        result = res.result;
+      } else if (options.pluginWorkerManager) {
+        result = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
+          toolName: "gcal_create_event",
+          parameters: toolParams,
+          runContext,
+        });
+      } else {
+        throw unprocessable("No plugin dispatcher or worker manager available");
+      }
+
+      if (result?.error) {
+        throw unprocessable(typeof result.error === "string" ? result.error : JSON.stringify(result.error));
+      }
+
+      return result?.data?.event ?? result;
+    },
+
+    deleteGoogleEvent: async (
+      companyId: string,
+      eventId: string,
+      calendarId = "primary",
+    ) => {
+      const [plugin] = await db
+        .select()
+        .from(plugins)
+        .where(and(eq(plugins.pluginKey, "google-workspace"), eq(plugins.status, "ready")))
+        .limit(1);
+
+      if (!plugin) {
+        throw unprocessable("Google Workspace plugin is not installed or active");
+      }
+
+      const [cfg] = await db
+        .select()
+        .from(pluginConfig)
+        .where(eq(pluginConfig.pluginId, plugin.id))
+        .limit(1);
+
+      const configJson = (cfg?.configJson as Record<string, unknown>) ?? {};
+      const accounts = Array.isArray(configJson.accounts)
+        ? (configJson.accounts as Array<Record<string, unknown>>)
+        : [];
+      const matchingAccount = accounts.find((acc) => {
+        if (!acc.refreshTokenRef) return false;
+        const allowed = Array.isArray(acc.allowedCompanies)
+          ? (acc.allowedCompanies as string[])
+          : [];
+        return allowed.includes("*") || allowed.includes(companyId);
+      });
+
+      if (!matchingAccount || typeof matchingAccount.key !== "string") {
+        throw unprocessable("No connected Google Calendar account found for this company");
+      }
+
+      const toolParams = {
+        account: matchingAccount.key,
+        calendarId: calendarId || "primary",
+        eventId,
+      };
+
+      const runContext = {
+        companyId,
+        agentId: "",
+        runId: "",
+        projectId: "",
+        userId: null,
+      };
+
+      let result: any;
+      const dispatcher = options.getToolDispatcher?.();
+      if (dispatcher) {
+        const res = await dispatcher.executeTool(
+          "google-workspace:gcal_delete_event",
+          toolParams,
+          runContext as any,
+          { bypassDraftGate: true, localTrustedUser: true },
+        );
+        result = res.result;
+      } else if (options.pluginWorkerManager) {
+        result = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
+          toolName: "gcal_delete_event",
+          parameters: toolParams,
+          runContext,
+        });
+      } else {
+        throw unprocessable("No plugin dispatcher or worker manager available");
+      }
+
+      if (result?.error) {
+        throw unprocessable(typeof result.error === "string" ? result.error : JSON.stringify(result.error));
+      }
+
+      return { success: true, eventId };
     },
 
     dispatchEventFire,

@@ -52,7 +52,7 @@ export function sourceMeta(source: string): SourceMeta {
 }
 
 /** The set of sources currently known to the surface (for the legend). */
-export const KNOWN_SOURCES = ["paperclip", "routine"] as const;
+export const KNOWN_SOURCES = ["paperclip", "routine", "google"] as const;
 
 /**
  * Source whose entries are scheduled agent work rather than a reminder. These
@@ -63,6 +63,12 @@ export const ROUTINE_SOURCE = "routine";
 
 export function isRoutineOccurrence(source: string): boolean {
   return source === ROUTINE_SOURCE;
+}
+
+export const GOOGLE_SOURCE = "google";
+
+export function isGoogleOccurrence(source: string): boolean {
+  return source === GOOGLE_SOURCE;
 }
 
 export const CHANNEL_LABELS: Record<string, string> = {

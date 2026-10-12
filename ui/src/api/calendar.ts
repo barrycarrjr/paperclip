@@ -4,6 +4,7 @@ import type {
   CalendarOccurrence,
   Company,
   CreateCalendarEvent,
+  CreateGoogleCalendarEventInput,
   UpdateCalendarEvent,
 } from "@paperclipai/shared";
 import { api } from "./client";
@@ -64,6 +65,20 @@ export const calendarApi = {
 
   createEvent: (companyId: string, body: CreateCalendarEvent) =>
     api.post<CalendarEvent>(`/companies/${companyId}/events`, body),
+
+  createGoogleEvent: (companyId: string, body: CreateGoogleCalendarEventInput) =>
+    api.post<{ event: Record<string, unknown> }>(
+      `/companies/${companyId}/calendar/google-events`,
+      body,
+    ),
+
+  deleteGoogleEvent: (companyId: string, eventId: string, calendarId?: string) => {
+    const qs = calendarId ? `?calendarId=${encodeURIComponent(calendarId)}` : "";
+    return api.delete<{ success: boolean; eventId: string }>(
+      `/companies/${companyId}/calendar/google-events/${encodeURIComponent(eventId)}${qs}`,
+    );
+  },
+
 
   getEvent: (id: string) => api.get<CalendarEventDetail>(`/events/${id}`),
 

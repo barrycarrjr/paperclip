@@ -1095,7 +1095,9 @@ export {
   updateEventSchema,
   type CalendarRecurrence,
   type CreateCalendarEvent,
+  createGoogleCalendarEventSchema,
   type UpdateCalendarEvent,
+  type CreateGoogleCalendarEventInput,
 } from "./validators/calendar.js";
 
 export type {

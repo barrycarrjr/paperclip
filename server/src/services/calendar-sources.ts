@@ -1,14 +1,22 @@
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { calendarEvents, routines, routineTriggers } from "@paperclipai/db";
+import { calendarEvents, pluginConfig, plugins, routines, routineTriggers } from "@paperclipai/db";
 import type { CalendarOccurrence } from "@paperclipai/shared";
+import { logger } from "../middleware/logger.js";
 import { type CalendarScheduleInput, expandOccurrences } from "./calendar-schedule.js";
 import { getZonedMinuteParts } from "./cron.js";
+import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 
 const MS_PER_MINUTE = 60_000;
 
 /** Kind reported for a scheduled routine, distinct from the reminder kinds. */
 const ROUTINE_OCCURRENCE_KIND = "routine";
+
+export interface CalendarSourceOptions {
+  pluginWorkerManager?: PluginWorkerManager;
+  getToolDispatcher?: () => PluginToolDispatcher | null;
+}
 
 /**
  * A calendar source expands stored schedules into concrete occurrences for a
@@ -232,11 +240,154 @@ export function routineCalendarSource(db: Db): CalendarSource {
 }
 
 /**
- * The ordered list of calendar sources to aggregate for a company. Google and
- * Outlook sources will be appended here.
+ * Calendar source backed by Google Calendar via the `google-workspace` plugin.
+ * Queries events across `[from, to]` and maps them to `CalendarOccurrence`.
  */
-export function getCalendarSources(db: Db): CalendarSource[] {
-  return [paperclipCalendarSource(db), routineCalendarSource(db)];
+export function googleCalendarSource(
+  db: Db,
+  options: CalendarSourceOptions = {},
+): CalendarSource {
+  return {
+    id: "google",
+    async listOccurrences(
+      companyId: string,
+      from: Date,
+      to: Date,
+      opts?: { kinds?: string[] },
+    ): Promise<CalendarOccurrence[]> {
+      if (opts?.kinds?.length && !opts.kinds.includes("google") && !opts.kinds.includes("all")) {
+        return [];
+      }
+
+      try {
+        const [plugin] = await db
+          .select()
+          .from(plugins)
+          .where(and(eq(plugins.pluginKey, "google-workspace"), eq(plugins.status, "ready")))
+          .limit(1);
+
+        if (!plugin) {
+          return [];
+        }
+
+        const [cfg] = await db
+          .select()
+          .from(pluginConfig)
+          .where(eq(pluginConfig.pluginId, plugin.id))
+          .limit(1);
+
+        const configJson = (cfg?.configJson as Record<string, unknown>) ?? {};
+        const accounts = Array.isArray(configJson.accounts)
+          ? (configJson.accounts as Array<Record<string, unknown>>)
+          : [];
+        const matchingAccount = accounts.find((acc) => {
+          if (!acc.refreshTokenRef) return false;
+          const allowed = Array.isArray(acc.allowedCompanies)
+            ? (acc.allowedCompanies as string[])
+            : [];
+          return allowed.includes("*") || allowed.includes(companyId);
+        });
+
+        if (!matchingAccount || typeof matchingAccount.key !== "string") {
+          return [];
+        }
+
+        const toolParams = {
+          account: matchingAccount.key,
+          calendarId: "primary",
+          timeMin: from.toISOString(),
+          timeMax: to.toISOString(),
+          maxResults: 250,
+        };
+
+        const runContext = {
+          companyId,
+          agentId: "",
+          runId: "",
+          projectId: "",
+          userId: null,
+        };
+
+        let rawResult: unknown;
+        const dispatcher = options.getToolDispatcher?.();
+        if (dispatcher) {
+          const res = await dispatcher.executeTool(
+            "google-workspace:gcal_list_events",
+            toolParams,
+            runContext as any,
+            { bypassDraftGate: true, localTrustedUser: true },
+          );
+          rawResult = res.result;
+        } else if (options.pluginWorkerManager) {
+          rawResult = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
+            toolName: "gcal_list_events",
+            parameters: toolParams,
+            runContext,
+          });
+        } else {
+          return [];
+        }
+
+        const dataObj = (rawResult as any)?.data ?? rawResult;
+        const eventsList = Array.isArray(dataObj?.events)
+          ? dataObj.events
+          : Array.isArray(rawResult)
+            ? rawResult
+            : [];
+
+        const occurrences: CalendarOccurrence[] = [];
+        for (const e of eventsList) {
+          if (!e || typeof e !== "object") continue;
+          const startStr =
+            e.start?.dateTime ??
+            (e.start?.date ? `${e.start.date}T00:00:00.000Z` : from.toISOString());
+          const endStr =
+            e.end?.dateTime ?? (e.end?.date ? `${e.end.date}T23:59:59.999Z` : null);
+          const allDay = Boolean(e.start?.date && !e.start?.dateTime);
+
+          occurrences.push({
+            eventId: e.id || `google-${startStr}`,
+            companyId,
+            source: "google",
+            kind: "google",
+            title: e.summary || "(No title)",
+            body: e.description ?? null,
+            start: startStr,
+            end: endStr,
+            allDay,
+            ownerUserId: "",
+            status: e.status === "cancelled" ? "cancelled" : "active",
+            notify: false,
+            channels: [],
+            location: e.location ?? null,
+            htmlLink: e.htmlLink ?? null,
+          });
+        }
+
+        return occurrences;
+      } catch (err) {
+        logger.warn(
+          { companyId, err: err instanceof Error ? err.message : String(err) },
+          "Failed to fetch Google Calendar occurrences",
+        );
+        return [];
+      }
+    },
+  };
+}
+
+/**
+ * The ordered list of calendar sources to aggregate for a company.
+ */
+export function getCalendarSources(
+  db: Db,
+  options: CalendarSourceOptions = {},
+): CalendarSource[] {
+  return [
+    paperclipCalendarSource(db),
+    routineCalendarSource(db),
+    googleCalendarSource(db, options),
+  ];
 }
 
 /**
@@ -249,8 +400,9 @@ export async function aggregateOccurrences(
   from: Date,
   to: Date,
   opts?: { kinds?: string[] },
+  options: CalendarSourceOptions = {},
 ): Promise<CalendarOccurrence[]> {
-  const sources = getCalendarSources(db);
+  const sources = getCalendarSources(db, options);
   const results = await Promise.all(
     sources.map((source) => source.listOccurrences(companyId, from, to, opts)),
   );

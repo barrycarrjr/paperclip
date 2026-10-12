@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { pluginsApi } from "@/api/plugins";
+import { queryKeys } from "@/lib/queryKeys";
 import type {
   CalendarEvent,
   CalendarEventDetail,
@@ -227,6 +229,38 @@ function buildBody(draft: EventDraft): CreateCalendarEvent {
   return { ...base, scheduleKind: "cron", cronExpression: draft.cronExpression.trim() };
 }
 
+interface GoogleDraft {
+  summary: string;
+  description: string;
+  location: string;
+  allDay: boolean;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+}
+
+function createDefaultGoogleDraft(startOn?: Date | null): GoogleDraft {
+  const start = startOn ? new Date(startOn) : new Date();
+  if (startOn) {
+    start.setHours(9, 0, 0, 0);
+  } else {
+    start.setMinutes(0, 0, 0);
+    start.setHours(start.getHours() + 1);
+  }
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  return {
+    summary: "",
+    description: "",
+    location: "",
+    allDay: false,
+    startDate: toDateInputValue(start),
+    startTime: `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`,
+    endDate: toDateInputValue(end),
+    endTime: `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`,
+  };
+}
+
 function isDraftComplete(draft: EventDraft): boolean {
   if (!draft.title.trim()) return false;
   if (draft.scheduleKind === "once") return !!draft.onceAt;
@@ -248,6 +282,8 @@ export function EventDialog({
   const { pushToast } = useToastActions();
   const isEdit = !!event;
   const [draft, setDraft] = useState<EventDraft>(createDefaultDraft);
+  const [destination, setDestination] = useState<"paperclip" | "google">("paperclip");
+  const [googleDraft, setGoogleDraft] = useState<GoogleDraft>(createDefaultGoogleDraft);
 
   // Only ask which company when creating and the caller has not fixed one.
   const needsCompanyChoice = !isEdit && (companyChoices?.length ?? 0) > 0;
@@ -258,6 +294,8 @@ export function EventDialog({
   useEffect(() => {
     if (!open) return;
     setDraft(event ? draftFromEvent(event) : createDefaultDraft(startOn));
+    setGoogleDraft(createDefaultGoogleDraft(startOn));
+    setDestination("paperclip");
     setTargetCompanyId("");
   }, [open, event, startOn]);
 
@@ -268,6 +306,63 @@ export function EventDialog({
   }, [draft.timezone]);
 
   const patch = (next: Partial<EventDraft>) => setDraft((current) => ({ ...current, ...next }));
+
+  const { data: connectors = [] } = useQuery({
+    queryKey: queryKeys.plugins.connectors("calendar"),
+    queryFn: () => pluginsApi.listConnectors("calendar"),
+    staleTime: 30_000,
+  });
+
+  const effectiveCompanyId = needsCompanyChoice ? targetCompanyId : companyId;
+
+  const isGoogleConnected = useMemo(() => {
+    return connectors.some(
+      (con) =>
+        con.pluginKey === "google-workspace" &&
+        con.companies.some(
+          (comp) =>
+            (comp.companyId === effectiveCompanyId || comp.companyId === "*") &&
+            comp.connected,
+        ),
+    );
+  }, [connectors, effectiveCompanyId]);
+
+  const patchGoogle = (next: Partial<GoogleDraft>) =>
+    setGoogleDraft((current) => ({ ...current, ...next }));
+
+  const googleMutation = useMutation({
+    mutationFn: () => {
+      const start = googleDraft.allDay
+        ? { date: googleDraft.startDate }
+        : { dateTime: new Date(`${googleDraft.startDate}T${googleDraft.startTime}:00`).toISOString() };
+      const end = googleDraft.allDay
+        ? { date: googleDraft.endDate }
+        : { dateTime: new Date(`${googleDraft.endDate}T${googleDraft.endTime}:00`).toISOString() };
+      return calendarApi.createGoogleEvent(effectiveCompanyId, {
+        summary: googleDraft.summary.trim(),
+        description: googleDraft.description.trim() || undefined,
+        location: googleDraft.location.trim() || undefined,
+        calendarId: "primary",
+        start,
+        end,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      pushToast({
+        title: "Google Calendar event created",
+        tone: "success",
+      });
+      onOpenChange(false);
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to create Google Calendar event",
+        body: err instanceof Error ? err.message : "Please try again.",
+        tone: "error",
+      });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -297,15 +392,47 @@ export function EventDialog({
     <Dialog open={open} onOpenChange={(next) => (!mutation.isPending ? onOpenChange(next) : undefined)}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-xl">
         <DialogHeader className="border-b border-border/60 px-5 py-4">
-          <DialogTitle>{isEdit ? "Edit reminder" : "New reminder"}</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit reminder" : destination === "google" ? "New Google Calendar event" : "New reminder"}</DialogTitle>
           <DialogDescription>
             {isEdit
               ? "Update the schedule and notification settings for this reminder."
-              : "Schedule a reminder or event and choose how you want to be notified."}
+              : destination === "google"
+                ? "Create an event on your connected Google Calendar."
+                : "Schedule a reminder or event and choose how you want to be notified."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="max-h-[65vh] space-y-5 overflow-y-auto px-5 py-4">
+
+          {!isEdit && isGoogleConnected ? (
+            <div className="flex rounded-lg border border-border p-1 bg-muted/40">
+              <button
+                type="button"
+                className={cn(
+                  "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors",
+                  destination === "paperclip"
+                    ? "bg-background text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setDestination("paperclip")}
+              >
+                Paperclip Reminder
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors",
+                  destination === "google"
+                    ? "bg-background text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setDestination("google")}
+              >
+                Google Calendar Event
+              </button>
+            </div>
+          ) : null}
+
           {needsCompanyChoice ? (
             <div className="space-y-1.5">
               <Label htmlFor="calendar-event-company">Company</Label>
@@ -326,6 +453,86 @@ export function EventDialog({
               </p>
             </div>
           ) : null}
+
+
+          {destination === "google" && !isEdit ? (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="google-event-summary">Title</Label>
+                <Input
+                  id="google-event-summary"
+                  value={googleDraft.summary}
+                  onChange={(e) => patchGoogle({ summary: e.target.value })}
+                  placeholder="e.g. Weekly Team Standup"
+                  autoFocus
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={googleDraft.allDay}
+                  onCheckedChange={(checked) => patchGoogle({ allDay: checked === true })}
+                />
+                All-day event
+              </label>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Start</Label>
+                  <Input
+                    type="date"
+                    value={googleDraft.startDate}
+                    onChange={(e) => patchGoogle({ startDate: e.target.value })}
+                  />
+                  {!googleDraft.allDay && (
+                    <Input
+                      type="time"
+                      value={googleDraft.startTime}
+                      onChange={(e) => patchGoogle({ startTime: e.target.value })}
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>End</Label>
+                  <Input
+                    type="date"
+                    value={googleDraft.endDate}
+                    onChange={(e) => patchGoogle({ endDate: e.target.value })}
+                  />
+                  {!googleDraft.allDay && (
+                    <Input
+                      type="time"
+                      value={googleDraft.endTime}
+                      onChange={(e) => patchGoogle({ endTime: e.target.value })}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="google-event-location">Location</Label>
+                <Input
+                  id="google-event-location"
+                  value={googleDraft.location}
+                  onChange={(e) => patchGoogle({ location: e.target.value })}
+                  placeholder="e.g. Conference Room A or Google Meet link"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="google-event-desc">Description</Label>
+                <Textarea
+                  id="google-event-desc"
+                  value={googleDraft.description}
+                  onChange={(e) => patchGoogle({ description: e.target.value })}
+                  placeholder="Optional meeting agenda or notes..."
+                  rows={3}
+                />
+              </div>
+            </div>
+          ) : (
+            <>
 
           <div className="space-y-1.5">
             <Label htmlFor="calendar-event-title">Title</Label>
@@ -553,23 +760,42 @@ export function EventDialog({
               </div>
             ) : null}
           </div>
+            </>
+          )}
         </div>
 
         <DialogFooter className="border-t border-border/60 px-5 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={destination === "google" ? googleMutation.isPending : mutation.isPending}
+          >
             Cancel
           </Button>
-          <Button
-            onClick={() => mutation.mutate()}
-            disabled={
-              mutation.isPending ||
-              !isDraftComplete(draft) ||
-              (needsCompanyChoice && !targetCompanyId) ||
-              (draft.notify && draft.slack && !draft.slackTarget.trim())
-            }
-          >
-            {mutation.isPending ? "Saving..." : isEdit ? "Save changes" : "Create reminder"}
-          </Button>
+          {destination === "google" && !isEdit ? (
+            <Button
+              onClick={() => googleMutation.mutate()}
+              disabled={
+                googleMutation.isPending ||
+                !googleDraft.summary.trim() ||
+                (needsCompanyChoice && !targetCompanyId)
+              }
+            >
+              {googleMutation.isPending ? "Creating..." : "Create Google event"}
+            </Button>
+          ) : (
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={
+                mutation.isPending ||
+                !isDraftComplete(draft) ||
+                (needsCompanyChoice && !targetCompanyId) ||
+                (draft.notify && draft.slack && !draft.slackTarget.trim())
+              }
+            >
+              {mutation.isPending ? "Saving..." : isEdit ? "Save changes" : "Create reminder"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

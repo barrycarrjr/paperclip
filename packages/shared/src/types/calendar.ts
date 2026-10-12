@@ -98,6 +98,8 @@ export interface CalendarOccurrence {
    * spelled into it would be the first thing lost.
    */
   repeatsInDay?: number;
+  location?: string | null;
+  htmlLink?: string | null;
 }
 
 export interface CalendarEventListItem extends CalendarEvent {

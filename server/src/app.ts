@@ -302,7 +302,10 @@ export async function createApp(
     }),
   );
   api.use(startWorkRoutes(db));
-  api.use(calendarRoutes(db));
+  api.use(calendarRoutes(db, {
+    pluginWorkerManager: workerManager,
+    getToolDispatcher: () => toolDispatcherRef.current,
+  }));
   api.use(internalNotificationRoutes(db));
   api.use(templateRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(environmentRoutes(db, { pluginWorkerManager: workerManager }));

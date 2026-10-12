@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CalendarEventDetail } from "@paperclipai/shared";
-import { Bell, Loader2, MessageSquare, Monitor, Pencil, Trash2 } from "lucide-react";
+import type { CalendarEventDetail, CalendarOccurrence } from "@paperclipai/shared";
+import { Bell, ExternalLink, Loader2, MapPin, MessageSquare, Monitor, Pencil, Trash2 } from "lucide-react";
 import { calendarApi } from "@/api/calendar";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -21,6 +21,7 @@ interface EventDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   eventId: string | null;
+  occurrence?: CalendarOccurrence | null;
   currentUserId: string | null;
   onEdit: (event: CalendarEventDetail) => void;
   /** Optional company label shown on the portfolio surface. */
@@ -40,6 +41,7 @@ export function EventDetailDialog({
   open,
   onOpenChange,
   eventId,
+  occurrence,
   currentUserId,
   onEdit,
   companyLabel,
@@ -52,13 +54,15 @@ export function EventDetailDialog({
     if (!open) setConfirmingDelete(false);
   }, [open]);
 
+  const isGoogle = occurrence?.source === "google";
+
   const { data: event, isLoading, error } = useQuery({
     queryKey: eventId ? queryKeys.calendar.event(eventId) : ["calendar", "event", "none"],
     queryFn: () => calendarApi.getEvent(eventId!),
-    enabled: open && !!eventId,
+    enabled: open && !!eventId && !isGoogle,
   });
 
-  const isOwned = !event || currentUserId == null || event.userId === currentUserId;
+  const isOwned = isGoogle || !event || currentUserId == null || event.userId === currentUserId;
 
   const deleteMutation = useMutation({
     mutationFn: () => calendarApi.deleteEvent(eventId!),
@@ -76,7 +80,23 @@ export function EventDetailDialog({
     },
   });
 
-  const meta = event ? sourceMeta(event.source) : null;
+  const deleteGoogleMutation = useMutation({
+    mutationFn: () => calendarApi.deleteGoogleEvent(occurrence!.companyId, occurrence!.eventId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      pushToast({ title: "Google Calendar event deleted", tone: "success" });
+      onOpenChange(false);
+    },
+    onError: (mutationError) => {
+      pushToast({
+        title: "Failed to delete Google Calendar event",
+        body: mutationError instanceof Error ? mutationError.message : "Please try again.",
+        tone: "error",
+      });
+    },
+  });
+
+  const meta = isGoogle ? sourceMeta("google") : event ? sourceMeta(event.source) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -84,11 +104,39 @@ export function EventDetailDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {meta ? <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", meta.dot)} /> : null}
-            <span className="min-w-0 truncate">{event?.title ?? "Reminder"}</span>
+            <span className="min-w-0 truncate">{isGoogle ? occurrence?.title ?? "Google Calendar Event" : event?.title ?? "Reminder"}</span>
           </DialogTitle>
         </DialogHeader>
 
-        {isLoading ? (
+        {isGoogle && occurrence ? (
+          <div className="divide-y divide-border">
+            {companyLabel ? <DetailRow label="Company">{companyLabel}</DetailRow> : null}
+            <DetailRow label="Source">
+              <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                Google Calendar
+              </Badge>
+            </DetailRow>
+            <DetailRow label="When">
+              {occurrence.allDay
+                ? `All day (${formatDateTime(occurrence.start).split(" ")[0]})`
+                : `${formatDateTime(occurrence.start)}${occurrence.end ? ` – ${formatDateTime(occurrence.end)}` : ""}`}
+            </DetailRow>
+            {occurrence.location ? (
+              <DetailRow label="Location">
+                <span className="inline-flex items-center gap-1">
+                  <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  {occurrence.location}
+                </span>
+              </DetailRow>
+            ) : null}
+            {occurrence.body ? (
+              <div className="py-2">
+                <p className="mb-1 text-xs text-muted-foreground">Notes</p>
+                <p className="text-sm whitespace-pre-wrap wrap-anywhere">{occurrence.body}</p>
+              </div>
+            ) : null}
+          </div>
+        ) : isLoading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading...
           </div>
@@ -167,16 +215,16 @@ export function EventDetailDialog({
               variant="ghost"
               size="sm"
               className={cn("text-red-600 hover:text-red-700", !isOwned && "invisible")}
-              disabled={!isOwned || deleteMutation.isPending}
+              disabled={!isOwned || (isGoogle ? deleteGoogleMutation.isPending : deleteMutation.isPending)}
               onClick={() => {
                 if (confirmingDelete) {
-                  deleteMutation.mutate();
+                  if (isGoogle) { deleteGoogleMutation.mutate(); } else { deleteMutation.mutate(); }
                 } else {
                   setConfirmingDelete(true);
                 }
               }}
             >
-              {deleteMutation.isPending ? (
+              {(isGoogle ? deleteGoogleMutation.isPending : deleteMutation.isPending) ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Trash2 className="h-3.5 w-3.5" />
@@ -187,7 +235,13 @@ export function EventDetailDialog({
               <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
                 Close
               </Button>
-              {isOwned ? (
+              {isGoogle && occurrence?.htmlLink ? (
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => window.open(occurrence.htmlLink!, "_blank", "noopener,noreferrer")}>
+                <ExternalLink className="h-3.5 w-3.5" />
+                Google Calendar
+              </Button>
+            ) : null}
+            {!isGoogle && isOwned && event ? (
                 <Button size="sm" onClick={() => onEdit(event)}>
                   <Pencil className="h-3.5 w-3.5" />
                   Edit

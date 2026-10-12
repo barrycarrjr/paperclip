@@ -1,19 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { isRoutineOccurrence, KNOWN_SOURCES, resolveNotificationTime, sourceMeta } from "./calendar-utils";
+import { isGoogleOccurrence, isRoutineOccurrence, KNOWN_SOURCES, resolveNotificationTime, sourceMeta } from "./calendar-utils";
 
 describe("calendar sources", () => {
-  it("offers routines in the legend so they can be switched off", () => {
+  it("offers routines and google in the legend so they can be switched off", () => {
     expect([...KNOWN_SOURCES]).toContain("routine");
     expect([...KNOWN_SOURCES]).toContain("paperclip");
+    expect([...KNOWN_SOURCES]).toContain("google");
   });
 
-  it("gives routines their own label and colour, distinct from reminders", () => {
+  it("gives routines and google their own label and colour, distinct from reminders", () => {
     const routine = sourceMeta("routine");
     const paperclip = sourceMeta("paperclip");
+    const google = sourceMeta("google");
 
     expect(routine.label).toBe("Routines");
+    expect(google.label).toBe("Google");
     expect(routine.dot).not.toBe(paperclip.dot);
-    expect(routine.pill).not.toBe(paperclip.pill);
+    expect(google.dot).not.toBe(paperclip.dot);
+    expect(google.dot).not.toBe(routine.dot);
   });
 
   // The reminder dialog can neither edit nor delete a routine, so the pages
@@ -23,6 +27,13 @@ describe("calendar sources", () => {
     expect(isRoutineOccurrence("paperclip")).toBe(false);
     expect(isRoutineOccurrence("google")).toBe(false);
     expect(isRoutineOccurrence("")).toBe(false);
+  });
+
+  it("recognises a google entry and nothing else", () => {
+    expect(isGoogleOccurrence("google")).toBe(true);
+    expect(isGoogleOccurrence("paperclip")).toBe(false);
+    expect(isGoogleOccurrence("routine")).toBe(false);
+    expect(isGoogleOccurrence("")).toBe(false);
   });
 
   it("still falls back for a source it has never seen", () => {

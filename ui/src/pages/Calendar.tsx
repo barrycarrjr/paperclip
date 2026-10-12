@@ -67,6 +67,7 @@ export function Calendar() {
   const [createOnDay, setCreateOnDay] = useState<Date | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailEventId, setDetailEventId] = useState<string | null>(null);
+  const [detailOccurrence, setDetailOccurrence] = useState<CalendarOccurrence | null>(null);
   const [pending, setPending] = useState<{ id: string; kind: "fire" | "delete" } | null>(null);
 
   useEffect(() => {
@@ -96,6 +97,7 @@ export function Calendar() {
     setCreateOnDay(null);
     setDetailOpen(false);
     setDetailEventId(null);
+    setDetailOccurrence(null);
   }, [selectedCompanyId]);
 
   const range = useMemo(() => monthRange(viewMonth), [viewMonth]);
@@ -188,11 +190,12 @@ export function Calendar() {
       navigate(`/routines/${occ.eventId}`);
       return;
     }
-    openDetail(occ.eventId);
+    openDetail(occ.eventId, occ);
   }
 
-  function openDetail(eventId: string) {
+  function openDetail(eventId: string, occ?: CalendarOccurrence | null) {
     setDetailEventId(eventId);
+    setDetailOccurrence(occ ?? null);
     setDetailOpen(true);
   }
 
@@ -348,6 +351,7 @@ export function Calendar() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         eventId={detailEventId}
+        occurrence={detailOccurrence}
         currentUserId={currentUserId}
         onEdit={(event) => {
           setDetailOpen(false);

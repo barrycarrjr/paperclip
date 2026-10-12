@@ -122,3 +122,22 @@ export const updateEventSchema = createEventBaseSchema.partial().extend({
 });
 
 export type UpdateCalendarEvent = z.infer<typeof updateEventSchema>;
+
+export const createGoogleCalendarEventSchema = z.object({
+  summary: z.string().trim().min(1, "Summary is required"),
+  description: z.string().trim().optional().nullable(),
+  location: z.string().trim().optional().nullable(),
+  calendarId: z.string().trim().optional().default("primary"),
+  start: z.object({
+    dateTime: z.string().optional(),
+    date: z.string().optional(),
+    timeZone: z.string().optional(),
+  }),
+  end: z.object({
+    dateTime: z.string().optional(),
+    date: z.string().optional(),
+    timeZone: z.string().optional(),
+  }),
+});
+
+export type CreateGoogleCalendarEventInput = z.infer<typeof createGoogleCalendarEventSchema>;
