@@ -1,5 +1,17 @@
 import { Bot, Clock3, Cpu, FlaskConical, Network, Puzzle, ScrollText, Settings, Shield, SlidersHorizontal, Sparkles, UserRoundPen } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { useAccountRequests } from "../hooks/useAccountRequests";
 import { SidebarNavItem } from "./SidebarNavItem";
+
+/**
+ * Access, with a count of the new accounts waiting for approval, the way
+ * company settings counts people asking to join a company on its own Access.
+ * A component of its own so the menu below stays a plain list of links.
+ */
+function AccessNavItem(props: { to: string; label: string; icon: LucideIcon; end?: boolean }) {
+  const accountRequests = useAccountRequests();
+  return <SidebarNavItem {...props} badge={accountRequests.length} />;
+}
 
 export function InstanceSidebar() {
   return (
@@ -15,7 +27,7 @@ export function InstanceSidebar() {
         <div className="flex flex-col gap-0.5">
           <SidebarNavItem to="/instance/settings/profile" label="Profile" icon={UserRoundPen} end />
           <SidebarNavItem to="/instance/settings/general" label="General" icon={SlidersHorizontal} end />
-          <SidebarNavItem to="/instance/settings/access" label="Access" icon={Shield} end />
+          <AccessNavItem to="/instance/settings/access" label="Access" icon={Shield} end />
           <SidebarNavItem to="/instance/settings/heartbeats" label="Heartbeats" icon={Clock3} end />
           <SidebarNavItem to="/instance/settings/templates" label="Templates" icon={Sparkles} />
           <SidebarNavItem to="/instance/settings/plugins" label="Plugins" icon={Puzzle} />

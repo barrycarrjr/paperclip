@@ -141,6 +141,23 @@ export function assertActorCompanyAccess(
     }
     throw forbidden("Tool session cannot access another company");
   }
+  if (actor.type === "tool_session") {
+    // In its own company the key acts as the person it was made for, with no
+    // more than they have now: a viewer's key reads but does not write, and a
+    // removed member's key does nothing. The actor middleware loads the person
+    // on every request. The one addition is the instance admin's, which
+    // Clippy's own tools already give: any company but someone else's
+    // Personal, and Personal companies were settled above.
+    const person = actor.person;
+    if (!person || person.type !== "board") {
+      throw forbidden("Tool session is not acting for a user");
+    }
+    if (person.isInstanceAdmin) {
+      return;
+    }
+    assertActorCompanyAccess(person, companyId, mode, method);
+    return;
+  }
   if (actor.type === "board" && actor.source !== "local_implicit") {
     const allowedCompanies = actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
@@ -221,4 +238,16 @@ export function hasActorCompanyAccess(
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether `companyId` is someone's Personal company that this actor may not
+ * enter. For tools that reach across companies on purpose, such as an
+ * instance admin's screens or a template deploy, which must still stop at
+ * another person's Personal. The company access check decides, so its
+ * Personal rule is not copied: the owner gets in, and so does the single
+ * local operator.
+ */
+export function isOthersPersonalCompany(actor: Request["actor"], companyId: string): boolean {
+  return personalCompanyOwner(companyId) !== null && !hasActorCompanyAccess(actor, companyId, "read");
 }

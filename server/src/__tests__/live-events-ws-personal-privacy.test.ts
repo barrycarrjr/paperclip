@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import {
   agentApiKeys,
   agents,
+  authUsers,
   companies,
   companyMemberships,
   createDb,
@@ -37,11 +38,18 @@ if (!embeddedPostgresSupport.supported) {
 type FeedMessage = { kind?: string; id?: number; companyId?: string };
 
 // Alice owns a Personal company and is also an HQ admin, so she can open the
-// portfolio feed. Bob is an HQ owner and Carol an instance administrator;
-// neither of them owns Alice's Personal.
+// portfolio feed. Bob is an HQ owner and Carol an instance administrator with
+// an ordinary seat in HQ; neither of them owns Alice's Personal. Dan is an
+// instance administrator with no seat anywhere. Erin is an instance
+// administrator and an HQ admin who does not own Alice's Personal either. The
+// owner of this instance is an instance administrator, an HQ owner, and the
+// owner of his own Personal.
 const ALICE = "user-alice";
 const BOB = "user-bob";
 const CAROL = "user-carol";
+const DAN = "user-dan";
+const ERIN = "user-erin";
+const OWNER = "user-owner";
 const HQ_AGENT_TOKEN = "hq-agent-live-feed-token";
 
 /**
@@ -60,6 +68,7 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
   let hqId!: string;
   let acmeId!: string;
   let alicePersonalId!: string;
+  let ownerPersonalId!: string;
 
   async function startFeedServer(deploymentMode: DeploymentMode): Promise<number> {
     const server = createServer();
@@ -80,6 +89,18 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-live-feed-personal-");
     db = createDb(tempDb.connectionString);
+    // Approved accounts: a feed is refused to one still waiting for approval.
+    const now = new Date();
+    await db.insert(authUsers).values(
+      [ALICE, BOB, CAROL].map((id) => ({
+        id,
+        name: id,
+        email: `${id}@example.com`,
+        approvalStatus: "approved",
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
     authenticatedPort = await startFeedServer("authenticated");
     localTrustedPort = await startFeedServer("local_trusted");
   }, 90_000);
@@ -100,15 +121,22 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
     hqId = randomUUID();
     acmeId = randomUUID();
     alicePersonalId = randomUUID();
+    ownerPersonalId = randomUUID();
 
     await db.insert(companies).values([
       { id: hqId, name: "HQ", issuePrefix: "HQF", isPortfolioRoot: true },
       { id: acmeId, name: "Acme", issuePrefix: "ACF" },
       { id: alicePersonalId, name: "Personal", issuePrefix: "MEF", kind: "personal", ownerUserId: ALICE },
+      { id: ownerPersonalId, name: "Personal", issuePrefix: "ME2F", kind: "personal", ownerUserId: OWNER },
     ]);
     await db.insert(companyMemberships).values([
       { companyId: hqId, principalType: "user", principalId: BOB, status: "active", membershipRole: "owner" },
       { companyId: hqId, principalType: "user", principalId: ALICE, status: "active", membershipRole: "admin" },
+      // An instance administrator needs a seat in HQ to watch its feed, as the
+      // REST portfolio routes require.
+      { companyId: hqId, principalType: "user", principalId: CAROL, status: "active", membershipRole: "viewer" },
+      { companyId: hqId, principalType: "user", principalId: OWNER, status: "active", membershipRole: "owner" },
+      { companyId: hqId, principalType: "user", principalId: ERIN, status: "active", membershipRole: "admin" },
       {
         companyId: alicePersonalId,
         principalType: "user",
@@ -116,8 +144,20 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
         status: "active",
         membershipRole: "owner",
       },
+      {
+        companyId: ownerPersonalId,
+        principalType: "user",
+        principalId: OWNER,
+        status: "active",
+        membershipRole: "owner",
+      },
     ]);
-    await db.insert(instanceUserRoles).values({ userId: CAROL, role: "instance_admin" });
+    await db.insert(instanceUserRoles).values([
+      { userId: CAROL, role: "instance_admin" },
+      { userId: DAN, role: "instance_admin" },
+      { userId: ERIN, role: "instance_admin" },
+      { userId: OWNER, role: "instance_admin" },
+    ]);
     const [hqAgent] = await db
       .insert(agents)
       .values({ companyId: hqId, name: "HQ analyst" })
@@ -241,6 +281,10 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
 
       await vi.waitFor(() => expect(eventIds(messages)).toEqual([event.id]));
     });
+
+    it("refuses an instance administrator with no seat in HQ, as the REST portfolio routes do", async () => {
+      await expect(openFeed(portfolioFeed(), asUser(DAN))).rejects.toThrow(/403/);
+    });
   });
 
   describe("a single company's feed", () => {
@@ -249,6 +293,19 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
       ["an instance administrator who is not the owner", CAROL],
     ])("refuses %s the feed of someone's Personal company", async (_who, userId) => {
       await expect(openFeed(companyFeed(alicePersonalId), asUser(userId))).rejects.toThrow(/403/);
+    });
+
+    it.each([
+      ["an HQ admin who is not the owner", BOB],
+      // Erin, not Carol: Carol has only a viewer seat in HQ, so she is
+      // refused for that alone, and the case would no longer test the id.
+      ["an instance administrator and HQ admin who is not the owner", ERIN],
+    ])("refuses %s that feed with the company id in capitals and braces", async (_who, userId) => {
+      // Postgres reads that id as the same company. The feed must not depend
+      // on events happening to be routed by the exact string.
+      await expect(
+        openFeed(companyFeed(`{${alicePersonalId.toUpperCase()}}`), asUser(userId)),
+      ).rejects.toThrow(/403/);
     });
 
     it("opens a Personal company's feed to its owner", async () => {
@@ -263,6 +320,25 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
       const event = publishLiveEvent({ companyId: acmeId, type: "activity.logged", payload: {} });
 
       await vi.waitFor(() => expect(eventIds(messages)).toEqual([event.id]));
+    });
+
+    it("refuses an instance administrator with no seat an ordinary company's feed, as REST does", async () => {
+      await expect(openFeed(companyFeed(acmeId), asUser(DAN))).rejects.toThrow(/403/);
+    });
+  });
+
+  describe("the owner of this instance", () => {
+    it("still gets HQ's feed with his own Personal in it, any company's feed, and his own Personal's", async () => {
+      const hq = await openFeed(portfolioFeed(), asUser(OWNER));
+      const acme = await openFeed(companyFeed(acmeId), asUser(OWNER));
+      const own = await openFeed(companyFeed(ownerPersonalId), asUser(OWNER));
+      const his = publishLiveEvent({ companyId: ownerPersonalId, type: "activity.logged", payload: {} });
+      publishLiveEvent({ companyId: alicePersonalId, type: "activity.logged", payload: {} });
+      const ordinary = publishLiveEvent({ companyId: acmeId, type: "activity.logged", payload: {} });
+
+      await vi.waitFor(() => expect(eventIds(hq)).toEqual([his.id, ordinary.id]));
+      await vi.waitFor(() => expect(eventIds(acme)).toEqual([ordinary.id]));
+      await vi.waitFor(() => expect(eventIds(own)).toEqual([his.id]));
     });
   });
 });

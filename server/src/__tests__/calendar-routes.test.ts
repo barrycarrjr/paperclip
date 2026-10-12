@@ -155,13 +155,25 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     return row?.status;
   }
 
-  /** A user-driven actor (Clippy-style tool session) scoped to one company. */
+  /**
+   * A user-driven actor (Clippy-style tool session) scoped to one company,
+   * acting for a person who is a member there, as the actor middleware builds
+   * it from Clippy's key.
+   */
   function toolSessionActor(
     userId: string,
     companyId: string,
     extra: Record<string, unknown> = {},
   ): Record<string, unknown> {
-    return { type: "tool_session", userId, companyId, source: "tool_session", ...extra };
+    const person = {
+      type: "board",
+      userId,
+      companyIds: [companyId],
+      memberships: [{ companyId, membershipRole: "member", status: "active" }],
+      isInstanceAdmin: false,
+      source: "tool_session_jwt",
+    };
+    return { type: "tool_session", userId, companyId, source: "tool_session", person, ...extra };
   }
 
   /** An agent (non-user-driven) actor scoped to one company. */

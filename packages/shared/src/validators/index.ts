@@ -297,10 +297,14 @@ export {
   updateSpaceSchema,
   createSpacePageSchema,
   updateSpacePageSchema,
+  moveSpacePageSchema,
+  restoreSpacePageRevisionSchema,
   type CreateSpace,
   type UpdateSpace,
   type CreateSpacePage,
   type UpdateSpacePage,
+  type MoveSpacePage,
+  type RestoreSpacePageRevision,
 } from "./space.js";
 
 export {

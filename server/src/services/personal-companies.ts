@@ -12,12 +12,21 @@
  * themselves out of their own Personal, an administrator cannot look inside
  * to help. A back door that only administrators can walk through is still a
  * back door, and the promise here is that your Personal is yours.
+ *
+ * A known limit, left as it is for now: the live event feed numbers every
+ * company's events from one shared counter. Nobody is sent another person's
+ * Personal events, but the numbers missing from what the HQ feed receives
+ * show roughly how much, and when, other people's Personal companies are
+ * active (every log line of an agent run there uses up a number). Closing
+ * that needs the numbering, and the catch-up after a reconnect, to be per
+ * company. See services/live-events.ts and realtime/live-events-ws.ts.
  */
 
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companyMemberships } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
+import { canonicalUuid } from "../lib/canonical-uuid.js";
 import { logger } from "../middleware/logger.js";
 
 export const PERSONAL_COMPANY_KIND = "personal";
@@ -26,11 +35,17 @@ export const PERSONAL_COMPANY_KIND = "personal";
  * Owner lookup for personal companies, kept in memory because the access
  * check runs on effectively every request and is synchronous.
  *
- * There is one row per user, so this stays small. It is refreshed whenever a
- * personal company is created and can be reloaded on demand; a miss is
- * resolved by reloading rather than by assuming the company is not personal,
- * because assuming wrongly would open exactly the hole this file exists to
- * close.
+ * There is one row per user, so this stays small. It is loaded before the
+ * server starts listening, updated by every path that makes a company
+ * personal (create, adopt, the re-read after losing a race) and reloaded after
+ * a restore. Nothing reloads it on a miss: a miss means "not personal", and
+ * the ordinary access rules apply, HQ's read across every company included.
+ *
+ * The keys are ids as Postgres returns them, so every lookup first puts the
+ * id it is given into that same form (`canonicalUuid`). Postgres reads an id
+ * written in capitals, in braces or without hyphens as the same company; an
+ * exact string lookup would miss someone's Personal under any of those and
+ * let HQ straight in.
  */
 let ownerByCompanyId = new Map<string, string>();
 let companyIdByOwner = new Map<string, string>();
@@ -87,14 +102,18 @@ export function isPersonalCompanyIndexLoaded(): boolean {
 
 /** The owner of `companyId`, or null when it is not a personal company. */
 export function personalCompanyOwner(companyId: string): string | null {
-  return ownerByCompanyId.get(companyId) ?? null;
+  return ownerByCompanyId.get(canonicalUuid(companyId)) ?? null;
 }
 
 export function isPersonalCompany(companyId: string): boolean {
-  return ownerByCompanyId.has(companyId);
+  return ownerByCompanyId.has(canonicalUuid(companyId));
 }
 
-/** Every personal company id, so listings can filter them out in one pass. */
+/**
+ * Every personal company id, so listings can filter them out in one pass.
+ * The ids are in the form Postgres returns: put an id from a request through
+ * `canonicalUuid` before looking it up here.
+ */
 export function personalCompanyIds(): ReadonlySet<string> {
   return new Set(ownerByCompanyId.keys());
 }
@@ -117,7 +136,7 @@ export function excludeOthersPersonalCompanies<T extends { id: string }>(
 ): T[] {
   if (ownerByCompanyId.size === 0) return rows;
   return rows.filter((row) => {
-    const owner = ownerByCompanyId.get(row.id);
+    const owner = ownerByCompanyId.get(canonicalUuid(row.id));
     return !owner || owner === viewerUserId;
   });
 }
@@ -141,7 +160,7 @@ export function assertPersonalCompanyOwner(
   companyId: string,
   userId: string | null | undefined,
 ): void {
-  const owner = ownerByCompanyId.get(companyId);
+  const owner = ownerByCompanyId.get(canonicalUuid(companyId));
   if (!owner) return; // Not a personal company; normal rules apply.
   if (!userId || userId !== owner) {
     // Deliberately says nothing about whose it is, or that it is personal at
@@ -298,10 +317,17 @@ async function nextPersonalIssuePrefix(db: Db): Promise<string> {
 }
 
 /**
- * Refuse to let anyone else in. Used by the membership and invite paths.
- * Personal companies reject these outright rather than relying on a
- * permission check further down, so there is no ordering in which a member
- * could be added and then filtered out.
+ * Refuses outright for any Personal company, the owner's own included.
+ *
+ * Nothing calls this today, and the invite, join-request and member routes do
+ * not need it. Each of them starts with the company access check, which keeps
+ * everyone out of a Personal company except its owner, the owner's own agents
+ * there, and the single local operator. So only they can invite anyone in, and
+ * a membership row there grants nothing anyway, because that check ignores
+ * memberships for a Personal company. Calling this on invites would also stop
+ * the owner inviting an outside agent into their own Personal. The admin
+ * editor for a user's company access has its own Personal check, in
+ * `setUserCompanyAccess`.
  */
 export function assertNotPersonalCompany(companyId: string, action: string): void {
   if (isPersonalCompany(companyId)) {

@@ -8,6 +8,15 @@ export const authUsers = pgTable("user", {
   image: text("image"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  /**
+   * "pending" until an instance admin approves ("approved") or declines
+   * ("declined") the account; see server/src/services/account-approvals.ts.
+   * The sign-in library does not know this column, so it can never be set by
+   * signing up, and a new account takes the "pending" default.
+   */
+  approvalStatus: text("approval_status").notNull().default("pending"),
+  approvalDecidedAt: timestamp("approval_decided_at", { withTimezone: true }),
+  approvalDecidedByUserId: text("approval_decided_by_user_id"),
 });
 
 export const authSessions = pgTable("session", {

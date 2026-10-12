@@ -4,13 +4,18 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import { unauthorized } from "../errors.js";
-import type { DeploymentMode } from "@paperclipai/shared";
+import { forbidden, unauthorized } from "../errors.js";
+import { ACCOUNT_PENDING_APPROVAL_CODE, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 import { ensurePersonalCompanyOnce } from "../services/personal-companies.js";
+import {
+  ACCOUNT_DECLINED_MESSAGE,
+  ACCOUNT_PENDING_APPROVAL_MESSAGE,
+  loadAccountApprovalStatus,
+} from "../services/account-approvals.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -79,7 +84,12 @@ async function annotateHqStatus(req: Request, db: Db): Promise<void> {
 async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Promise<void> {
   if ((actor.type === "agent" || actor.type === "tool_session") && actor.companyId) {
     const rootId = await getPortfolioRootCompanyId(db);
-    if (rootId && actor.companyId === rootId) {
+    // A tool session gets HQ's read across companies only when the person it
+    // acts for has that themselves, as an HQ owner or admin. A key scoped to
+    // HQ is not enough: an HQ viewer, or an instance admin outside HQ, can
+    // start a chat there but cannot read the other companies themselves.
+    const readsAcross = actor.type === "agent" || actor.person?.isPortfolioRootUserAdmin === true;
+    if (rootId && actor.companyId === rootId && readsAcross) {
       actor.isPortfolioRootAgent = true;
     }
   } else if (
@@ -101,15 +111,21 @@ async function annotatePortfolioRootStatus(actor: Request["actor"], db: Db): Pro
 }
 
 /**
- * The board actor for a user acting through a paired chat app rather than a
- * browser: the same memberships, admin flag and portfolio-root status a
- * signed-in request from that user gets, so every access rule treats a
- * Slack message exactly like a click in the web app. Null when the user no
- * longer exists.
+ * The board actor for a user acting through something other than a browser:
+ * the same memberships, admin flag and portfolio-root status a signed-in
+ * request from that user gets, so every access rule treats them exactly like
+ * a click in the web app. Null when the user no longer exists.
  */
-export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
+async function boardActorForUser(
+  db: Db,
+  userId: string,
+  source: Request["actor"]["source"],
+): Promise<Request["actor"] | null> {
   const access = await boardAuthService(db).resolveBoardAccess(userId);
   if (!access.user) return null;
+  // A chat app speaks as its user, so an account an instance admin has not
+  // approved gets nothing through one, Clippy included.
+  if (access.user.approvalStatus !== "approved") return null;
   const actor: Request["actor"] = {
     type: "board",
     userId,
@@ -118,10 +134,18 @@ export async function boardActorForLinkedUser(db: Db, userId: string): Promise<R
     companyIds: access.companyIds,
     memberships: access.memberships,
     isInstanceAdmin: access.isInstanceAdmin,
-    source: "channel_link",
+    source,
   };
   await annotatePortfolioRootStatus(actor, db);
   return actor;
+}
+
+/**
+ * The board actor for a user acting through a paired chat app, so a Slack
+ * message is treated exactly like a click in the web app.
+ */
+export async function boardActorForLinkedUser(db: Db, userId: string): Promise<Request["actor"] | null> {
+  return boardActorForUser(db, userId, "channel_link");
 }
 
 interface ActorMiddlewareOptions {
@@ -165,7 +189,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         }
         if (session?.user?.id) {
           const userId = session.user.id;
-          const [roleRow, memberships] = await Promise.all([
+          const [roleRow, memberships, approvalStatus] = await Promise.all([
             db
               .select({ id: instanceUserRoles.id })
               .from(instanceUserRoles)
@@ -185,7 +209,34 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
                   eq(companyMemberships.status, "active"),
                 ),
               ),
+            loadAccountApprovalStatus(db, userId),
           ]);
+          if (approvalStatus !== "approved") {
+            // Still waiting for an instance admin: signed in, and nothing
+            // more. No memberships, no admin role, and no Personal company
+            // until approval (services/account-approvals.ts), and the guard
+            // after this middleware refuses it almost everywhere. A declined
+            // account, or one that no longer exists, stays as nobody, as if
+            // it had no session.
+            if (approvalStatus === "pending") {
+              req.actor = {
+                type: "board",
+                userId,
+                userName: session.user.name ?? null,
+                userEmail: session.user.email ?? null,
+                companyIds: [],
+                memberships: [],
+                isInstanceAdmin: false,
+                awaitingApproval: true,
+                runId: runIdHeader ?? undefined,
+                source: "session",
+              };
+            } else if (runIdHeader) {
+              req.actor.runId = runIdHeader;
+            }
+            next();
+            return;
+          }
           req.actor = {
             type: "board",
             userId,
@@ -217,6 +268,17 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (boardKey) {
       const access = await boardAuth.resolveBoardAccess(boardKey.userId);
       if (access.user) {
+        // A key is only as good as its account. One waiting for approval, or
+        // declined, is refused outright rather than treated as nobody, so the
+        // program holding the key is told why.
+        if (access.user.approvalStatus === "pending") {
+          next(forbidden(ACCOUNT_PENDING_APPROVAL_MESSAGE, { code: ACCOUNT_PENDING_APPROVAL_CODE }));
+          return;
+        }
+        if (access.user.approvalStatus !== "approved") {
+          next(unauthorized(ACCOUNT_DECLINED_MESSAGE));
+          return;
+        }
         await boardAuth.touchBoardApiKey(boardKey.id);
         req.actor = {
           type: "board",
@@ -269,6 +331,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         const userId = typeof claims.user_id === "string" && claims.user_id.length > 0
           ? claims.user_id
           : undefined;
+        // The key acts as the person chatting and may never do more than they
+        // can. Their access is read here on every request rather than frozen
+        // into the key, so a removed membership or a move to viewer applies to
+        // the very next call instead of when the key expires, up to two days on.
+        const person = userId ? await boardActorForUser(db, userId, "tool_session_jwt") : null;
+        if (!person) {
+          next(unauthorized("Tool-session token is not for an existing user; obtain fresh credentials and retry"));
+          return;
+        }
         req.actor = {
           type: "tool_session",
           userId,
@@ -276,6 +347,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           toolSessionId: claims.sub,
           runId: runIdHeader || claims.run_id || undefined,
           source: "tool_session_jwt",
+          person,
         };
         await annotateHqStatus(req, db);
         next();

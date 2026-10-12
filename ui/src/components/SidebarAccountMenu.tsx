@@ -14,14 +14,17 @@ import {
   RefreshCw,
   Settings,
   Sun,
+  UserPlus,
   UserRoundPen,
 } from "lucide-react";
 import type { DeploymentMode } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { systemApi, type SystemActionResponse } from "@/api/system";
+import { describeWaitingAccounts } from "@/lib/account-approval";
 import { queryKeys } from "@/lib/queryKeys";
 import { forgetSignedInData } from "@/lib/signed-in-cache";
+import { useAccountRequests } from "../hooks/useAccountRequests";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
 import { useToastActions } from "../context/ToastContext";
@@ -342,6 +345,10 @@ export function SidebarAccountMenu({
     updateMutation.isPending ||
     rebuildMutation.isPending;
 
+  // New accounts waiting for an instance admin. Counted on this row, which
+  // sits at the foot of every page, so an admin sees them without looking.
+  const waitingAccounts = useAccountRequests().length;
+
   const displayName = session?.user.name?.trim() || "Board";
   const secondaryLabel =
     session?.user.email?.trim() || (deploymentMode === "authenticated" ? "Signed in" : "Local workspace board");
@@ -410,13 +417,29 @@ export function SidebarAccountMenu({
           <button
             type="button"
             className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] font-medium text-foreground/80 transition-colors hover:bg-accent/50 hover:text-foreground"
-            aria-label="Open account menu"
+            aria-label={
+              waitingAccounts > 0
+                ? `Open account menu. ${describeWaitingAccounts(waitingAccounts)}`
+                : "Open account menu"
+            }
           >
             <Avatar size="sm">
               {session?.user.image ? <AvatarImage src={session.user.image} alt={displayName} /> : null}
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1 truncate">{displayName}</span>
+            {/* The red count the menu's Attention line shows for things
+                waiting on you. Beside the name rather than on the avatar,
+                which is too small to carry one without hiding the initials. */}
+            {waitingAccounts > 0 ? (
+              <span
+                className="shrink-0 rounded-full bg-red-600/90 px-1.5 py-0.5 text-xs leading-none text-red-50 tabular-nums"
+                title={describeWaitingAccounts(waitingAccounts)}
+                data-testid="account-requests-count"
+              >
+                {waitingAccounts > 99 ? "99+" : waitingAccounts}
+              </span>
+            ) : null}
             {shortCommit && !updateAvailable && !quietBadge ? (
               <span
                 className="ml-auto shrink-0 font-mono text-[10px] font-normal text-muted-foreground/70"
@@ -590,6 +613,17 @@ export function SidebarAccountMenu({
             <div className="my-3 border-t border-border/60" />
 
             <div className="space-y-1">
+              {waitingAccounts > 0 ? (
+                <MenuAction
+                  label={
+                    waitingAccounts === 1 ? "1 new account to approve" : `${waitingAccounts} new accounts to approve`
+                  }
+                  description="Approve or decline them in Access."
+                  icon={UserPlus}
+                  href="/instance/settings/access"
+                  onClick={closeNavigationChrome}
+                />
+              ) : null}
               <MenuAction
                 label="Instance settings"
                 description="Jump back to the last settings page you opened."

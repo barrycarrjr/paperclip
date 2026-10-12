@@ -1294,6 +1294,7 @@ export function issueRoutes(
       userId: req.actor.userId ?? "board",
       isInstanceAdmin: req.actor.isInstanceAdmin === true,
       companyIds: req.actor.companyIds ?? [],
+      memberships: req.actor.memberships,
     };
   }
 

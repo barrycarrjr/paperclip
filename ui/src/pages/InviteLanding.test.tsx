@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
 import { InviteLandingPage } from "./InviteLanding";
 
 const getInviteMock = vi.hoisted(() => vi.fn());
@@ -716,6 +717,103 @@ describe("InviteLandingPage", () => {
 
     await act(async () => {
       root.unmount();
+    });
+  });
+
+  describe("for a new account, which waits for an instance admin", () => {
+    const WAITING_SESSION = {
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", name: "Jane Example", email: "jane@example.com", image: null },
+      accountStatus: "pending",
+    };
+    // The server refuses a waiting account the company list.
+    const waitingRefusal = () =>
+      new ApiError("Your account is waiting for an admin to approve it.", 403, {
+        error: "Your account is waiting for an admin to approve it.",
+        code: "account_pending_approval",
+      });
+
+    async function renderAndSignUp() {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await act(async () => {
+        root.render(
+          <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+            <QueryClientProvider client={queryClient}>
+              <Routes>
+                <Route path="/invite/:token" element={<InviteLandingPage />} />
+              </Routes>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => {
+        for (const [name, value] of [["name", "Jane Example"], ["email", "jane@example.com"], ["password", "supersecret"]]) {
+          const input = container.querySelector(`input[name="${name}"]`) as HTMLInputElement;
+          setValue.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      await act(async () => {
+        container
+          .querySelector('[data-testid="invite-inline-auth"]')
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 5; i += 1) await flushReact();
+      return root;
+    }
+
+    it("still takes the bootstrap invite after signing up, though it is refused the company list", async () => {
+      getInviteMock.mockResolvedValue({
+        id: "invite-boot",
+        companyId: null,
+        inviteType: "bootstrap_ceo",
+        allowedJoinTypes: "human",
+        expiresAt: "2027-03-07T00:10:00.000Z",
+      });
+      getSessionMock.mockResolvedValueOnce(null);
+      getSessionMock.mockResolvedValue(WAITING_SESSION);
+      listCompaniesMock.mockRejectedValue(waitingRefusal());
+      acceptInviteMock.mockResolvedValue({ inviteId: "invite-boot", bootstrapAccepted: true, userId: "user-1" });
+
+      const root = await renderAndSignUp();
+
+      expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
+      expect(container.textContent).not.toContain("waiting for an admin to approve it");
+
+      await act(async () => {
+        root.unmount();
+      });
+    });
+
+    it("asks to join, and says the account itself also waits for an instance admin", async () => {
+      getSessionMock.mockResolvedValueOnce(null);
+      getSessionMock.mockResolvedValue(WAITING_SESSION);
+      listCompaniesMock.mockRejectedValue(waitingRefusal());
+      acceptInviteMock.mockResolvedValue({
+        id: "join-1",
+        companyId: "company-1",
+        requestType: "human",
+        status: "pending_approval",
+      });
+
+      const root = await renderAndSignUp();
+
+      expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
+      expect(container.textContent).toContain("Request to join Acme Robotics");
+      expect(container.querySelector('[data-testid="invite-account-waiting"]')?.textContent).toBe(
+        "Your new account also needs an instance admin to approve it.",
+      );
+      // The refused company list is not shown as a failure.
+      expect(container.textContent).not.toContain("waiting for an admin to approve it.");
+
+      await act(async () => {
+        root.unmount();
+      });
     });
   });
 });

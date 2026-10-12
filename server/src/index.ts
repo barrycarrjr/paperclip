@@ -237,6 +237,8 @@ export async function startServer(): Promise<StartedServer> {
         email: LOCAL_BOARD_USER_EMAIL,
         emailVerified: true,
         image: null,
+        // The instance's own operator, never a request for an admin to answer.
+        approvalStatus: "approved",
         createdAt: now,
         updatedAt: now,
       });

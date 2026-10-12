@@ -10,6 +10,7 @@ import type { DeploymentMode, LiveEvent } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
 import { hasActorCompanyAccess } from "../routes/authz.js";
+import { loadAccountApprovalStatus } from "../services/account-approvals.js";
 import { isPersonalCompany } from "../services/personal-companies.js";
 import { getPortfolioRootCompanyId } from "../services/portfolio-root-cache.js";
 import {
@@ -60,8 +61,8 @@ interface UpgradeContext {
   /**
    * Who is connected, in the shape the company access check takes. Only the
    * identity is filled in (the user, or the agent and its company): that is
-   * all the Personal company rule reads, and it is the one rule this feed
-   * asks the check about.
+   * all the Personal company rule reads, and it is the one rule each event is
+   * checked against once the feed is open.
    */
   actor: Request["actor"];
   /** Replay cursor from the client, valid only when replayBootId matches. */
@@ -189,7 +190,7 @@ async function authorizeUpgrade(
     const userId = session?.user?.id;
     if (!userId) return null;
 
-    const [roleRow, memberships] = await Promise.all([
+    const [roleRow, memberships, approvalStatus] = await Promise.all([
       db
         .select({ id: instanceUserRoles.id })
         .from(instanceUserRoles)
@@ -208,40 +209,38 @@ async function authorizeUpgrade(
             eq(companyMemberships.status, "active"),
           ),
         ),
+      loadAccountApprovalStatus(db, userId),
     ]);
+
+    // An account an instance admin has not approved gets no feed, whatever
+    // memberships it may hold, as it gets nothing from the REST routes.
+    if (approvalStatus !== "approved") return null;
 
     const actor: Request["actor"] = { type: "board", userId, source: "session" };
 
-    if (scope === "portfolio") {
-      // Portfolio feed: instance admin, or owner/admin membership on the
-      // HQ company - the same principals the REST portfolio guard accepts.
-      const isHqAdmin = memberships.some(
+    const hqCompanyId = await getPortfolioRootCompanyId(db);
+    const isHqAdmin =
+      hqCompanyId != null &&
+      memberships.some(
         (row) =>
-          row.companyId === companyId &&
+          row.companyId === hqCompanyId &&
           (row.membershipRole === "owner" || row.membershipRole === "admin"),
       );
-      if (!roleRow && !isHqAdmin) return null;
-    } else {
-      // Someone's Personal company first, as the company access check does,
-      // so neither the instance-admin role nor the HQ-admin allowance below
-      // can open another person's Personal feed.
-      if (!mayReceiveCompanyEvents(actor, companyId)) return null;
-      const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
-      if (!roleRow && !hasCompanyMembership) {
-        // Mirror REST's read bypass: an HQ owner/admin may read any
-        // company's feed even without a membership row on it, matching
-        // assertCompanyAccess's isPortfolioRootUserAdmin escape hatch.
-        const hqCompanyId = await getPortfolioRootCompanyId(db);
-        const isHqAdmin =
-          hqCompanyId != null &&
-          memberships.some(
-            (row) =>
-              row.companyId === hqCompanyId &&
-              (row.membershipRole === "owner" || row.membershipRole === "admin"),
-          );
-        if (!isHqAdmin) return null;
-      }
-    }
+
+    // Either feed opens only to someone who could read that company over
+    // REST, so the company access check decides, given this user's seats: a
+    // seat in the company, or HQ owner or admin, and someone's Personal only
+    // for its owner. Being an instance admin is not a seat.
+    const reader: Request["actor"] = {
+      ...actor,
+      companyIds: memberships.map((row) => row.companyId),
+      isPortfolioRootUserAdmin: isHqAdmin,
+    };
+    if (!hasActorCompanyAccess(reader, companyId, "read")) return null;
+
+    // The portfolio feed also needs what the REST portfolio routes ask on top
+    // of reading HQ: an instance admin, or HQ owner or admin.
+    if (scope === "portfolio" && !roleRow && !isHqAdmin) return null;
 
     return {
       companyId,

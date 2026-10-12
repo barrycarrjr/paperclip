@@ -6,6 +6,7 @@ import {
   getProviderForModel,
   listConfiguredProviders,
   resolveNativeDefaultModel,
+  runsOnServer,
   type AdapterTurnContext,
   type CanonicalContentBlock,
   type CanonicalMessage,
@@ -128,6 +129,12 @@ export function emailDraftRoutes() {
     // only invent — better to say so than to hand back a fabricated email.
     if (mode === "new" && !instructions?.trim() && !subject?.trim() && !revising) {
       throw badRequest("Tell the AI what the message should say, or fill in a subject first.");
+    }
+
+    // Its model list is Clippy's, and so is the rule: a model that runs on
+    // this server is for instance admins only.
+    if (requestedModel && runsOnServer(requestedModel) && !req.actor.isInstanceAdmin) {
+      throw forbidden("Only instance admins can use models that run on this server.");
     }
 
     const pick = await pickProviderAndModel(requestedModel);

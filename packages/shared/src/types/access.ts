@@ -156,6 +156,15 @@ export interface AdminUserDirectoryEntry extends AccessUserProfile {
   activeCompanyMembershipCount: number;
 }
 
+/** A new account waiting for an instance admin to approve or decline it. */
+export interface AccountRequest {
+  id: string;
+  name: string | null;
+  email: string | null;
+  /** When the account was made, which is when the request was, as an ISO time. */
+  requestedAt: string;
+}
+
 export interface UserCompanyAccessEntry extends CompanyMembership {
   principalType: "user";
   companyName: string | null;

@@ -1,0 +1,3 @@
+ALTER TABLE "space_pages" ADD COLUMN "deleted_with_page_id" uuid;--> statement-breakpoint
+ALTER TABLE "space_pages" ADD CONSTRAINT "space_pages_deleted_with_page_id_space_pages_id_fk" FOREIGN KEY ("deleted_with_page_id") REFERENCES "public"."space_pages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "space_pages_deleted_with_idx" ON "space_pages" USING btree ("deleted_with_page_id");

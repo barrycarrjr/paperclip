@@ -1,5 +1,16 @@
-import type { AgentAdapterType, JoinRequest, PermissionKey } from "@paperclipai/shared";
+import type {
+  AccountApprovalStatus,
+  AccountRequest,
+  AgentAdapterType,
+  JoinRequest,
+  PermissionKey,
+} from "@paperclipai/shared";
 import { api } from "./client";
+
+export type { AccountRequest };
+
+/** What approving or declining an account left it as. */
+export type AccountRequestDecision = { id: string; status: AccountApprovalStatus };
 
 export type HumanCompanyRole = "owner" | "admin" | "operator" | "viewer";
 
@@ -413,4 +424,14 @@ export const accessApi = {
 
   getCurrentBoardAccess: () =>
     api.get<CurrentBoardAccess>("/cli-auth/me"),
+
+  /** New accounts waiting for an instance admin, the longest waiting first. Instance admins only. */
+  listAccountRequests: () =>
+    api.get<AccountRequest[]>("/admin/account-requests"),
+
+  approveAccountRequest: (userId: string) =>
+    api.post<AccountRequestDecision>(`/admin/account-requests/${encodeURIComponent(userId)}/approve`, {}),
+
+  declineAccountRequest: (userId: string) =>
+    api.post<AccountRequestDecision>(`/admin/account-requests/${encodeURIComponent(userId)}/decline`, {}),
 };

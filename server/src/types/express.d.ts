@@ -17,6 +17,12 @@ declare global {
           status?: string;
         }>;
         isInstanceAdmin?: boolean;
+        /**
+         * A signed-in account an instance admin has not approved yet. It
+         * carries no memberships and no admin role, and is refused everywhere
+         * but the few calls middleware/account-approval-guard.ts lets through.
+         */
+        awaitingApproval?: boolean;
         /** True if this agent's company is the portfolio root (HQ). Confers cross-company READ via `assertCompanyAccess(..., "read")`. */
         isPortfolioRootAgent?: boolean;
         /** True if this board user has an active owner|admin membership in the portfolio root (HQ). Confers cross-company READ via `assertCompanyAccess(..., "read")`. */
@@ -25,6 +31,14 @@ declare global {
         runId?: string;
         /** Synthetic identity carried in tool_session JWTs, e.g. `clippy-<sessionId>`. Never a foreign key into `agents`. */
         toolSessionId?: string;
+        /**
+         * Tool sessions only: the person the key acts for, as the board actor a
+         * signed-in request from them would get, loaded again on every request.
+         * The company check gives the key no more than this person has now. Kept
+         * apart from the board fields above, which many routes read without
+         * checking the actor type.
+         */
+        person?: Request["actor"];
         source?:
           | "local_implicit"
           | "session"
