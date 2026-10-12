@@ -171,6 +171,7 @@ export const RecipientAutoSuggest = forwardRef<DraftFieldHandle, RecipientAutoSu
       },
       enabled: isMenuOpen && Boolean(emailApi) && activeToken.length >= 1,
       staleTime: 30_000,
+      retry: 1,
     });
 
     const suggestions = data?.contacts ?? [];

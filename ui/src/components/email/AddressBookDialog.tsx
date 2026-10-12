@@ -69,7 +69,7 @@ export function AddressBookDialog({
     [companyId, companyIds, search],
   );
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey,
     queryFn: async () => {
       if (!emailApi) return { contacts: [] };
@@ -79,6 +79,7 @@ export function AddressBookDialog({
       });
     },
     enabled: open && Boolean(emailApi),
+    retry: 1,
   });
 
   const contacts = data?.contacts ?? [];
@@ -293,6 +294,13 @@ export function AddressBookDialog({
                 <div className="flex items-center justify-center p-8 text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin mr-2" />
                   <span className="text-xs">Loading contacts...</span>
+                </div>
+              ) : isError ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+                  <p className="text-xs font-medium text-destructive">Failed to load contacts.</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {(error as Error)?.message || "Please check your connection and try again."}
+                  </p>
                 </div>
               ) : contacts.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">

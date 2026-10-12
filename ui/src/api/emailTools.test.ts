@@ -288,4 +288,41 @@ describe("makeEmailToolsApi", () => {
       expect(result).toEqual({ ok: true, cleared: 1 });
     });
   });
+  describe("address book contacts", () => {
+    it("listContacts calls bridgeGetData with companyId and query", async () => {
+      mockBridgeGetData.mockResolvedValue({ data: { contacts: [{ id: "c1", email: "alice@example.com", name: "Alice" }] } });
+      const result = await api.listContacts({ query: "alice" });
+      expect(mockBridgeGetData).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.list-contacts",
+        { companyId: COMPANY_ID, query: "alice" },
+        COMPANY_ID,
+      );
+      expect(result.contacts).toHaveLength(1);
+    });
+
+    it("saveContact calls bridgePerformAction with contact payload", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true, contact: { id: "c1", email: "alice@example.com" } } });
+      const result = await api.saveContact({ email: "alice@example.com", name: "Alice" });
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.save-contact",
+        { companyId: COMPANY_ID, email: "alice@example.com", name: "Alice" },
+        COMPANY_ID,
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    it("deleteContact calls bridgePerformAction with contact id", async () => {
+      mockBridgePerformAction.mockResolvedValue({ data: { ok: true } });
+      const result = await api.deleteContact("c1");
+      expect(mockBridgePerformAction).toHaveBeenCalledWith(
+        PLUGIN_ID,
+        "email.delete-contact",
+        { companyId: COMPANY_ID, id: "c1" },
+        COMPANY_ID,
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
 });
