@@ -578,4 +578,51 @@ describe("useEmailMessageActions", () => {
     expect(onOptimistic).toHaveBeenCalledWith(42, "gone");
     expect(mockApi.moveMessage).toHaveBeenCalledWith("personal", 42, "INBOX", "Archive");
   });
+
+  it("forwards cc and bcc when replying", async () => {
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.reply.mutate({
+        msg: header(),
+        body: "Thanks",
+        replyAll: false,
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+      });
+    });
+    await settle();
+
+    expect(mockApi.sendReply).toHaveBeenCalledWith("personal", 42, "INBOX", "Thanks", {
+      replyAll: false,
+      cc: "cc@example.com",
+      bcc: "bcc@example.com",
+    });
+  });
+
+  it("forwards cc and bcc when forwarding", async () => {
+    const actions = mountActions();
+
+    await act(async () => {
+      actions.current!.forward.mutate({
+        msg: parsed({ subject: "Quarterly numbers" }),
+        to: "colleague@example.com",
+        note: "See below",
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+      });
+    });
+    await settle();
+
+    expect(mockApi.sendNew).toHaveBeenCalledWith(
+      "personal",
+      "colleague@example.com",
+      "Fwd: Quarterly numbers",
+      expect.stringContaining("See below"),
+      expect.objectContaining({
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+      }),
+    );
+  });
 });

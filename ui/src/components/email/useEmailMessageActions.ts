@@ -166,15 +166,21 @@ export function useEmailMessageActions(
       body,
       replyAll,
       attachments,
+      cc,
+      bcc,
     }: {
       msg: MailHeader;
       body: string;
       replyAll: boolean;
       attachments?: EmailSendAttachment[];
+      cc?: string | string[];
+      bcc?: string | string[];
     }) => {
       const { api, target } = mustHaveMailbox();
       const sent = await api.sendReply(target.mailbox, msg.uid, target.folder, body, {
         replyAll,
+        ...(cc ? { cc } : {}),
+        ...(bcc ? { bcc } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
       // Replying is disposal: mark read so it leaves the unread view here and
@@ -203,10 +209,14 @@ export function useEmailMessageActions(
       msg,
       to,
       note,
+      cc,
+      bcc,
     }: {
       msg: ParsedEmailMessage;
       to: string;
       note: string;
+      cc?: string | string[];
+      bcc?: string | string[];
     }) => {
       const { api, target } = mustHaveMailbox();
       const quoted = [
@@ -244,6 +254,8 @@ export function useEmailMessageActions(
         });
       }
       return api.sendNew(target.mailbox, to, subject, quoted, {
+        ...(cc ? { cc } : {}),
+        ...(bcc ? { bcc } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
         // Names the original so the mailbox marks it forwarded: the icon
         // Outlook and the Email pages show. Left off when there is no real

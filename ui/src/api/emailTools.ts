@@ -272,7 +272,13 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       uid: number,
       folder: string,
       body: string,
-      opts?: { body_html?: string; replyAll?: boolean; attachments?: EmailSendAttachment[] },
+      opts?: {
+        body_html?: string;
+        replyAll?: boolean;
+        attachments?: EmailSendAttachment[];
+        cc?: string | string[];
+        bcc?: string | string[];
+      },
     ): Promise<EmailSendResult> => {
       const result = await pluginsApi.bridgePerformAction(
         pluginId,
@@ -289,8 +295,8 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       subject: string,
       body: string,
       opts?: {
-        cc?: string;
-        bcc?: string;
+        cc?: string | string[];
+        bcc?: string | string[];
         body_html?: string;
         attachments?: EmailSendAttachment[];
         /**

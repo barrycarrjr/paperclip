@@ -106,6 +106,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
   const [composer, setComposer] = useState<Composer>(null);
   const [body, setBody] = useState("");
   const [forwardTo, setForwardTo] = useState("");
+  const [replyCc, setReplyCc] = useState("");
+  const [replyBcc, setReplyBcc] = useState("");
+  const [showReplyCc, setShowReplyCc] = useState(false);
+  const [showReplyBcc, setShowReplyBcc] = useState(false);
+  const [forwardCc, setForwardCc] = useState("");
+  const [forwardBcc, setForwardBcc] = useState("");
+  const [showForwardCc, setShowForwardCc] = useState(false);
+  const [showForwardBcc, setShowForwardBcc] = useState(false);
   const [handOffOpen, setHandOffOpen] = useState(false);
   const [handOffAgentId, setHandOffAgentId] = useState<string | null>(null);
   const [handOffNote, setHandOffNote] = useState("");
@@ -130,6 +138,14 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
     setComposer(null);
     setBody("");
     setForwardTo("");
+    setReplyCc("");
+    setReplyBcc("");
+    setShowReplyCc(false);
+    setShowReplyBcc(false);
+    setForwardCc("");
+    setForwardBcc("");
+    setShowForwardCc(false);
+    setShowForwardBcc(false);
     setHandOffOpen(false);
     setHandOffAgentId(null);
     setHandOffNote("");
@@ -499,16 +515,58 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               <span className="text-xs font-medium text-muted-foreground">
                 Reply to {message.from}
               </span>
-              <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={composer.replyAll}
-                  onChange={(e) => setComposer({ kind: "reply", replyAll: e.target.checked })}
-                  className="h-3 w-3"
-                />
-                Reply all
-              </label>
+              <div className="flex items-center gap-2">
+                {!showReplyCc && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReplyCc(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                  >
+                    Cc
+                  </button>
+                )}
+                {!showReplyBcc && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReplyBcc(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                  >
+                    Bcc
+                  </button>
+                )}
+                <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={composer.replyAll}
+                    onChange={(e) => setComposer({ kind: "reply", replyAll: e.target.checked })}
+                    className="h-3 w-3"
+                  />
+                  Reply all
+                </label>
+              </div>
             </div>
+            {showReplyCc && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
+                <Input
+                  value={replyCc}
+                  onChange={(e) => setReplyCc(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="h-7 text-xs flex-1"
+                />
+              </div>
+            )}
+            {showReplyBcc && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
+                <Input
+                  value={replyBcc}
+                  onChange={(e) => setReplyBcc(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="h-7 text-xs flex-1"
+                />
+              </div>
+            )}
             {sendingIdentity && <SendingIdentityLine identity={sendingIdentity} />}
             <Textarea
               value={body}
@@ -562,12 +620,18 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                       msg: headerForActions,
                       body,
                       replyAll: composer.replyAll,
+                      ...(replyCc.trim() ? { cc: replyCc.trim() } : {}),
+                      ...(replyBcc.trim() ? { bcc: replyBcc.trim() } : {}),
                       attachments: toEmailSendAttachments(replyAttachments.attachments),
                     },
                     {
                       onSuccess: () => {
                         setComposer(null);
                         setBody("");
+                        setReplyCc("");
+                        setReplyBcc("");
+                        setShowReplyCc(false);
+                        setShowReplyBcc(false);
                         setDraftInstructions("");
                         replyAttachments.clear();
                         // Replying marks the message read, so the toolbar has
@@ -591,7 +655,29 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
 
         {message && composer?.kind === "forward" && (
           <div className="shrink-0 space-y-2 border-t border-border bg-background p-4">
-            <span className="text-xs font-medium text-muted-foreground">Forward this email</span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">Forward this email</span>
+              <div className="flex items-center gap-2">
+                {!showForwardCc && (
+                  <button
+                    type="button"
+                    onClick={() => setShowForwardCc(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                  >
+                    Cc
+                  </button>
+                )}
+                {!showForwardBcc && (
+                  <button
+                    type="button"
+                    onClick={() => setShowForwardBcc(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                  >
+                    Bcc
+                  </button>
+                )}
+              </div>
+            </div>
             {sendingIdentity && <SendingIdentityLine identity={sendingIdentity} />}
             <Input
               value={forwardTo}
@@ -599,6 +685,28 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
               placeholder="to@example.com"
               autoFocus
             />
+            {showForwardCc && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
+                <Input
+                  value={forwardCc}
+                  onChange={(e) => setForwardCc(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="h-7 text-xs flex-1"
+                />
+              </div>
+            )}
+            {showForwardBcc && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
+                <Input
+                  value={forwardBcc}
+                  onChange={(e) => setForwardBcc(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="h-7 text-xs flex-1"
+                />
+              </div>
+            )}
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -612,12 +720,16 @@ export function EmailPopoutDialog({ request, onClose, actionHooks }: EmailPopout
                 disabled={!forwardTo.trim() || actions.forward.isPending}
                 onClick={() =>
                   actions.forward.mutate(
-                    { msg: message, to: forwardTo.trim(), note: body },
+                    { msg: message, to: forwardTo.trim(), ...(forwardCc.trim() ? { cc: forwardCc.trim() } : {}), ...(forwardBcc.trim() ? { bcc: forwardBcc.trim() } : {}), note: body },
                     {
                       onSuccess: () => {
                         setComposer(null);
                         setBody("");
                         setForwardTo("");
+                        setForwardCc("");
+                        setForwardBcc("");
+                        setShowForwardCc(false);
+                        setShowForwardBcc(false);
                         refreshShownMessage();
                       },
                     },

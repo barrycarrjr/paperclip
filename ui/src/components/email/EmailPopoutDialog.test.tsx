@@ -660,4 +660,68 @@ describe("EmailPopoutDialog reply extras", () => {
       attachments: [{ name: "q3.pdf", mime: "application/pdf", contentBase64: "aGVsbG8=" }],
     });
   });
+
+  it("sends cc and bcc with the reply when specified", async () => {
+    mockApi.sendReply.mockResolvedValue({ ok: true, messageId: "<r1>" });
+    await mountDialog(request());
+
+    await clickToolbar("Reply");
+    await typeReply("Here is the update");
+    await clickByText("Cc");
+    await clickByText("Bcc");
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input[placeholder="recipient@example.com"]'));
+    expect(inputs.length).toBe(2);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(inputs[0], "cc@example.com");
+      inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+      setter.call(inputs[1], "bcc@example.com");
+      inputs[1].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+
+    await clickByText("Send reply");
+    await settle();
+
+    expect(mockApi.sendReply).toHaveBeenCalledWith("personal", 42, "INBOX", "Here is the update", {
+      replyAll: false,
+      cc: "cc@example.com",
+      bcc: "bcc@example.com",
+    });
+  });
+
+  it("sends cc and bcc with the forward when specified", async () => {
+    mockApi.sendNew.mockResolvedValue({ ok: true, messageId: "<f1>" });
+    await mountDialog(request());
+
+    await clickToolbar("Forward");
+    await typeInto('input[placeholder="to@example.com"]', "accounting@example.com");
+    await clickByText("Cc");
+    await clickByText("Bcc");
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input[placeholder="recipient@example.com"]'));
+    expect(inputs.length).toBe(2);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(inputs[0], "boss@example.com");
+      inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+      setter.call(inputs[1], "archive@example.com");
+      inputs[1].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+
+    await clickByText("Send forward");
+    await settle();
+
+    expect(mockApi.sendNew).toHaveBeenCalledWith(
+      "personal",
+      "accounting@example.com",
+      "Fwd: Quarterly numbers",
+      expect.stringContaining("---------- Forwarded message ----------"),
+      expect.objectContaining({
+        cc: "boss@example.com",
+        bcc: "archive@example.com",
+        forwardOf: { uid: 42, folder: "INBOX", messageId: "<m1>" },
+      }),
+    );
+  });
 });

@@ -190,7 +190,7 @@ const DRAFT_DEBOUNCE_MS = 800;
 // mailbox come back after switching companies and get sent from a different
 // one (the send path uses whatever mailbox is selected when Send is clicked,
 // not the company the draft was written under).
-export function composeDraftKey(companyId: string | null, field: "to" | "subject" | "body"): string {
+export function composeDraftKey(companyId: string | null, field: "to" | "subject" | "body" | "cc" | "bcc"): string {
   return `email-draft-compose-${field}:${companyId ?? "none"}`;
 }
 
@@ -199,6 +199,18 @@ function replyDraftKey(mailbox: string, uid: number): string {
 }
 function forwardDraftKey(mailbox: string, uid: number): string {
   return `email-draft-forward:${mailbox}:${uid}`;
+}
+function replyCcDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-reply-cc:${mailbox}:${uid}`;
+}
+function replyBccDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-reply-bcc:${mailbox}:${uid}`;
+}
+function forwardCcDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-forward-cc:${mailbox}:${uid}`;
+}
+function forwardBccDraftKey(mailbox: string, uid: number): string {
+  return `email-draft-forward-bcc:${mailbox}:${uid}`;
 }
 
 function loadDraft(key: string): string {
@@ -703,6 +715,10 @@ export function Email() {
   // disabled state) and reads the live value via the imperative ref.
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyAll, setReplyAll] = useState(false);
+  const [replyCc, setReplyCc] = useState("");
+  const [replyBcc, setReplyBcc] = useState("");
+  const [showReplyCc, setShowReplyCc] = useState(false);
+  const [showReplyBcc, setShowReplyBcc] = useState(false);
   const [replyHasContent, setReplyHasContent] = useState(false);
   const replyComposerRef = useRef<DraftFieldHandle>(null);
   // Files picked for the inline reply. Not persisted like the text drafts:
@@ -719,13 +735,17 @@ export function Email() {
   // live inside DraftInput / DraftTextarea; the parent only tracks the
   // has-content flags and the initial values to seed each field on mount.
   const [composeOpen, setComposeOpen] = useState(false);
-  const [composeInitial, setComposeInitial] = useState<{ to: string; subject: string; body: string }>(
-    { to: "", subject: "", body: "" },
+  const [composeInitial, setComposeInitial] = useState<{ to: string; cc: string; bcc: string; subject: string; body: string }>(
+    { to: "", cc: "", bcc: "", subject: "", body: "" },
   );
+  const [showComposeCc, setShowComposeCc] = useState(false);
+  const [showComposeBcc, setShowComposeBcc] = useState(false);
   const [composeToHasContent, setComposeToHasContent] = useState(false);
   const [composeSubjectHasContent, setComposeSubjectHasContent] = useState(false);
   const [composeBodyHasContent, setComposeBodyHasContent] = useState(false);
   const composeToRef = useRef<DraftFieldHandle>(null);
+  const composeCcRef = useRef<DraftFieldHandle>(null);
+  const composeBccRef = useRef<DraftFieldHandle>(null);
   const composeSubjectRef = useRef<DraftFieldHandle>(null);
   const composeBodyRef = useRef<DraftFieldHandle>(null);
   // Drives which localStorage keys back the compose dialog's drafts: "new"
@@ -1082,6 +1102,12 @@ export function Email() {
   // children read initialValue on mount and own the value state from there.
   function openReplyFor(uid: number) {
     const saved = selectedMailbox ? loadDraft(replyDraftKey(selectedMailbox, uid)) : "";
+    const savedCc = selectedMailbox ? loadDraft(replyCcDraftKey(selectedMailbox, uid)) : "";
+    const savedBcc = selectedMailbox ? loadDraft(replyBccDraftKey(selectedMailbox, uid)) : "";
+    setReplyCc(savedCc);
+    setReplyBcc(savedBcc);
+    setShowReplyCc(savedCc.trim().length > 0);
+    setShowReplyBcc(savedBcc.trim().length > 0);
     setReplyHasContent(saved.trim().length > 0);
     // Instructions are per-message — never carry them into the next reply.
     setDraftInstructions("");
@@ -1104,13 +1130,17 @@ export function Email() {
       .join("\n");
     const fresh = `\n\n${header}\n\n${msg.text || msg.markdown || ""}`;
     const saved = selectedMailbox ? loadDraft(forwardDraftKey(selectedMailbox, msg.uid)) : "";
+    const savedCc = selectedMailbox ? loadDraft(forwardCcDraftKey(selectedMailbox, msg.uid)) : "";
+    const savedBcc = selectedMailbox ? loadDraft(forwardBccDraftKey(selectedMailbox, msg.uid)) : "";
     const body = saved || fresh;
     setComposeMode("forward");
     setComposeSourceUid(msg.uid);
     setComposeSourcePlace(
       selectedMailbox ? { mailbox: selectedMailbox, folder: selectedFolder, messageId: msg.messageId } : null,
     );
-    setComposeInitial({ to: "", subject: fwdSubj, body });
+    setComposeInitial({ to: "", cc: savedCc, bcc: savedBcc, subject: fwdSubj, body });
+    setShowComposeCc(savedCc.trim().length > 0);
+    setShowComposeBcc(savedBcc.trim().length > 0);
     setComposeToHasContent(false);
     setComposeSubjectHasContent(fwdSubj.trim().length > 0);
     setComposeBodyHasContent(body.trim().length > 0);
@@ -1131,12 +1161,16 @@ export function Email() {
 
   function openNewCompose() {
     const to = loadDraft(composeDraftKey(selectedCompanyId, "to"));
+    const cc = loadDraft(composeDraftKey(selectedCompanyId, "cc"));
+    const bcc = loadDraft(composeDraftKey(selectedCompanyId, "bcc"));
     const subject = loadDraft(composeDraftKey(selectedCompanyId, "subject"));
     const body = loadDraft(composeDraftKey(selectedCompanyId, "body"));
     setComposeMode("new");
     setComposeSourceUid(null);
     setComposeSourcePlace(null);
-    setComposeInitial({ to, subject, body });
+    setComposeInitial({ to, cc, bcc, subject, body });
+    setShowComposeCc(cc.trim().length > 0);
+    setShowComposeBcc(bcc.trim().length > 0);
     setComposeToHasContent(to.trim().length > 0);
     setComposeSubjectHasContent(subject.trim().length > 0);
     setComposeBodyHasContent(body.trim().length > 0);
@@ -1551,15 +1585,21 @@ export function Email() {
       uid,
       body,
       rAll,
+      cc,
+      bcc,
       attachments,
     }: {
       uid: number;
       body: string;
       rAll: boolean;
+      cc?: string | string[];
+      bcc?: string | string[];
       attachments?: EmailSendAttachment[];
     }) => {
       const sent = await emailApi!.sendReply(selectedMailbox!, uid, selectedFolder, body, {
         replyAll: rAll,
+        ...(cc ? { cc } : {}),
+        ...(bcc ? { bcc } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
       // Replied = taken care of. Mark read so it disappears from the unread view
@@ -1574,9 +1614,17 @@ export function Email() {
       invalidateRules();
       invalidateMessageLists();
       refreshOpenMessage(selectedMailbox, selectedFolder, uid);
-      if (selectedMailbox) clearDraft(replyDraftKey(selectedMailbox, uid));
+      if (selectedMailbox) {
+        clearDraft(replyDraftKey(selectedMailbox, uid));
+        clearDraft(replyCcDraftKey(selectedMailbox, uid));
+        clearDraft(replyBccDraftKey(selectedMailbox, uid));
+      }
       setReplyOpen(false);
       setReplyHasContent(false);
+      setReplyCc("");
+      setReplyBcc("");
+      setShowReplyCc(false);
+      setShowReplyBcc(false);
       setDraftInstructions("");
       replyAttachments.clear();
       showSent(sendOutcomeText("Reply sent", sent));
@@ -1657,11 +1705,15 @@ export function Email() {
       to,
       subject,
       body,
+      cc,
+      bcc,
       attachments,
     }: {
       to: string;
       subject: string;
       body: string;
+      cc?: string | string[];
+      bcc?: string | string[];
       attachments?: EmailSendAttachment[];
     }) => {
       // A forward names its original so the mailbox marks it forwarded; see
@@ -1673,6 +1725,8 @@ export function Email() {
         sendingMailbox: selectedMailbox,
       });
       return emailApi!.sendNew(selectedMailbox!, to, subject, body, {
+        ...(cc ? { cc } : {}),
+        ...(bcc ? { bcc } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(forwardOf ? { forwardOf } : {}),
       });
@@ -1684,12 +1738,18 @@ export function Email() {
       }
       if (composeMode === "forward" && selectedMailbox && composeSourceUid !== null) {
         clearDraft(forwardDraftKey(selectedMailbox, composeSourceUid));
+        clearDraft(forwardCcDraftKey(selectedMailbox, composeSourceUid));
+        clearDraft(forwardBccDraftKey(selectedMailbox, composeSourceUid));
       } else {
         clearDraft(composeDraftKey(selectedCompanyId, "to"));
+        clearDraft(composeDraftKey(selectedCompanyId, "cc"));
+        clearDraft(composeDraftKey(selectedCompanyId, "bcc"));
         clearDraft(composeDraftKey(selectedCompanyId, "subject"));
         clearDraft(composeDraftKey(selectedCompanyId, "body"));
       }
       setComposeOpen(false);
+      setShowComposeCc(false);
+      setShowComposeBcc(false);
       setComposeToHasContent(false);
       setComposeSubjectHasContent(false);
       setComposeBodyHasContent(false);
@@ -3366,6 +3426,24 @@ export function Email() {
                         Reply to {fullMessage.from}
                       </span>
                       <div className="flex items-center gap-2">
+                        {!showReplyCc && (
+                          <button
+                            type="button"
+                            onClick={() => setShowReplyCc(true)}
+                            className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                          >
+                            Cc
+                          </button>
+                        )}
+                        {!showReplyBcc && (
+                          <button
+                            type="button"
+                            onClick={() => setShowReplyBcc(true)}
+                            className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                          >
+                            Bcc
+                          </button>
+                        )}
                         <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
                           <input
                             type="checkbox"
@@ -3388,6 +3466,38 @@ export function Email() {
                         as the selected mailbox, and that should be visible
                         before Send, not discovered afterwards. */}
                     <SendingIdentityLine identity={composeIdentity} className="px-0.5" />
+                    {showReplyCc && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="w-8 text-muted-foreground font-medium shrink-0">Cc:</span>
+                        <Input
+                          value={replyCc}
+                          onChange={(e) => {
+                            setReplyCc(e.target.value);
+                            if (selectedMailbox && selectedUid !== null) {
+                              saveDraft(replyCcDraftKey(selectedMailbox, selectedUid), e.target.value);
+                            }
+                          }}
+                          placeholder="recipient@example.com"
+                          className="h-7 text-xs flex-1"
+                        />
+                      </div>
+                    )}
+                    {showReplyBcc && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="w-8 text-muted-foreground font-medium shrink-0">Bcc:</span>
+                        <Input
+                          value={replyBcc}
+                          onChange={(e) => {
+                            setReplyBcc(e.target.value);
+                            if (selectedMailbox && selectedUid !== null) {
+                              saveDraft(replyBccDraftKey(selectedMailbox, selectedUid), e.target.value);
+                            }
+                          }}
+                          placeholder="recipient@example.com"
+                          className="h-7 text-xs flex-1"
+                        />
+                      </div>
+                    )}
                     <DraftTextarea
                       key={`reply:${selectedMailbox}:${selectedUid}`}
                       ref={replyComposerRef}
@@ -3455,6 +3565,8 @@ export function Email() {
                               uid: selectedUid,
                               body,
                               rAll: replyAll,
+                              ...(replyCc.trim() ? { cc: replyCc.trim() } : {}),
+                              ...(replyBcc.trim() ? { bcc: replyBcc.trim() } : {}),
                               attachments: toEmailSendAttachments(replyAttachments.attachments),
                             });
                           }
@@ -3543,7 +3655,29 @@ export function Email() {
                 guess. See sendingIdentity.ts. */}
             <SendingIdentityLine identity={composeIdentity} />
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">To</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-muted-foreground">To</label>
+                <div className="flex items-center gap-2">
+                  {!showComposeCc && (
+                    <button
+                      type="button"
+                      onClick={() => setShowComposeCc(true)}
+                      className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                    >
+                      Cc
+                    </button>
+                  )}
+                  {!showComposeBcc && (
+                    <button
+                      type="button"
+                      onClick={() => setShowComposeBcc(true)}
+                      className="text-xs text-muted-foreground hover:text-foreground font-medium"
+                    >
+                      Bcc
+                    </button>
+                  )}
+                </div>
+              </div>
               <DraftInput
                 key={`to:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
                 ref={composeToRef}
@@ -3554,6 +3688,44 @@ export function Email() {
                 onContentChange={setComposeToHasContent}
               />
             </div>
+            {showComposeCc && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Cc</label>
+                <DraftInput
+                  key={`cc:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
+                  ref={composeCcRef}
+                  initialValue={composeInitial.cc}
+                  draftKey={
+                    composeMode === "forward" && selectedMailbox && composeSourceUid !== null
+                      ? forwardCcDraftKey(selectedMailbox, composeSourceUid)
+                      : composeMode === "new"
+                        ? composeDraftKey(selectedCompanyId, "cc")
+                        : null
+                  }
+                  placeholder="recipient@example.com"
+                  className="text-sm"
+                />
+              </div>
+            )}
+            {showComposeBcc && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Bcc</label>
+                <DraftInput
+                  key={`bcc:${composeMode}:${composeSourceUid ?? "none"}:${selectedCompanyId ?? "none"}`}
+                  ref={composeBccRef}
+                  initialValue={composeInitial.bcc}
+                  draftKey={
+                    composeMode === "forward" && selectedMailbox && composeSourceUid !== null
+                      ? forwardBccDraftKey(selectedMailbox, composeSourceUid)
+                      : composeMode === "new"
+                        ? composeDraftKey(selectedCompanyId, "bcc")
+                        : null
+                  }
+                  placeholder="recipient@example.com"
+                  className="text-sm"
+                />
+              </div>
+            )}
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Subject</label>
               <DraftInput
@@ -3645,11 +3817,15 @@ export function Email() {
               }
               onClick={() => {
                 const to = composeToRef.current?.getValue().trim() ?? "";
+                const cc = composeCcRef.current?.getValue().trim() ?? "";
+                const bcc = composeBccRef.current?.getValue().trim() ?? "";
                 const subject = composeSubjectRef.current?.getValue().trim() ?? "";
                 const body = composeBodyRef.current?.getValue().trim() ?? "";
                 if (to && subject && body) {
                   composeMutation.mutate({
                     to,
+                    ...(cc ? { cc } : {}),
+                    ...(bcc ? { bcc } : {}),
                     subject,
                     body,
                     attachments: toEmailSendAttachments(composeAttachments.attachments),
