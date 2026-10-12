@@ -92,7 +92,7 @@ describeEmbeddedPostgres("live event feeds and Personal companies", () => {
     // Approved accounts: a feed is refused to one still waiting for approval.
     const now = new Date();
     await db.insert(authUsers).values(
-      [ALICE, BOB, CAROL].map((id) => ({
+      [ALICE, BOB, CAROL, OWNER, ERIN].map((id) => ({
         id,
         name: id,
         email: `${id}@example.com`,

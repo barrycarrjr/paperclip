@@ -186,7 +186,7 @@ describeEmbeddedPostgres("Clippy acts as the person, never more (HTTP, real data
     opts: { instanceAdmin?: boolean; memberships?: Array<[companyId: string, role: string]> } = {},
   ) {
     const now = new Date();
-    await db.insert(authUsers).values({ id: userId, name: userId, email: `${userId}@example.com`, createdAt: now, updatedAt: now });
+    await db.insert(authUsers).values({ id: userId, name: userId, email: `${userId}@example.com`, approvalStatus: "approved", createdAt: now, updatedAt: now });
     if (opts.instanceAdmin) await db.insert(instanceUserRoles).values({ userId, role: "instance_admin" });
     for (const [companyId, role] of opts.memberships ?? []) await addMembership(userId, companyId, role);
     return userId;
