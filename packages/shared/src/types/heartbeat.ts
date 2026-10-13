@@ -7,6 +7,7 @@ import type {
   WakeupTriggerDetail,
   WakeupRequestStatus,
 } from "../constants.js";
+import type { RunModelSource } from "../model-selection.js";
 
 export interface HeartbeatRun {
   id: string;
@@ -52,6 +53,10 @@ export interface HeartbeatRun {
   continuationAttempt: number;
   lastUsefulActionAt: Date | null;
   nextAction: string | null;
+  /** The model the run was started with; null when the adapter picked its own. */
+  model?: string | null;
+  modelSource?: RunModelSource | null;
+  modelReason?: string | null;
   contextSnapshot: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;

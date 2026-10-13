@@ -8,13 +8,16 @@ import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
+  chooseRunModel,
   isEnvironmentDriverSupportedForAdapter,
+  readEnabledModelSelection,
   type BillingType,
   type EnvironmentLeaseStatus,
   type ExecutionWorkspace,
   type ExecutionWorkspaceConfig,
   type RoutineRevisionSnapshotV1,
   type RunLivenessState,
+  type RunModelChoice,
 } from "@paperclipai/shared";
 import {
   agents,
@@ -25,12 +28,14 @@ import {
   companySkills as companySkillsTable,
   documentRevisions,
   issueDocuments,
+  issueLabels,
   heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
   issueRelations,
   issues,
   issueWorkProducts,
+  labels,
   pipelineStages,
   pipelines,
   projects,
@@ -805,6 +810,9 @@ const heartbeatRunListColumns = {
   continuationAttempt: heartbeatRuns.continuationAttempt,
   lastUsefulActionAt: heartbeatRuns.lastUsefulActionAt,
   nextAction: heartbeatRuns.nextAction,
+  model: heartbeatRuns.model,
+  modelSource: heartbeatRuns.modelSource,
+  modelReason: heartbeatRuns.modelReason,
   createdAt: heartbeatRuns.createdAt,
   updatedAt: heartbeatRuns.updatedAt,
 } as const;
@@ -2405,6 +2413,56 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * The model a run on a task starts with. A model set on the task wins;
+   * otherwise the agent's selection rules pick one from the task's labels and
+   * priority, and with selection off the agent's own model is used.
+   */
+  async function chooseModelForRun(input: {
+    agent: { companyId: string; runtimeConfig: unknown };
+    issueContext: { id: string; priority: string } | null;
+    manualModel: string | null;
+    agentModel: string | null;
+  }): Promise<RunModelChoice> {
+    const selection = parseObject(input.agent.runtimeConfig).modelSelection;
+    const needsTaskSignals = !input.manualModel && readEnabledModelSelection(selection) !== null;
+    const task = input.issueContext
+      ? {
+          labels: needsTaskSignals
+            ? await listIssueLabelNames(input.agent.companyId, input.issueContext.id)
+            : [],
+          priority: input.issueContext.priority,
+        }
+      : null;
+    return chooseRunModel({
+      selection,
+      manualModel: input.manualModel,
+      agentModel: input.agentModel,
+      task,
+    });
+  }
+
+  async function listIssueLabelNames(companyId: string, issueId: string) {
+    return db
+      .select({ name: labels.name })
+      .from(issueLabels)
+      .innerJoin(labels, eq(issueLabels.labelId, labels.id))
+      .where(and(eq(issueLabels.issueId, issueId), eq(issueLabels.companyId, companyId)))
+      .then((rows) => rows.map((row) => row.name));
+  }
+
+  async function recordRunModelChoice(runId: string, choice: RunModelChoice) {
+    await db
+      .update(heartbeatRuns)
+      .set({
+        model: choice.model,
+        modelSource: choice.source,
+        modelReason: choice.reason,
+        updatedAt: new Date(),
+      })
+      .where(eq(heartbeatRuns.id, runId));
   }
 
   async function getIssueExecutionContext(companyId: string, issueId: string) {
@@ -5460,6 +5518,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (resolvedAgentModel.length > 0) {
       config.model = resolvedAgentModel;
     }
+    const modelChoice = await chooseModelForRun({
+      agent,
+      issueContext,
+      manualModel: readNonEmptyString(issueAssigneeOverrides?.adapterConfig?.model),
+      agentModel: readNonEmptyString(config.model),
+    });
+    if (modelChoice.source === "rule" || modelChoice.source === "fallback") {
+      config.model = modelChoice.model;
+    }
+    await recordRunModelChoice(run.id, modelChoice);
     // Agents that leave "skip permissions" unset inherit the company default,
     // then the instance default, then the adapter's code default.
     await companyAgentDefaults.applyRunPermissionDefault({

@@ -119,6 +119,7 @@ import {
   type BudgetPolicySummary,
   type HeartbeatRun,
   type HeartbeatRunEvent,
+  type RunModelSource,
   type AgentRuntimeState,
   type LiveEvent,
   type WorkspaceOperation,
@@ -3390,6 +3391,25 @@ function RunsTab({
 
 /* ---- Run Detail (expanded) ---- */
 
+const RUN_MODEL_SOURCE_LABELS: Record<RunModelSource, string> = {
+  manual: "Set on task",
+  rule: "Model rule",
+  fallback: "Model rule fallback",
+  "agent-default": "Agent default",
+};
+
+/** Why the run started on its model, from the run record. Runs from before this was recorded show nothing. */
+function RunModelChoiceLine({ run }: { run: HeartbeatRun }) {
+  if (!run.modelSource) return null;
+  const label = RUN_MODEL_SOURCE_LABELS[run.modelSource] ?? run.modelSource;
+  return (
+    <div className="text-[11px] text-muted-foreground" title={run.model ? `Started on ${run.model}` : undefined}>
+      <span className="font-medium">{label}</span>
+      {run.modelReason && <>: {run.modelReason.replace(/`/g, "")}</>}
+    </div>
+  );
+}
+
 function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -3658,19 +3678,23 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               const displayProvider = metrics.provider
                 ?? asNonEmptyString(adapterConfig?.provider);
               const displayModel = metrics.model
+                ?? asNonEmptyString(run.model)
                 ?? asNonEmptyString(adapterConfig?.model);
               if (!adapterType && !displayProvider && !displayModel) return null;
               return (
-                <div className="text-[11px] text-muted-foreground font-mono flex items-center gap-1.5 flex-wrap">
-                  {adapterType && (
-                    <span className="bg-muted rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">{adapterType.replace(/_/g, " ")}</span>
-                  )}
-                  {displayProvider && displayModel && (
-                    <span>{displayProvider}/{displayModel}</span>
-                  )}
-                  {!displayProvider && displayModel && (
-                    <span>{displayModel}</span>
-                  )}
+                <div className="space-y-0.5">
+                  <div className="text-[11px] text-muted-foreground font-mono flex items-center gap-1.5 flex-wrap">
+                    {adapterType && (
+                      <span className="bg-muted rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">{adapterType.replace(/_/g, " ")}</span>
+                    )}
+                    {displayProvider && displayModel && (
+                      <span>{displayProvider}/{displayModel}</span>
+                    )}
+                    {!displayProvider && displayModel && (
+                      <span>{displayModel}</span>
+                    )}
+                  </div>
+                  <RunModelChoiceLine run={run} />
                 </div>
               );
             })()}

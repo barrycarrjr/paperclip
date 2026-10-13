@@ -1,5 +1,6 @@
 import { agentAppearanceSchema } from "../agent-appearance.js";
 import { aiConnectionBindingSchema } from "../ai-connections.js";
+import { agentModelSelectionSchema } from "../model-selection.js";
 import { z } from "zod";
 import {
   AGENT_ICON_NAMES,
@@ -74,6 +75,7 @@ export const agentRuntimeConfigSchema = z.object({
   debug: z.object({
     providerTrace: z.literal("raw").optional(),
   }).strict().optional(),
+  modelSelection: agentModelSelectionSchema.nullable().optional(),
 }).catchall(z.unknown()).superRefine((value, ctx) => {
   if (Object.prototype.hasOwnProperty.call(value, "modelProfiles")) {
     ctx.addIssue({
