@@ -102,6 +102,7 @@ type StagedGrokAssets = {
   stagedSkillsCount: number;
   stagedInstructionsPath: string | null;
   rulesFilePath: string | null;
+  deliveredInstructions: string | null;
 };
 
 async function pathExists(candidate: string): Promise<boolean> {
@@ -178,10 +179,20 @@ async function stageGrokProjectAssets(input: {
     }
   }
 
+  // Inspect the file actually selected for native discovery or --rules, rather
+  // than assuming the configured source was successfully delivered.
+  let deliveredInstructions: string | null = null;
+  try {
+    deliveredInstructions = await fs.readFile(rulesFilePath ?? instructionsTarget, "utf8");
+  } catch {
+    // Keep generated guidance when the selected instruction channel is unreadable.
+  }
+
   return {
     stagedSkillsCount,
     stagedInstructionsPath,
     rulesFilePath,
+    deliveredInstructions,
     cleanup: async () => {
       for (const entry of [...cleanup].reverse()) {
         if (entry.kind === "file") {
@@ -379,6 +390,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
     const paperclipEnvNote = renderPaperclipEnvNote(env);
     const apiAccessNote = renderApiAccessNote(env);
+    // Workspace-native instructions travel with the workspace. A remote --rules
+    // path can name a host-only file, so retain guidance in that case.
     const prompt = appendSourceEvidenceInstructions(joinPromptSections([
       memoriesNote,
       wakePrompt,
@@ -387,7 +400,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       paperclipEnvNote,
       apiAccessNote,
       renderedPrompt,
-    ]));
+    ]), executionTargetIsRemote && stagedAssets.rulesFilePath ? null : stagedAssets.deliveredInstructions);
     const promptMetrics = {
       promptChars: prompt.length,
       memoriesPromptChars: memoriesNote.length,

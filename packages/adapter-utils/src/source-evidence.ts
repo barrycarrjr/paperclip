@@ -12,8 +12,8 @@ export const SOURCE_EVIDENCE_INSTRUCTIONS = [
   "Never list a note as read merely because a search result, filename or memory mentioned it. If no notes were available, say Read: None and describe the missing evidence in Not covered.",
 ].join("\n");
 
-/** Append once without changing custom instructions or previously composed text. */
-export function appendSourceEvidenceInstructions(prompt: string): string {
-  if (prompt.includes(SOURCE_EVIDENCE_INSTRUCTIONS)) return prompt;
+/** Append once without changing custom text. Companion instructions must be loaded and delivered in this invocation. */
+export function appendSourceEvidenceInstructions(prompt: string, deliveredInstructions?: string | null): string {
+  if (prompt.includes(SOURCE_EVIDENCE_INSTRUCTIONS) || deliveredInstructions?.includes(SOURCE_EVIDENCE_INSTRUCTIONS)) return prompt;
   return prompt.length > 0 ? `${prompt}\n\n${SOURCE_EVIDENCE_INSTRUCTIONS}` : SOURCE_EVIDENCE_INSTRUCTIONS;
 }

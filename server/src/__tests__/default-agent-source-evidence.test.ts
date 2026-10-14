@@ -7,8 +7,9 @@ describe("default onboarding source evidence", () => {
   it.each(["default", "ceo"] as const)("adds the guidance when composing the %s instruction bundle without rewriting its source", async (role) => {
     const sourceUrl = new URL(`../onboarding-assets/${role}/AGENTS.md`, import.meta.url);
     const original = await fs.readFile(sourceUrl, "utf8");
+    const core = await fs.readFile(new URL("../onboarding-assets/shared/CORE.md", import.meta.url), "utf8");
     const bundle = await loadDefaultAgentInstructionsBundle(role);
-    expect(bundle["AGENTS.md"]).toBe(`${original}\n\n${SOURCE_EVIDENCE_INSTRUCTIONS}`);
+    expect(bundle["AGENTS.md"]).toBe(`${original}\n${core}\n\n${SOURCE_EVIDENCE_INSTRUCTIONS}`);
     expect(await fs.readFile(sourceUrl, "utf8")).toBe(original);
     const again = await loadDefaultAgentInstructionsBundle(role);
     expect(again).toEqual(bundle);

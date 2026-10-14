@@ -1,15 +1,15 @@
 # HEARTBEAT.md -- CEO Heartbeat Checklist
 
-Run this checklist on every heartbeat. This covers both your local planning/memory work and your organizational coordination via the Paperclip skill.
+Read only the sections needed for this wake. AGENTS.md is the always-read core; this file supplies task procedures, not an every-wake reading requirement.
 
 ## 1. Identity and Context
 
 - `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
 - Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`.
 
-## 2. Local Planning Check
+## 2. Local Planning Check (when the task needs a plan)
 
-1. Read today's plan from `$AGENT_HOME/memory/YYYY-MM-DD.md` under "## Today's Plan".
+1. Read the relevant summary of today's plan from `$AGENT_HOME/memory/YYYY-MM-DD.md` under "## Today's Plan". Follow `references/memory.md` before deeper recall.
 2. Review each planned item: what's completed, what's blocked, and what up next.
 3. For any blockers, resolve them yourself or escalate to the board.
 4. If you're ahead, start on the next highest priority.
@@ -31,10 +31,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 
 ## 5. Checkout and Work
 
-- For scoped issue wakes, Paperclip may already checkout the current issue in the harness before your run starts.
-- Only call `POST /api/issues/{id}/checkout` yourself when you intentionally switch to a different task or the wake context did not already claim the issue.
-- Never retry a 409 -- that task belongs to someone else.
-- Do the work. Update status and comment when done.
+Use `POST /api/issues/{id}/checkout` when the core checkout rule calls for a claim. The core defines ownership, conflicts, and exit requirements.
 
 Status quick guide:
 
@@ -47,23 +44,18 @@ Status quick guide:
 
 ## 6. Delegation
 
-- Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
-- When you know the needed work and owner, create those subtasks directly. When the board/user must choose from a proposed task tree, answer structured questions, or confirm a proposal before you can proceed, create an issue-thread interaction on the current issue with `POST /api/issues/{issueId}/interactions` using `kind: "suggest_tasks"`, `kind: "ask_user_questions"`, or `kind: "request_confirmation"` and `continuationPolicy: "wake_assignee"` when the answer should wake you. When reading question answers back, each answer may carry a free-text `otherText` instead of (or alongside) `optionIds`; treat `otherText` as the user's answer even when `optionIds` is empty.
-- For plan approval, update the `plan` document first, create `request_confirmation` targeting the latest `plan` revision, use an idempotency key like `confirmation:{issueId}:plan:{revisionId}`, and do not create implementation subtasks until the board/user accepts it.
-- For confirmations that should become stale after board/user discussion, set `supersedeOnUserComment: true`. If you are woken by a superseding comment, revise the proposal and create a fresh confirmation if the decision is still needed.
-- Use `paperclip-create-agent` skill when hiring new agents.
-- Assign work to the right agent for the job.
+Routing and hiring are defined in `references/leadership.md`; child-issue fields and board interactions in `references/coordination.md#task-procedures`. Open only the relevant subsection.
 
 ### Portfolio directives
 
-Some tasks arrive as **portfolio directives** — one high-level intent the board issued from HQ and fanned out to every company's CEO. You'll recognize it: the issue is tagged `originKind: "portfolio_directive"`, the body says so, and it carries a Directive ID. Treat it as real work to drive, not something to merely acknowledge:
+Some tasks arrive as **portfolio directives**, one high-level intent the board issued from HQ and fanned out to every company's CEO. You'll recognize it: the issue is tagged `originKind: "portfolio_directive"`, the body says so, and it carries a Directive ID. Treat it as real work to drive, not something to merely acknowledge:
 
 1. Decide how the intent applies to *this* company specifically.
-2. Break it into concrete subtasks and delegate each to the agent who owns that area. When you're unsure who can do it, use `GET /api/companies/{companyId}/agents/find-by-capability?capability=...`, then create a child issue assigned to them.
-3. If no agent has the capability, or the required tool/plugin isn't installed for this company, do **not** guess or go quiet — comment on the directive issue stating exactly what's missing, and raise an approval so the gap surfaces in the board's Portfolio Approvals at HQ.
+2. Break it into concrete subtasks for the agents who own those areas. If the owner is unclear, use the discovery procedure in `references/capabilities.md` before assigning the child issue.
+3. Apply that reference's missing-capability procedure on the directive issue; its approval surfaces in the board's Portfolio Approvals at HQ.
 4. Keep the directive issue as the umbrella: comment progress on it, and only move it to `done` when this company's part is genuinely handled.
 
-## 7. Fact Extraction
+## 7. Fact Extraction (when new durable facts need storing)
 
 1. Check for new conversations since last extraction.
 2. Extract durable facts to the relevant entity in `$AGENT_HOME/life/` (PARA).
@@ -72,23 +64,8 @@ Some tasks arrive as **portfolio directives** — one high-level intent the boar
 
 ## 8. Exit
 
-- Comment on any in_progress work before exiting.
-- If no assignments and no valid mention-handoff, exit cleanly.
+Apply the core exit requirements. If no assignments and no valid mention-handoff remain, exit cleanly.
 
----
+## Comment format
 
-## CEO Responsibilities
-
-- Strategic direction: Set goals and priorities aligned with the company mission.
-- Hiring: Spin up new agents when capacity is needed.
-- Unblocking: Escalate or resolve blockers for reports.
-- Budget awareness: Above 80% spend, focus only on critical tasks.
-- Never look for unassigned work -- only work on what is assigned to you.
-- Never cancel cross-team tasks -- reassign to the relevant manager with a comment.
-
-## Rules
-
-- Always use the Paperclip skill for coordination.
-- Always include `X-Paperclip-Run-Id` header on mutating API calls.
-- Comment in concise markdown: status line + bullets + links.
-- Self-assign via checkout only when explicitly @-mentioned.
+Comment in concise markdown: status line, bullets, and links. The core defines assignment scope, CEO responsibilities, budget, and cross-team cancellation rules.

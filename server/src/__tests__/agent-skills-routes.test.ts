@@ -786,21 +786,23 @@ describe.sequential("agent skill routes", () => {
           adapterType: "claude_local",
         }),
         expect.objectContaining({
-          "AGENTS.md": expect.stringMatching(/Start actionable work in the same heartbeat\.[\s\S]*Keep the work moving until it is done\./),
+          "AGENTS.md": expect.stringMatching(/Start actionable work in this wake\.[\s\S]*Keep the work moving until it is done\.[\s\S]*Stop at a plan only when the issue explicitly asks for planning\./),
         }),
         { entryFile: "AGENTS.md", replaceExisting: false },
       );
       expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({
-          "AGENTS.md": expect.stringContaining('kind: "request_confirmation"'),
+          "AGENTS.md": expect.stringContaining("accepted confirmation bound to the latest plan revision"),
+          "references/coordination.md": expect.stringContaining('kind: "request_confirmation"'),
         }),
         expect.any(Object),
       );
       expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({
-          "AGENTS.md": expect.stringContaining("confirmation:{issueId}:plan:{revisionId}"),
+          "AGENTS.md": expect.stringContaining("references/coordination.md#task-procedures"),
+          "references/coordination.md": expect.stringContaining("confirmation:{issueId}:plan:{revisionId}"),
         }),
         expect.any(Object),
       );

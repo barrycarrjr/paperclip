@@ -19,4 +19,14 @@ describe("source evidence prompt composition", () => {
     expect(appendSourceEvidenceInstructions(runtime)).toBe(runtime);
     expect(runtime.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
   });
+
+  it("uses a delivered instruction channel without stripping any custom prompt content", () => {
+    const task = "Custom task.\n  Preserve this spacing.";
+    const core = appendSourceEvidenceInstructions("Trusted loaded core.");
+    expect(appendSourceEvidenceInstructions(task, core)).toBe(task);
+    expect(appendSourceEvidenceInstructions(task, null)).toContain(SOURCE_EVIDENCE_INSTRUCTIONS);
+    expect(appendSourceEvidenceInstructions(task, "A configured filename is not loaded content.")).toContain(SOURCE_EVIDENCE_INSTRUCTIONS);
+    const repeatedCustom = `${SOURCE_EVIDENCE_INSTRUCTIONS}\nCustom quote\n${SOURCE_EVIDENCE_INSTRUCTIONS}`;
+    expect(appendSourceEvidenceInstructions(repeatedCustom, core)).toBe(repeatedCustom);
+  });
 });

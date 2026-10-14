@@ -442,7 +442,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionHandoffNote,
     taskContextNote,
     renderedHeartbeatPrompt,
-  ]));
+  ]), resolvedInstructionsFilePath && !instructionsReadFailed ? renderedSystemPromptExtension : null);
   const promptMetrics = {
     systemPromptChars: renderedSystemPromptExtension.length,
     promptChars: userPrompt.length,

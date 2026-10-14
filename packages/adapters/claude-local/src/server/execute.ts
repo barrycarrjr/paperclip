@@ -613,14 +613,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       mcpConfigFilePath = null;
     }
   }
-  const prompt = appendSourceEvidenceInstructions(joinPromptSections([
+  const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     memoriesNote,
     wakePrompt,
     sessionHandoffNote,
     taskContextNote,
     renderedPrompt,
-  ]));
+  ]);
   const promptMetrics = {
     promptChars: prompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
@@ -714,6 +714,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runAttempt = async (resumeSessionId: string | null) => {
     const attemptInstructionsFilePath = resumeSessionId ? undefined : effectiveInstructionsFilePath;
     const args = buildClaudeArgs(resumeSessionId, attemptInstructionsFilePath);
+    const attemptPrompt = appendSourceEvidenceInstructions(prompt, attemptInstructionsFilePath ? combinedInstructionsContents : null);
     const commandNotes: string[] = [];
     if (!resumeSessionId) {
       commandNotes.push(`Using stable Claude prompt bundle ${promptBundle.bundleKey}.`);
@@ -731,8 +732,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         commandArgs: args,
         commandNotes,
         env: loggedEnv,
-        prompt,
-        promptMetrics,
+        prompt: attemptPrompt,
+        promptMetrics: { ...promptMetrics, promptChars: attemptPrompt.length },
         context,
       });
     }
@@ -740,7 +741,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
       cwd,
       env,
-      stdin: prompt,
+      stdin: attemptPrompt,
       timeoutSec,
       graceSec,
       onSpawn,

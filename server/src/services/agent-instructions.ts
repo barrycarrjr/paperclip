@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { notFound, unprocessable } from "../errors.js";
+import { HttpError, notFound, unprocessable } from "../errors.js";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 const ENTRY_FILE_DEFAULT = "AGENTS.md";
@@ -313,6 +313,59 @@ function isSamePath(left: string, right: string) {
     : resolvedLeft === resolvedRight;
 }
 
+async function statUnlinkedManagedPath(instanceRoot: string, absolutePath: string) {
+  let current = instanceRoot;
+  let stat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+  for (const component of path.relative(instanceRoot, absolutePath).split(path.sep)) {
+    current = path.join(current, component);
+    stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) throw unprocessable("Managed instruction files must not use linked paths");
+  }
+  return stat!;
+}
+
+async function readManagedInstructionFile(agent: AgentLike, absolutePath: string) {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    const managedRoot = resolveManagedInstructionsRoot(agent);
+    const [instanceRoot, canonicalRoot, canonicalFile] = await Promise.all([
+      fs.realpath(resolvePaperclipInstanceRoot()), fs.realpath(managedRoot), fs.realpath(absolutePath),
+    ]);
+    // The instance itself may use a storage alias. Company/agent folders must
+    // still resolve to their own location inside that actual instance.
+    const expectedRoot = path.join(instanceRoot, "companies", agent.companyId, "agents", agent.id, "instructions");
+    const relative = path.relative(canonicalRoot, canonicalFile);
+    if (!isSamePath(canonicalRoot, expectedRoot)
+      || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw unprocessable("Instructions file path must stay within the bundle root");
+    }
+    const ownedFile = path.join(expectedRoot, path.relative(managedRoot, absolutePath));
+    const expectedStat = await statUnlinkedManagedPath(instanceRoot, ownedFile);
+    if (!expectedStat.isFile()) throw notFound("Instructions file not found");
+    handle = await fs.open(canonicalFile, "r");
+    const stat = await handle.stat();
+    const [currentRoot, currentFile] = await Promise.all([
+      fs.realpath(managedRoot), fs.realpath(absolutePath),
+    ]);
+    const currentStat = await statUnlinkedManagedPath(instanceRoot, ownedFile);
+    // Read through the checked handle, so replacing a link or file after this
+    // check cannot redirect the read to another company's or host's file.
+    if (!stat.isFile() || stat.dev !== expectedStat.dev || stat.ino !== expectedStat.ino
+      || !currentStat.isFile() || stat.dev !== currentStat.dev || stat.ino !== currentStat.ino
+      || !isSamePath(currentRoot, canonicalRoot) || !isSamePath(currentFile, canonicalFile)) {
+      throw unprocessable("Instructions file path must stay within the bundle root");
+    }
+    // Portable consistency checks are not OS filesystem isolation. Processes
+    // able to mutate these folders still need appropriate OS permissions.
+    return { content: await handle.readFile("utf8"), stat };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw notFound("Instructions file not found");
+  } finally {
+    await handle?.close();
+  }
+}
+
 /**
  * Whether an agent's instructions live outside Paperclip's own managed
  * folder, judged on the folder the service really reads, as every read and
@@ -542,10 +595,19 @@ export function agentInstructionsService() {
     }
     if (!state.rootPath) throw notFound("Agent instructions bundle is not configured");
     const absolutePath = resolvePathWithinRoot(state.rootPath, relativePath);
-    const [content, stat] = await Promise.all([
-      fs.readFile(absolutePath, "utf8").catch(() => null),
-      fs.stat(absolutePath).catch(() => null),
-    ]);
+    // const [content, stat] = await Promise.all([
+    //   fs.readFile(absolutePath, "utf8").catch(() => null),
+    //   fs.stat(absolutePath).catch(() => null),
+    // ]);
+    const { content, stat } = state.mode !== "external" && isSamePath(state.rootPath, resolveManagedInstructionsRoot(agent))
+      ? await readManagedInstructionFile(agent, absolutePath)
+      : await (async () => {
+          const [content, stat] = await Promise.all([
+            fs.readFile(absolutePath, "utf8").catch(() => null),
+            fs.stat(absolutePath).catch(() => null),
+          ]);
+          return { content, stat };
+        })();
     if (content === null || !stat?.isFile()) throw notFound("Instructions file not found");
     const normalizedPath = normalizeRelativeFilePath(relativePath);
     return {

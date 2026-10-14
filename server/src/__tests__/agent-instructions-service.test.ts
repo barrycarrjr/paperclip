@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentInstructionsBundleMode, agentInstructionsService } from "../services/agent-instructions.js";
 
 type TestAgent = {
@@ -30,6 +30,7 @@ describe("agent instructions service", () => {
   const cleanupDirs = new Set<string>();
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (originalPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
     else process.env.PAPERCLIP_HOME = originalPaperclipHome;
     if (originalPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
@@ -53,6 +54,149 @@ describe("agent instructions service", () => {
       instructionsFilePath: path.join(rootPath, "AGENTS.md"),
     });
   }
+
+  async function managedReadFixture() {
+    const paperclipHome = await makeTempDir("paperclip-instructions-safe-read-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+    const root = managedRootUnder(paperclipHome);
+    const outside = path.join(paperclipHome, "private-other-company");
+    await fs.mkdir(path.join(root, "docs"), { recursive: true });
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(root, "AGENTS.md"), "Core instructions.");
+    await fs.writeFile(path.join(root, "docs", "checks.md"), "Managed checks.");
+    await fs.writeFile(path.join(outside, "AGENTS.md"), "PRIVATE OUTSIDE CONTENT");
+    return { paperclipHome, root, outside, agent: bundleAt("managed", root) };
+  }
+
+  async function makeLink(target: string, link: string, type: "file" | "junction") {
+    try {
+      await fs.symlink(target, link, type);
+      return true;
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+      throw error;
+    }
+  }
+
+  it("reads ordinary nested managed companions and keeps missing-file errors", async () => {
+    const { agent, root } = await managedReadFixture();
+    const svc = agentInstructionsService();
+    await expect(svc.readFile(agent, "docs/checks.md")).resolves.toMatchObject({ content: "Managed checks.", path: "docs/checks.md" });
+    await expect(svc.readFile(agent, "docs/missing.md")).rejects.toMatchObject({ status: 404 });
+    // Legacy nested entry paths keep the same actual managed root.
+    await expect(svc.readFile(makeAgent({ instructionsFilePath: path.join(root, "docs", "checks.md") }), "docs/checks.md"))
+      .resolves.toMatchObject({ content: "Managed checks." });
+  });
+
+  it("keeps legitimate instance storage aliases usable", async (ctx) => {
+    const { paperclipHome } = await managedReadFixture();
+    const aliasParent = await makeTempDir("paperclip-instructions-storage-alias-");
+    cleanupDirs.add(aliasParent);
+    const aliasHome = path.join(aliasParent, "storage");
+    if (!await makeLink(paperclipHome, aliasHome, "junction")) { ctx.skip(); return; }
+    process.env.PAPERCLIP_HOME = aliasHome;
+    const agent = bundleAt("managed", managedRootUnder(aliasHome));
+    await expect(agentInstructionsService().readFile(agent, "docs/checks.md"))
+      .resolves.toMatchObject({ content: "Managed checks." });
+  });
+
+  it.each(["file", "directory", "root"] as const)("refuses a managed %s link escaping its actual folder", async (kind, ctx) => {
+    const { agent, root, outside } = await managedReadFixture();
+    let filePath: string;
+    let linked: boolean;
+    if (kind === "file") {
+      linked = await makeLink(path.join(outside, "AGENTS.md"), path.join(root, "private.md"), "file");
+      filePath = "private.md";
+    } else if (kind === "directory") {
+      linked = await makeLink(outside, path.join(root, "references"), "junction");
+      filePath = "references/AGENTS.md";
+    } else {
+      await fs.rename(root, `${root}-original`);
+      linked = await makeLink(outside, root, "junction");
+      filePath = "AGENTS.md";
+    }
+    if (!linked) { ctx.skip(); return; }
+    await expect(agentInstructionsService().readFile(agent, filePath)).rejects.toMatchObject({
+      status: 422, message: "Instructions file path must stay within the bundle root",
+    });
+  });
+
+  it.each(["file", "directory"] as const)("refuses managed %s links even when their target is inside the folder", async (kind, ctx) => {
+    const { agent, root } = await managedReadFixture();
+    const linked = kind === "file"
+      ? await makeLink(path.join(root, "docs", "checks.md"), path.join(root, "linked.md"), "file")
+      : await makeLink(path.join(root, "docs"), path.join(root, "references"), "junction");
+    if (!linked) { ctx.skip(); return; }
+    await expect(agentInstructionsService().readFile(agent, kind === "file" ? "linked.md" : "references/checks.md"))
+      .rejects.toMatchObject({ status: 422, message: "Managed instruction files must not use linked paths" });
+  });
+
+  it("refuses a managed companion replaced with a link during open", async (ctx) => {
+    const { agent, root, outside } = await managedReadFixture();
+    const file = path.join(root, "docs", "checks.md");
+    const outsideFile = path.join(outside, "AGENTS.md");
+    const probe = path.join(root, "probe.md");
+    if (!await makeLink(outsideFile, probe, "file")) { ctx.skip(); return; }
+    await fs.unlink(probe);
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === await fs.realpath(file)) {
+        await fs.rename(file, `${file}.original`);
+        await fs.symlink(outsideFile, file, "file");
+      }
+      return open(...args);
+    });
+    await expect(agentInstructionsService().readFile(agent, "docs/checks.md")).rejects.toMatchObject({
+      status: 422, message: "Managed instruction files must not use linked paths",
+    });
+  });
+
+  it("refuses an ancestor swapped outside before open and restored before final resolution", async (ctx) => {
+    const { agent, root, outside } = await managedReadFixture();
+    const directory = path.join(root, "docs");
+    const savedDirectory = `${directory}-original`;
+    const file = await fs.realpath(path.join(directory, "checks.md"));
+    await fs.writeFile(path.join(outside, "checks.md"), "OUTSIDE_MARKER");
+    const probe = path.join(root, "probe");
+    if (!await makeLink(outside, probe, "junction")) { ctx.skip(); return; }
+    await fs.unlink(probe);
+    const lstat = fs.lstat.bind(fs);
+    const open = fs.open.bind(fs);
+    let swapped = false;
+    let restored = false;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+      if (String(args[0]) === file && !swapped) {
+        swapped = true;
+        await fs.rename(directory, savedDirectory);
+        await fs.symlink(outside, directory, "junction");
+      }
+      return lstat(...args);
+    });
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (String(args[0]) === file && swapped && !restored) {
+        await fs.unlink(directory);
+        await fs.rename(savedDirectory, directory);
+        restored = true;
+      }
+      return handle;
+    });
+    await expect(agentInstructionsService().readFile(agent, "docs/checks.md")).rejects.toMatchObject({
+      status: 422, message: "Instructions file path must stay within the bundle root",
+    });
+    expect(swapped).toBe(true);
+    expect(restored).toBe(true);
+    expect(await fs.readFile(file, "utf8")).toBe("Managed checks.");
+  });
+
+  it("preserves explicitly external bundle reads for the route's authorized administrator", async (ctx) => {
+    const { root, outside } = await managedReadFixture();
+    if (!await makeLink(path.join(root, "docs", "checks.md"), path.join(outside, "linked.md"), "file")) { ctx.skip(); return; }
+    await expect(agentInstructionsService().readFile(bundleAt("external", outside), "linked.md"))
+      .resolves.toMatchObject({ content: "Managed checks." });
+  });
 
   it("calls a bundle external whenever its folder is outside Paperclip's managed folder", async () => {
     const paperclipHome = path.join(os.tmpdir(), "paperclip-bundle-mode-home");

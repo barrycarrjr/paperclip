@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 const mockAgentService = vi.hoisted(() => ({
+  create: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   resolveByReference: vi.fn(),
@@ -24,6 +25,8 @@ const mockAgentInstructionsService = vi.hoisted(() => ({
 }));
 
 const mockAccessService = vi.hoisted(() => ({
+  ensureMembership: vi.fn(),
+  setPrincipalPermission: vi.fn(),
   canUser: vi.fn(),
   hasPermission: vi.fn(),
 }));
@@ -96,7 +99,7 @@ const LOCAL_BOARD = {
   isInstanceAdmin: false,
 };
 
-async function createApp(actor: Record<string, unknown> = LOCAL_BOARD) {
+async function createApp(actor: Record<string, unknown> = LOCAL_BOARD, db: unknown = {}) {
   const [{ agentRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -107,7 +110,7 @@ async function createApp(actor: Record<string, unknown> = LOCAL_BOARD) {
     (req as any).actor = { ...actor };
     next();
   });
-  app.use("/api", agentRoutes({} as any));
+  app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
 }
@@ -294,6 +297,147 @@ describe("agent instructions bundle routes", () => {
       entryFile: "AGENTS.md",
     });
     expect(mockAgentInstructionsService.getBundle).toHaveBeenCalled();
+  });
+
+  describe("new-agent tiered onboarding through the API", () => {
+    let temporaryHome: string;
+    let created: ReturnType<typeof makeAgent>;
+    const creationDb = {
+      select: () => ({ from: () => ({ where: () => Promise.resolve([{ id: "company-1", requireBoardApprovalForNewAgents: false }]) }) }),
+    };
+
+    beforeEach(async () => {
+      temporaryHome = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-tiered-onboarding-"));
+      process.env.PAPERCLIP_HOME = temporaryHome;
+      const { agentInstructionsService } = await vi.importActual<typeof import("../services/agent-instructions.js")>("../services/agent-instructions.js");
+      const real = agentInstructionsService();
+      mockAgentInstructionsService.materializeManagedBundle.mockImplementation(real.materializeManagedBundle);
+      mockAgentInstructionsService.getBundle.mockImplementation(real.getBundle);
+      mockAgentInstructionsService.readFile.mockImplementation(real.readFile);
+      mockAgentService.create.mockImplementation(async (_companyId, input) => {
+        created = { ...makeAgent(), ...input };
+        return created;
+      });
+      mockAgentService.update.mockImplementation(async (_id, patch) => {
+        created = { ...created, ...patch };
+        return created;
+      });
+      mockAgentService.getById.mockImplementation(async () => created);
+    });
+
+    afterEach(async () => {
+      await fs.rm(temporaryHome, { recursive: true, force: true });
+    });
+
+    async function createAgent(role: string, adapterConfig: Record<string, unknown> = {}) {
+      return requestApp(await createApp(LOCAL_BOARD, creationDb), (baseUrl) => request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Tiered agent", role, adapterType: "codex_local", adapterConfig }));
+    }
+
+    it.each(["engineer", "ceo"])("materializes the %s core and serves every linked reference to its own agent", async (role) => {
+      const creation = await createAgent(role);
+      expect(creation.status, JSON.stringify(creation.body)).toBe(201);
+      const ownApp = await createApp(SAME_AGENT);
+      const core = await requestApp(ownApp, (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "AGENTS.md" }));
+      expect(core.status, JSON.stringify(core.body)).toBe(200);
+      const content: string = core.body.content;
+      // Includes the full shared source-evidence instructions. Before tiering,
+      // the default entry alone was 6,382 bytes; the CEO also required all three
+      // companion files on every wake. These budgets are below those wake loads.
+      expect(Buffer.byteLength(content)).toBeLessThan(role === "ceo" ? 7_000 : 6_382);
+      expect(content).toContain("Core, read on every wake");
+      expect(content).toContain("Read deeper only for the task");
+      if (role === "ceo") expect(content).toContain("Above 80% spend");
+      else expect(content).not.toContain("Above 80% spend");
+      expect(content).toContain("Never expose secrets");
+      expect(content).toContain("company access and permissions");
+      expect(content).toContain("never retry a 409");
+      expect(content).toContain("accepted confirmation bound to the latest plan revision");
+      expect(content).toContain("stop the affected work and explain the missing access");
+      expect(content).toContain("For each claim about money");
+      expect(content).toContain("Not covered:");
+      expect(content).not.toContain("These files are essential. Read them.");
+      expect(content).not.toContain("## Strategic Posture");
+      const references = [...new Set([...content.matchAll(/\]\(([^)#]+\.md)(?:#[^)]*)?\)/g)].map((match) => match[1]))];
+      expect(references.length).toBe(role === "ceo" ? 8 : 4);
+      for (const reference of references) {
+        const response = await requestApp(ownApp, (baseUrl) => request(baseUrl)
+          .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: reference }));
+        expect(response.status, `${reference}: ${JSON.stringify(response.body)}`).toBe(200);
+        expect(response.body.content.length).toBeGreaterThan(100);
+        for (const link of [...response.body.content.matchAll(/\]\(([^)#]+\.md)(?:#[^)]*)?\)/g)]) {
+          const linkedPath = path.posix.normalize(path.posix.join(path.posix.dirname(reference), link[1]));
+          const linked = await requestApp(ownApp, (baseUrl) => request(baseUrl)
+            .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: linkedPath }));
+          expect(linked.status, `${reference} links ${linkedPath}: ${JSON.stringify(linked.body)}`).toBe(200);
+        }
+      }
+      const memory = await requestApp(ownApp, (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "references/memory.md" }));
+      expect(memory.body.content).toContain("Open an index only when the task needs discovery");
+      expect(memory.body.content).toContain("A summary is a navigation aid");
+      if (role === "ceo") {
+        const heartbeat = await requestApp(ownApp, (baseUrl) => request(baseUrl)
+          .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "HEARTBEAT.md" }));
+        expect(heartbeat.body.content).not.toContain("Run this checklist on every heartbeat");
+        expect(heartbeat.body.content).toContain("when new durable facts need storing");
+      }
+    });
+
+    it("uses the same tiered bundle for the hire API", async () => {
+      const creation = await requestApp(await createApp(LOCAL_BOARD, creationDb), (baseUrl) => request(baseUrl)
+        .post("/api/companies/company-1/agent-hires")
+        .send({ name: "New CEO", role: "ceo", adapterType: "codex_local" }));
+      expect(creation.status, JSON.stringify(creation.body)).toBe(201);
+      const app = await createApp(SAME_AGENT);
+      const entry = await requestApp(app, (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "AGENTS.md" }));
+      const routing = await requestApp(app, (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "references/leadership.md" }));
+      expect(entry.status).toBe(200);
+      expect(entry.body.content).toContain("Read deeper only for the task");
+      expect(routing.status).toBe(200);
+      expect(routing.body.content).toContain("technical tasks: CTO");
+      expect(routing.body.content).toContain("CMO");
+      expect(routing.body.content).toContain("UXDesigner");
+    });
+
+    it("materializes a custom prompt exactly, without adding core or references", async () => {
+      const custom = "# Team instructions\nKeep our saved custom rules.\n";
+      const creation = await createAgent("ceo", { promptTemplate: custom });
+      expect(creation.status, JSON.stringify(creation.body)).toBe(201);
+      const read = await requestApp(await createApp(SAME_AGENT), (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "AGENTS.md" }));
+      expect(read.body.content).toBe(custom);
+      const bundle = await requestApp(await createApp(SAME_AGENT), (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle`));
+      expect(bundle.body.files.map((file: { path: string }) => file.path)).toEqual(["AGENTS.md"]);
+    });
+
+    it("keeps an explicitly saved managed bundle byte-identical", async () => {
+      const rootPath = managedInstructionsRoot();
+      await fs.mkdir(rootPath, { recursive: true });
+      const saved = "# Existing rules\nNo replacement or extra references.\n";
+      await fs.writeFile(path.join(rootPath, "AGENTS.md"), saved);
+      const creation = await createAgent("ceo", {
+        instructionsBundleMode: "managed", instructionsRootPath: rootPath,
+        instructionsEntryFile: "AGENTS.md", instructionsFilePath: path.join(rootPath, "AGENTS.md"),
+      });
+      expect(creation.status, JSON.stringify(creation.body)).toBe(201);
+      expect(mockAgentInstructionsService.materializeManagedBundle).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(rootPath, "AGENTS.md"), "utf8")).toBe(saved);
+      expect(await fs.readdir(rootPath)).toEqual(["AGENTS.md"]);
+    });
+
+    it("refuses the managed reference fallback to an agent from another company", async () => {
+      expect((await createAgent("engineer")).status).toBe(201);
+      const foreign = { ...SAME_AGENT, companyId: "company-2" };
+      const response = await requestApp(await createApp(foreign), (baseUrl) => request(baseUrl)
+        .get(`/api/agents/${AGENT_ID}/instructions-bundle/file`).query({ path: "references/memory.md" }));
+      expect(response.status).toBe(403);
+    });
   });
 
   it("writes a bundle file and persists compatibility config", async () => {

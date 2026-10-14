@@ -392,6 +392,14 @@ New local agents created through the API or UI, and local agents imported from c
 
 Explicit saved or imported values, including `0` for no cap, remain unchanged. Existing agents are not rewritten. Hermes keeps its computed timeout, which scales with its configured turn cap; gateway and cloud adapters retain their own defaults.
 
+## Tiered Default Instruction Bundles
+
+New default and CEO instruction bundles compose a role entry with shared core rules and source-evidence guidance. This entry stays in the wake prompt. Detailed coordination, capability, messaging, leadership and memory procedures remain separate files with task-specific reading triggers, rather than an instruction to read every file on every wake. Existing saved or custom bundles are not rewritten.
+
+Memory and knowledge guidance starts from the relevant summary or plan section. Indexes are opened for discovery, and individual notes are opened for the evidence the task needs. A summary or search hit is not proof that its underlying source was read. This controls instruction loading and gives reading guidance; it does not enforce model obedience or implement a knowledge-base storage plugin.
+
+References are relative to the managed instruction bundle. A runtime without mounted companion files can use the existing authenticated `GET /api/agents/{id}/instructions-bundle/file?path={relative-path}` endpoint when it has an HTTP tool, its own company-scoped agent credentials and a reachable API URL. Managed reads reject linked paths escaping their root. External folders still require instance administrator access. Remote runtimes are not guaranteed these tools or credentials; if a required reference cannot be loaded, the agent must stop the affected work and explain the missing access.
+
 ## Source Evidence Guidance
 
 Default agent onboarding bundles and built-in language-model prompts include shared source-evidence guidance. Claims about money, dates and legal terms must cite a source document that the agent read and that supports the claim. Missing, unread, ambiguous or unsupported evidence means omitting the claim. Knowledge-base answers end with `Read:` (notes actually opened and read) and `Not covered:` (what those notes do not establish). Outside knowledge must be labelled or omitted and follows the same source requirement for money, dates and legal terms.
