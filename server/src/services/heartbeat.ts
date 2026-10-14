@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { allocateModelCostCents, readModelUsage, sumModelUsage } from "@paperclipai/adapter-utils/model-usage";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
@@ -5219,7 +5220,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     normalizedUsage?: UsageTotals | null,
   ) {
     await ensureRuntimeState(agent);
-    const usage = normalizedUsage ?? normalizeUsageTotals(result.usage);
+    const modelUsage = readModelUsage(result.modelUsage);
+    const usage = modelUsage ? sumModelUsage(modelUsage) : normalizedUsage ?? normalizeUsageTotals(result.usage);
     const inputTokens = usage?.inputTokens ?? 0;
     const outputTokens = usage?.outputTokens ?? 0;
     const cachedInputTokens = usage?.cachedInputTokens ?? 0;
@@ -5246,7 +5248,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       })
       .where(eq(agentRuntimeState.agentId, agent.id));
 
-    if (additionalCostCents > 0 || hasTokenUsage) {
+    const modelCents = modelUsage ? allocateModelCostCents(modelUsage, additionalCostCents) : null;
+    if (modelUsage && modelCents) {
+      const costs = costService(db, budgetHooks);
+      for (const [model, row] of Object.entries(modelUsage)) {
+        const costCents = modelCents[model]!;
+        const modelInputTokens = row.inputTokens + row.cacheCreationInputTokens;
+        if (!(costCents > 0 || modelInputTokens > 0 || row.outputTokens > 0 || row.cachedInputTokens > 0)) continue;
+        await costs.createEvent(agent.companyId, { heartbeatRunId: run.id, agentId: agent.id,
+          issueId: ledgerScope.issueId, projectId: ledgerScope.projectId, provider, biller, billingType, model,
+          inputTokens: modelInputTokens, cachedInputTokens: row.cachedInputTokens, outputTokens: row.outputTokens,
+          costCents, occurredAt: new Date() });
+      }
+    } else if (additionalCostCents > 0 || hasTokenUsage) {
       const costs = costService(db, budgetHooks);
       await costs.createEvent(agent.companyId, {
         heartbeatRunId: run.id,
@@ -5256,7 +5270,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         provider,
         biller,
         billingType,
-        model: result.model ?? "unknown",
+        model: modelUsage || parseObject(result.resultJson).paperclipAdvisor || parseObject(result.resultJson).paperclipUsageReporting
+          ? "unknown" : result.model ?? "unknown",
         inputTokens,
         cachedInputTokens,
         outputTokens,
@@ -6514,11 +6529,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         previousDisplayId: runtimeForAdapter.sessionDisplayId,
         previousLegacySessionId: runtimeForAdapter.sessionId,
       });
-      const rawUsage = normalizeUsageTotals(adapterResult.usage);
+      const reportedModelUsage = readModelUsage(adapterResult.modelUsage);
+      const rawUsage = normalizeUsageTotals(reportedModelUsage ? sumModelUsage(reportedModelUsage) : adapterResult.usage);
       const sessionUsageResolution = await resolveNormalizedUsageForSession({
         agentId: agent.id,
         runId: run.id,
-        sessionId: nextSessionState.displayId ?? nextSessionState.legacySessionId,
+        // Provider model reports are invocation totals even for a resumed process.
+        sessionId: reportedModelUsage || adapterResult.usageScope === "invocation" ? null : nextSessionState.displayId ?? nextSessionState.legacySessionId,
         rawUsage,
       });
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
@@ -6601,6 +6618,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 rawOutputTokens: rawUsage.outputTokens,
               } : {}),
               ...(sessionUsageResolution.derivedFromSessionTotals ? { usageSource: "session_delta" } : {}),
+              ...(adapterResult.usageScope === "invocation" ? { usageSource: "invocation_totals" } : {}),
+              ...(reportedModelUsage ? { modelUsage: reportedModelUsage, usageSource: "invocation_model_totals",
+                costAttribution: allocateModelCostCents(reportedModelUsage, normalizeBilledCostCents(adapterResult.costUsd, normalizeLedgerBillingType(adapterResult.billingType)))
+                  ? "per_model" : "aggregate_unknown", reportedUsdType: "provider_estimate" } : {}),
+              ...(!reportedModelUsage && parseObject(adapterResult.resultJson).paperclipAdvisor
+                ? { costAttribution: "aggregate_unknown", reportedUsdType: "provider_estimate" } : {}),
+              ...(parseObject(adapterResult.resultJson).paperclipUsageReporting
+                ? { reportingCompleteness: parseObject(adapterResult.resultJson).paperclipUsageReporting } : {}),
               ...((nextSessionState.displayId ?? nextSessionState.legacySessionId)
                 ? { persistedSessionId: nextSessionState.displayId ?? nextSessionState.legacySessionId }
                 : {}),

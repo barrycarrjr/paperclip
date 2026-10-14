@@ -1,10 +1,21 @@
 import type { UsageSummary } from "@paperclipai/adapter-utils";
+import { readModelUsage } from "@paperclipai/adapter-utils/model-usage";
 import {
   asString,
   asNumber,
   parseObject,
   parseJson,
 } from "@paperclipai/adapter-utils/server-utils";
+
+export function readClaudeModelUsage(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const normalized = Object.fromEntries(Object.entries(value).map(([model, item]) => {
+    const row = parseObject(item);
+    return [model, { inputTokens: row.inputTokens, outputTokens: row.outputTokens,
+      cachedInputTokens: row.cacheReadInputTokens, cacheCreationInputTokens: row.cacheCreationInputTokens, costUsd: row.costUSD }];
+  }));
+  return readModelUsage(normalized);
+}
 
 const CLAUDE_AUTH_REQUIRED_RE = /(?:not\s+logged\s+in|please\s+log\s+in|(?:please\s+)?run\s+`?claude\s+(?:auth\s+)?login`?|login\s+required|requires\s+login|unauthorized|authentication\s+required|authentication[_\s]error|failed\s+to\s+authenticate|invalid\s+authentication\s+credentials|invalid\s+x-api-key|invalid\s+bearer\s+token|oauth\s+token\s+(?:has\s+)?expired)/i;
 const URL_RE = /(https?:\/\/[^\s'"`<>()[\]{};,!?]+[^\s'"`<>()[\]{};,!.?:]+)/gi;
@@ -88,6 +99,9 @@ export function parseClaudeStreamJson(stdout: string) {
   let finalResult: Record<string, unknown> | null = null;
   let rateLimit: ClaudeRateLimitInfo | null = null;
   const assistantTexts: string[] = [];
+  const observedAdvisorModels = new Set<string>();
+  let advisorConsultationObserved = false;
+  let resolvedAdvisorModel: string | null = null;
 
   for (const rawLine of stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -117,8 +131,19 @@ export function parseClaudeStreamJson(stdout: string) {
     }
 
     if (type === "assistant") {
+      if (typeof event.advisorModel === "string" && event.advisorModel.trim()) resolvedAdvisorModel = event.advisorModel;
       sessionId = asString(event.session_id, sessionId ?? "") || sessionId;
       const message = parseObject(event.message);
+      const messageUsage = parseObject(message.usage);
+      if (Array.isArray(messageUsage.iterations)) {
+        for (const iteration of messageUsage.iterations) {
+          const row = parseObject(iteration);
+          if (row.type === "advisor_message") {
+            advisorConsultationObserved = true;
+            if (typeof row.model === "string" && row.model.trim()) observedAdvisorModels.add(row.model);
+          }
+        }
+      }
       const content = Array.isArray(message.content) ? message.content : [];
       for (const entry of content) {
         if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
@@ -146,6 +171,10 @@ export function parseClaudeStreamJson(stdout: string) {
       summary: assistantTexts.join("\n\n").trim(),
       resultJson: null as Record<string, unknown> | null,
       rateLimit,
+      modelUsage: null,
+      observedAdvisorModels: [...observedAdvisorModels],
+      advisorConsultationObserved,
+      resolvedAdvisorModel,
     };
   }
 
@@ -167,6 +196,10 @@ export function parseClaudeStreamJson(stdout: string) {
     summary,
     resultJson: finalResult,
     rateLimit,
+    modelUsage: readClaudeModelUsage(finalResult.modelUsage),
+    observedAdvisorModels: [...observedAdvisorModels],
+    advisorConsultationObserved,
+    resolvedAdvisorModel,
   };
 }
 

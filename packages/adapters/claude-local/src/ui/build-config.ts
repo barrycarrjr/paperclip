@@ -70,6 +70,8 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
   if (v.promptTemplate) ac.promptTemplate = v.promptTemplate;
   if (v.bootstrapPrompt) ac.bootstrapPromptTemplate = v.bootstrapPrompt;
   if (v.model) ac.model = v.model;
+  const advisorModel = v.advisorModel?.trim();
+  if (advisorModel) ac.advisorModel = advisorModel;
   if (v.thinkingEffort) ac.effort = v.thinkingEffort;
   if (v.chrome) ac.chrome = true;
   ac.timeoutSec = AGENT_DEFAULT_TIMEOUT_SEC;

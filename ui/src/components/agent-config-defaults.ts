@@ -7,6 +7,7 @@ export const defaultCreateValues: CreateConfigValues = {
   instructionsFilePath: "",
   promptTemplate: "",
   model: "",
+  advisorModel: "",
   thinkingEffort: "",
   chrome: false,
   search: false,

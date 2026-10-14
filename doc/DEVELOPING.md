@@ -418,6 +418,14 @@ Aider supports this through its native repeatable `--read` flag. Complete valida
 
 Gateway and cloud adapters submit the same complete bounded procedure text through their existing prompt fields. They do not deploy remote packages, expose remote skill inventories, run local procedure scripts remotely or synchronize remote resource directories. Native remote installation and discovery remain unsupported until implemented against an actual runtime protocol. Arbitrary process and HTTP adapters remain unsupported for this procedure-loading contract.
 
+## Claude Native Advisor
+
+Claude local configuration has an optional `advisorModel` string in Advanced settings. Enter a model alias or full id to request a second model for advice, for example `{ "model": "sonnet", "advisorModel": "opus" }`. Blank or absent keeps Paperclip advice off, including an inherited native advisor setting. Creating an agent leaves this field empty; clearing it in the editor removes only that setting. Existing Claude settings files are preserved.
+
+The runtime passes the native `--advisor` flag on fresh and resumed invocations. Use this field instead of `extraArgs` for the flag. Advice remains experimental and depends on the installed CLI, account, provider and compatible model pair; an explicit selection is a request, not proof of availability or consultation. Native disable policies remain respected. The CLI may omit this flag from `--help`.
+
+Advisor calls have no separate call cap and consume provider usage or plan limits. The main model and run timeout/turn limits remain unchanged. Reported native per-model usage can contain provider estimates; missing advisor consumption stays unknown. Automatic model routing and forced consultation are outside this setting. See [Claude Code advisor requirements, behavior and cost](https://code.claude.com/docs/en/advisor).
+
 ## Quick Health Checks
 
 In another terminal:

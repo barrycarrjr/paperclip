@@ -30,6 +30,7 @@ Core fields:
 - cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file injected at runtime
 - model (string, optional): Claude model id
+- advisorModel (string, optional): explicit opt-in model alias or full id for Claude Code's experimental native advisor. Blank or absent disables advice for this Paperclip run, including inherited advisor settings. The main model stays unchanged.
 - effort (string, optional): reasoning effort passed via --effort (low|medium|high)
 - chrome (boolean, optional): pass --chrome when running Claude
 - promptTemplate (string, optional): run prompt template
@@ -47,4 +48,6 @@ Operational fields:
 
 Notes:
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
+- Advisor availability depends on the installed Claude Code version, account, provider and model eligibility. Setting advisorModel requests advice; it does not guarantee an advisor tool or consultation. Existing native disable policies are respected.
+- Configure advice through advisorModel, not an extraArgs --advisor flag. Advice has no separate call cap and consumes provider usage; the run timeout and main turn cap remain in effect. Per-model native totals may be provider estimates, and unreported advisor consumption remains unknown rather than inferred.
 `;

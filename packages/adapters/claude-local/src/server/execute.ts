@@ -50,6 +50,7 @@ import { resolveClaudeDesiredSkillNames } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
 import { prepareClaudePromptBundle } from "./prompt-cache.js";
 import { buildClaudeForbiddenPathRules, buildClaudeForbiddenPathSettings } from "./forbidden-paths.js";
+import { combineClaudeUsage } from "./advisor-usage.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -397,6 +398,13 @@ export async function runClaudeSetupToken(input: {
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
+  const rawAdvisorModel = config.advisorModel;
+  if (rawAdvisorModel != null && (typeof rawAdvisorModel !== "string"
+    || (rawAdvisorModel.trim() && !/^[A-Za-z0-9][A-Za-z0-9._/:+\[\]-]{0,199}$/.test(rawAdvisorModel.trim())))) {
+    return { exitCode: 1, signal: null, timedOut: false, errorCode: "claude_advisor_invalid",
+      errorMessage: "advisorModel must be a model alias or full model id, or blank to disable advice." };
+  }
+  const advisorModel = typeof rawAdvisorModel === "string" ? rawAdvisorModel.trim() : "";
   const executionTarget = readAdapterExecutionTarget({
     executionTarget: ctx.executionTarget,
     legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
@@ -440,6 +448,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     graceSec,
     extraArgs,
   } = runtimeConfig;
+  // Advice is an explicit per-agent opt-in, never silently inherited from host settings.
+  // Keep the user's files and all unrelated settings unchanged.
+  if (!advisorModel) env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1";
+  if (extraArgs.some(arg => arg === "--advisor" || arg.startsWith("--advisor="))) {
+    return { exitCode: 1, signal: null, timedOut: false, errorCode: "claude_advisor_invalid",
+      errorMessage: "Configure advisorModel instead of passing --advisor in extraArgs, so usage can be reported." };
+  }
   const effectiveExecutionCwd = adapterExecutionTargetRemoteCwd(executionTarget, cwd);
   const terminalResultCleanupGraceMs = Math.max(
     0,
@@ -668,6 +683,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--model", model);
     }
     if (effort) args.push("--effort", effort);
+    if (advisorModel) args.push("--advisor", advisorModel);
     if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
     // On resumed sessions the instructions are already in the session cache;
     // re-injecting them via --append-system-prompt-file wastes 5-10K tokens
@@ -711,11 +727,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : `Claude exited with code ${proc.exitCode ?? -1}`;
   };
 
+  const attemptReports: Array<ReturnType<typeof parseClaudeStreamJson>> = [];
   const runAttempt = async (resumeSessionId: string | null) => {
     const attemptInstructionsFilePath = resumeSessionId ? undefined : effectiveInstructionsFilePath;
     const args = buildClaudeArgs(resumeSessionId, attemptInstructionsFilePath);
-    const attemptPrompt = appendSourceEvidenceInstructions(prompt, attemptInstructionsFilePath ? combinedInstructionsContents : null);
+    const advisorPrompt = advisorModel ? `${prompt}\n\nAn advisor model was requested for this run. If the native advisor tool is available, consult it before committing to an approach, when errors recur, and before declaring completion. Use available source/tool evidence first, preserve company and approval boundaries, and never claim a consultation that did not occur. If the advisor is unavailable, report that limitation.` : prompt;
+    const attemptPrompt = appendSourceEvidenceInstructions(advisorPrompt, attemptInstructionsFilePath ? combinedInstructionsContents : null);
     const commandNotes: string[] = [];
+    if (advisorModel) commandNotes.push(`Experimental native advisor requested: ${advisorModel}. Availability and consultation are not guaranteed; calls have no separate cap and consume provider usage.`);
+    if (advisorModel && effectiveEnv.CLAUDE_CODE_DISABLE_ADVISOR_TOOL) commandNotes.push("Native advice is disabled by the configured or inherited CLAUDE_CODE_DISABLE_ADVISOR_TOOL policy.");
     if (!resumeSessionId) {
       commandNotes.push(`Using stable Claude prompt bundle ${promptBundle.bundleKey}.`);
     }
@@ -753,6 +773,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
 
     const parsedStream = parseClaudeStreamJson(proc.stdout);
+    attemptReports.push(parsedStream);
     const parsed = parsedStream.resultJson ?? parseJson(proc.stdout);
     return { proc, parsedStream, parsed };
   };
@@ -808,6 +829,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     opts: { fallbackSessionId: string | null; clearSessionOnMissingSession?: boolean },
   ): AdapterExecutionResult => {
     const { proc, parsedStream, parsed } = attempt;
+    const reported = combineClaudeUsage(attemptReports);
+    const accountingEnabled = Boolean(advisorModel || attemptReports.some(report => report.modelUsage));
+    const accountedUsage = reported.usage ?? reported.knownUsage;
+    const accountedCost = reported.costUsd ?? reported.knownCostUsd;
+    const reportingMetadata = accountingEnabled ? { paperclipUsageReporting: {
+      costComplete: reported.costUsd !== null, usageComplete: reported.usage !== null,
+      detail: "Incomplete reports retain only known invocation subtotals; unreported consumption remains unknown.",
+    }, ...(reported.modelUsage ? { reportedModelUsage: reported.modelUsage } : {
+      availableModelUsageReports: attemptReports.flatMap(report => report.modelUsage ? [report.modelUsage] : []),
+    }) } : {};
+    const advisorModels = [...new Set(attemptReports.flatMap(report => report.observedAdvisorModels))];
+    const resolvedAdvisorModel = [...attemptReports].reverse().find(report => report.resolvedAdvisorModel)?.resolvedAdvisorModel ?? advisorModels.at(-1) ?? null;
+    const advisorReport = advisorModel ? { requestedModel: advisorModel, resolvedModel: resolvedAdvisorModel,
+      status: resolvedAdvisorModel && reported.modelUsage?.[resolvedAdvisorModel] ? "model_observed" : "unconfirmed",
+      consultation: attemptReports.some(report => report.advisorConsultationObserved) ? "observed" : "unknown",
+      ...(effectiveEnv.CLAUDE_CODE_DISABLE_ADVISOR_TOOL ? { availability: "disabled_by_policy" } : {}),
+      accounting: reported.modelUsage ? "native_per_model_totals" : "unknown_advisor_consumption",
+      detail: "CLI-reported model totals are not call-role attribution. USD values are CLI estimates, not evidence of paid advisor credits or per-model billing category. Missing reports leave advisor consumption unknown.",
+    } : null;
     const loginMeta = detectClaudeLoginRequired({
       parsed,
       stdout: proc.stdout,
@@ -828,6 +868,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorMessage: `Timed out after ${timeoutSec}s`,
         errorCode: "timeout",
         errorMeta,
+        ...(accountingEnabled ? { resultJson: { ...(advisorReport ? { paperclipAdvisor: advisorReport } : {}), ...reportingMetadata },
+          costUsd: accountedCost, ...(accountedUsage ? { usage: accountedUsage, usageScope: "invocation" as const } : {}),
+          ...(reported.modelUsage ? { modelUsage: reported.modelUsage } : {}), provider: "anthropic",
+          biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic", model: parsedStream.model || model, billingType } : {}),
         clearSession: Boolean(opts.clearSessionOnMissingSession),
       };
     }
@@ -854,17 +898,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorFamily: recovery.errorFamily,
         retryNotBefore: recovery.retryNotBefore,
         errorMeta,
+        ...(accountingEnabled ? { costUsd: accountedCost,
+          ...(accountedUsage ? { usage: accountedUsage, usageScope: "invocation" as const } : {}),
+          ...(reported.modelUsage ? { modelUsage: reported.modelUsage } : {}), provider: "anthropic",
+          biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic", model: parsedStream.model || model, billingType } : {}),
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
           ...recovery.resultJsonPatch,
+          ...reportingMetadata,
+          ...(advisorReport ? { paperclipAdvisor: advisorReport } : {}),
         },
         clearSession: Boolean(opts.clearSessionOnMissingSession),
       };
     }
 
     const usage =
-      parsedStream.usage ??
+      (accountingEnabled ? accountedUsage : null) ?? parsedStream.usage ??
       (() => {
         const usageObj = parseObject(parsed.usage);
         return {
@@ -915,6 +965,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const mergedResultJson: Record<string, unknown> = {
       ...parsed,
       ...recovery.resultJsonPatch,
+      ...reportingMetadata,
+      ...(advisorReport ? { paperclipAdvisor: advisorReport } : {}),
     };
 
     return {
@@ -927,6 +979,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       retryNotBefore: recovery.retryNotBefore,
       errorMeta,
       usage,
+      ...(accountingEnabled ? { usageScope: "invocation" as const } : {}),
+      ...(reported.modelUsage ? { modelUsage: reported.modelUsage } : {}),
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,
       sessionDisplayId: resolvedSessionId,
@@ -934,7 +988,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       biller: isBedrockAuth(effectiveEnv) ? "aws_bedrock" : "anthropic",
       model: parsedStream.model || asString(parsed.model, model),
       billingType,
-      costUsd: parsedStream.costUsd ?? asNumber(parsed.total_cost_usd, 0),
+      costUsd: accountingEnabled ? accountedCost : reported.costUsd ?? parsedStream.costUsd ?? asNumber(parsed.total_cost_usd, 0),
       resultJson: mergedResultJson,
       summary: parsedStream.summary || asString(parsed.result, ""),
       clearSession: clearSessionForMaxTurns || Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId),

@@ -76,6 +76,17 @@ export function ClaudeLocalAdvancedFields(props: AdapterConfigFieldsProps) {
   const { isCreate, values, set, config, eff, mark } = props;
   return (
     <>
+      <Field label="Advisor model" hint="Request a second model for advice. Leave blank to keep advice off for this agent. Accepts a model alias or full id. Experimental availability depends on the account, provider and models. Calls have no separate cap and consume provider usage; run timeout and turn limits still apply.">
+        <DraftInput
+          aria-label="Advisor model"
+          value={isCreate ? values!.advisorModel ?? "" : eff("adapterConfig", "advisorModel", String(config.advisorModel ?? ""))}
+          onCommit={(value) => isCreate ? set!({ advisorModel: value.trim() }) : mark("adapterConfig", "advisorModel", value.trim() || undefined)}
+          immediate
+          className={inputClass}
+          placeholder="Off, or a model alias / full id"
+          maxLength={200}
+        />
+      </Field>
       <ToggleField
         label="Enable Chrome"
         hint={help.chrome}

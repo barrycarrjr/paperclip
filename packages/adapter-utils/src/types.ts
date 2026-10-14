@@ -39,6 +39,13 @@ export interface UsageSummary {
   cachedInputTokens?: number;
 }
 
+/** Provider-reported totals for one model in this invocation, not session lifetime totals. */
+export interface AdapterModelUsage extends UsageSummary {
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUsd: number;
+}
+
 export type AdapterBillingType =
   | "api"
   | "subscription"
@@ -98,6 +105,10 @@ export interface AdapterExecutionResult {
   retryNotBefore?: string | null;
   errorMeta?: Record<string, unknown>;
   usage?: UsageSummary;
+  /** Explicit invocation totals must not be subtracted from an earlier saved session. */
+  usageScope?: "invocation";
+  /** Complete provider-reported per-model invocation totals. Omit when unavailable or invalid. */
+  modelUsage?: Record<string, AdapterModelUsage>;
   /**
    * Legacy single session id output. Prefer `sessionParams` + `sessionDisplayId`.
    */
@@ -572,6 +583,8 @@ export interface CreateConfigValues {
   promptTemplate: string;
   model: string;
   thinkingEffort: string;
+  /** Explicit opt-in native advisor model; blank or absent leaves Paperclip advice disabled. */
+  advisorModel?: string;
   chrome: boolean;
   /** Unset means the agent inherits the company or instance default. */
   dangerouslySkipPermissions?: boolean;
