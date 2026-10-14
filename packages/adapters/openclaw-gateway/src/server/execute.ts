@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
@@ -13,6 +14,7 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import crypto, { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
+import { loadProcedureContext } from "./skills.js";
 
 type SessionKeyStrategy = "fixed" | "issue" | "run";
 
@@ -1079,6 +1081,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   const timeoutSec = Math.max(0, Math.floor(asNumber(ctx.config.timeoutSec, 120)));
+  let procedureContext: string;
+  try {
+    procedureContext = await loadProcedureContext(ctx.config);
+  } catch (err) {
+    return {
+      exitCode: 1, signal: null, timedOut: false,
+      errorCode: "paperclip_procedure_unavailable",
+      errorMessage: err instanceof Error ? err.message : "Attached company procedures cannot be delivered completely.",
+    };
+  }
   const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
   const connectTimeoutMs = timeoutMs > 0 ? Math.min(timeoutMs, 15_000) : 10_000;
   const waitTimeoutMs = parseOptionalPositiveInteger(ctx.config.waitTimeoutMs) ?? (timeoutMs > 0 ? timeoutMs : 30_000);
@@ -1126,7 +1138,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
 
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
-  const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
+  const message = appendSourceEvidenceInstructions(appendWakeText(
+    templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText,
+    procedureContext,
+  ));
   const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
 
   const agentParams: Record<string, unknown> = {

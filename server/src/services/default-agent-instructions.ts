@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 
 const DEFAULT_AGENT_BUNDLE_FILES = {
@@ -16,7 +17,7 @@ export async function loadDefaultAgentInstructionsBundle(role: DefaultAgentBundl
   const entries = await Promise.all(
     fileNames.map(async (fileName) => {
       const content = await fs.readFile(resolveDefaultAgentBundleUrl(role, fileName), "utf8");
-      return [fileName, content] as const;
+      return [fileName, fileName === "AGENTS.md" ? appendSourceEvidenceInstructions(content) : content] as const;
     }),
   );
   return Object.fromEntries(entries);

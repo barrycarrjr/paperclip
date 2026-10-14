@@ -48,6 +48,7 @@ Core fields:
 - graceSec (number, optional): SIGTERM grace period in seconds.
 
 Notes:
+- Explicitly selected company procedures load complete bounded text as disposable native read-only files outside the workspace. Missing, linked, binary, executable or oversized resources stop the run. This is local only and does not persistently install skills. Aider constructs its final prompt and history internally, so Paperclip does not claim exact model context admission for Aider.
 - Aider must be installed and on PATH (\`pip install aider-chat\`).
 - Ollama must be running locally (\`ollama serve\`) and the requested model must
   be pulled (\`ollama pull llama3.1:8b\`).

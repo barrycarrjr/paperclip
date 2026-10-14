@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
@@ -491,6 +492,8 @@ describe("openclaw gateway adapter execute", () => {
       expect(payload?.idempotencyKey).toBe("run-123");
       expect(payload?.sessionKey).toBe("paperclip:issue:issue-123");
       expect(String(payload?.message ?? "")).toContain("wake now");
+      expect(String(payload?.message ?? "").endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
+      expect(String(payload?.message ?? "").split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
       expect(String(payload?.message ?? "")).toContain("PAPERCLIP_RUN_ID=run-123");
       expect(String(payload?.message ?? "")).toContain("PAPERCLIP_TASK_ID=task-123");
       expect(String(payload?.message ?? "")).toContain("## Paperclip Wake Payload");

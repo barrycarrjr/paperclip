@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -22,6 +23,7 @@ import {
   renderTemplate,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
+import { loadProcedureContext } from "./skills.js";
 
 type CursorCloudSession = {
   cursorAgentId: string;
@@ -407,7 +409,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     renderedPrompt,
   ]);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
-  const finalPrompt = joinPromptSections([prompt, sessionHandoffNote]);
+  let procedureContext: string;
+  try {
+    procedureContext = await loadProcedureContext(config);
+  } catch (err) {
+    return {
+      exitCode: 1, signal: null, timedOut: false,
+      errorCode: "paperclip_procedure_unavailable",
+      errorMessage: err instanceof Error ? err.message : "Attached company procedures cannot be delivered completely.",
+      provider: "cursor", biller: "cursor", billingType: "api", clearSession: false,
+    };
+  }
+  const finalPrompt = appendSourceEvidenceInstructions(joinPromptSections([prompt, sessionHandoffNote, procedureContext]));
 
   const agentOptions = buildAgentOptions({
     apiKey,

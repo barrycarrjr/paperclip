@@ -1,6 +1,14 @@
 # 2026-03-14 Adapter Skill Sync Rollout
 
-Status: Proposed
+## Implementation Update, 2026-10-14
+
+The historical rollout below is retained for design context. Local filesystem adapters now have their existing persistent or ephemeral implementations. Ollama and Aider now implement explicit attached-company-procedure loading with ephemeral snapshots. Ollama preserves its compact native wake contract, loads complete bounded text only when selected, and stops when observed model context cannot be verified or is insufficient. Aider stages complete text in disposable local read-only files outside the workspace.
+
+OpenClaw Gateway, Hermes Gateway and Cursor Cloud now implement ephemeral complete procedure text through existing remote prompt transports. Configured means validated for submission on the next run, not remotely installed or confirmed executed. Native remote package installation, resource synchronization and external skill inventory are still unsupported. Process and generic HTTP adapters still have no procedure-loading contract. This supersedes the earlier recommendation to treat all gateway text-context support as unsupported; it does not satisfy the future remote package-management part of this plan.
+
+Decision. Barry, 2026-10-14: stop and explain when attached procedures cannot load completely or fit the observed Ollama model context. Do not truncate them, force model warmup or increase GPU memory. The implementation and limits are documented in `doc/DEVELOPING.md`.
+
+Status: Partially implemented. The 2026-10-14 update above is current; remaining sections preserve the original proposal.
 Date: 2026-03-14
 Audience: Product and engineering
 Related:

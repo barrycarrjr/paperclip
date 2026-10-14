@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { describe, expect, it } from "vitest";
 import { pluginDiscoveryInstructions } from "../services/chat-plugin-discovery.js";
 import { systemPromptFor, type ChatSession } from "../services/chat.js";
@@ -8,6 +9,7 @@ describe("Clippy plugin discovery context", () => {
       { name: "customer-support__support_open_case", description: "Investigate a computer — Uses saved company support access", input_schema: { type: "object", properties: {} } },
     ]);
     expect(prompt).toContain("customer-support__support_open_case (Investigate a computer)");
+    expect(prompt.endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
     expect(prompt).toContain("Current company id (default for tools that take companyId): company-a");
   });
   it("gives deferred-tool adapters an index including newly installed support tools", () => {

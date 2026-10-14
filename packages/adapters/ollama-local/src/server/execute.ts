@@ -13,6 +13,9 @@ import {
   DEFAULT_OLLAMA_LOCAL_MODEL,
 } from "../index.js";
 import { ensureOllamaModelPulled } from "./prepare.js";
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
+import { loadEphemeralProcedures, renderEphemeralProcedureContext, requireCompleteEphemeralProcedures, EphemeralProcedureError } from "@paperclipai/adapter-utils/ephemeral-skills";
+import { assertOllamaProcedureContext, procedureModuleDir } from "./skills.js";
 
 interface OllamaChatMessage {
   role: "system" | "user" | "assistant";
@@ -229,7 +232,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const numPredict = asNumber(cfg.numPredict, 0);
   const timeoutSec = asNumber(cfg.timeoutSec, 600);
   const explicitSystem = asString(cfg.systemPrompt, "");
-  const systemPrompt = explicitSystem.length > 0 ? explicitSystem : defaultSystemPromptForAgent(agent);
+  let systemPrompt = appendSourceEvidenceInstructions(explicitSystem.length > 0 ? explicitSystem : defaultSystemPromptForAgent(agent));
 
   // Build a small-model-friendly prompt out of the wake context. The standard
   // renderPaperclipWakePrompt is too dense for 7B–14B local models — they
@@ -241,6 +244,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
   void runId;
 
+  const procedures = await loadEphemeralProcedures(cfg, procedureModuleDir);
+  try {
+    requireCompleteEphemeralProcedures(procedures);
+    if (procedures.procedures.length) {
+      if ((ctx.executionTarget && ctx.executionTarget.kind !== "local") || (parseObject(context.paperclipEnvironment).driver && parseObject(context.paperclipEnvironment).driver !== "local")) throw new EphemeralProcedureError("procedure_environment_unsupported", "Ollama attached procedures support local execution only.");
+      systemPrompt += "\n\n" + renderEphemeralProcedureContext(procedures.procedures);
+      await assertOllamaProcedureContext(baseUrl, model, [systemPrompt, userPrompt], numPredict);
+    }
+  } catch (error) {
+    return { exitCode: 1, signal: null, timedOut: false, errorCode: error instanceof EphemeralProcedureError ? error.code : "procedure_incomplete", errorMessage: error instanceof Error ? error.message : "Cannot load complete attached procedures.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+  }
+
   await onLog(
     "stdout",
     `[paperclip] ollama_local invoking ${baseUrl}/api/chat with model "${model}".\n`,
@@ -249,7 +264,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Auto-pull the model if missing. Streams progress through onLog
   // ("[paperclip ollama] downloading 47%…").
   try {
-    await ensureOllamaModelPulled({ model, baseUrl, onLog });
+    if (!procedures.procedures.length) await ensureOllamaModelPulled({ model, baseUrl, onLog });
   } catch (err) {
     return {
       exitCode: 1,
@@ -276,6 +291,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     messages,
     stream: false,
   };
+  if (procedures.procedures.length) { requestBody.truncate = false; requestBody.shift = false; }
   const options: Record<string, unknown> = {};
   if (Number.isFinite(temperature)) options.temperature = temperature;
   if (numPredict > 0) options.num_predict = numPredict;

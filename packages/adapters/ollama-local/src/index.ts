@@ -38,6 +38,7 @@ Core fields:
 - timeoutSec (number, optional): request timeout in seconds. Defaults to 600 (10 min).
 
 Notes:
+- Explicitly selected company procedures load complete bounded text next run, without adding tools or installing skills. Unavailable resources stop the run. Attached runs require stable Ollama 0.14.0 or newer and a running selected model with verifiable sufficient context. Paperclip does not warm the model or increase GPU memory, and refuses truncation and context shifting. No attachments retain the compact native wake contract.
 - Ollama must be running locally (\`ollama serve\`) and the requested model must
   be pulled (\`ollama pull <model>\`). The adapter auto-pulls missing models on
   first run, streaming progress to the run log.

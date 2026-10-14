@@ -9,6 +9,8 @@ import {
   testEnvironment as aiderTestEnvironment,
   sessionCodec as aiderSessionCodec,
   readAiderAuthStatus,
+  listSkills as listAiderSkills,
+  syncSkills as syncAiderSkills,
 } from "@paperclipai/adapter-aider-local/server";
 import {
   agentConfigurationDoc as aiderAgentConfigurationDoc,
@@ -20,6 +22,8 @@ import {
   testEnvironment as ollamaTestEnvironment,
   sessionCodec as ollamaSessionCodec,
   readOllamaAuthStatus,
+  listSkills as listOllamaSkills,
+  syncSkills as syncOllamaSkills,
 } from "@paperclipai/adapter-ollama-local/server";
 import {
   agentConfigurationDoc as ollamaAgentConfigurationDoc,
@@ -80,6 +84,8 @@ import {
 } from "@paperclipai/adapter-opencode-local";
 import {
   execute as openclawGatewayExecute,
+  listSkills as listOpenclawGatewaySkills,
+  syncSkills as syncOpenclawGatewaySkills,
   testEnvironment as openclawGatewayTestEnvironment,
 } from "@paperclipai/adapter-openclaw-gateway/server";
 import {
@@ -113,6 +119,8 @@ import {
 } from "@paperclipai/adapter-pi-local";
 import {
   execute as cursorCloudExecute,
+  listSkills as listCursorCloudSkills,
+  syncSkills as syncCursorCloudSkills,
   getConfigSchema as getCursorCloudConfigSchema,
   testEnvironment as cursorCloudTestEnvironment,
   sessionCodec as cursorCloudSessionCodec,
@@ -735,6 +743,8 @@ const aiderLocalAdapter: ServerAdapterModule = {
   type: "aider_local",
   description: "⚠️ Coding agent only. Wraps the Aider CLI to edit code with a local Ollama model. Aider treats every prompt as a file-edit task — DO NOT use for triage, scheduling, research, or any non-coding agent. For those use ollama_local.",
   execute: aiderExecute,
+  listSkills: listAiderSkills,
+  syncSkills: syncAiderSkills,
   testEnvironment: aiderTestEnvironment,
   sessionCodec: aiderSessionCodec,
   sessionManagement: getAdapterSessionManagement("aider_local") ?? undefined,
@@ -744,7 +754,7 @@ const aiderLocalAdapter: ServerAdapterModule = {
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
-  requiresMaterializedRuntimeSkills: false,
+  requiresMaterializedRuntimeSkills: true,
   agentConfigurationDoc: aiderAgentConfigurationDoc,
   getAuthStatus: aiderGetAuthStatus,
   // No authenticate() — Ollama is unauthenticated. The Adapters page hides the
@@ -767,6 +777,8 @@ const ollamaLocalAdapter: ServerAdapterModule = {
   type: "ollama_local",
   description: "Talks to a local Ollama model directly. For thinking-class agents — research, triage, status updates, scheduling, decision-making. No code editing, no tools — just inference + reply. Auto-pulls the model on first run.",
   execute: ollamaExecute,
+  listSkills: listOllamaSkills,
+  syncSkills: syncOllamaSkills,
   testEnvironment: ollamaTestEnvironment,
   sessionCodec: ollamaSessionCodec,
   sessionManagement: getAdapterSessionManagement("ollama_local") ?? undefined,
@@ -775,7 +787,7 @@ const ollamaLocalAdapter: ServerAdapterModule = {
   refreshModels: refreshOllamaModels,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: false,
-  requiresMaterializedRuntimeSkills: false,
+  requiresMaterializedRuntimeSkills: true,
   agentConfigurationDoc: ollamaAgentConfigurationDoc,
   getAuthStatus: ollamaGetAuthStatus,
 };
@@ -784,11 +796,13 @@ const openclawGatewayAdapter: ServerAdapterModule = {
   type: "openclaw_gateway",
   description: "Bridges to an OpenClaw gateway endpoint — fan agent runs out to a remote OpenClaw cluster.",
   execute: openclawGatewayExecute,
+  listSkills: listOpenclawGatewaySkills,
+  syncSkills: syncOpenclawGatewaySkills,
   testEnvironment: openclawGatewayTestEnvironment,
   models: openclawGatewayModels,
   supportsLocalAgentJwt: false,
   supportsInstructionsBundle: false,
-  requiresMaterializedRuntimeSkills: false,
+  requiresMaterializedRuntimeSkills: true,
   agentConfigurationDoc: openclawGatewayAgentConfigurationDoc,
 };
 
@@ -831,6 +845,8 @@ const piLocalAdapter: ServerAdapterModule = {
 const cursorCloudAdapter: ServerAdapterModule = {
   type: "cursor_cloud",
   execute: cursorCloudExecute,
+  listSkills: listCursorCloudSkills,
+  syncSkills: syncCursorCloudSkills,
   testEnvironment: cursorCloudTestEnvironment,
   sessionCodec: cursorCloudSessionCodec,
   sessionManagement: getAdapterSessionManagement("cursor_cloud") ?? undefined,
@@ -838,7 +854,7 @@ const cursorCloudAdapter: ServerAdapterModule = {
   supportsLocalAgentJwt: false,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
-  requiresMaterializedRuntimeSkills: false,
+  requiresMaterializedRuntimeSkills: true,
   agentConfigurationDoc: cursorCloudAgentConfigurationDoc,
   getConfigSchema: getCursorCloudConfigSchema,
 };

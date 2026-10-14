@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions, SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 /**
  * Server-side execution logic for the Hermes Agent adapter.
  *
@@ -192,12 +193,12 @@ export function buildPrompt(
   };
 
   const rendered = renderTemplate(renderConditionalSections(template, vars), vars);
-  return joinPromptSections([
+  return appendSourceEvidenceInstructions(joinPromptSections([
     wakePrompt,
     sessionHandoffMarkdown,
     paperclipTaskMarkdown,
     rendered,
-  ]);
+  ]));
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,13 @@ export async function execute(
   // ── Build prompt ───────────────────────────────────────────────────────
   let prompt = buildPrompt(ctx, config, { resumedSession: Boolean(prevSessionId) });
   if (agentInstructions) {
+    // The trusted instruction bundle can already supply this exact shared rule.
+    // Remove only the generated prompt's known policy suffix before combining.
+    if (agentInstructions.includes(SOURCE_EVIDENCE_INSTRUCTIONS)) {
+      const evidenceSuffix = `\n\n${SOURCE_EVIDENCE_INSTRUCTIONS}`;
+      if (prompt.endsWith(evidenceSuffix)) prompt = prompt.slice(0, -evidenceSuffix.length);
+      else if (prompt === SOURCE_EVIDENCE_INSTRUCTIONS) prompt = "";
+    }
     prompt = agentInstructions + "\n\n---\n\n" + prompt;
   }
 

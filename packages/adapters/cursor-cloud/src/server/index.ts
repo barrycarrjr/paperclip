@@ -1,6 +1,7 @@
 export { execute } from "./execute.js";
 export { testEnvironment } from "./test.js";
 export { sessionCodec } from "./session.js";
+export { listSkills, syncSkills } from "./skills.js";
 
 import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
 

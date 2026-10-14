@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { execute } from "./execute.js";
@@ -161,6 +162,10 @@ describe("cursor_cloud execute", () => {
     const result = await execute(ctx);
 
     expect(createMock).toHaveBeenCalledTimes(1);
+    const sentPrompt = (sdkAgent.send.mock.calls as unknown as Array<[string]>)[0]?.[0] ?? "";
+    expect(sentPrompt).toContain("Do the work for Cursor Cloud Agent");
+    expect(sentPrompt).toContain(SOURCE_EVIDENCE_INSTRUCTIONS);
+    expect(sentPrompt.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
     expect(resumeMock).not.toHaveBeenCalled();
     expect(getRunMock).not.toHaveBeenCalled();
     expect(createMock.mock.calls[0]?.[0]).toMatchObject({

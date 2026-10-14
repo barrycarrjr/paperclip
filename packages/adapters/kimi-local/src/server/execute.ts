@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -398,7 +399,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const apiAccessNote = renderApiAccessNote(env);
-  const prompt = joinPromptSections([
+  const prompt = appendSourceEvidenceInstructions(joinPromptSections([
     instructionsPrefix,
     renderedBootstrapPrompt,
     memoriesNote,
@@ -408,7 +409,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     paperclipEnvNote,
     apiAccessNote,
     renderedPrompt,
-  ]);
+  ]));
   const promptMetrics = {
     promptChars: prompt.length,
     instructionsChars: instructionsPrefix.length,

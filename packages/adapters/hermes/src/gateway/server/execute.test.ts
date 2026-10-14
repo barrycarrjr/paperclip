@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { execute, mapFinalResultForTest, parseSseFramesForTest, resolveSessionKey } from "./execute.js";
@@ -94,7 +95,7 @@ describe("execute", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("constructs POST /v1/runs with auth, idempotency, and Hermes session headers", async () => {
+  it.each([undefined, "CUSTOM knowledge-base question"])("constructs POST /v1/runs with source guidance and custom input %s", async (customInput) => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/v1/runs")) {
@@ -123,6 +124,7 @@ describe("execute", () => {
       apiBaseUrl: "http://127.0.0.1:8642",
       apiKey: "secret-key",
       timeoutSec: 5,
+      ...(customInput ? { payloadTemplate: { input: customInput } } : {}),
     }));
 
     expect(result.exitCode).toBe(0);
@@ -140,7 +142,9 @@ describe("execute", () => {
       "X-Hermes-Session-Key": "paperclip:company:company-1:agent:agent-1:issue:issue-1",
     });
     const body = JSON.parse(String(init.body));
-    expect(body.input).toContain("Do the thing");
+    expect(body.input).toContain(customInput ?? "Do the thing");
+    expect(body.input.endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
+    expect(body.input.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
     expect(body.session_id).toBe("paperclip:company:company-1:agent:agent-1:issue:issue-1");
   });
 

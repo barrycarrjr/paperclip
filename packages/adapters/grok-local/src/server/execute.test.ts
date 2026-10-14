@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -75,6 +76,10 @@ describe("grok_local execute", () => {
           "dontAsk",
         ]),
       );
+      const sentPrompt = args.find((part: string) => part.includes(SOURCE_EVIDENCE_INSTRUCTIONS));
+      expect(sentPrompt).toBeDefined();
+      expect(sentPrompt.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
+      expect(await fs.readFile(instructionsPath, "utf8")).toBe("You are Grok.\n");
       expect(await fs.readFile(path.join(root, "Agents.md"), "utf8")).toContain("You are Grok.");
       expect(await pathExists(path.join(root, ".claude", "skills", "paperclip", "SKILL.md"))).toBe(true);
       await options.onLog?.("stdout", '{"type":"text","data":"done"}\n');

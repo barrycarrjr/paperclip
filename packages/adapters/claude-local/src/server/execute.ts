@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -612,14 +613,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       mcpConfigFilePath = null;
     }
   }
-  const prompt = joinPromptSections([
+  const prompt = appendSourceEvidenceInstructions(joinPromptSections([
     renderedBootstrapPrompt,
     memoriesNote,
     wakePrompt,
     sessionHandoffNote,
     taskContextNote,
     renderedPrompt,
-  ]);
+  ]));
   const promptMetrics = {
     promptChars: prompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,

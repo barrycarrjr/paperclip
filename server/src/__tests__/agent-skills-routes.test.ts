@@ -718,6 +718,11 @@ describe.sequential("agent skill routes", () => {
       }));
 
     expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.any(Object),
+      { "AGENTS.md": "You are QA." },
+      { entryFile: "AGENTS.md", replaceExisting: false },
+    );
     expect(mockAgentService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       expect.objectContaining({

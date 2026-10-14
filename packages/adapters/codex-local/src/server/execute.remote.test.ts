@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -130,6 +131,12 @@ describe("codex remote execution", () => {
     }));
 
     expect(runChildProcess).toHaveBeenCalledTimes(1);
+    const firstProcessCall = runChildProcess.mock.calls[0] as unknown as [unknown, unknown, string[], { stdin?: string }];
+    const sentPrompt = [...firstProcessCall[2], firstProcessCall[3]?.stdin]
+      .find((part) => typeof part === "string" && part.includes(SOURCE_EVIDENCE_INSTRUCTIONS));
+    expect(sentPrompt).toBeDefined();
+    expect((sentPrompt ?? "").split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
+
     const call = runChildProcess.mock.calls[0] as unknown as
       | [string, string, string[], { env: Record<string, string>; remoteExecution?: { remoteCwd: string } | null }]
       | undefined;

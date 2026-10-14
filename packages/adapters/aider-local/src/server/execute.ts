@@ -13,6 +13,7 @@ import {
   renderTemplate,
   renderPaperclipWakePrompt,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+  redactEnvForLogs,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   runAdapterExecutionTargetProcess,
@@ -23,6 +24,9 @@ import {
 } from "../index.js";
 import { classifyAiderFailure, extractAiderSummary, parseAiderUsage } from "./parse.js";
 import { ensureAiderInstalled, ensureOllamaModelPulled } from "./prepare.js";
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
+import { loadEphemeralProcedures, requireCompleteEphemeralProcedures, EphemeralProcedureError } from "@paperclipai/adapter-utils/ephemeral-skills";
+import { procedureModuleDir, stageAiderProcedures } from "./skills.js";
 
 interface AiderRuntime {
   command: string;
@@ -44,6 +48,7 @@ async function buildAiderRuntime(input: {
   config: Record<string, unknown>;
   context: Record<string, unknown>;
   authToken?: string;
+  procedureReadPaths?: string[];
 }): Promise<AiderRuntime> {
   const { agent, config, context } = input;
   const command = asString(config.command, "aider");
@@ -125,18 +130,19 @@ async function buildAiderRuntime(input: {
   args.push("--no-show-release-notes"); // do not display release notes (which used to open a browser)
   args.push("--no-check-update"); // do not contact PyPI for version checks
   args.push("--message-file", "-"); // read prompt from stdin
+  for (const file of input.procedureReadPaths ?? []) args.push("--read", file);
   for (const extra of asStringArray(config.extraArgs)) {
     args.push(extra);
   }
 
   const promptTemplate = asString(config.promptTemplate, DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE);
-  const prompt = renderTemplate(promptTemplate, {
+  const prompt = appendSourceEvidenceInstructions(renderTemplate(promptTemplate, {
     paperclipWake: renderPaperclipWakePrompt(context),
     agentName: agent.name,
     agentId: agent.id,
     companyId: agent.companyId,
     runId: input.runId,
-  });
+  }));
 
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
   // Resolution check is deferred to ensureAiderInstalled() so we can attempt
@@ -160,14 +166,26 @@ async function buildAiderRuntime(input: {
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { runId, agent, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
+  const { config, context } = ctx;
 
+  const procedures = await loadEphemeralProcedures(config, procedureModuleDir);
+  requireCompleteEphemeralProcedures(procedures);
+  if (procedures.procedures.length && ((ctx.executionTarget && ctx.executionTarget.kind !== "local") || (parseObject(context.paperclipEnvironment).driver && parseObject(context.paperclipEnvironment).driver !== "local"))) throw new EphemeralProcedureError("procedure_environment_unsupported", "Aider attached procedures support local execution only.");
+  const staged = await stageAiderProcedures(procedures.procedures);
+  try {
+    return await executeWithProcedureReads(ctx, staged.paths);
+  } finally { await staged.cleanup(); }
+}
+
+async function executeWithProcedureReads(ctx: AdapterExecutionContext, procedureReadPaths: string[]): Promise<AdapterExecutionResult> {
+  const { runId, agent, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
   const runtime = await buildAiderRuntime({
     runId,
     agent,
     config,
     context,
     authToken,
+    procedureReadPaths,
   });
 
   await onMeta?.({
@@ -175,7 +193,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     command: runtime.command,
     cwd: runtime.cwd,
     commandArgs: runtime.args,
-    env: runtime.env,
+    env: redactEnvForLogs(runtime.env),
     prompt: runtime.prompt,
   });
 

@@ -1,4 +1,5 @@
 export { execute } from "./execute.js";
+export { listSkills, syncSkills } from "./skills.js";
 export { testEnvironment, readOllamaAuthStatus } from "./test.js";
 export { ensureOllamaModelPulled, probeOllamaReachable, listPulledOllamaModels } from "./prepare.js";
 

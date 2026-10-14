@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import { expect, test } from "vitest";
 
 import { buildPrompt } from "./execute.js";
@@ -245,4 +246,19 @@ test("preserves custom prompt templates while exposing runtime and wake variable
   expect(prompt).toContain("## Paperclip Wake Payload");
   expect(prompt).toContain("Issue description:\n```text\nUse the wake payload as runtime authority.\n```");
   expect(prompt).not.toContain("Paperclip runtime identity:");
+});
+
+
+test("retains custom and resumed task composition while adding source evidence guidance once", () => {
+  for (const resumedSession of [false, true]) {
+    const config = { promptTemplate: "CUSTOM SOURCE TASK {{agentName}}" };
+    const ctx = baseContext();
+    const prompt = buildPrompt(ctx, config, { resumedSession });
+    expect(prompt).toContain("CUSTOM SOURCE TASK Hermes Engineer");
+    expect(prompt).toContain("Paperclip task context:");
+    expect(prompt).toContain(resumedSession ? "## Paperclip Resume Delta" : "## Paperclip Wake Payload");
+    expect(prompt.endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
+    expect(prompt.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
+    expect(config.promptTemplate).toBe("CUSTOM SOURCE TASK {{agentName}}");
+  }
 });

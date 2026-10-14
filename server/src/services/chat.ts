@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import { CHAT_MAX_TOOL_LOOPS } from "@paperclipai/adapter-utils/run-limits";
 import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -261,7 +262,7 @@ export function systemPromptFor(session: ChatSession, defaultCompanyId: string |
   }
   const pluginDirectory = pluginDiscoveryInstructions(pluginTools);
   if (pluginDirectory) lines.push(pluginDirectory);
-  return lines.join("\n\n");
+  return appendSourceEvidenceInstructions(lines.join("\n\n"));
 }
 
 function isAbortError(err: unknown): boolean {

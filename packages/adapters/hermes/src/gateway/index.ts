@@ -1,6 +1,6 @@
 import type { AdapterSessionManagement, ServerAdapterModule } from "@paperclipai/adapter-utils";
 import { ADAPTER_LABEL, ADAPTER_TYPE } from "./shared/constants.js";
-import { execute, getConfigSchema, sessionCodec, testEnvironment } from "./server/index.js";
+import { execute, getConfigSchema, sessionCodec, testEnvironment, listSkills, syncSkills } from "./server/index.js";
 
 export const type = ADAPTER_TYPE;
 export const label = ADAPTER_LABEL;
@@ -59,13 +59,15 @@ export function createServerAdapter(): ServerAdapterModule {
   return {
     type,
     execute,
+    listSkills,
+    syncSkills,
     testEnvironment,
     sessionCodec,
     sessionManagement,
     models,
     supportsLocalAgentJwt: false,
     supportsInstructionsBundle: false,
-    requiresMaterializedRuntimeSkills: false,
+    requiresMaterializedRuntimeSkills: true,
     agentConfigurationDoc,
     getConfigSchema,
   };

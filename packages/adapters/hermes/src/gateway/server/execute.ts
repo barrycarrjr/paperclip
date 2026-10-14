@@ -1,3 +1,4 @@
+import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
 import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
@@ -23,6 +24,7 @@ import {
   isRemotePlainHttp,
   remotePlainHttpDeniedMessage,
 } from "./transport-security.js";
+import { loadProcedureContext } from "./skills.js";
 
 type SessionKeyStrategy = "issue" | "agent" | "run" | "none";
 
@@ -289,10 +291,12 @@ function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null
   return lines.filter((line) => line !== null && line !== undefined).join("\n").trim();
 }
 
-function buildRunBody(ctx: AdapterExecutionContext, sessionKey: string | null): Record<string, unknown> {
+function buildRunBody(ctx: AdapterExecutionContext, sessionKey: string | null, procedureContext: string): Record<string, unknown> {
   const paperclipApiUrl = nonEmpty(ctx.config.paperclipApiUrl);
   const payloadTemplate = parseObject(ctx.config.payloadTemplate);
-  const input = nonEmpty(payloadTemplate.input) ?? buildInput(ctx, paperclipApiUrl);
+  const input = appendSourceEvidenceInstructions([
+    nonEmpty(payloadTemplate.input) ?? buildInput(ctx, paperclipApiUrl), procedureContext,
+  ].filter(Boolean).join("\n\n"));
   const instructions =
     nonEmpty(ctx.config.instructions) ??
     nonEmpty(payloadTemplate.instructions) ??
@@ -808,7 +812,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     runHeaders.Authorization,
     runHeaders["X-Hermes-Session-Key"],
   ]);
-  const body = buildRunBody(ctx, sessionKey);
+  let procedureContext: string;
+  try {
+    procedureContext = await loadProcedureContext(ctx.config);
+  } catch (err) {
+    return {
+      exitCode: 1, signal: null, timedOut: false,
+      errorCode: "paperclip_procedure_unavailable",
+      errorMessage: err instanceof Error ? err.message : "Attached company procedures cannot be delivered completely.",
+    };
+  }
+  const body = buildRunBody(ctx, sessionKey, procedureContext);
 
   await ctx.onMeta?.({
     adapterType: ADAPTER_TYPE,

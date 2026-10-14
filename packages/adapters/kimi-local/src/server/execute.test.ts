@@ -1,3 +1,4 @@
+import { SOURCE_EVIDENCE_INSTRUCTIONS } from "@paperclipai/adapter-utils/source-evidence";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -395,6 +396,9 @@ describe("kimi_local execute", () => {
     expect(prompt).toContain("./HEARTBEAT.md");
     expect(prompt).toContain("./SOUL.md");
     expect(prompt).toContain("./TOOLS.md");
+    expect(prompt.endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
+    expect(prompt.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
+    expect(await fs.readFile(instructionsFilePath, "utf8")).toBe("# Role\nYou are the lead agent.\n");
   });
 
   it("does not pass --skills-dir when no skills are desired", async () => {
@@ -405,7 +409,12 @@ describe("kimi_local execute", () => {
       return { exitCode: 0, signal: null, timedOut: false, stdout: KIMI_STDOUT, stderr: "" };
     });
 
-    await execute(makeContext(root, { config: { cwd: root, model: "kimi-code/k3" } }));
+    await execute(makeContext(root, { config: {
+      cwd: root, model: "kimi-code/k3",
+      // Override ambient bundled skills so this case actually has no required skills.
+      paperclipRuntimeSkills: [{ key: "optional-fixture", runtimeName: "optional-fixture", source: path.join(root, "optional-fixture") }],
+      paperclipSkillSync: { desiredSkills: [] },
+    } }));
 
     expect(seenArgs).not.toContain("--skills-dir");
   });
