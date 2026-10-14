@@ -146,3 +146,4 @@ export {
   pipelineAutomationExecutions,
 } from "./pipeline_cases.js";
 export { pipelineCaseEvents } from "./pipeline_case_events.js";
+export { issueTerminalEvents } from "./issue_terminal_events.js";

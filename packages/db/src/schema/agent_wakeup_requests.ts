@@ -36,5 +36,6 @@ export const agentWakeupRequests = pgTable(
       table.requestedAt,
     ),
     agentRequestedIdx: index("agent_wakeup_requests_agent_requested_idx").on(table.agentId, table.requestedAt),
+    idempotencyIdx: index("agent_wakeup_requests_idempotency_idx").on(table.companyId, table.agentId, table.idempotencyKey),
   }),
 );

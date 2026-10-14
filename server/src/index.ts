@@ -989,6 +989,7 @@ export async function startServer(): Promise<StartedServer> {
       .then(() => heartbeat.promoteDueScheduledRetries())
       .then(async (promotion) => {
         await heartbeat.resumeQueuedRuns();
+        await heartbeat.reconcileIssueDependencyWakeups();
         const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
         if (
           promotion.promoted > 0 ||
@@ -1104,6 +1105,7 @@ export async function startServer(): Promise<StartedServer> {
         .then(() => heartbeat.promoteDueScheduledRetries())
         .then(async (promotion) => {
           await heartbeat.resumeQueuedRuns();
+          await heartbeat.reconcileIssueDependencyWakeups();
           const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
           if (
             promotion.promoted > 0 ||

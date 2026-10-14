@@ -161,6 +161,7 @@ export function issueTreeControlRoutes(db: Db) {
         result.hold.mode === "pause"
           ? "Cancelled because an active subtree pause hold was created"
           : "Cancelled because a subtree cancel operation was applied",
+        { preserveDependencyDeferrals: result.hold.mode === "pause" },
       );
       for (const wakeup of cancelledWakeups) {
         await logActivity(db, {

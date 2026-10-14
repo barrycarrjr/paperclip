@@ -406,6 +406,8 @@ V1 non-terminal liveness rule:
 - `in_review` is healthy only when a typed execution participant, pending issue-thread interaction or approval, user owner, active run, queued wake, or explicit recovery issue owns the next action
 - a blocked chain is covered only when each unresolved leaf issue is live or explicitly waiting
 - when Paperclip cannot safely infer the next action, it surfaces the problem through visible blocked/recovery work instead of silently completing or reassigning work
+- a committed final child completion or final blocker resolution wakes its assigned parent or dependent within one heartbeat scheduler tick, regardless of the status writer; cancelled blockers remain unresolved
+- completion wake delivery survives process restarts, shares one delivery for concurrent closures, and queues a followup when the assignee is already running
 
 Detailed ownership, execution, blocker, active-run watchdog, crash-recovery, and non-terminal liveness semantics are documented in `doc/execution-semantics.md`.
 

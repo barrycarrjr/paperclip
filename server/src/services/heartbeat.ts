@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -87,6 +87,7 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { buildIssueDependencyWakeup, issueDependencyWakeupService } from "./issue-dependency-wakeups.js";
 import { memoryService } from "./memories.js";
 import { issueEmailDelegationService } from "./issue-email-delegations.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
@@ -326,7 +327,7 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
+const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved", "issue_children_completed", "issue_blockers_resolved"]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -1036,6 +1037,7 @@ interface WakeupOptions {
   reason?: string | null;
   payload?: Record<string, unknown> | null;
   idempotencyKey?: string | null;
+  issueDependencyFingerprint?: string;
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
@@ -6958,6 +6960,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           .where(eq(issues.id, issue.id));
       }
 
+      const preservedDependencyIds: string[] = [];
       while (true) {
         const deferred = await tx
           .select()
@@ -6966,6 +6969,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             and(
               eq(agentWakeupRequests.companyId, issue.companyId),
               eq(agentWakeupRequests.status, "deferred_issue_execution"),
+              preservedDependencyIds.length > 0 ? notInArray(agentWakeupRequests.id, preservedDependencyIds) : undefined,
               sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issue.id}`,
             ),
           )
@@ -6980,6 +6984,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           .from(agents)
           .where(eq(agents.id, deferred.agentId))
           .then((rows) => rows[0] ?? null);
+
+        const deferredPayload = parseObject(deferred.payload);
+        const deferredContextSeed = parseObject(deferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+        const dependencyDeferred = Boolean(readNonEmptyString(deferredContextSeed.issueDependencyFingerprint));
+        if (
+          dependencyDeferred && deferredAgent?.companyId === issue.companyId &&
+          (deferredAgent.status === "paused" || deferredAgent.status === "pending_approval")
+        ) {
+          // Accepted completion events are already acknowledged. Keep their
+          // deferred request so the scheduler can deliver after the pause ends.
+          preservedDependencyIds.push(deferred.id);
+          continue;
+        }
 
         if (
           !deferredAgent ||
@@ -7000,8 +7017,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           continue;
         }
 
-        const deferredPayload = parseObject(deferred.payload);
-        const deferredContextSeed = parseObject(deferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+        if (dependencyDeferred && await budgets.getInvocationBlock(issue.companyId, deferredAgent.id, {
+          issueId: issue.id, projectId: issue.projectId,
+        })) {
+          preservedDependencyIds.push(deferred.id);
+          continue;
+        }
+
         const activePauseHold = await treeControlSvc.getActivePauseHoldGate(issue.companyId, issue.id);
         const treeHoldInteractionWake = activePauseHold && await isVerifiedIssueTreeControlInteractionWake(tx, {
           companyId: issue.companyId,
@@ -7012,6 +7034,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           requestedByActorId: deferred.requestedByActorId,
         });
         if (activePauseHold && !treeHoldInteractionWake) {
+          if (dependencyDeferred) {
+            preservedDependencyIds.push(deferred.id);
+            continue;
+          }
           await tx
             .update(agentWakeupRequests)
             .set({
@@ -7161,6 +7187,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           reopenedActivity,
         };
       }
+
+      if (preservedDependencyIds.length > 0) return { kind: "released" as const };
 
       const issueNeedsImmediateRecovery =
         (issue.status === "todo" || issue.status === "in_progress") &&
@@ -7526,6 +7554,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           return { kind: "skipped" as const };
         }
 
+        if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
+          const existingDelivery = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
+            .where(and(
+              eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.agentId, agentId),
+              eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey), ne(agentWakeupRequests.status, "skipped"),
+            )).limit(1);
+          if (existingDelivery.length > 0) return { kind: "duplicate" as const };
+          const currentWake = reason === "issue_children_completed" || reason === "issue_blockers_resolved"
+            ? await buildIssueDependencyWakeup(tx as unknown as Db, agent.companyId, issue.id, reason)
+            : null;
+          if (!currentWake || currentWake.agentId !== agentId || currentWake.options.issueDependencyFingerprint !== opts.issueDependencyFingerprint) {
+            return { kind: "skipped" as const };
+          }
+        }
+
         const cancelStaleScheduledRetry = async (scheduledRun: typeof heartbeatRuns.$inferSelect) => {
           const issueCancelled = issue.status === "cancelled";
           if (
@@ -7823,6 +7866,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(agentWakeupRequests.id, existingDeferred.id));
 
+            // The deferred row can already carry a different delivery key.
+            // Retain a receipt for this key as well, so crash retries and other
+            // sources in the same child/blocker set do not enqueue it again.
+            if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
+              await tx.insert(agentWakeupRequests).values({
+                companyId: agent.companyId, agentId, source, triggerDetail, reason, payload,
+                status: "coalesced", coalescedCount: 1, idempotencyKey: opts.idempotencyKey,
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                runId: existingDeferred.runId, finishedAt: new Date(),
+              });
+            }
+
             return { kind: "deferred" as const };
           }
 
@@ -7890,7 +7946,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return { kind: "queued" as const, run: newRun };
       });
 
-      if (outcome.kind === "deferred" || outcome.kind === "skipped") return null;
+      if (outcome.kind === "deferred" || outcome.kind === "skipped" || outcome.kind === "duplicate") return null;
       if (outcome.kind === "coalesced") {
         await startNextQueuedRunForAgent(agent.id);
         return outcome.run;
@@ -8036,6 +8092,48 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return newRun;
   }
 
+  async function reconcileIssueDependencyWakeups() {
+    const result = await issueDependencyWakeupService(db, enqueueWakeup).reconcile();
+    // A process can stop after persisting a terminal run but before releasing
+    // its deferred wake. Blocked parents are absent from ordinary stranded-task
+    // recovery, so retry their existing promotion on every scheduler tick.
+    const deferred = await db.select({
+      companyId: agentWakeupRequests.companyId, payload: agentWakeupRequests.payload,
+      executionRunId: issues.executionRunId,
+    }).from(agentWakeupRequests).innerJoin(issues, and(
+      eq(issues.companyId, agentWakeupRequests.companyId),
+      sql`${issues.id}::text = ${agentWakeupRequests.payload} ->> 'issueId'`,
+    )).where(and(
+        eq(agentWakeupRequests.status, "deferred_issue_execution"),
+        sql`${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'issueDependencyFingerprint' is not null`,
+      ));
+    const seen = new Set<string>();
+    for (const wake of deferred) {
+      const issueId = readNonEmptyString(wake.payload?.issueId);
+      if (!issueId || seen.has(`${wake.companyId}:${issueId}`)) continue;
+      seen.add(`${wake.companyId}:${issueId}`);
+      try {
+        const active = await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
+          eq(heartbeatRuns.companyId, wake.companyId),
+          inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+        )).limit(1);
+        if (active.length > 0) continue;
+        const terminalRun = await db.select().from(heartbeatRuns).where(and(
+          eq(heartbeatRuns.companyId, wake.companyId),
+          inArray(heartbeatRuns.status, ["succeeded", "failed", "timed_out", "cancelled"]),
+          wake.executionRunId
+            ? eq(heartbeatRuns.id, wake.executionRunId)
+            : sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+        )).orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id)).limit(1).then((rows) => rows[0] ?? null);
+        if (terminalRun) await releaseIssueExecutionAndPromote(terminalRun);
+      } catch (err) {
+        logger.warn({ err, issueId }, "deferred completion wake promotion will retry on the next scheduler tick");
+      }
+    }
+    return result;
+  }
+
   async function listProjectScopedRunIds(companyId: string, projectId: string) {
     const runIssueId = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
     const effectiveProjectId = sql<string | null>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'projectId', ${issues.projectId}::text)`;
@@ -8122,7 +8220,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     if (wakeupIds.length === 0) return 0;
 
-    await db
+    const cancelled = await db
       .update(agentWakeupRequests)
       .set({
         status: "cancelled",
@@ -8130,9 +8228,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         error: "Cancelled due to budget pause",
         updatedAt: now,
       })
-      .where(inArray(agentWakeupRequests.id, wakeupIds));
+      .where(and(
+        inArray(agentWakeupRequests.id, wakeupIds),
+        // A budget pause temporarily blocks execution, but accepted completion
+        // delivery must remain available when the operator resumes the scope.
+        sql`not (${agentWakeupRequests.status} = 'deferred_issue_execution' and ${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'issueDependencyFingerprint' is not null)`,
+      ))
+      .returning({ id: agentWakeupRequests.id });
 
-    return wakeupIds.length;
+    return cancelled.length;
   }
 
   async function cancelRunInternal(
@@ -8516,6 +8620,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }),
 
     wakeup: enqueueWakeup,
+    reconcileIssueDependencyWakeups,
 
     reportRunActivity: clearDetachedRunWarning,
 

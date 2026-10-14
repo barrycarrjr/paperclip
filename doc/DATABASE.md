@@ -153,6 +153,28 @@ The database mode is controlled by `DATABASE_URL`:
 
 Your Drizzle schema (`packages/db/src/schema/`) stays the same regardless of mode.
 
+## Issue completion wakeups
+
+`issue_terminal_events` keeps one row per issue with a terminal transition
+version and an acknowledged version. A PostgreSQL trigger records status changes
+to `done` or `cancelled` in the same transaction, including direct SQL writes.
+The migration also records existing terminal issues for startup recovery.
+
+On startup and each heartbeat scheduler tick, the server checks committed events
+and wakes ready parents and issues whose blockers are all done. Cancelled blockers
+remain unresolved. Each delivery key includes the current source issue versions,
+so concurrent closures share one wake and reopening then closing creates a new
+delivery. Accepted requests, including merged deferred wakes, keep a delivery
+receipt under the target issue lock. Failed enqueue attempts and policy skips
+remain pending for a later tick. A running assignee receives a followup run after
+its current run finishes. Company boundaries, pause holds, and invocation budgets
+still apply.
+If a process stops between saving the terminal run and promoting its deferred
+completion wake, startup and scheduler reconciliation retry the promotion.
+Accepted deferred completion requests also survive temporary agent, subtree,
+and budget pauses and are promoted after those restrictions are released.
+Agent termination and subtree cancellation still discard deferred work.
+
 ## Secret storage
 
 Paperclip stores secret metadata and versions in:

@@ -1049,7 +1049,10 @@ export function issueTreeControlService(db: Db) {
     return toHold(updated, members);
   }
 
-  async function cancelUnclaimedWakeupsForTree(companyId: string, rootIssueId: string, reason: string) {
+  async function cancelUnclaimedWakeupsForTree(
+    companyId: string, rootIssueId: string, reason: string,
+    options: { preserveDependencyDeferrals?: boolean } = {},
+  ) {
     const treeIssues = await listTreeIssues(companyId, rootIssueId);
     const issueIds = treeIssues.map((issue) => issue.id);
     if (issueIds.length === 0) return [];
@@ -1067,6 +1070,11 @@ export function issueTreeControlService(db: Db) {
           eq(agentWakeupRequests.companyId, companyId),
           inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution"]),
           isNull(agentWakeupRequests.runId),
+          // Pauses preserve accepted completion delivery; cancel operations
+          // still discard it along with the rest of the subtree's work.
+          options.preserveDependencyDeferrals
+            ? sql`not (${agentWakeupRequests.status} = 'deferred_issue_execution' and ${agentWakeupRequests.payload} -> '_paperclipWakeContext' ->> 'issueDependencyFingerprint' is not null)`
+            : undefined,
           inArray(sql<string | null>`${agentWakeupRequests.payload} ->> 'issueId'`, issueIds),
         ),
       )

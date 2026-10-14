@@ -2963,6 +2963,10 @@ export function issueRoutes(
         }
       }
 
+      // Terminal status writes now record transactional events for the common
+      // scheduler reconciliation, including service and direct SQL writes.
+      // Preserve the former route-only implementation as an undo path.
+      /*
       const becameDone = existing.status !== "done" && issue.status === "done";
       if (becameDone) {
         const dependents = await svc.listWakeableBlockedDependents(issue.id);
@@ -3022,6 +3026,7 @@ export function issueRoutes(
         }
       }
 
+      */
       for (const { agentId, wakeup } of wakeups.values()) {
         heartbeat
           .wakeup(agentId, wakeup)

@@ -112,7 +112,7 @@ describe("issue dependency wakeups in issue routes", () => {
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
   });
 
-  it("wakes dependents when the final blocker transitions to done", async () => {
+  it("leaves blocker completion wakes to shared scheduler reconciliation", async () => {
     mockIssueService.getById.mockResolvedValue({
       id: "issue-1",
       companyId: "company-1",
@@ -157,21 +157,10 @@ describe("issue dependency wakeups in issue routes", () => {
 
     const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
     expect(res.status).toBe(200);
-    await vi.waitFor(() => {
-      expect(mockWakeup).toHaveBeenCalledWith(
-        "agent-2",
-        expect.objectContaining({
-          reason: "issue_blockers_resolved",
-          payload: expect.objectContaining({
-            issueId: "issue-2",
-            resolvedBlockerIssueId: "issue-1",
-          }),
-        }),
-      );
-    });
+    expect(mockWakeup).not.toHaveBeenCalled();
   });
 
-  it("wakes the parent when all direct children become terminal", async () => {
+  it("leaves child completion wakes to shared scheduler reconciliation", async () => {
     mockIssueService.getById.mockResolvedValue({
       id: "child-1",
       companyId: "company-1",
@@ -239,25 +228,6 @@ describe("issue dependency wakeups in issue routes", () => {
 
     const res = await request(await createApp()).patch("/api/issues/child-1").send({ status: "done" });
     expect(res.status).toBe(200);
-    await vi.waitFor(() => {
-      expect(mockWakeup).toHaveBeenCalledWith(
-        "agent-9",
-        expect.objectContaining({
-          reason: "issue_children_completed",
-          payload: expect.objectContaining({
-            issueId: "parent-1",
-            completedChildIssueId: "child-1",
-            childIssueSummaries: expect.arrayContaining([
-              expect.objectContaining({ identifier: "PAP-101", summary: "Last child finished." }),
-            ]),
-          }),
-          contextSnapshot: expect.objectContaining({
-            childIssueSummaries: expect.arrayContaining([
-              expect.objectContaining({ identifier: "PAP-100", summary: "First child finished." }),
-            ]),
-          }),
-        }),
-      );
-    });
+    expect(mockWakeup).not.toHaveBeenCalled();
   });
 });
