@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { updateMemoryFolderSchema } from "@paperclipai/shared";
+import { updateMemoryFolderSchema, applyDocumentLinksSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { logActivity } from "../services/index.js";
 import { memoryFolderService, type MemoryFolderService } from "../services/memory-folder-sync.js";
@@ -29,6 +29,39 @@ export function memoryFolderRoutes(db: Db, service: MemoryFolderService = memory
     res.json(await service.validate(companyId, "manual"));
   });
 
+  router.get("/companies/:companyId/memory-folder/links/preview", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await service.previewLinks(companyId));
+  });
+
+  router.post("/companies/:companyId/memory-folder/links/apply", validate(applyDocumentLinksSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId,
+      action: "memory_folder.links_apply_started", entityType: "memory_folder", entityId: companyId,
+      details: { planHash: req.body.planHash, status: "started" },
+    });
+    try {
+      const result = await service.applyLinks(companyId, req.body.planHash);
+      await logActivity(db, {
+        companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId,
+        action: "memory_folder.links_applied", entityType: "memory_folder", entityId: companyId,
+        details: { planHash: result.planHash, status: result.status, filesChanged: result.filesChanged, memoriesChanged: result.memoriesChanged },
+      });
+      res.json(result);
+    } catch (error) {
+      await logActivity(db, {
+        companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId,
+        action: "memory_folder.links_apply_failed", entityType: "memory_folder", entityId: companyId,
+        details: { planHash: req.body.planHash, status: "failed" },
+      });
+      throw error;
+    }
+  });
+
   router.put(
     "/companies/:companyId/memory-folder",
     validate(updateMemoryFolderSchema),
@@ -46,7 +79,11 @@ export function memoryFolderRoutes(db: Db, service: MemoryFolderService = memory
         action: "memory_folder.updated",
         entityType: "memory_folder",
         entityId: companyId,
-        details: { path: settings.path, scheduleMinutes: settings.scheduleMinutes },
+        details: {
+          path: settings.path,
+          scheduleMinutes: settings.scheduleMinutes,
+          driveLinkMode: settings.driveLinkMode,
+        },
       });
       res.json(settings);
     },

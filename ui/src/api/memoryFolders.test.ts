@@ -22,4 +22,15 @@ describe("memoryFoldersApi knowledge-base actions", () => {
     expect(mockApi.get).toHaveBeenCalledWith("/companies/company-1/memory-folder/findings");
     expect(mockApi.post).toHaveBeenCalledWith("/companies/company-1/memory-folder/index", {});
   });
+
+  it("uses the company-scoped Drive-link preview and apply endpoints", async () => {
+    await memoryFoldersApi.previewLinks("company-1");
+    await memoryFoldersApi.applyLinks("company-1", "a".repeat(64));
+
+    expect(mockApi.get).toHaveBeenCalledWith("/companies/company-1/memory-folder/links/preview");
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/companies/company-1/memory-folder/links/apply",
+      { planHash: "a".repeat(64) },
+    );
+  });
 });

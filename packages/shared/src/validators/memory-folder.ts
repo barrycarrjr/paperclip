@@ -6,6 +6,8 @@ export const MEMORY_FOLDER_SCHEDULES = [15, 60, 360, 1440] as const;
 export const updateMemoryFolderSchema = z.object({
   /** Absolute path (a leading `~/` is expanded on the server). Empty string disconnects the folder. */
   path: z.string().max(1000),
+  /** Require declared Drive identities on document links. Existing folders default off. */
+  driveLinkMode: z.boolean().optional(),
   scheduleMinutes: z
     .number()
     .int()
@@ -17,3 +19,7 @@ export const updateMemoryFolderSchema = z.object({
 });
 
 export type UpdateMemoryFolder = z.infer<typeof updateMemoryFolderSchema>;
+
+export const applyDocumentLinksSchema = z.object({
+  planHash: z.string().regex(/^[a-f0-9]{64}$/),
+});

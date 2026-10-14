@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderSync } from "lucide-react";
-import type { KnowledgeBaseValidationResult, MemoryFolderRunResult } from "@paperclipai/shared";
+import type {
+  DocumentLinkPreview,
+  KnowledgeBaseValidationResult,
+  MemoryFolderRunResult,
+} from "@paperclipai/shared";
 import { MEMORY_FOLDER_SCHEDULES } from "@paperclipai/shared";
 import { memoryFoldersApi } from "@/api/memoryFolders";
 import { Button } from "@/components/ui/button";
@@ -80,6 +84,8 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
 
   const [path, setPath] = useState("");
   const [schedule, setSchedule] = useState<string>("");
+  const [driveLinkMode, setDriveLinkMode] = useState(false);
+  const [linkPreview, setLinkPreview] = useState<DocumentLinkPreview | null>(null);
 
   useEffect(() => {
     if (settingsQuery.data) {
@@ -87,6 +93,8 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
       setSchedule(
         settingsQuery.data.scheduleMinutes ? String(settingsQuery.data.scheduleMinutes) : "",
       );
+      setDriveLinkMode(settingsQuery.data.driveLinkMode ?? false);
+      setLinkPreview(null);
     }
   }, [settingsQuery.data]);
 
@@ -100,6 +108,7 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
       memoryFoldersApi.update(companyId, {
         path: path.trim(),
         scheduleMinutes: schedule ? Number(schedule) : null,
+        driveLinkMode,
       }),
     onSuccess: (settings) => {
       pushToast({
@@ -168,11 +177,63 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
       }),
   });
 
+  const previewLinksMutation = useMutation({
+    mutationFn: () => memoryFoldersApi.previewLinks(companyId),
+    onSuccess: (result) => {
+      setLinkPreview(result);
+      pushToast({
+        tone: result.changes.length > 0 || result.skipped.length > 0 ? "warn" : "success",
+        title: "Drive-link preview finished",
+        body: `${result.changes.length} link changes and ${result.memoriesChanged} memory updates ready, ${result.skipped.length} skipped`,
+      });
+    },
+    onError: (error) =>
+      pushToast({
+        tone: "error",
+        title: "Drive-link preview failed",
+        body: error instanceof Error ? error.message : "Unknown error",
+      }),
+  });
+
+  const applyLinksMutation = useMutation({
+    mutationFn: (planHash: string) => memoryFoldersApi.applyLinks(companyId, planHash),
+    onSuccess: (result) => {
+      setLinkPreview(null);
+      pushToast({
+        tone: result.status === "completed" ? "success" : "warn",
+        title: result.status === "completed" ? "Drive links applied" : "Drive-link recovery pending",
+        body: `${result.filesChanged} files and ${result.memoriesChanged} memories changed`,
+      });
+      refresh();
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Drive-link apply did not finish",
+        body: error instanceof Error ? error.message : "Unknown error",
+      });
+      refresh();
+    },
+  });
+
   const configured = Boolean(settingsQuery.data?.path);
   const dirty =
     path.trim() !== (settingsQuery.data?.path ?? "") ||
-    (schedule ? Number(schedule) : null) !== (settingsQuery.data?.scheduleMinutes ?? null);
-  const busy = saveMutation.isPending || runMutation.isPending || checkMutation.isPending || indexMutation.isPending;
+    (schedule ? Number(schedule) : null) !== (settingsQuery.data?.scheduleMinutes ?? null) ||
+    driveLinkMode !== (settingsQuery.data?.driveLinkMode ?? false);
+  const migrationPending = settingsQuery.data?.linkMigration?.status === "pending";
+  const busy = saveMutation.isPending || runMutation.isPending || checkMutation.isPending ||
+    indexMutation.isPending || previewLinksMutation.isPending || applyLinksMutation.isPending;
+  const applyPlanHash = migrationPending
+    ? settingsQuery.data?.linkMigration?.planHash ?? null
+    : linkPreview?.planHash ?? null;
+  const previewBeforeFingerprints = new Set(
+    linkPreview?.before.findings.map((finding) => finding.fingerprint) ?? [],
+  );
+  const previewNewFindings = linkPreview?.after.findings.filter(
+    (finding) => !previewBeforeFingerprints.has(finding.fingerprint),
+  ) ?? [];
+  const previewBlocked = Boolean(linkPreview?.after.error || previewNewFindings.length > 0);
   const last = settingsQuery.data?.lastResult ?? null;
 
   return (
@@ -204,6 +265,70 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               Absolute path, or start with ~/ for your home folder. Leave empty and save to disconnect.
               Only an instance admin can change this.
             </p>
+          </div>
+          <div className="rounded-md border p-3">
+            <label className="flex items-start gap-2 text-sm" htmlFor="memory-folder-drive-links">
+              <input
+                id="memory-folder-drive-links"
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={driveLinkMode}
+                onChange={(event) => {
+                  setDriveLinkMode(event.target.checked);
+                  setLinkPreview(null);
+                }}
+                disabled={busy || migrationPending}
+              />
+              <span>
+                <span className="font-medium">Require Drive IDs on document links</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Use this only for a Google Drive backed folder. Links stay readable as relative paths and add an authoritative Drive-ID.
+                </span>
+              </span>
+            </label>
+            {migrationPending && (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                A Drive-link apply was interrupted. Retry it before changing settings or running a sync.
+              </p>
+            )}
+            {linkPreview && (
+              <div className="mt-2 text-xs text-muted-foreground">
+                {linkPreview.changes.length} link changes and {linkPreview.memoriesChanged} memory updates ready, {linkPreview.skipped.length} skipped.
+                <p>
+                  Validator: {linkPreview.before.findings.length} findings before, {linkPreview.after.findings.length} after.
+                </p>
+                {previewBlocked && (
+                  <p className="text-amber-700 dark:text-amber-300">
+                    Apply is blocked because the preview introduced {previewNewFindings.length} findings
+                    {linkPreview.after.error ? ` and the final check failed: ${linkPreview.after.error}` : ""}.
+                  </p>
+                )}
+                {linkPreview.changes.length > 0 && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer">Review proposed link changes</summary>
+                    <ul className="mt-1 ml-4 list-disc break-all">
+                      {linkPreview.changes.map((change) => (
+                        <li key={`${change.path}:${change.line}:${change.target}`}>
+                          {change.path}:{change.line} changes {change.target} to {change.replacement}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {linkPreview.skipped.length > 0 && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer">Review skipped references</summary>
+                    <ul className="mt-1 ml-4 list-disc break-all">
+                      {linkPreview.skipped.map((item, index) => (
+                        <li key={`${item.path}:${item.line ?? "file"}:${index}`}>
+                          {item.path}{item.line ? `:${item.line}` : ""}: {item.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <Label htmlFor="memory-folder-schedule">Automatic sync</Label>
@@ -252,7 +377,7 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!configured || dirty || busy}
+              disabled={!configured || dirty || busy || migrationPending}
               onClick={() => runMutation.mutate("export")}
             >
               Export now
@@ -261,7 +386,7 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!configured || dirty || busy}
+              disabled={!configured || dirty || busy || migrationPending}
               onClick={() => runMutation.mutate("import")}
             >
               Import now
@@ -270,7 +395,7 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!configured || dirty || busy}
+              disabled={!configured || dirty || busy || migrationPending}
               onClick={() => runMutation.mutate("sync")}
             >
               Import then export
@@ -288,13 +413,35 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!configured || dirty || busy}
+              disabled={!configured || dirty || busy || migrationPending}
               onClick={() => indexMutation.mutate()}
             >
               Rebuild index
             </Button>
+            {driveLinkMode && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!configured || dirty || busy || migrationPending}
+                onClick={() => previewLinksMutation.mutate()}
+              >
+                Preview Drive links
+              </Button>
+            )}
+            {driveLinkMode && applyPlanHash && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!configured || dirty || busy || (!migrationPending && (((linkPreview?.changes.length ?? 0) === 0 && (linkPreview?.memoriesChanged ?? 0) === 0) || previewBlocked))}
+                onClick={() => applyLinksMutation.mutate(applyPlanHash)}
+              >
+                {migrationPending ? "Retry Drive-link apply" : "Apply Drive links"}
+              </Button>
+            )}
           </div>
-          <Button type="button" disabled={!dirty || busy} onClick={() => saveMutation.mutate()}>
+          <Button type="button" disabled={!dirty || busy || migrationPending} onClick={() => saveMutation.mutate()}>
             {saveMutation.isPending ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>

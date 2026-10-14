@@ -449,6 +449,9 @@ export type {
   KnowledgeBaseIndexResult,
   MemoryFolderRunResult,
   MemoryFolderSettings,
+  DocumentLinkChange,
+  DocumentLinkPreview,
+  DocumentLinkApplyResult,
   Space,
   SpaceListItem,
   SpacePage,
@@ -620,6 +623,8 @@ export type {
   ExternalMcpTestConnectResult,
 } from "./types/index.js";
 export { KNOWLEDGE_BASE_FINDING_KINDS } from "./types/memory-folder.js";
+export { DRIVE_FILE_ID_PATTERN, DRIVE_FILE_ID_FIELDS, declaredDriveFileId } from "./validators/document-links.js";
+export { applyDocumentLinksSchema } from "./validators/memory-folder.js";
 export type {
   CalendarEventKind,
   CalendarChannel,

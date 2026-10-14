@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, integer, timestamp, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 /**
@@ -17,6 +17,9 @@ export const memoryFolders = pgTable(
       .references(() => companies.id, { onDelete: "cascade" }),
     /** Absolute path of the folder on the server's disk. */
     path: text("path").notNull(),
+    driveLinkMode: boolean("drive_link_mode").notNull().default(false),
+    /** Encrypted pending/completed dual-link apply receipt. Never contains plaintext note backups. */
+    linkMigration: text("link_migration"),
     /** Minutes between automatic syncs; null means manual only. */
     scheduleMinutes: integer("schedule_minutes"),
     lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),

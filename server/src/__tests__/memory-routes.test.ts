@@ -149,6 +149,40 @@ describe.sequential("memory routes", () => {
     );
   });
 
+  it("accepts a Drive file ID on create and rejects malformed identity", async () => {
+    const driveFileId = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
+    mockMemoryService.create.mockResolvedValue({
+      id: "m-drive",
+      companyId: "company-1",
+      kind: "reference",
+      name: "Contract",
+      driveFileId,
+    });
+    const app = await createApp();
+
+    const accepted = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/memories")
+        .send({ kind: "reference", name: "Contract", content: "contracts/current.md", driveFileId }),
+    );
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.driveFileId).toBe(driveFileId);
+    expect(mockMemoryService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({ driveFileId }),
+      expect.anything(),
+    );
+
+    mockMemoryService.create.mockClear();
+    const rejected = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/memories")
+        .send({ kind: "reference", name: "Contract", content: "contracts/current.md", driveFileId: "Drive URL" }),
+    );
+    expect(rejected.status).toBe(400);
+    expect(mockMemoryService.create).not.toHaveBeenCalled();
+  });
+
   it("blocks cross-company creates with 403", async () => {
     const app = await createApp();
     const res = await requestApp(app, (baseUrl) =>
@@ -191,6 +225,22 @@ describe.sequential("memory routes", () => {
       expect.anything(),
       expect.objectContaining({ action: "memory.updated" }),
     );
+  });
+
+  it("clears Drive file identity with an explicit null patch", async () => {
+    mockMemoryService.getById.mockResolvedValue({ id: "m-1", companyId: "company-1" });
+    mockMemoryService.update.mockResolvedValue({
+      id: "m-1",
+      companyId: "company-1",
+      driveFileId: null,
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).patch("/api/memories/m-1").send({ driveFileId: null }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.driveFileId).toBeNull();
+    expect(mockMemoryService.update).toHaveBeenCalledWith("m-1", { driveFileId: null });
   });
 
   it("deletes memories and logs activity", async () => {

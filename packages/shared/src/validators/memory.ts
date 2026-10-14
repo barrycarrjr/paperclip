@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DRIVE_FILE_ID_PATTERN } from "./document-links.js";
 
 export const MEMORY_KINDS = ["user", "feedback", "project", "reference"] as const;
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
@@ -15,6 +16,7 @@ export const createMemorySchema = z.object({
   description: z.string().max(MEMORY_DESCRIPTION_MAX).optional().nullable(),
   content: z.string().min(1).max(MEMORY_CONTENT_MAX),
   agentId: z.string().uuid().optional().nullable(),
+  driveFileId: z.string().regex(DRIVE_FILE_ID_PATTERN).optional().nullable(),
 });
 
 export type CreateMemory = z.infer<typeof createMemorySchema>;
@@ -24,6 +26,7 @@ export const updateMemorySchema = z.object({
   name: z.string().min(1).max(MEMORY_NAME_MAX).optional(),
   description: z.string().max(MEMORY_DESCRIPTION_MAX).optional().nullable(),
   content: z.string().min(1).max(MEMORY_CONTENT_MAX).optional(),
+  driveFileId: z.string().regex(DRIVE_FILE_ID_PATTERN).optional().nullable(),
 });
 
 export type UpdateMemory = z.infer<typeof updateMemorySchema>;

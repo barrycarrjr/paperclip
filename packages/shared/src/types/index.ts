@@ -195,6 +195,9 @@ export {
   type KnowledgeBaseIndexResult,
   type MemoryFolderRunResult,
   type MemoryFolderSettings,
+  type DocumentLinkChange,
+  type DocumentLinkPreview,
+  type DocumentLinkApplyResult,
 } from "./memory-folder.js";
 export type {
   Space,

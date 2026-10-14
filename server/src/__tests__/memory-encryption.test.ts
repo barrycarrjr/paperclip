@@ -53,6 +53,7 @@ describe("memoryService encrypts content at rest", () => {
     const rows: Array<Record<string, unknown>> = [];
     let lastInsert: Record<string, unknown> | null = null;
     let lastSet: Record<string, unknown> | null = null;
+    let lastConflict: Record<string, unknown> | null = null;
     const db = {
       insert() {
         return {
@@ -62,7 +63,10 @@ describe("memoryService encrypts content at rest", () => {
             rows.push(row);
             return {
               returning: () => Promise.resolve([row]),
-              onConflictDoUpdate: () => ({ returning: () => Promise.resolve([row]) }),
+              onConflictDoUpdate: (config: Record<string, unknown>) => {
+                lastConflict = config;
+                return { returning: () => Promise.resolve([row]) };
+              },
             };
           },
         };
@@ -84,6 +88,7 @@ describe("memoryService encrypts content at rest", () => {
           from() {
             const chain = {
               where: () => chain,
+              for: () => Promise.resolve(rows),
               orderBy: () => chain,
               limit: () => Promise.resolve(rows),
               then: (resolve: (v: unknown) => unknown) => Promise.resolve(rows).then(resolve),
@@ -95,8 +100,17 @@ describe("memoryService encrypts content at rest", () => {
       delete() {
         return { where: () => ({ returning: () => Promise.resolve([rows[0]]) }) };
       },
+      transaction<T>(callback: (tx: typeof db) => Promise<T>) {
+        return callback(db);
+      },
     };
-    return { db, rows, getInsert: () => lastInsert, getSet: () => lastSet };
+    return {
+      db,
+      rows,
+      getInsert: () => lastInsert,
+      getSet: () => lastSet,
+      getConflict: () => lastConflict,
+    };
   }
 
   it("writes ciphertext and reads plaintext back", async () => {
@@ -126,5 +140,32 @@ describe("memoryService encrypts content at rest", () => {
     const setContent = fake.getSet()!.content as string;
     expect(setContent.startsWith("enc1:")).toBe(true);
     expect(setContent).not.toContain("FedEx");
+  });
+
+  it("persists, clears and upserts Drive file identity without encrypting it", async () => {
+    const { memoryService } = await import("../services/memories.js");
+    const fake = fakeDb();
+    const svc = memoryService(fake.db as never);
+    const driveFileId = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
+
+    const created = await svc.create(
+      "company-1",
+      { kind: "reference", name: "Contract", content: "contracts/current.md", driveFileId },
+      { agentId: null, userId: "user-1" },
+    );
+    expect(created.driveFileId).toBe(driveFileId);
+    expect(fake.getInsert()!.driveFileId).toBe(driveFileId);
+
+    const updated = await svc.update("mem-1", { driveFileId: null });
+    expect(updated!.driveFileId).toBeNull();
+    expect(fake.getSet()!.driveFileId).toBeNull();
+
+    await svc.upsertByName(
+      "company-1",
+      { kind: "reference", name: "Contract", content: "contracts/current.md", driveFileId },
+      { agentId: null, userId: "user-1" },
+    );
+    expect(fake.getInsert()!.driveFileId).toBe(driveFileId);
+    expect((fake.getConflict()!.set as Record<string, unknown>).driveFileId).toBe(driveFileId);
   });
 });

@@ -39,6 +39,7 @@ function memoryRow(overrides: Record<string, unknown> = {}) {
     name: "Courier",
     description: null,
     content: "Use DHL",
+    driveFileId: null,
     createdByAgentId: null,
     createdByUserId: "user-1",
     createdAt: new Date("2026-10-01T00:00:00Z"),
@@ -71,13 +72,66 @@ describe("Clippy memory tools", () => {
     expect(result.ok).toBe(true);
     expect(mockMemoryService.create).toHaveBeenCalledWith(
       COMPANY_ID,
-      { name: "Courier", content: "Use DHL", kind: "project", description: null, agentId: null },
+      {
+        name: "Courier",
+        content: "Use DHL",
+        kind: "project",
+        description: null,
+        agentId: null,
+        driveFileId: null,
+      },
       { userId: "user-1", agentId: null },
     );
     expect(mockMemoryService.update).not.toHaveBeenCalled();
     const payload = (result as { result: { replaced: boolean; message: string } }).result;
     expect(payload.replaced).toBe(false);
     expect(payload.message).toContain("encrypted");
+  });
+
+  it("remember stores and returns an exact Drive file ID", async () => {
+    const driveFileId = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
+    mockMemoryService.getCompanyMemoryByName.mockResolvedValue(null);
+    mockMemoryService.create.mockResolvedValue(memoryRow({ driveFileId }));
+
+    const result = await executeChatTool(
+      "remember",
+      { name: "Contract", content: "contracts/current.md", driveFileId },
+      ctx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockMemoryService.create).toHaveBeenCalledWith(
+      COMPANY_ID,
+      expect.objectContaining({ driveFileId }),
+      expect.anything(),
+    );
+    expect((result as { result: { memory: { driveFileId: string } } }).result.memory.driveFileId).toBe(driveFileId);
+  });
+
+  it("remember can clear a Drive file ID and rejects malformed IDs", async () => {
+    mockMemoryService.getCompanyMemoryByName.mockResolvedValue(memoryRow({ driveFileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz" }));
+    mockMemoryService.update.mockResolvedValue(memoryRow({ driveFileId: null }));
+
+    const cleared = await executeChatTool(
+      "remember",
+      { name: "Courier", content: "Use DHL", driveFileId: null },
+      ctx(),
+    );
+    expect(cleared.ok).toBe(true);
+    expect(mockMemoryService.update).toHaveBeenCalledWith(MEMORY_ID, {
+      content: "Use DHL",
+      driveFileId: null,
+    });
+
+    vi.clearAllMocks();
+    const invalid = await executeChatTool(
+      "remember",
+      { name: "Courier", content: "Use DHL", driveFileId: "not a Drive URL" },
+      ctx(),
+    );
+    expect(invalid.ok).toBe(false);
+    expect(mockMemoryService.create).not.toHaveBeenCalled();
+    expect(mockMemoryService.update).not.toHaveBeenCalled();
   });
 
   it("remember with an existing name updates instead of duplicating", async () => {
@@ -117,7 +171,8 @@ describe("Clippy memory tools", () => {
   });
 
   it("recall_memories lists the current company's memories with a search term", async () => {
-    mockMemoryService.list.mockResolvedValue([memoryRow()]);
+    const driveFileId = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
+    mockMemoryService.list.mockResolvedValue([memoryRow({ driveFileId })]);
 
     const result = await executeChatTool("recall_memories", { query: "courier" }, ctx());
 
@@ -126,8 +181,9 @@ describe("Clippy memory tools", () => {
     const payload = (result as { result: { memories: Array<{ name: string; content: string }> } })
       .result;
     expect(payload.memories).toEqual([
-      expect.objectContaining({ name: "Courier", content: "Use DHL" }),
+      expect.objectContaining({ name: "Courier", content: "Use DHL", driveFileId }),
     ]);
+    expect(getChatTool("recall_memories")!.description).toContain("use the Drive file ID");
   });
 
   it("forget_memory deletes by exact name within the current company", async () => {

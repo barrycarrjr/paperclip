@@ -14,6 +14,7 @@ import {
 import {
   AGENT_FINDING_KEY_MAX_LENGTH,
   AGENT_FINDING_ORIGIN_KIND,
+  DRIVE_FILE_ID_PATTERN,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
   MEMORY_CONTENT_MAX,
@@ -1227,6 +1228,7 @@ function summarizeMemory(row: {
   name: string;
   description: string | null;
   content: string;
+  driveFileId?: string | null;
   updatedAt: Date;
 }) {
   return {
@@ -1236,6 +1238,7 @@ function summarizeMemory(row: {
     name: row.name,
     description: row.description,
     content: row.content,
+    driveFileId: row.driveFileId ?? null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -1245,6 +1248,7 @@ const rememberTool: ChatToolDefinition<{
   content: string;
   kind?: MemoryKind;
   description?: string;
+  driveFileId?: string | null;
   companyId?: string;
 }> = {
   name: "remember",
@@ -1256,6 +1260,7 @@ const rememberTool: ChatToolDefinition<{
     content: z.string().trim().min(1).max(MEMORY_CONTENT_MAX),
     kind: z.enum(MEMORY_KINDS).optional(),
     description: z.string().trim().max(MEMORY_DESCRIPTION_MAX).optional(),
+    driveFileId: z.string().regex(DRIVE_FILE_ID_PATTERN).nullable().optional(),
     companyId: z.string().optional(),
   }),
   spec: {
@@ -1284,6 +1289,11 @@ const rememberTool: ChatToolDefinition<{
           type: "string",
           description: "Optional one-line summary used when listing memories.",
         },
+        driveFileId: {
+          type: ["string", "null"],
+          description:
+            "Optional exact Google Drive file ID for a referenced document. Use null to clear an existing ID.",
+        },
         companyId: {
           type: "string",
           description: "Company to attach the memory to. Defaults to the current company.",
@@ -1292,7 +1302,7 @@ const rememberTool: ChatToolDefinition<{
       required: ["name", "content"],
     },
   },
-  async handler({ name, content, kind, description, companyId }, ctx) {
+  async handler({ name, content, kind, description, driveFileId, companyId }, ctx) {
     const target = companyId ?? ctx.defaultCompanyId;
     if (!target) {
       throw forbidden("No company context: select a company first");
@@ -1306,10 +1316,18 @@ const rememberTool: ChatToolDefinition<{
           content,
           ...(kind ? { kind } : {}),
           ...(description !== undefined ? { description } : {}),
+          ...(driveFileId !== undefined ? { driveFileId } : {}),
         })
       : await svc.create(
           target,
-          { name, content, kind: kind ?? "project", description: description ?? null, agentId: null },
+          {
+            name,
+            content,
+            kind: kind ?? "project",
+            description: description ?? null,
+            agentId: null,
+            driveFileId: driveFileId ?? null,
+          },
           actor,
         );
     if (!saved) throw notFound("Memory not found");
@@ -1331,7 +1349,7 @@ const recallMemoriesTool: ChatToolDefinition<{
 }> = {
   name: "recall_memories",
   description:
-    "List what has been remembered for a company, optionally filtered by a search term or kind. Read-only.",
+    "List what has been remembered for a company, optionally filtered by a search term or kind. Results include any declared Drive file ID. When a readable path and Drive file ID disagree, use the Drive file ID. Read-only.",
   mutating: false,
   inputSchema: z.object({
     query: z.string().trim().min(1).max(200).optional(),
@@ -1341,7 +1359,7 @@ const recallMemoriesTool: ChatToolDefinition<{
   spec: {
     name: "recall_memories",
     description:
-      "Look up memories previously stored for a company. Call this before answering questions about things the user may have asked you to remember. Returns name, kind, description, content and when it was last updated.",
+      "Look up memories previously stored for a company. Call this before answering questions about things the user may have asked you to remember. Returns name, kind, description, content, any Drive file ID and when it was last updated. When a readable path and Drive file ID disagree, use the Drive file ID.",
     input_schema: {
       type: "object",
       properties: {

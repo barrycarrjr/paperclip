@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Memory, MemoryKind } from "@paperclipai/shared";
-import { MEMORY_KINDS } from "@paperclipai/shared";
+import { MEMORY_KINDS, declaredDriveFileId } from "@paperclipai/shared";
 
 /**
  * Pure helpers for the on-disk shape of a company's memory folder.
@@ -20,6 +20,7 @@ export interface MemoryFileFrontMatter {
   agent: string | null;
   /** Memory id when the file was written by Paperclip, else null. */
   paperclipId: string | null;
+  driveFileId: string | null;
 }
 
 export interface ParsedMemoryFile extends MemoryFileFrontMatter {
@@ -63,6 +64,7 @@ export function serializeMemoryFile(memory: Memory, agentName: string | null): s
   if (memory.description) lines.push(`description: ${yamlScalar(memory.description)}`);
   if (agentName) lines.push(`agent: ${yamlScalar(agentName)}`);
   lines.push(`paperclip_id: ${memory.id}`);
+  if (memory.driveFileId) lines.push(`drive_file_id: ${memory.driveFileId}`);
   lines.push(`updated: ${new Date(memory.updatedAt).toISOString()}`);
   lines.push("---", "", memory.content.replace(/\r\n/g, "\n").trimEnd(), "");
   return lines.join("\n");
@@ -116,7 +118,7 @@ export function parseMemoryFile(fileName: string, text: string): ParsedMemoryFil
   const idRaw = (fields.paperclip_id ?? fields.paperclipid ?? "").trim();
   const paperclipId = /^[0-9a-f-]{36}$/i.test(idRaw) ? idRaw : null;
 
-  return { name, kind, description, agent, paperclipId, content: body.trim() };
+  return { name, kind, description, agent, paperclipId, driveFileId: declaredDriveFileId(fields).id, content: body.trim() };
 }
 
 /**
@@ -140,9 +142,10 @@ export interface IndexEntry {
   kind: MemoryKind;
   description: string | null;
   agentName: string | null;
+  driveFileId?: string | null;
 }
 
-export function serializeIndex(companyName: string, entries: IndexEntry[]): string {
+export function serializeIndex(companyName: string, entries: IndexEntry[], driveLinkMode = false): string {
   const lines = [
     `# ${companyName} memories`,
     "",
@@ -153,7 +156,8 @@ export function serializeIndex(companyName: string, entries: IndexEntry[]): stri
   for (const entry of sorted) {
     const scope = entry.agentName ? ` (agent: ${entry.agentName})` : "";
     const desc = entry.description ? ` - ${entry.description}` : "";
-    lines.push(`- [${entry.name}](${entry.fileName}) [${entry.kind}]${scope}${desc}`);
+    const identity = driveLinkMode && entry.driveFileId ? ` (Drive-ID: ${entry.driveFileId})` : "";
+    lines.push(`- [${entry.name}](${entry.fileName})${identity} [${entry.kind}]${scope}${desc}`);
   }
   lines.push("");
   return lines.join("\n");

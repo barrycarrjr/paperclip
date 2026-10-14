@@ -8,14 +8,15 @@ import type {
   KnowledgeBaseValidationResult,
   MemoryKind,
 } from "@paperclipai/shared";
-import { MEMORY_DESCRIPTION_MAX, MEMORY_KINDS, MEMORY_NAME_MAX } from "@paperclipai/shared";
+import { MEMORY_DESCRIPTION_MAX, MEMORY_KINDS, MEMORY_NAME_MAX, DRIVE_FILE_ID_PATTERN, declaredDriveFileId } from "@paperclipai/shared";
 import { INDEX_FILE, isSkippedFileName, parseMemoryFile } from "./memory-folder-markdown.js";
+import { documentReferences, relativeDocumentTarget, driveIdFromUrl } from "./document-links.js";
 
 export const DEFAULT_ACTIVE_NOTE_STALE_DAYS = 90;
 const MAX_SCAN_FILES = 5_000;
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+export const MEMORY_FOLDER_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const MAX_SCAN_DEPTH = 20;
-const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,200}$/;
+const DRIVE_ID_RE = DRIVE_FILE_ID_PATTERN;
 const NOTE_STATUSES = new Set(["active", "superseded", "archived"]);
 const ARCHIVE_SEGMENTS = new Set(["archive", "archived", "archives", "superseded", "_superseded"]);
 
@@ -26,7 +27,7 @@ interface StrictFrontmatter {
   bodyStartLine: number;
 }
 
-interface ScannedNote {
+export interface ScannedNote {
   path: string;
   text: string;
   fields: Record<string, string>;
@@ -39,12 +40,14 @@ interface ScannedNote {
   status: string | null;
   updated: Date;
   valid: boolean;
+  driveFileId: string | null;
 }
 
-interface Inspection {
+export interface Inspection {
   filesScanned: number;
   findings: KnowledgeBaseFinding[];
   notes: ScannedNote[];
+  regularFiles: Map<string, string>;
 }
 
 function slash(value: string): string {
@@ -156,6 +159,8 @@ export function validateMemoryFileHeader(text: string): MemoryHeaderValidation {
   if (paperclipId && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(paperclipId)) {
     problems.push("field paperclip_id must be a UUID");
   }
+  const identity = declaredDriveFileId(parsed.fields);
+  if (identity.problem) problems.push(identity.problem);
   return {
     valid: problems.length === 0,
     problems,
@@ -266,14 +271,14 @@ async function listTree(root: string): Promise<{
       }
       regularFiles.set(fileSystemPathKey(relativePath), relativePath);
       if (isMarkdown(entry.name) && !isSkippedFileName(entry.name)) {
-        if (stat.size > MAX_FILE_BYTES) {
+        if (stat.size > MEMORY_FOLDER_FILE_MAX_BYTES) {
           findings.push(finding(
             "unsafe_entry",
             "medium",
             relativePath,
             null,
             `${relativePath} is larger than the validator limit`,
-            { bytes: stat.size, maximumBytes: MAX_FILE_BYTES },
+            { bytes: stat.size, maximumBytes: MEMORY_FOLDER_FILE_MAX_BYTES },
             `oversize:${stat.size}`,
           ));
           continue;
@@ -326,7 +331,7 @@ async function readOrdinaryNote(
   try {
     const opened = await handle.stat();
     if (!opened.isFile()) throw new Error("entry is not an ordinary file");
-    if (opened.size > MAX_FILE_BYTES) throw new Error(`file is larger than ${MAX_FILE_BYTES} bytes`);
+    if (opened.size > MEMORY_FOLDER_FILE_MAX_BYTES) throw new Error(`file is larger than ${MEMORY_FOLDER_FILE_MAX_BYTES} bytes`);
     await afterOpen?.();
     const current = await fs.lstat(fullPath);
     if (current.isSymbolicLink() || !current.isFile() || current.dev !== opened.dev || current.ino !== opened.ino) {
@@ -337,7 +342,9 @@ async function readOrdinaryNote(
     if (relativeReal === ".." || relativeReal.startsWith(`..${path.sep}`) || path.isAbsolute(relativeReal)) {
       throw new Error("file resolves outside the configured folder");
     }
-    const text = await handle.readFile("utf8");
+    const bytes = await handle.readFile();
+    if (bytes.byteLength > MEMORY_FOLDER_FILE_MAX_BYTES) throw new Error(`file is larger than ${MEMORY_FOLDER_FILE_MAX_BYTES} bytes`);
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     const after = await fs.lstat(fullPath);
     if (after.isSymbolicLink() || !after.isFile() || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("file identity changed while it was being read");
@@ -526,11 +533,12 @@ function isArchived(note: ScannedNote): boolean {
   });
 }
 
-async function inspectKnowledgeBase(
+export async function inspectKnowledgeBase(
   root: string,
   now: Date,
   staleDays: number,
   afterFileOpen?: (relativePath: string) => Promise<void>,
+  options: { driveLinkMode?: boolean; texts?: ReadonlyMap<string, string> } = {},
 ): Promise<Inspection> {
   const tree = await listTree(root);
   const rootReal = await fs.realpath(root);
@@ -558,17 +566,20 @@ async function inspectKnowledgeBase(
       ));
       continue;
     }
+    text = options.texts?.get(file.relativePath) ?? text;
     const header = validateMemoryFileHeader(text);
     const lenient = parseMemoryFile(path.posix.basename(file.relativePath), text);
-    if (!header.valid) {
+    const identityProblem = declaredDriveFileId(header.fields).problem;
+    const structuralProblems = header.problems.filter((problem) => problem !== identityProblem);
+    if (structuralProblems.length > 0) {
       findings.push(finding(
         "malformed_frontmatter",
         "high",
         file.relativePath,
         1,
         `${file.relativePath} has malformed required frontmatter`,
-        { problems: header.problems, recommendation: "Add valid name, kind, and updated fields before writing or importing this note" },
-        header.problems.join(";"),
+        { problems: structuralProblems, recommendation: "Add valid name, kind, and updated fields before writing or importing this note" },
+        structuralProblems.join(";"),
       ));
     }
     const status = (header.fields.status ?? "").trim().toLowerCase() || null;
@@ -585,9 +596,14 @@ async function inspectKnowledgeBase(
       status,
       updated: header.updated ?? new Date(0),
       valid: header.valid,
+      driveFileId: declaredDriveFileId(header.fields).id,
     };
     notes.push(note);
     inbound.set(file.relativePath, 0);
+
+    if (identityProblem === "Drive identity fields disagree") {
+      findings.push(finding("invalid_drive_id", "medium", file.relativePath, null, `${file.relativePath} declares conflicting Drive identities`, { reason: identityProblem }, identityProblem));
+    }
 
     for (const driveKey of ["drive_file_id", "drivefileid", "drive_id", "driveid"]) {
       if (!Object.hasOwn(header.fields, driveKey)) continue;
@@ -632,9 +648,28 @@ async function inspectKnowledgeBase(
     }
   }
 
+  const notesByPath = new Map(notes.map((note) => [note.path, note]));
+  const notesByIdentity = new Map<string, ScannedNote[]>();
+  for (const note of notes) if (note.valid && note.driveFileId) notesByIdentity.set(note.driveFileId, [...(notesByIdentity.get(note.driveFileId) ?? []), note]);
   for (const note of notes) {
-    for (const link of markdownTargets(note.text, note.bodyStartLine)) {
-      const target = resolveTarget(note.path, link.target, link.wiki, tree.regularFiles);
+    for (const link of documentReferences(note.text, note.bodyStartLine)) {
+      const target = relativeDocumentTarget(note.path, link.target, link.kind === "wiki", tree.regularFiles);
+      if (options.driveLinkMode && !link.image && link.kind !== "definition" && (target.resolved !== null || driveIdFromUrl(link.target) || link.driveFileId !== null)) {
+        if (link.driveFileId === null) {
+          findings.push(finding("missing_drive_id", "medium", note.path, link.line, `${note.path} has a document reference without a Drive-ID`, { target: link.target }, link.target));
+        } else if (!DRIVE_ID_RE.test(link.driveFileId)) {
+          findings.push(finding("invalid_drive_id", "medium", note.path, link.line, `${note.path} has an invalid paired Drive-ID`, { target: link.target }, `${link.target}:${link.driveFileId}`));
+        } else {
+          const byIdentity = notesByIdentity.get(link.driveFileId) ?? [];
+          const targetNote = target.resolved ? notesByPath.get(target.resolved) : undefined;
+          if (byIdentity.length !== 1) {
+            findings.push(finding(byIdentity.length > 1 ? "duplicate_drive_id" : "unresolved_drive_id", "medium", note.path, link.line, `${note.path} refers to an ${byIdentity.length > 1 ? "ambiguous" : "unresolved"} Drive identity`, { driveFileId: link.driveFileId, paths: byIdentity.map((candidate) => candidate.path) }, link.driveFileId));
+          }
+          if (targetNote?.driveFileId !== link.driveFileId || !target.valid) {
+            findings.push(finding("conflicting_drive_id", "high", note.path, link.line, `${note.path} has a path that does not identify its authoritative Drive-ID`, { target: link.target, driveFileId: link.driveFileId, targetDriveFileId: targetNote?.driveFileId ?? null, suggestedPath: byIdentity.length === 1 ? byIdentity[0]!.path : null }, `${link.target}:${link.driveFileId}`));
+          }
+        }
+      }
       if (target.resolved === null) continue;
       if (!target.valid) {
         findings.push(finding(
@@ -682,13 +717,19 @@ async function inspectKnowledgeBase(
 
   findings.sort((a, b) => compareText(a.path, b.path) || (a.line ?? 0) - (b.line ?? 0) || compareText(a.kind, b.kind) || compareText(a.fingerprint, b.fingerprint));
   notes.sort((a, b) => compareText(a.path, b.path));
-  return { filesScanned: tree.markdown.length, findings, notes };
+  if (options.driveLinkMode) {
+    const byId = new Map<string, string[]>();
+    for (const note of notes) if (note.driveFileId) byId.set(note.driveFileId, [...(byId.get(note.driveFileId) ?? []), note.path]);
+    for (const [id, paths] of byId) if (paths.length > 1) findings.push(finding("duplicate_drive_id", "medium", paths[0]!, null, "Multiple notes declare the same Drive identity", { driveFileId: id, paths }, id));
+    findings.sort((a, b) => compareText(a.path, b.path) || (a.line ?? 0) - (b.line ?? 0) || compareText(a.kind, b.kind) || compareText(a.fingerprint, b.fingerprint));
+  }
+  return { filesScanned: tree.markdown.length, findings, notes, regularFiles: tree.regularFiles };
 }
 
 export async function validateKnowledgeBase(
   root: string,
   trigger: KnowledgeBaseValidationResult["trigger"],
-  options: { now?: Date; staleDays?: number; afterFileOpen?: (relativePath: string) => Promise<void> } = {},
+  options: { now?: Date; staleDays?: number; afterFileOpen?: (relativePath: string) => Promise<void>; driveLinkMode?: boolean; texts?: ReadonlyMap<string, string> } = {},
 ): Promise<KnowledgeBaseValidationResult> {
   const now = options.now ?? new Date();
   try {
@@ -697,6 +738,7 @@ export async function validateKnowledgeBase(
       now,
       options.staleDays ?? DEFAULT_ACTIVE_NOTE_STALE_DAYS,
       options.afterFileOpen,
+      options,
     );
     return {
       trigger,
@@ -724,7 +766,7 @@ function markdownPath(value: string): string {
   return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
 
-function indexText(companyName: string, notes: ScannedNote[]): string {
+function indexText(companyName: string, notes: ScannedNote[], driveLinkMode = false): string {
   const safeCompanyName = companyName.replace(/\s+/g, " ").trim() || "Company";
   const lines = [
     `# ${safeCompanyName} memories`,
@@ -735,7 +777,8 @@ function indexText(companyName: string, notes: ScannedNote[]): string {
   for (const note of notes) {
     const scope = note.agent ? ` (agent: ${note.agent})` : "";
     const description = note.description ? ` - ${note.description.replace(/\s+/g, " ").trim()}` : "";
-    lines.push(`- [${markdownLabel(note.name)}](${markdownPath(note.path)}) [${note.kind}]${scope}${description}`);
+    const identity = driveLinkMode && note.driveFileId ? ` (Drive-ID: ${note.driveFileId})` : "";
+    lines.push(`- [${markdownLabel(note.name)}](${markdownPath(note.path)})${identity} [${note.kind}]${scope}${description}`);
   }
   lines.push("");
   return lines.join("\n");
@@ -746,8 +789,9 @@ export async function regenerateKnowledgeBaseIndex(
   root: string,
   companyName: string,
   now: Date = new Date(),
+  driveLinkMode = false,
 ): Promise<KnowledgeBaseIndexResult> {
-  const inspected = await inspectKnowledgeBase(root, now, DEFAULT_ACTIVE_NOTE_STALE_DAYS);
+  const inspected = await inspectKnowledgeBase(root, now, DEFAULT_ACTIVE_NOTE_STALE_DAYS, undefined, { driveLinkMode });
   const malformed = inspected.findings.filter((item) => item.kind === "malformed_frontmatter" || item.kind === "unsafe_entry");
   if (malformed.length > 0) {
     throw new Error(`Index not replaced because ${malformed.length} note or path ${malformed.length === 1 ? "needs" : "need"} attention`);
@@ -759,7 +803,7 @@ export async function regenerateKnowledgeBaseIndex(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
-  const next = indexText(companyName, inspected.notes);
+  const next = indexText(companyName, inspected.notes, driveLinkMode);
   let current: string | null = null;
   try {
     current = (await readMemoryFolderFileSafely(root, target)).text;

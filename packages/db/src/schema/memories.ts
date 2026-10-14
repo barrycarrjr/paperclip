@@ -12,6 +12,7 @@ export const memories = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     content: text("content").notNull(),
+    driveFileId: text("drive_file_id"),
     createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdByUserId: text("created_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

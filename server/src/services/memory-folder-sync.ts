@@ -10,7 +10,7 @@ import type {
   MemoryFolderSettings,
   UpdateMemoryFolder,
 } from "@paperclipai/shared";
-import { MEMORY_CONTENT_MAX, MEMORY_NAME_MAX } from "@paperclipai/shared";
+import { MEMORY_CONTENT_MAX, MEMORY_NAME_MAX, DRIVE_FILE_ID_FIELDS } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 import { agentService } from "./agents.js";
 import { memoryService } from "./memories.js";
@@ -30,6 +30,7 @@ import {
   validateMemoryFileHeader,
   writeMemoryFolderFileAtomically,
 } from "./memory-folder-validator.js";
+import { documentLinkMigrationService, migrationSummary, assertNoPendingLinkMigration } from "./memory-folder-link-migration.js";
 
 /**
  * Mirrors a company's memories to a folder of Markdown files and back.
@@ -102,6 +103,7 @@ export async function exportMemoriesToFolder(
   companyId: string,
   folder: string,
   result: MemoryFolderRunResult,
+  driveLinkMode = false,
 ): Promise<void> {
   await fs.mkdir(folder, { recursive: true });
   const [rows, agents, companyName] = await Promise.all([
@@ -203,10 +205,11 @@ export async function exportMemoriesToFolder(
       kind: memory.kind,
       description: memory.description,
       agentName,
+      driveFileId: memory.driveFileId,
     });
   }
 
-  await writeMemoryFolderFileAtomically(folder, path.join(folder, INDEX_FILE), serializeIndex(companyName, indexEntries));
+  await writeMemoryFolderFileAtomically(folder, path.join(folder, INDEX_FILE), serializeIndex(companyName, indexEntries, driveLinkMode));
 }
 
 /**
@@ -257,6 +260,7 @@ export async function importMemoriesFromFolder(
         continue;
       }
       const parsed = parseMemoryFile(entry.name, text);
+      const hasDriveIdentity = DRIVE_FILE_ID_FIELDS.some((field) => Object.hasOwn(header.fields, field));
       if (!parsed.content) {
         result.warnings.push(`Skipped ${entry.name}: it has no content.`);
         result.skipped += 1;
@@ -286,7 +290,7 @@ export async function importMemoriesFromFolder(
       if (!existing) {
         const created = (await deps.memories.create(
           companyId,
-          { kind: parsed.kind, name, description: parsed.description, content: parsed.content, agentId },
+          { kind: parsed.kind, name, description: parsed.description, content: parsed.content, agentId, driveFileId: parsed.driveFileId },
           { agentId: null, userId: null },
         )) as Memory;
         byId.set(created.id, created);
@@ -299,7 +303,8 @@ export async function importMemoriesFromFolder(
         sameText(existing.content, parsed.content) &&
         existing.kind === parsed.kind &&
         sameText(existing.description, parsed.description) &&
-        existing.name === name;
+        existing.name === name &&
+        (!hasDriveIdentity || (existing.driveFileId ?? null) === parsed.driveFileId);
       if (unchanged) continue;
 
       if (stat.mtime.getTime() <= new Date(existing.updatedAt).getTime()) {
@@ -313,6 +318,7 @@ export async function importMemoriesFromFolder(
         name,
         description: parsed.description,
         content: parsed.content,
+        ...(hasDriveIdentity ? { driveFileId: parsed.driveFileId } : {}),
       });
       result.updated += 1;
     } catch (err) {
@@ -328,6 +334,7 @@ export async function runMemoryFolder(
   folder: string,
   mode: MemoryFolderMode,
   trigger: MemoryFolderTrigger,
+  driveLinkMode = false,
 ): Promise<MemoryFolderRunResult> {
   const now = deps.now ?? (() => new Date());
   const result = emptyResult(mode, trigger, now());
@@ -336,12 +343,12 @@ export async function runMemoryFolder(
       await importMemoriesFromFolder(deps, companyId, folder, result);
     }
     if (mode === "export" || mode === "sync") {
-      await exportMemoriesToFolder(deps, companyId, folder, result);
+      await exportMemoriesToFolder(deps, companyId, folder, result, driveLinkMode);
     }
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
   }
-  result.validation = await validateKnowledgeBase(folder, trigger, { now: now() });
+  result.validation = await validateKnowledgeBase(folder, trigger, { now: now(), driveLinkMode });
   result.finishedAt = now().toISOString();
   return result;
 }
@@ -353,6 +360,8 @@ function toSettings(companyId: string, row: FolderRow | null | undefined): Memor
   return {
     companyId,
     path: row?.path ?? null,
+    driveLinkMode: row?.driveLinkMode ?? false,
+    linkMigration: migrationSummary(row?.linkMigration ?? null),
     scheduleMinutes: row?.scheduleMinutes ?? null,
     lastSyncAt: row?.lastSyncAt ?? null,
     lastResult: storedResult ? { ...storedResult, validation: storedResult.validation ?? null } : null,
@@ -380,8 +389,8 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
     return rows[0] ?? null;
   }
 
-  async function recordResult(companyId: string, result: MemoryFolderRunResult) {
-    await db
+  async function recordResult(companyId: string, result: MemoryFolderRunResult, writer: Pick<Db, "update"> = db) {
+    await writer
       .update(memoryFolders)
       .set({
         lastSyncAt: new Date(result.finishedAt),
@@ -392,11 +401,15 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
   }
 
   async function run(companyId: string, mode: MemoryFolderMode, trigger: MemoryFolderTrigger) {
-    const row = await getRow(companyId);
-    if (!row) throw unprocessable("No memory folder is configured for this company");
-    const result = await runMemoryFolder(deps, companyId, row.path, mode, trigger);
-    await recordResult(companyId, result);
-    return result;
+    return db.transaction(async (tx) => {
+      const [row] = await tx.select().from(memoryFolders).where(eq(memoryFolders.companyId, companyId)).for("update");
+      if (!row) throw unprocessable("No memory folder is configured for this company");
+      assertNoPendingLinkMigration(row.linkMigration);
+      const runDeps = { ...deps, memories: depsOverride?.memories ?? memoryService(tx) };
+      const result = await runMemoryFolder(runDeps, companyId, row.path, mode, trigger, row.driveLinkMode);
+      await recordResult(companyId, result, tx);
+      return result;
+    });
   }
 
   async function configuredFolder(companyId: string): Promise<FolderRow> {
@@ -409,21 +422,26 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
     getSettings: async (companyId: string) => toSettings(companyId, await getRow(companyId)),
 
     updateSettings: async (companyId: string, input: UpdateMemoryFolder) => {
+      return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memoryFolders).where(eq(memoryFolders.companyId, companyId)).for("update");
+      assertNoPendingLinkMigration(existing?.linkMigration ?? null);
       if (input.path.trim() === "") {
-        await db.delete(memoryFolders).where(eq(memoryFolders.companyId, companyId));
+        await tx.delete(memoryFolders).where(eq(memoryFolders.companyId, companyId));
         return toSettings(companyId, null);
       }
       const folder = normalizeFolderPath(input.path);
       const scheduleMinutes = input.scheduleMinutes ?? null;
-      const rows = await db
+      const driveLinkMode = input.driveLinkMode ?? existing?.driveLinkMode ?? false;
+      const rows = await tx
         .insert(memoryFolders)
-        .values({ companyId, path: folder, scheduleMinutes })
+        .values({ companyId, path: folder, scheduleMinutes, driveLinkMode })
         .onConflictDoUpdate({
           target: memoryFolders.companyId,
-          set: { path: folder, scheduleMinutes, updatedAt: sql`now()` },
+          set: { path: folder, scheduleMinutes, driveLinkMode, updatedAt: sql`now()` },
         })
         .returning();
       return toSettings(companyId, rows[0]);
+      });
     },
 
     export: (companyId: string) => run(companyId, "export", "manual"),
@@ -433,19 +451,25 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
     /** Fresh read-only validation. The result is not persisted and does not change any note. */
     validate: async (companyId: string, trigger: MemoryFolderTrigger = "manual") => {
       const row = await configuredFolder(companyId);
-      return validateKnowledgeBase(row.path, trigger, { now: deps.now?.() ?? new Date() });
+      return validateKnowledgeBase(row.path, trigger, { now: deps.now?.() ?? new Date(), driveLinkMode: row.driveLinkMode });
     },
 
     /** Explicit operator action; validation and scheduled scans never replace the index. */
     rebuildIndex: async (companyId: string) => {
-      const row = await configuredFolder(companyId);
+      return db.transaction(async (tx) => {
+      const [row] = await tx.select().from(memoryFolders).where(eq(memoryFolders.companyId, companyId)).for("update");
+      if (!row) throw unprocessable("No memory folder is configured for this company");
+      assertNoPendingLinkMigration(row.linkMigration);
       const companyName = await deps.companyName(companyId);
       try {
-        return await regenerateKnowledgeBaseIndex(row.path, companyName, deps.now?.() ?? new Date());
+        return await regenerateKnowledgeBaseIndex(row.path, companyName, deps.now?.() ?? new Date(), row.driveLinkMode);
       } catch (err) {
         throw unprocessable(err instanceof Error ? err.message : String(err));
       }
+      });
     },
+
+    ...documentLinkMigrationService(db),
 
     /** Run a scheduled sync for every company whose interval has elapsed. */
     tickDue: async (now: Date = new Date()) => {
@@ -460,8 +484,8 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
         if (intervalMs <= 0) continue;
         const last = row.lastSyncAt ? new Date(row.lastSyncAt).getTime() : 0;
         if (now.getTime() - last < intervalMs) continue;
-        const result = await runMemoryFolder(deps, row.companyId, row.path, "sync", "scheduled");
-        await recordResult(row.companyId, result);
+        if (migrationSummary(row.linkMigration)?.status === "pending") continue;
+        const result = await run(row.companyId, "sync", "scheduled");
         ran += 1;
         if (result.error || result.validation?.error) failed += 1;
       }

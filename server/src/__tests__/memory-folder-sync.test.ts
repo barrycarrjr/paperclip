@@ -35,6 +35,7 @@ function fakeMemories(seed: Memory[] = []) {
         name: data.name,
         description: data.description ?? null,
         content: data.content,
+        driveFileId: data.driveFileId ?? null,
         createdByAgentId: null,
         createdByUserId: null,
         createdAt: new Date(),
@@ -94,6 +95,40 @@ describe("memory folder paths", () => {
     expect(expandHomePath("~/memory/acme")).toBe(path.join(os.homedir(), "memory/acme"));
     expect(path.isAbsolute(normalizeFolderPath("~/memory/acme"))).toBe(true);
     expect(() => normalizeFolderPath("memory/acme")).toThrow(/absolute/);
+  });
+});
+
+describe("memory folder declared document identities", () => {
+  it("imports consistent aliases and exports canonical identities without changing dual-link bodies", async () => {
+    const store = fakeMemories();
+    const id = "DeclaredFile_A123";
+    const body = `[Target](target.md) (Drive-ID: ${id})`;
+    await fs.writeFile(path.join(folder, "source.md"), `---\nname: Source\nkind: reference\nupdated: 2026-10-14\ndrive_id: ${id}\ndriveFileId: ${id}\n---\n${body}\n`);
+    const result = await runMemoryFolder(depsFor(store), COMPANY_ID, folder, "import", "manual", true);
+    expect(result.created).toBe(1);
+    const row = [...store.rows.values()][0]!;
+    expect(row.driveFileId).toBe(id);
+    expect(row.content).toBe(body);
+    // The importer deliberately does not claim ownership of unmanaged source files.
+    const canonical = (await import("../services/memory-folder-markdown.js")).serializeMemoryFile(row, null);
+    expect(canonical).toContain(`drive_file_id: ${id}`);
+    expect(canonical).not.toContain("drive_id:");
+    expect(parseMemoryFile("source.md", canonical).content).toBe(body);
+  });
+
+  it("blocks invalid declared identity without clearing saved identity, and preserves it when old headers omit it", async () => {
+    const saved = memory({ driveFileId: "DeclaredFile_A123" });
+    const store = fakeMemories([saved]);
+    const prefix = `---\nname: Courier\nkind: project\nupdated: 2026-10-14\npaperclip_id: ${saved.id}\n`;
+    await fs.writeFile(path.join(folder, "courier.md"), prefix + "drive_file_id: bad id\n---\nChanged body\n");
+    const rejected = await runMemoryFolder(depsFor(store), COMPANY_ID, folder, "import", "manual");
+    expect(rejected.updated).toBe(0);
+    expect(rejected.skipped).toBe(1);
+    expect(store.rows.get(saved.id)?.driveFileId).toBe(saved.driveFileId);
+    await fs.writeFile(path.join(folder, "courier.md"), prefix + "---\nChanged body\n");
+    const accepted = await runMemoryFolder(depsFor(store), COMPANY_ID, folder, "import", "manual");
+    expect(accepted.updated).toBe(1);
+    expect(store.rows.get(saved.id)?.driveFileId).toBe(saved.driveFileId);
   });
 });
 

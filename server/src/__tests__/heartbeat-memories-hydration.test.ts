@@ -44,6 +44,19 @@ describe("buildPaperclipMemoriesMarkdown", () => {
     expect(markdown).toContain("- **code_style** (conventions):\n  Line 1: use const\n  Line 2: avoid any");
   });
 
+  it("includes Drive identity and says it is authoritative when paths disagree", () => {
+    const markdown = buildPaperclipMemoriesMarkdown([
+      {
+        name: "Current contract",
+        content: "contracts/current.md",
+        driveFileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+      },
+    ]);
+
+    expect(markdown).toContain("When a readable path and Drive file ID disagree, use the Drive file ID.");
+    expect(markdown).toContain("- **Current contract**: contracts/current.md\n  Drive file ID: 1AbCdEfGhIjKlMnOpQrStUvWxYz");
+  });
+
   it("truncates and appends guidance when memories exceed max items count", () => {
     const items = Array.from({ length: HEARTBEAT_MEMORIES_MAX_ITEMS + 5 }, (_, i) => ({
       name: `rule_${i}`,

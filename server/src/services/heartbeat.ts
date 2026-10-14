@@ -2109,6 +2109,7 @@ export function buildPaperclipMemoriesMarkdown(
     content: string;
     description?: string | null;
     kind?: string | null;
+    driveFileId?: string | null;
   }>,
 ): string | null {
   if (!memoriesList || memoriesList.length === 0) return null;
@@ -2117,6 +2118,9 @@ export function buildPaperclipMemoriesMarkdown(
     "Paperclip company memories:",
     "The following durable memories and instructions are remembered for this company. Treat them as company-wide context, preferences, and conventions for your assignments:",
   ];
+  if (memoriesList.some((memory) => memory.driveFileId)) {
+    lines.push("When a readable path and Drive file ID disagree, use the Drive file ID.");
+  }
 
   let totalChars = lines.join("\n").length;
   let truncated = false;
@@ -2134,6 +2138,7 @@ export function buildPaperclipMemoriesMarkdown(
     } else {
       entryText = `- **${memory.name}**${desc}: ${cleanContent}`;
     }
+    if (memory.driveFileId) entryText += `\n  Drive file ID: ${memory.driveFileId}`;
 
     if (totalChars + entryText.length + 1 > HEARTBEAT_MEMORIES_MAX_CHARS) {
       truncated = true;
@@ -5645,7 +5650,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
     const memoriesSvc = memoryService(db);
     let memoriesMarkdown: string | null = null;
-    let loadedMemories: Array<{ id: string; name: string; content: string; description: string | null; kind: string }> = [];
+    let loadedMemories: Array<{
+      id: string;
+      name: string;
+      content: string;
+      description: string | null;
+      kind: string;
+      driveFileId?: string | null;
+    }> = [];
     try {
       const rows = await memoriesSvc.list(agent.companyId, {
         limit: HEARTBEAT_MEMORIES_MAX_ITEMS,
@@ -5668,6 +5680,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         kind: m.kind,
         description: m.description,
         content: m.content,
+        driveFileId: m.driveFileId ?? null,
       }));
     } else {
       delete context.paperclipMemoriesMarkdown;

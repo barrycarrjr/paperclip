@@ -67,6 +67,7 @@ describe("memory folder markdown", () => {
       description: null,
       agent: null,
       paperclipId: null,
+      driveFileId: null,
       content: "Ship on Tuesdays.",
     });
   });

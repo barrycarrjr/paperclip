@@ -1,8 +1,9 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { memories } from "@paperclipai/db";
+import { memories, memoryFolders } from "@paperclipai/db";
 import type { CreateMemory, UpdateMemory } from "@paperclipai/shared";
 import { decryptTextAtRest, encryptTextAtRest } from "../secrets/local-encrypted-provider.js";
+import { assertMemoryOutsidePendingMigration } from "./memory-folder-link-migration.js";
 
 export interface MemoryListFilter {
   kind?: string;
@@ -40,7 +41,13 @@ function revealAll(rows: MemoryRow[]): MemoryRow[] {
   return rows.map((row) => reveal(row));
 }
 
-export function memoryService(db: Db) {
+export function memoryService(db: Pick<Db, "select" | "insert" | "update" | "delete" | "transaction">) {
+  async function withFolderLock<T>(companyId: string, action: (writer: Pick<Db, "select" | "update" | "delete" | "insert">, receipt: string | null) => Promise<T>): Promise<T> {
+    return db.transaction(async (tx) => {
+      const [folder] = await tx.select().from(memoryFolders).where(eq(memoryFolders.companyId, companyId)).for("update");
+      return action(tx, folder?.linkMigration ?? null);
+    });
+  }
   return {
     list: async (companyId: string, filter: MemoryListFilter = {}) => {
       const conditions = [eq(memories.companyId, companyId)];
@@ -107,24 +114,32 @@ export function memoryService(db: Db) {
           name: data.name,
           description: data.description ?? null,
           content: encryptTextAtRest(data.content),
+          driveFileId: data.driveFileId ?? null,
           createdByAgentId: actor.agentId,
           createdByUserId: actor.userId,
         })
         .returning()
         .then((rows) => reveal(rows[0])),
 
-    update: (id: string, data: UpdateMemory) => {
+    update: async (id: string, data: UpdateMemory) => {
       const patch: Record<string, unknown> = { updatedAt: new Date() };
       if (data.kind !== undefined) patch.kind = data.kind;
       if (data.name !== undefined) patch.name = data.name;
       if (data.description !== undefined) patch.description = data.description ?? null;
       if (data.content !== undefined) patch.content = encryptTextAtRest(data.content);
-      return db
+      if (data.driveFileId !== undefined) patch.driveFileId = data.driveFileId;
+      const [existing] = await db.select({ companyId: memories.companyId }).from(memories).where(eq(memories.id, id));
+      if (!existing) return null;
+      return withFolderLock(existing.companyId, async (writer, receipt) => {
+      assertMemoryOutsidePendingMigration(receipt, id);
+      patch.updatedAt = new Date();
+      return writer
         .update(memories)
         .set(patch)
         .where(eq(memories.id, id))
         .returning()
         .then((rows) => reveal(rows[0] ?? null));
+      });
     },
 
     upsertByName: (
@@ -133,7 +148,10 @@ export function memoryService(db: Db) {
       actor: MemoryActor,
     ) => {
       const content = encryptTextAtRest(data.content);
-      return db
+      return withFolderLock(companyId, async (writer, receipt) => {
+      const [existing] = await writer.select({ id: memories.id }).from(memories).where(and(eq(memories.companyId, companyId), eq(memories.name, data.name), data.agentId ? eq(memories.agentId, data.agentId) : isNull(memories.agentId)));
+      if (existing) assertMemoryOutsidePendingMigration(receipt, existing.id);
+      return writer
         .insert(memories)
         .values({
           companyId,
@@ -142,6 +160,7 @@ export function memoryService(db: Db) {
           name: data.name,
           description: data.description ?? null,
           content,
+          driveFileId: data.driveFileId ?? null,
           createdByAgentId: actor.agentId,
           createdByUserId: actor.userId,
         })
@@ -151,19 +170,27 @@ export function memoryService(db: Db) {
             kind: data.kind,
             description: data.description ?? null,
             content,
+            ...(data.driveFileId !== undefined ? { driveFileId: data.driveFileId } : {}),
             updatedAt: sql`now()`,
           },
         })
         .returning()
         .then((rows) => reveal(rows[0]));
+      });
     },
 
-    remove: (id: string) =>
-      db
+    remove: async (id: string) => {
+      const [existing] = await db.select({ companyId: memories.companyId }).from(memories).where(eq(memories.id, id));
+      if (!existing) return null;
+      return withFolderLock(existing.companyId, async (writer, receipt) => {
+      assertMemoryOutsidePendingMigration(receipt, id);
+      return writer
         .delete(memories)
         .where(eq(memories.id, id))
         .returning()
-        .then((rows) => reveal(rows[0] ?? null)),
+        .then((rows) => reveal(rows[0] ?? null));
+      });
+    },
   };
 }
 

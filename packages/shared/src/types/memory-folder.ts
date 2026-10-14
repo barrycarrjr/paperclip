@@ -6,6 +6,10 @@ export const KNOWLEDGE_BASE_FINDING_KINDS = [
   "stale_active_note",
   "open_gap",
   "unsafe_entry",
+  "missing_drive_id",
+  "conflicting_drive_id",
+  "duplicate_drive_id",
+  "unresolved_drive_id",
 ] as const;
 
 export type KnowledgeBaseFindingKind = (typeof KNOWLEDGE_BASE_FINDING_KINDS)[number];
@@ -56,7 +60,36 @@ export interface MemoryFolderRunResult {
 export interface MemoryFolderSettings {
   companyId: string;
   path: string | null;
+  driveLinkMode: boolean;
+  linkMigration: { planHash: string; status: "pending" | "completed" } | null;
   scheduleMinutes: number | null;
   lastSyncAt: Date | string | null;
   lastResult: MemoryFolderRunResult | null;
+}
+
+export interface DocumentLinkChange {
+  path: string;
+  line: number;
+  target: string;
+  replacement: string;
+  driveFileId: string;
+  evidence: "target_frontmatter" | "existing_identity";
+}
+
+export interface DocumentLinkPreview {
+  planHash: string;
+  memoriesChanged: number;
+  changes: DocumentLinkChange[];
+  skipped: Array<{ path: string; line: number | null; reason: string }>;
+  before: KnowledgeBaseValidationResult;
+  after: KnowledgeBaseValidationResult;
+}
+
+export interface DocumentLinkApplyResult {
+  planHash: string;
+  status: "pending" | "completed";
+  filesChanged: number;
+  memoriesChanged: number;
+  before: KnowledgeBaseValidationResult;
+  after: KnowledgeBaseValidationResult | null;
 }
