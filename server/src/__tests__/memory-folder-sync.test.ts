@@ -119,7 +119,7 @@ describe("memory folder export", () => {
     expect(index).toContain("(agent: Ops Bot)");
   });
 
-  it("removes files it wrote for memories that no longer exist, but keeps hand-written files", async () => {
+  it("reports obsolete exported files without deleting them or hand-written files", async () => {
     const memories = fakeMemories([memory()]);
     await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "export", "manual");
     await fs.writeFile(path.join(folder, "mine.md"), "A note someone typed by hand.\n", "utf8");
@@ -127,9 +127,11 @@ describe("memory folder export", () => {
     memories.rows.clear();
     const result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "export", "manual");
 
-    expect(result.removed).toBe(1);
+    expect(result.removed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.warnings.some((warning) => /Kept courier\.md.*Remove it manually/.test(warning))).toBe(true);
     const files = (await fs.readdir(folder)).sort();
-    expect(files).toEqual(["MEMORY.md", "mine.md"]);
+    expect(files).toEqual(["MEMORY.md", "courier.md", "mine.md"]);
   });
 
   it("creates the folder when it does not exist yet", async () => {
@@ -138,14 +140,60 @@ describe("memory folder export", () => {
     expect(result.error).toBeNull();
     expect(await fs.readdir(nested)).toContain("courier.md");
   });
+
+  it("reports existing unowned or malformed notes without overwriting them", async () => {
+    const memories = fakeMemories([memory()]);
+    const validUnowned = "---\nname: Courier\nkind: project\nupdated: 2026-10-14\n---\nHand written.\n";
+    await fs.writeFile(path.join(folder, "courier.md"), validUnowned, "utf8");
+    let result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "export", "manual");
+    expect(result.skipped).toBe(1);
+    expect(result.warnings.join("\n")).toMatch(/not owned/);
+    expect(await fs.readFile(path.join(folder, "courier.md"), "utf8")).toBe(validUnowned);
+
+    const malformed = "Legacy note with no header.\n";
+    await fs.writeFile(path.join(folder, "courier.md"), malformed, "utf8");
+    result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "export", "manual");
+    expect(result.skipped).toBe(1);
+    expect(result.warnings.join("\n")).toMatch(/invalid frontmatter/);
+    expect(await fs.readFile(path.join(folder, "courier.md"), "utf8")).toBe(malformed);
+  });
+
+  it("validates generated frontmatter before writing a note", async () => {
+    const invalid = memory({ name: " ", agentId: AGENT_ID });
+    const result = await runMemoryFolder(depsFor(fakeMemories([invalid])), COMPANY_ID, folder, "export", "manual");
+
+    expect(result.exported).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.warnings.some((warning) => /generated invalid frontmatter.*required field name is missing/.test(warning))).toBe(true);
+    expect((await fs.readdir(folder)).filter((name) => name !== "MEMORY.md")).toEqual([]);
+  });
+
+  it("does not remove a malformed note that declares an old Paperclip ID", async () => {
+    const file = path.join(folder, "old.md");
+    await fs.writeFile(
+      file,
+      "---\npaperclip_id: 11111111-1111-1111-1111-111111111111\n---\nKeep this legacy note.\n",
+      "utf8",
+    );
+    const result = await runMemoryFolder(depsFor(fakeMemories()), COMPANY_ID, folder, "export", "manual");
+
+    expect(result.removed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.warnings.some((warning) => /Did not remove old\.md: invalid frontmatter/.test(warning))).toBe(true);
+    expect(await fs.readFile(file, "utf8")).toContain("Keep this legacy note.");
+  });
 });
 
 describe("memory folder import", () => {
-  it("creates memories from new files, with or without front matter", async () => {
-    await fs.writeFile(path.join(folder, "Shipping rules.md"), "Ship on Tuesdays.\n", "utf8");
+  it("creates memories from new files with valid required frontmatter", async () => {
+    await fs.writeFile(
+      path.join(folder, "Shipping rules.md"),
+      "---\nname: Shipping rules\nkind: reference\nupdated: 2026-10-14\n---\nShip on Tuesdays.\n",
+      "utf8",
+    );
     await fs.writeFile(
       path.join(folder, "bot-note.md"),
-      "---\nname: Bot note\nkind: feedback\nagent: ops bot\n---\nAlways confirm before cancelling.\n",
+      "---\nname: Bot note\nkind: feedback\nagent: ops bot\nupdated: 2026-10-14\n---\nAlways confirm before cancelling.\n",
       "utf8",
     );
     const memories = fakeMemories();
@@ -156,6 +204,19 @@ describe("memory folder import", () => {
     const rows = [...memories.rows.values()];
     expect(rows.find((r) => r.name === "Shipping rules")).toMatchObject({ kind: "reference", agentId: null });
     expect(rows.find((r) => r.name === "Bot note")).toMatchObject({ kind: "feedback", agentId: AGENT_ID });
+  });
+
+  it("blocks a malformed new import while validation reports the existing disk note", async () => {
+    await fs.writeFile(path.join(folder, "Legacy note.md"), "Still readable on disk.\n", "utf8");
+    const memories = fakeMemories();
+    const result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "import", "manual");
+
+    expect(result.created).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect([...memories.rows.values()]).toEqual([]);
+    expect(result.warnings.some((warning) => /Skipped Legacy note\.md: invalid frontmatter/.test(warning))).toBe(true);
+    expect(result.validation?.findings.some((item) => item.kind === "malformed_frontmatter")).toBe(true);
+    expect(await fs.readFile(path.join(folder, "Legacy note.md"), "utf8")).toBe("Still readable on disk.\n");
   });
 
   it("updates a memory when the file is newer and differs, and leaves it when Paperclip is newer", async () => {
@@ -185,7 +246,7 @@ describe("memory folder import", () => {
 
   it("skips cloud-sync conflict copies and empty files with a warning", async () => {
     await fs.writeFile(path.join(folder, "courier (conflicted copy 2026-10-03).md"), "x", "utf8");
-    await fs.writeFile(path.join(folder, "empty.md"), "---\nname: Empty\n---\n", "utf8");
+    await fs.writeFile(path.join(folder, "empty.md"), "---\nname: Empty\nkind: reference\nupdated: 2026-10-14\n---\n", "utf8");
     const memories = fakeMemories();
     const result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "import", "manual");
 
@@ -196,7 +257,7 @@ describe("memory folder import", () => {
   });
 
   it("imports a file naming an unknown agent company-wide, with a warning", async () => {
-    await fs.writeFile(path.join(folder, "n.md"), "---\nname: N\nagent: Nobody\n---\nbody\n", "utf8");
+    await fs.writeFile(path.join(folder, "n.md"), "---\nname: N\nkind: reference\nagent: Nobody\nupdated: 2026-10-14\n---\nbody\n", "utf8");
     const memories = fakeMemories();
     const result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "import", "manual");
     expect(result.created).toBe(1);
@@ -213,7 +274,11 @@ describe("memory folder import", () => {
 
 describe("memory folder sync", () => {
   it("imports first, then exports, leaving the folder in canonical form", async () => {
-    await fs.writeFile(path.join(folder, "Hand written.md"), "Typed by a person.\n", "utf8");
+    await fs.writeFile(
+      path.join(folder, "Hand written.md"),
+      "---\nname: Hand written\nkind: reference\nupdated: 2026-10-14\n---\nTyped by a person.\n",
+      "utf8",
+    );
     const memories = fakeMemories([memory()]);
     const result = await runMemoryFolder(depsFor(memories), COMPANY_ID, folder, "sync", "scheduled");
 

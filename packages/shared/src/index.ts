@@ -443,6 +443,10 @@ export type {
   IssueTreePreviewWarning,
   Goal,
   Memory,
+  KnowledgeBaseFindingKind,
+  KnowledgeBaseFinding,
+  KnowledgeBaseValidationResult,
+  KnowledgeBaseIndexResult,
   MemoryFolderRunResult,
   MemoryFolderSettings,
   Space,
@@ -615,6 +619,7 @@ export type {
   ExternalMcpToolPreview,
   ExternalMcpTestConnectResult,
 } from "./types/index.js";
+export { KNOWLEDGE_BASE_FINDING_KINDS } from "./types/memory-folder.js";
 export type {
   CalendarEventKind,
   CalendarChannel,

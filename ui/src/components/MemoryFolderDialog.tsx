@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderSync } from "lucide-react";
-import type { MemoryFolderRunResult } from "@paperclipai/shared";
+import type { KnowledgeBaseValidationResult, MemoryFolderRunResult } from "@paperclipai/shared";
 import { MEMORY_FOLDER_SCHEDULES } from "@paperclipai/shared";
 import { memoryFoldersApi } from "@/api/memoryFolders";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,19 @@ export function describeRun(result: MemoryFolderRunResult): string {
     if (result.removed > 0) parts.push(`${result.removed} removed`);
   }
   if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+  if (result.validation) {
+    parts.push(`${result.validation.findings.length} findings`);
+    if (result.validation.error) parts.push(`check failed: ${result.validation.error}`);
+  }
   return parts.join(", ");
+}
+
+export function describeValidation(result: KnowledgeBaseValidationResult): string {
+  if (result.error) return `Failed: ${result.error}`;
+  if (result.findings.length === 0) return `${result.filesScanned} notes checked, no findings`;
+  const first = result.findings.slice(0, 3).map((finding) => finding.summary).join("; ");
+  const more = result.findings.length > 3 ? `; and ${result.findings.length - 3} more` : "";
+  return `${result.filesScanned} notes checked, ${result.findings.length} findings. ${first}${more}`;
 }
 
 function formatWhen(value: string | Date | null | undefined): string {
@@ -107,9 +119,11 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
   const runMutation = useMutation({
     mutationFn: (mode: "export" | "import" | "sync") => memoryFoldersApi[mode](companyId),
     onSuccess: (result) => {
+      const failed = Boolean(result.error || result.validation?.error);
+      const hasFindings = (result.validation?.findings.length ?? 0) > 0;
       pushToast({
-        tone: result.error ? "error" : "success",
-        title: result.error ? "Memory folder run failed" : "Memory folder run finished",
+        tone: failed ? "error" : hasFindings ? "warn" : "success",
+        title: failed ? "Memory folder run failed" : "Memory folder run finished",
         body: describeRun(result),
       });
       refresh();
@@ -122,11 +136,43 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
       }),
   });
 
+  const checkMutation = useMutation({
+    mutationFn: () => memoryFoldersApi.findings(companyId),
+    onSuccess: (result) =>
+      pushToast({
+        tone: result.error ? "error" : result.findings.length > 0 ? "warn" : "success",
+        title: result.error ? "Knowledge-base check failed" : "Knowledge-base check finished",
+        body: describeValidation(result),
+      }),
+    onError: (error) =>
+      pushToast({
+        tone: "error",
+        title: "Knowledge-base check failed",
+        body: error instanceof Error ? error.message : "Unknown error",
+      }),
+  });
+
+  const indexMutation = useMutation({
+    mutationFn: () => memoryFoldersApi.rebuildIndex(companyId),
+    onSuccess: (result) =>
+      pushToast({
+        tone: "success",
+        title: result.changed ? "Memory index rebuilt" : "Memory index is already current",
+        body: `${result.filesIndexed} notes indexed`,
+      }),
+    onError: (error) =>
+      pushToast({
+        tone: "error",
+        title: "Memory index was not rebuilt",
+        body: error instanceof Error ? error.message : "Unknown error",
+      }),
+  });
+
   const configured = Boolean(settingsQuery.data?.path);
   const dirty =
     path.trim() !== (settingsQuery.data?.path ?? "") ||
     (schedule ? Number(schedule) : null) !== (settingsQuery.data?.scheduleMinutes ?? null);
-  const busy = saveMutation.isPending || runMutation.isPending;
+  const busy = saveMutation.isPending || runMutation.isPending || checkMutation.isPending || indexMutation.isPending;
   const last = settingsQuery.data?.lastResult ?? null;
 
   return (
@@ -175,6 +221,10 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Each run also checks note headers and links. Active notes older than 90 days are reported.
+              Checks never edit notes or the generated index.
+            </p>
           </div>
 
           {configured && (
@@ -224,6 +274,24 @@ export function MemoryFolderDialog({ companyId, open, onOpenChange }: Props) {
               onClick={() => runMutation.mutate("sync")}
             >
               Import then export
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!configured || dirty || busy}
+              onClick={() => checkMutation.mutate()}
+            >
+              Check notes
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!configured || dirty || busy}
+              onClick={() => indexMutation.mutate()}
+            >
+              Rebuild index
             </Button>
           </div>
           <Button type="button" disabled={!dirty || busy} onClick={() => saveMutation.mutate()}>

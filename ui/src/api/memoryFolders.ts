@@ -1,4 +1,6 @@
 import type {
+  KnowledgeBaseIndexResult,
+  KnowledgeBaseValidationResult,
   MemoryFolderRunResult,
   MemoryFolderSettings,
   UpdateMemoryFolder,
@@ -16,4 +18,8 @@ export const memoryFoldersApi = {
     api.post<MemoryFolderRunResult>(`/companies/${companyId}/memory-folder/import`, {}),
   sync: (companyId: string) =>
     api.post<MemoryFolderRunResult>(`/companies/${companyId}/memory-folder/sync`, {}),
+  findings: (companyId: string) =>
+    api.get<KnowledgeBaseValidationResult>(`/companies/${companyId}/memory-folder/findings`),
+  rebuildIndex: (companyId: string) =>
+    api.post<KnowledgeBaseIndexResult>(`/companies/${companyId}/memory-folder/index`, {}),
 };

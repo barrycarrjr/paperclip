@@ -41,8 +41,9 @@ export async function runMemoryFolderExportNow(db: Db, companyId: string): Promi
     const settings = await service.getSettings(companyId);
     if (!settings.path) return false;
     const result = await service.export(companyId);
-    if (result.error) {
-      logger.warn({ companyId, error: result.error }, "memory folder auto-export failed");
+    const error = result.error ?? result.validation?.error;
+    if (error) {
+      logger.warn({ companyId, error }, "memory folder auto-export failed");
     }
     return true;
   } catch (err) {

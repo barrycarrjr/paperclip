@@ -187,7 +187,15 @@ export type {
 } from "./issue-tree-control.js";
 export type { Goal } from "./goal.js";
 export type { Memory } from "./memory.js";
-export type { MemoryFolderRunResult, MemoryFolderSettings } from "./memory-folder.js";
+export {
+  KNOWLEDGE_BASE_FINDING_KINDS,
+  type KnowledgeBaseFindingKind,
+  type KnowledgeBaseFinding,
+  type KnowledgeBaseValidationResult,
+  type KnowledgeBaseIndexResult,
+  type MemoryFolderRunResult,
+  type MemoryFolderSettings,
+} from "./memory-folder.js";
 export type {
   Space,
   SpaceListItem,

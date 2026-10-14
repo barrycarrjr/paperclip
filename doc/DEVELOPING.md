@@ -400,6 +400,10 @@ Memory and knowledge guidance starts from the relevant summary or plan section. 
 
 References are relative to the managed instruction bundle. A runtime without mounted companion files can use the existing authenticated `GET /api/agents/{id}/instructions-bundle/file?path={relative-path}` endpoint when it has an HTTP tool, its own company-scoped agent credentials and a reachable API URL. Managed reads reject linked paths escaping their root. External folders still require instance administrator access. Remote runtimes are not guaranteed these tools or credentials; if a required reference cannot be loaded, the agent must stop the affected work and explain the missing access.
 
+## Memory Folder Checks
+
+Markdown notes in a configured memory folder require `name`, `kind` and `updated` frontmatter fields. A read-only check runs after each manual or scheduled memory-folder run and reports malformed headers, broken relative links, orphan notes, open gaps and active notes older than 90 days. The **Rebuild index** action can replace `MEMORY.md` without running an import or export; normal exports continue to refresh it too. Exports retain obsolete Paperclip-owned notes and warn the operator to review and remove them manually. Drive file IDs are currently checked for valid syntax only when a note declares one; Paperclip does not contact Drive to confirm that the file exists.
+
 ## Source Evidence Guidance
 
 Default agent onboarding bundles and built-in language-model prompts include shared source-evidence guidance. Claims about money, dates and legal terms must cite a source document that the agent read and that supports the claim. Missing, unread, ambiguous or unsupported evidence means omitting the claim. Knowledge-base answers end with `Read:` (notes actually opened and read) and `Not covered:` (what those notes do not establish). Outside knowledge must be labelled or omitted and follows the same source requirement for money, dates and legal terms.

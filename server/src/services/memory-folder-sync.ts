@@ -23,12 +23,19 @@ import {
   serializeMemoryFile,
   type IndexEntry,
 } from "./memory-folder-markdown.js";
+import {
+  regenerateKnowledgeBaseIndex,
+  readMemoryFolderFileSafely,
+  validateKnowledgeBase,
+  validateMemoryFileHeader,
+  writeMemoryFolderFileAtomically,
+} from "./memory-folder-validator.js";
 
 /**
  * Mirrors a company's memories to a folder of Markdown files and back.
  *
  * The `memories` table is the source of record. Export writes every memory
- * to `<folder>/<slug>.md` plus a `MEMORY.md` index, and removes files it
+ * to `<folder>/<slug>.md` plus a `MEMORY.md` index, and reports files it
  * wrote earlier for memories that no longer exist. Import reads every other
  * `.md` file in the folder and creates or updates memories from it, taking a
  * file's content only when the file is newer than Paperclip's copy. A sync is
@@ -77,6 +84,7 @@ function emptyResult(mode: MemoryFolderMode, trigger: MemoryFolderTrigger, start
     updated: 0,
     skipped: 0,
     warnings: [],
+    validation: null,
     error: null,
   };
 }
@@ -124,18 +132,25 @@ export async function exportMemoriesToFolder(
   const liveIds = new Set(memories.map((m) => m.id));
   const keepFiles = new Set(planned.map((p) => p.fileName));
 
-  // Remove files Paperclip wrote for memories that have since been deleted or
-  // renamed. Files without a paperclip_id were written by a person or another
-  // tool and are never removed here.
+  // Report files Paperclip wrote for memories that have since been deleted or
+  // renamed. Path-based deletion cannot stay bound to the checked directory on
+  // every supported platform, so operators remove these files after review.
   const existing = await fs.readdir(folder, { withFileTypes: true });
   for (const entry of existing) {
     if (!entry.isFile() || isSkippedFileName(entry.name) || keepFiles.has(entry.name)) continue;
     const full = path.join(folder, entry.name);
     try {
-      const parsed = parseMemoryFile(entry.name, await fs.readFile(full, "utf8"));
+      const text = (await readMemoryFolderFileSafely(folder, full)).text;
+      const parsed = parseMemoryFile(entry.name, text);
       if (parsed.paperclipId && !liveIds.has(parsed.paperclipId)) {
-        await fs.unlink(full);
-        result.removed += 1;
+        const header = validateMemoryFileHeader(text);
+        if (!header.valid) {
+          result.warnings.push(`Did not remove ${entry.name}: invalid frontmatter (${header.problems.join("; ")}).`);
+          result.skipped += 1;
+          continue;
+        }
+        result.warnings.push(`Kept ${entry.name}: its Paperclip memory no longer exists. Remove it manually after review.`);
+        result.skipped += 1;
       }
     } catch (err) {
       result.warnings.push(`Could not read ${entry.name}: ${(err as Error).message}`);
@@ -145,15 +160,41 @@ export async function exportMemoriesToFolder(
   const indexEntries: IndexEntry[] = [];
   for (const { memory, fileName, agentName } of planned) {
     const text = serializeMemoryFile(memory, agentName);
+    const generatedHeader = validateMemoryFileHeader(text);
+    if (!generatedHeader.valid) {
+      result.warnings.push(`Did not export ${fileName}: generated invalid frontmatter (${generatedHeader.problems.join("; ")}).`);
+      result.skipped += 1;
+      continue;
+    }
     const full = path.join(folder, fileName);
     let current: string | null = null;
     try {
-      current = await fs.readFile(full, "utf8");
-    } catch {
-      current = null;
+      current = (await readMemoryFolderFileSafely(folder, full)).text;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        current = null;
+      } else {
+        result.warnings.push(`Did not export ${fileName}: ${(err as Error).message}`);
+        result.skipped += 1;
+        continue;
+      }
+    }
+    if (current !== null) {
+      const header = validateMemoryFileHeader(current);
+      if (!header.valid) {
+        result.warnings.push(`Did not overwrite ${fileName}: invalid frontmatter (${header.problems.join("; ")}).`);
+        result.skipped += 1;
+        continue;
+      }
+      const existing = parseMemoryFile(fileName, current);
+      if (existing.paperclipId !== memory.id) {
+        result.warnings.push(`Did not overwrite ${fileName}: the file is not owned by this Paperclip memory.`);
+        result.skipped += 1;
+        continue;
+      }
     }
     if (current === null || current.replace(/\r\n/g, "\n") !== text) {
-      await fs.writeFile(full, text, "utf8");
+      await writeMemoryFolderFileAtomically(folder, full, text);
     }
     result.exported += 1;
     indexEntries.push({
@@ -165,7 +206,7 @@ export async function exportMemoriesToFolder(
     });
   }
 
-  await fs.writeFile(path.join(folder, INDEX_FILE), serializeIndex(companyName, indexEntries), "utf8");
+  await writeMemoryFolderFileAtomically(folder, path.join(folder, INDEX_FILE), serializeIndex(companyName, indexEntries));
 }
 
 /**
@@ -208,7 +249,13 @@ export async function importMemoriesFromFolder(
     }
     const full = path.join(folder, entry.name);
     try {
-      const [text, stat] = await Promise.all([fs.readFile(full, "utf8"), fs.stat(full)]);
+      const { text, stat } = await readMemoryFolderFileSafely(folder, full);
+      const header = validateMemoryFileHeader(text);
+      if (!header.valid) {
+        result.warnings.push(`Skipped ${entry.name}: invalid frontmatter (${header.problems.join("; ")}).`);
+        result.skipped += 1;
+        continue;
+      }
       const parsed = parseMemoryFile(entry.name, text);
       if (!parsed.content) {
         result.warnings.push(`Skipped ${entry.name}: it has no content.`);
@@ -294,6 +341,7 @@ export async function runMemoryFolder(
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
   }
+  result.validation = await validateKnowledgeBase(folder, trigger, { now: now() });
   result.finishedAt = now().toISOString();
   return result;
 }
@@ -301,12 +349,13 @@ export async function runMemoryFolder(
 type FolderRow = typeof memoryFolders.$inferSelect;
 
 function toSettings(companyId: string, row: FolderRow | null | undefined): MemoryFolderSettings {
+  const storedResult = row?.lastResult as MemoryFolderRunResult | null | undefined;
   return {
     companyId,
     path: row?.path ?? null,
     scheduleMinutes: row?.scheduleMinutes ?? null,
     lastSyncAt: row?.lastSyncAt ?? null,
-    lastResult: (row?.lastResult as MemoryFolderRunResult | null | undefined) ?? null,
+    lastResult: storedResult ? { ...storedResult, validation: storedResult.validation ?? null } : null,
   };
 }
 
@@ -350,6 +399,12 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
     return result;
   }
 
+  async function configuredFolder(companyId: string): Promise<FolderRow> {
+    const row = await getRow(companyId);
+    if (!row) throw unprocessable("No memory folder is configured for this company");
+    return row;
+  }
+
   return {
     getSettings: async (companyId: string) => toSettings(companyId, await getRow(companyId)),
 
@@ -375,6 +430,23 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
     import: (companyId: string) => run(companyId, "import", "manual"),
     sync: (companyId: string) => run(companyId, "sync", "manual"),
 
+    /** Fresh read-only validation. The result is not persisted and does not change any note. */
+    validate: async (companyId: string, trigger: MemoryFolderTrigger = "manual") => {
+      const row = await configuredFolder(companyId);
+      return validateKnowledgeBase(row.path, trigger, { now: deps.now?.() ?? new Date() });
+    },
+
+    /** Explicit operator action; validation and scheduled scans never replace the index. */
+    rebuildIndex: async (companyId: string) => {
+      const row = await configuredFolder(companyId);
+      const companyName = await deps.companyName(companyId);
+      try {
+        return await regenerateKnowledgeBaseIndex(row.path, companyName, deps.now?.() ?? new Date());
+      } catch (err) {
+        throw unprocessable(err instanceof Error ? err.message : String(err));
+      }
+    },
+
     /** Run a scheduled sync for every company whose interval has elapsed. */
     tickDue: async (now: Date = new Date()) => {
       const rows = await db
@@ -391,7 +463,7 @@ export function memoryFolderService(db: Db, depsOverride?: Partial<MemoryFolderD
         const result = await runMemoryFolder(deps, row.companyId, row.path, "sync", "scheduled");
         await recordResult(row.companyId, result);
         ran += 1;
-        if (result.error) failed += 1;
+        if (result.error || result.validation?.error) failed += 1;
       }
       return { ran, failed };
     },

@@ -19,8 +19,14 @@ export function memoryFolderRoutes(db: Db, service: MemoryFolderService = memory
 
   router.get("/companies/:companyId/memory-folder", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId, "read");
+    assertCompanyAccess(req, companyId);
     res.json(await service.getSettings(companyId));
+  });
+
+  router.get("/companies/:companyId/memory-folder/findings", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await service.validate(companyId, "manual"));
   });
 
   router.put(
@@ -72,6 +78,24 @@ export function memoryFolderRoutes(db: Db, service: MemoryFolderService = memory
       res.json(result);
     });
   }
+
+  router.post("/companies/:companyId/memory-folder/index", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await service.rebuildIndex(companyId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "memory_folder.index_rebuilt",
+      entityType: "memory_folder",
+      entityId: companyId,
+      details: { ...result },
+    });
+    res.json(result);
+  });
 
   return router;
 }
