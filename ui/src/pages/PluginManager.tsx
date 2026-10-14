@@ -14,7 +14,7 @@ import {
   type PluginRecord,
 } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
-import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
+import { AlertTriangle, Download, FlaskConical, Plus, Power, Puzzle, RefreshCw, Search, Settings, ShieldAlert, Sparkles, Trash } from "lucide-react";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi, asCapabilityEscalationError, type CapabilityEscalationDetails } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
@@ -81,6 +81,20 @@ type BulkUpdateProgress = {
  * @see doc/plugins/PLUGIN_SPEC.md §3 — Plugin Lifecycle for status semantics.
  */
 
+/**
+ * True when every word of `query` appears (case-insensitively) in at least one
+ * of `fields`. An empty query matches everything.
+ */
+export function matchesPluginSearch(
+  query: string,
+  fields: Array<string | null | undefined>,
+): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const haystack = fields.filter(Boolean).join(" ").toLowerCase();
+  return words.every((word) => haystack.includes(word));
+}
+
 // True if `a` is strictly newer than `b` under simple major.minor.patch
 // comparison. Plugin versions in this codebase don't use pre-release tags, so
 // numeric triple compare is enough.
@@ -113,6 +127,7 @@ export function PluginManager() {
   const bulkUpdating = bulkUpdateProgress !== null;
   const [categoryFilter, setCategoryFilter] = useState<Set<PluginCategory>>(new Set());
   const [availabilityFilter, setAvailabilityFilter] = useState<AvailabilityFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   // When the upgrade path returns a 409 capability_escalation, park the
   // pluginKey + escalation details so the dialog can present them to the
   // operator and resubmit with `acknowledgeCapabilities` on confirm.
@@ -365,6 +380,16 @@ export function PluginManager() {
 
   const filteredRows = useMemo(() => {
     return unifiedRows.filter((row) => {
+      if (
+        !matchesPluginSearch(searchQuery, [
+          row.displayName,
+          row.description,
+          row.pluginKey,
+          row.packageName,
+        ])
+      ) {
+        return false;
+      }
       const comingSoon = isRowComingSoon(row);
       if (availabilityFilter === "available" && comingSoon) return false;
       if (availabilityFilter === "comingSoon" && !comingSoon) return false;
@@ -374,9 +399,22 @@ export function PluginManager() {
       }
       return true;
     });
-  }, [unifiedRows, categoryFilter, availabilityFilter]);
+  }, [unifiedRows, categoryFilter, availabilityFilter, searchQuery]);
 
-  const hasActiveFilters = categoryFilter.size > 0 || availabilityFilter !== "all";
+  const filteredExamples = useMemo(
+    () =>
+      examples.filter((example) =>
+        matchesPluginSearch(searchQuery, [
+          example.displayName,
+          example.description,
+          example.packageName,
+        ]),
+      ),
+    [examples, searchQuery],
+  );
+
+  const hasActiveFilters =
+    categoryFilter.size > 0 || availabilityFilter !== "all" || searchQuery.trim() !== "";
 
   const toggleCategory = (cat: PluginCategory) => {
     setCategoryFilter((prev) => {
@@ -390,6 +428,7 @@ export function PluginManager() {
   const clearFilters = () => {
     setCategoryFilter(new Set());
     setAvailabilityFilter("all");
+    setSearchQuery("");
   };
 
   async function handleUpdateAll() {
@@ -708,6 +747,18 @@ export function PluginManager() {
 
         {unifiedRows.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border bg-muted/20 px-3 py-2 text-xs">
+            <div className="relative w-full sm:w-64">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search plugins..."
+                className="h-8 pl-7 text-xs"
+                aria-label="Search plugins"
+                data-page-search-target="true"
+              />
+            </div>
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="mr-1 text-muted-foreground">Type:</span>
               {PLUGIN_CATEGORIES.map((cat) => {
@@ -1071,9 +1122,13 @@ export function PluginManager() {
           <div className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
             No bundled example plugins were found in this checkout.
           </div>
+        ) : filteredExamples.length === 0 ? (
+          <div className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
+            No example plugins match "{searchQuery.trim()}".
+          </div>
         ) : (
           <ul className="divide-y rounded-md border bg-card">
-            {examples.map((example) => {
+            {filteredExamples.map((example) => {
               const installedPlugin = installedByPackageName.get(example.packageName);
               const installPending =
                 installMutation.isPending &&
