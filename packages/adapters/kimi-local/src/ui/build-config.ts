@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 import { DEFAULT_KIMI_LOCAL_MODEL } from "../index.js";
 
@@ -56,7 +57,8 @@ export function buildKimiLocalConfig(v: CreateConfigValues): Record<string, unkn
   if (v.cwd) ac.cwd = v.cwd;
   if (v.instructionsFilePath) ac.instructionsFilePath = v.instructionsFilePath;
   ac.model = v.model || DEFAULT_KIMI_LOCAL_MODEL;
-  ac.timeoutSec = 0;
+  ac.timeoutSec = AGENT_DEFAULT_TIMEOUT_SEC;
+  ac.maxTurnsPerRun = v.maxTurnsPerRun ?? AGENT_DEFAULT_MAX_TURNS_PER_RUN;
   ac.graceSec = 15;
   const env = parseEnvBindings(v.envBindings);
   const legacy = parseEnvVars(v.envVars);

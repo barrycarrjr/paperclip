@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
 function parseCommaArgs(value: string): string[] {
@@ -61,9 +62,10 @@ export function buildOpenCodeLocalConfig(v: CreateConfigValues): Record<string, 
   if (typeof v.dangerouslySkipPermissions === "boolean") {
     ac.dangerouslySkipPermissions = v.dangerouslySkipPermissions;
   }
-  // OpenCode sessions can run until the CLI exits naturally; keep timeout disabled (0)
-  // and rely on graceSec for termination handling when a timeout is configured elsewhere.
-  ac.timeoutSec = 0;
+  // Bound new OpenCode sessions with the shared timeout default.
+  // graceSec allows the CLI to exit after termination is requested.
+  ac.timeoutSec = AGENT_DEFAULT_TIMEOUT_SEC;
+  ac.maxTurnsPerRun = v.maxTurnsPerRun ?? AGENT_DEFAULT_MAX_TURNS_PER_RUN;
   ac.graceSec = 20;
   const env = parseEnvBindings(v.envBindings);
   const legacy = parseEnvVars(v.envVars);

@@ -1968,6 +1968,35 @@ describe("company portability", () => {
     }));
   });
 
+  it.each([
+    { adapterType: "claude_local", adapterConfig: {}, expected: { timeoutSec: 300, maxTurnsPerRun: 100 } },
+    { adapterType: "codex_local", adapterConfig: {}, expected: { timeoutSec: 300, maxTurnsPerRun: 100 } },
+    { adapterType: "claude_local", adapterConfig: { timeoutSec: 0, maxTurnsPerRun: 0 }, expected: { timeoutSec: 0, maxTurnsPerRun: 0 } },
+    { adapterType: "claude_local", adapterConfig: { timeoutSec: 900, maxTurnsPerRun: 250 }, expected: { timeoutSec: 900, maxTurnsPerRun: 250 } },
+    { adapterType: "claude_local", adapterConfig: { timeoutSec: 300, maxTurnsPerRun: 100 }, expected: { timeoutSec: 300, maxTurnsPerRun: 100 } },
+  ])("round-trips imported run limits for $adapterType with $adapterConfig", async ({ adapterType, adapterConfig, expected }) => {
+    const sourceAgents = await agentSvc.list();
+    agentSvc.list.mockResolvedValue([{ ...sourceAgents[0], adapterType, adapterConfig }]);
+    agentSvc.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
+      id: "agent-created", ...input,
+    }));
+    const portability = companyPortabilityService({} as any);
+    const exported = await portability.exportBundle("company-1", {
+      include: { company: true, agents: true, projects: false, issues: false, skills: false },
+    });
+    agentSvc.list.mockResolvedValue([]);
+    await portability.importBundle({
+      source: { type: "inline", rootPath: exported.rootPath, files: exported.files },
+      include: { company: true, agents: true, projects: false, issues: false, skills: false },
+      target: { mode: "new_company", newCompanyName: "Imported Paperclip" },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, "user-1");
+    expect(agentSvc.create).toHaveBeenCalledWith("company-imported", expect.objectContaining({
+      adapterConfig: expect.objectContaining(expected),
+    }));
+  });
+
   it("imports a packaged company logo and attaches it to the target company", async () => {
     const storage = {
       putFile: vi.fn().mockResolvedValue({

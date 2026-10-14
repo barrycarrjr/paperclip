@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
 function parseCommaArgs(value: string): string[] {
@@ -71,7 +72,7 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
   if (v.model) ac.model = v.model;
   if (v.thinkingEffort) ac.effort = v.thinkingEffort;
   if (v.chrome) ac.chrome = true;
-  ac.timeoutSec = 0;
+  ac.timeoutSec = AGENT_DEFAULT_TIMEOUT_SEC;
   ac.graceSec = 15;
   const env = parseEnvBindings(v.envBindings);
   const legacy = parseEnvVars(v.envVars);
@@ -81,7 +82,7 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
     }
   }
   if (Object.keys(env).length > 0) ac.env = env;
-  ac.maxTurnsPerRun = v.maxTurnsPerRun;
+  ac.maxTurnsPerRun = v.maxTurnsPerRun ?? AGENT_DEFAULT_MAX_TURNS_PER_RUN;
   if (typeof v.dangerouslySkipPermissions === "boolean") {
     ac.dangerouslySkipPermissions = v.dangerouslySkipPermissions;
   }

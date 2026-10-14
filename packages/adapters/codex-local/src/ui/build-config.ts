@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 import { DEFAULT_CODEX_LOCAL_MODEL } from "../index.js";
 
@@ -71,7 +72,8 @@ export function buildCodexLocalConfig(v: CreateConfigValues): Record<string, unk
   if (v.bootstrapPrompt) ac.bootstrapPromptTemplate = v.bootstrapPrompt;
   ac.model = v.model || DEFAULT_CODEX_LOCAL_MODEL;
   if (v.thinkingEffort) ac.modelReasoningEffort = v.thinkingEffort;
-  ac.timeoutSec = 0;
+  ac.timeoutSec = AGENT_DEFAULT_TIMEOUT_SEC;
+  ac.maxTurnsPerRun = v.maxTurnsPerRun ?? AGENT_DEFAULT_MAX_TURNS_PER_RUN;
   ac.graceSec = 15;
   const env = parseEnvBindings(v.envBindings);
   const legacy = parseEnvVars(v.envVars);

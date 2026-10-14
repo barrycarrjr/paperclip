@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
 export const defaultCreateValues: CreateConfigValues = {
@@ -23,7 +24,7 @@ export const defaultCreateValues: CreateConfigValues = {
   workspaceBranchTemplate: "",
   worktreeParentDir: "",
   runtimeServicesJson: "",
-  maxTurnsPerRun: 1000,
+  maxTurnsPerRun: AGENT_DEFAULT_MAX_TURNS_PER_RUN,
   heartbeatEnabled: false,
   intervalSec: 300,
 };

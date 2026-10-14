@@ -1,3 +1,4 @@
+import { CHAT_MAX_TOOL_LOOPS } from "@paperclipai/adapter-utils/run-limits";
 import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { chatMessages, chatSessions } from "@paperclipai/db";
@@ -36,8 +37,6 @@ import {
   chatAttachmentService,
   type ChatAttachment,
 } from "./chat-attachments.js";
-
-const MAX_TOOL_LOOPS = 12;
 
 export type ChatMode = "chat" | "agent";
 export type PermissionMode = "ask" | "bypass";
@@ -764,7 +763,7 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
 
     try {
       let loops = 0;
-      while (loops < MAX_TOOL_LOOPS && !aborted) {
+      while (loops < CHAT_MAX_TOOL_LOOPS && !aborted) {
         loops += 1;
         const allMessages = await listMessages(actor, sessionId);
         const canonical = buildCanonicalMessages(allMessages);
@@ -955,10 +954,10 @@ export function chatService(db: Db, options: ChatServiceOptions = {}) {
       //   pluginMcpBridge.revokeToken(mcpBridgeToken);
       // }
 
-      if (loops >= MAX_TOOL_LOOPS) {
+      if (loops >= CHAT_MAX_TOOL_LOOPS) {
         yield {
           type: "error",
-          error: `Tool loop exceeded max iterations (${MAX_TOOL_LOOPS}). Stopping to avoid runaway.`,
+          error: `Tool loop exceeded max iterations (${CHAT_MAX_TOOL_LOOPS}). Stopping to avoid runaway.`,
         };
         return;
       }

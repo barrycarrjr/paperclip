@@ -1,3 +1,4 @@
+import { applyNewAgentRunDefaults } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "../../components/AgentConfigForm";
 
 function parseCommaArgs(value: string): string[] {
@@ -8,9 +9,8 @@ function parseCommaArgs(value: string): string[] {
 }
 
 export function buildProcessConfig(v: CreateConfigValues): Record<string, unknown> {
-  const ac: Record<string, unknown> = {};
+  const ac = applyNewAgentRunDefaults("process", { maxTurnsPerRun: v.maxTurnsPerRun });
   if (v.cwd) ac.cwd = v.cwd;
-  ac.timeoutSec = 0;
   ac.graceSec = 15;
   if (v.command) ac.command = v.command;
   if (v.args) ac.args = parseCommaArgs(v.args);

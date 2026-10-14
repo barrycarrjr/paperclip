@@ -386,6 +386,12 @@ eval "$(pnpm paperclipai worktree env)"
 
 For project execution worktrees, Paperclip can also run a project-defined provision command after it creates or reuses an isolated git worktree. Configure this on the project's execution workspace policy (`workspaceStrategy.provisionCommand`). The command runs inside the derived worktree and receives `PAPERCLIP_WORKSPACE_*`, `PAPERCLIP_PROJECT_ID`, `PAPERCLIP_AGENT_ID`, and `PAPERCLIP_ISSUE_*` environment variables so each repo can bootstrap itself however it wants.
 
+## New Agent Run Limits
+
+New local agents created through the API or UI, and local agents imported from company packages, receive a 300-second run timeout and a 100-turn cap when those settings are missing. Adapters that support a turn cap consume `maxTurnsPerRun`; every local process receives the timeout. CLI-backed Clippy turns receive a 300-second timeout and the same 12-turn setting as native chat. Claude and Hermes enforce that turn setting; other CLI adapters enforce the timeout.
+
+Explicit saved or imported values, including `0` for no cap, remain unchanged. Existing agents are not rewritten. Hermes keeps its computed timeout, which scales with its configured turn cap; gateway and cloud adapters retain their own defaults.
+
 ## Quick Health Checks
 
 In another terminal:

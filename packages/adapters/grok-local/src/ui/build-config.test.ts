@@ -14,7 +14,8 @@ describe("buildGrokLocalConfig", () => {
       cwd: "/tmp/project",
       instructionsFilePath: "/tmp/AGENTS.md",
       model: "grok-build",
-      timeoutSec: 0,
+      timeoutSec: 300,
+      maxTurnsPerRun: 100,
       graceSec: 20,
       reasoningEffort: "high",
       env: {

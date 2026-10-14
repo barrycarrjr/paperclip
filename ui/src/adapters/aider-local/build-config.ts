@@ -1,3 +1,4 @@
+import { applyNewAgentRunDefaults } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "../../components/AgentConfigForm";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -8,7 +9,7 @@ const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
  * applies defaults for everything else (default model, ollamaBaseUrl, etc.).
  */
 export function buildAiderLocalConfig(values: CreateConfigValues): Record<string, unknown> {
-  const ac: Record<string, unknown> = {};
+  const ac = applyNewAgentRunDefaults("aider_local", { maxTurnsPerRun: values.maxTurnsPerRun });
   if (values.cwd) ac.cwd = values.cwd;
   if (values.instructionsFilePath) ac.instructionsFilePath = values.instructionsFilePath;
   if (values.model) ac.model = values.model;

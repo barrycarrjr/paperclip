@@ -263,6 +263,7 @@ describe("AdapterExecuteProvider", () => {
     }
 
     expect(seenConfigs).toHaveLength(1);
+    expect(seenConfigs[0]).toMatchObject({ timeoutSec: 300, maxTurnsPerRun: 12 });
     const cwd = seenConfigs[0].cwd;
     expect(typeof cwd).toBe("string");
     expect(cwd as string).toContain("clippy-workspaces");

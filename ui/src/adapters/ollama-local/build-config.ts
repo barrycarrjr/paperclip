@@ -1,3 +1,4 @@
+import { applyNewAgentRunDefaults } from "@paperclipai/adapter-utils/run-limits";
 import type { CreateConfigValues } from "../../components/AgentConfigForm";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -8,7 +9,7 @@ const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
  * everything else (default model, ollamaBaseUrl, etc.).
  */
 export function buildOllamaLocalConfig(values: CreateConfigValues): Record<string, unknown> {
-  const ac: Record<string, unknown> = {};
+  const ac = applyNewAgentRunDefaults("ollama_local", { maxTurnsPerRun: values.maxTurnsPerRun });
   if (values.model) ac.model = values.model;
   if (values.promptTemplate) ac.promptTemplate = values.promptTemplate;
   // Only persist the base URL when it's not the default — keeps the stored

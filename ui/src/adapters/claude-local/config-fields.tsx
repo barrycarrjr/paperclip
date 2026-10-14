@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_MAX_TURNS_PER_RUN } from "@paperclipai/adapter-utils/run-limits";
 import type { AdapterConfigFieldsProps } from "../types";
 import {
   Field,
@@ -109,9 +110,9 @@ export function ClaudeLocalAdvancedFields(props: AdapterConfigFieldsProps) {
             value={eff(
               "adapterConfig",
               "maxTurnsPerRun",
-              Number(config.maxTurnsPerRun ?? 1000),
+              Number(config.maxTurnsPerRun ?? AGENT_DEFAULT_MAX_TURNS_PER_RUN),
             )}
-            onCommit={(v) => mark("adapterConfig", "maxTurnsPerRun", v || 1000)}
+            onCommit={(v) => mark("adapterConfig", "maxTurnsPerRun", v)}
             immediate
             className={inputClass}
           />

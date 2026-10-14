@@ -40,7 +40,7 @@ describe("buildKimiLocalConfig", () => {
     const config = buildKimiLocalConfig(makeValues());
 
     expect(config.model).toBe("kimi-code/kimi-for-coding");
-    expect(config.timeoutSec).toBe(0);
+    expect(config.timeoutSec).toBe(300);
     expect(config.graceSec).toBe(15);
   });
 

@@ -1,3 +1,4 @@
+import { applyNewAgentRunDefaults } from "@paperclipai/adapter-utils/run-limits";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -424,9 +425,10 @@ export function agentService(db: Db) {
       const role = data.role ?? "general";
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
       const runtimeConfig = normalizeRuntimeConfigForNewAgent(data.runtimeConfig);
+      const adapterConfig = applyNewAgentRunDefaults(data.adapterType ?? "process", data.adapterConfig ?? {});
       const created = await db
         .insert(agents)
-        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions, runtimeConfig })
+        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions, runtimeConfig, adapterConfig })
         .returning()
         .then((rows) => rows[0]);
 

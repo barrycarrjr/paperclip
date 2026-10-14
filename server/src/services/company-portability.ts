@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, AGENT_DEFAULT_MAX_TURNS_PER_RUN, applyNewAgentRunDefaults } from "@paperclipai/adapter-utils/run-limits";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -597,25 +598,25 @@ const RUNTIME_DEFAULT_RULES: Array<{ path: string[]; value: unknown }> = [
 
 const ADAPTER_DEFAULT_RULES_BY_TYPE: Record<string, Array<{ path: string[]; value: unknown }>> = {
   codex_local: [
-    { path: ["timeoutSec"], value: 0 },
+    { path: ["timeoutSec"], value: AGENT_DEFAULT_TIMEOUT_SEC },
     { path: ["graceSec"], value: 15 },
   ],
   gemini_local: [
-    { path: ["timeoutSec"], value: 0 },
+    { path: ["timeoutSec"], value: AGENT_DEFAULT_TIMEOUT_SEC },
     { path: ["graceSec"], value: 15 },
   ],
   opencode_local: [
-    { path: ["timeoutSec"], value: 0 },
+    { path: ["timeoutSec"], value: AGENT_DEFAULT_TIMEOUT_SEC },
     { path: ["graceSec"], value: 15 },
   ],
   cursor: [
-    { path: ["timeoutSec"], value: 0 },
+    { path: ["timeoutSec"], value: AGENT_DEFAULT_TIMEOUT_SEC },
     { path: ["graceSec"], value: 15 },
   ],
   claude_local: [
-    { path: ["timeoutSec"], value: 0 },
+    { path: ["timeoutSec"], value: AGENT_DEFAULT_TIMEOUT_SEC },
     { path: ["graceSec"], value: 15 },
-    { path: ["maxTurnsPerRun"], value: 1000 },
+    { path: ["maxTurnsPerRun"], value: AGENT_DEFAULT_MAX_TURNS_PER_RUN },
   ],
   openclaw_gateway: [
     { path: ["timeoutSec"], value: 120 },
@@ -2797,7 +2798,10 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     if (mode === "agent_safe" && IMPORT_FORBIDDEN_ADAPTER_TYPES.has(effectiveAdapterType)) {
       throw forbidden(`Adapter type "${effectiveAdapterType}" is not allowed in safe imports`);
     }
-    const nextAdapterConfig = writePaperclipSkillSyncPreference({ ...adapterConfig }, desiredSkills);
+    const nextAdapterConfig = writePaperclipSkillSyncPreference(
+      applyNewAgentRunDefaults(effectiveAdapterType, adapterConfig),
+      desiredSkills,
+    );
     delete nextAdapterConfig.promptTemplate;
     delete nextAdapterConfig.bootstrapPromptTemplate;
     delete nextAdapterConfig.instructionsFilePath;

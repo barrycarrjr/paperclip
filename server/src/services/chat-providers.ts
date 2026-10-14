@@ -1,3 +1,4 @@
+import { AGENT_DEFAULT_TIMEOUT_SEC, CHAT_MAX_TOOL_LOOPS } from "@paperclipai/adapter-utils/run-limits";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { promises as fsPromises } from "node:fs";
@@ -1273,7 +1274,8 @@ class AdapterExecuteProvider implements ChatProvider {
         // they read what they understand and ignore the rest.
         promptTemplate: "",
         dangerouslySkipPermissions: true,
-        maxTurnsPerRun: 0,
+        maxTurnsPerRun: CHAT_MAX_TOOL_LOOPS,
+        timeoutSec: AGENT_DEFAULT_TIMEOUT_SEC,
         ...(accountEnv ? { env: accountEnv.env } : {}),
         // Always route the adapter's working dir to the per-session Clippy
         // workspace, whether or not this turn carries images. The CLI adapter
