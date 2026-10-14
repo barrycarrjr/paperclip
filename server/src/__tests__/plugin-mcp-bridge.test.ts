@@ -7,6 +7,7 @@ import type { Db } from "@paperclipai/db";
 import { registerChatToolInteractions } from "../services/chat-tool-interactions.js";
 import { chatPermissions } from "../services/chat-permissions.js";
 import { createPluginMcpBridge } from "../services/plugin-mcp-bridge.js";
+import { loadPersonalCompanyIndex, rememberPersonalCompany } from "../services/personal-companies.js";
 import type {
   AgentToolDescriptor,
   PluginToolDispatcher,
@@ -22,7 +23,8 @@ function createDbStub(): Db {
         from() {
           return {
             where() {
-              return Promise.resolve([]);
+              const rows = Promise.resolve([]);
+              return Object.assign(rows, { orderBy: () => ({ limit: () => rows }) });
             },
             limit() {
               return Promise.resolve([]);
@@ -67,9 +69,11 @@ describe("plugin MCP bridge — built-in chat tools", () => {
   let server: http.Server;
   let baseUrl: string;
   let token: string;
+  let bridge: ReturnType<typeof createPluginMcpBridge>;
 
   beforeEach(async () => {
-    const bridge = createPluginMcpBridge({
+    await loadPersonalCompanyIndex(createDbStub());
+    bridge = createPluginMcpBridge({
       pluginToolDispatcher: createDispatcherStub(),
       db: createDbStub(),
     });
@@ -86,7 +90,9 @@ describe("plugin MCP bridge — built-in chat tools", () => {
     const app = express();
     app.use(express.json());
     const handler = async (req: express.Request, res: express.Response) => {
-      await bridge.handleHttpRequest(req.params.token, req, res, req.body);
+      const sessionToken = req.params.token;
+      if (typeof sessionToken !== "string") throw new Error("Missing bridge token");
+      await bridge.handleHttpRequest(sessionToken, req, res, req.body);
     };
     app.post("/api/internal/mcp/:token", handler);
     app.get("/api/internal/mcp/:token", handler);
@@ -103,8 +109,10 @@ describe("plugin MCP bridge — built-in chat tools", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  async function withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
-    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+  async function withClient<T>(fn: (client: Client) => Promise<T>, sessionToken = token): Promise<T> {
+    const url = new URL(baseUrl);
+    url.pathname = `/api/internal/mcp/${sessionToken}`;
+    const transport = new StreamableHTTPClientTransport(url);
     const client = new Client({ name: "test", version: "1.0.0" });
     await client.connect(transport);
     try {
@@ -169,6 +177,36 @@ describe("plugin MCP bridge — built-in chat tools", () => {
       return Array.isArray(res.content) ? res.content[0]?.text ?? "" : "";
     });
     expect(text).toBe("pong");
+  });
+
+  it("binds Personal access to the agent run, rather than a user id or supplied actor field", async () => {
+    const personalCompanyId = "22222222-2222-4222-8222-222222222222";
+    rememberPersonalCompany(personalCompanyId, "owner-1");
+    const actor = { userId: "agent:a1", isInstanceAdmin: false, companyIds: [personalCompanyId] };
+    const agentToken = bridge.mintToken({
+      chatSessionId: "heartbeat:personal-run", companyId: personalCompanyId, actor,
+      agentRunContext: { agentId: "a1", runId: "personal-run" },
+    });
+    const allowed = await withClient(client => client.callTool({ name: "list_issues", arguments: {} }), agentToken);
+    expect(allowed.isError).not.toBe(true);
+    expect(allowed.content).toEqual([{ type: "text", text: JSON.stringify({ companyId: personalCompanyId, issues: [] }) }]);
+
+    const impersonatorToken = bridge.mintToken({
+      chatSessionId: "chat:impersonator", companyId: personalCompanyId,
+      actor: { ...actor, agentCompanyId: personalCompanyId },
+    });
+    const outsideAgentToken = bridge.mintToken({
+      chatSessionId: "heartbeat:hq-run", companyId: "11111111-1111-1111-1111-111111111111",
+      actor: { ...actor, isInstanceAdmin: true },
+      agentRunContext: { agentId: "hq-agent", runId: "hq-run" },
+    });
+    for (const sessionToken of [impersonatorToken, outsideAgentToken]) {
+      const refused = await withClient(client => client.callTool({
+        name: "list_issues", arguments: { companyId: personalCompanyId },
+      }), sessionToken);
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([{ type: "text", text: "This is someone's personal company" }]);
+    }
   });
 
   it("refuses a viewer's chat the plugin tools and the changes the person could not make, but not an agent run", async () => {

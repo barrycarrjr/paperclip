@@ -307,7 +307,10 @@ export function createPluginMcpBridge(
         if (!incomingName.includes("__")) {
           const toolCtx: ToolContext = {
             db,
-            actor: session.actor,
+            actor: {
+              ...session.actor,
+              agentCompanyId: session.agentRunContext ? session.companyId : undefined,
+            },
             defaultCompanyId: session.companyId,
             chatSessionId: session.chatSessionId,
           };

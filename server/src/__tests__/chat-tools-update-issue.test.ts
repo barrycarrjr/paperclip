@@ -12,6 +12,7 @@ import type { Db } from "@paperclipai/db";
  */
 
 const mockIssueService = vi.hoisted(() => ({
+  getById: vi.fn(),
   update: vi.fn(),
 }));
 
@@ -67,6 +68,7 @@ function agentCtx(db: Db, agentId = "33333333-3333-3333-3333-333333333333") {
 describe("update_issue", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIssueService.getById.mockResolvedValue({ id: ISSUE_ID, companyId: COMPANY_ID });
     mockIssueService.update.mockResolvedValue({
       id: ISSUE_ID,
       identifier: "IND-1260",

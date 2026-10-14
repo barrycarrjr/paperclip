@@ -40,6 +40,8 @@ export type ToolActor = {
   userId: string;
   isInstanceAdmin: boolean;
   companyIds: string[];
+  /** The company bound to a verified agent run by the internal MCP bridge. */
+  agentCompanyId?: string;
   /**
    * The person's memberships with their roles, so a change can be refused
    * where they are only a viewer, as the web app refuses it. Absent for an
@@ -91,7 +93,7 @@ async function assertCompanyAccess(
   // which is exactly the door this is supposed to have no key for.
   const personalOwner = personalCompanyOwner(companyId);
   if (personalOwner) {
-    if (ctx.actor.userId !== personalOwner) {
+    if (ctx.actor.userId !== personalOwner && ctx.actor.agentCompanyId !== companyId) {
       throw forbidden("This is someone's personal company");
     }
     return;
@@ -118,7 +120,7 @@ async function resolveAccessibleCompanyIds(ctx: ToolContext): Promise<string[]> 
   const keepMine = (ids: string[]) =>
     ids.filter((id) => {
       const owner = personalCompanyOwner(id);
-      return !owner || owner === ctx.actor.userId;
+      return !owner || owner === ctx.actor.userId || ctx.actor.agentCompanyId === id;
     });
 
   if (ctx.actor.isInstanceAdmin) {
@@ -141,6 +143,13 @@ function summarizeIssue(row: typeof issues.$inferSelect) {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+async function resolveAccessibleIssue(ctx: ToolContext, issueId: string, mode: "read" | "write" = "read") {
+  const issue = await issueService(ctx.db).getById(issueId);
+  if (!issue) throw notFound(`Issue ${issueId} not found`);
+  await assertCompanyAccess(ctx, issue.companyId, mode);
+  return issue;
 }
 
 const listCompaniesTool: ChatToolDefinition<Record<string, never>> = {
@@ -332,18 +341,12 @@ const getIssueTool: ChatToolDefinition<{ issueId: string }> = {
     description: "Get a single issue with its comments.",
     input_schema: {
       type: "object",
-      properties: { issueId: { type: "string" } },
+      properties: { issueId: { type: "string", description: "Issue UUID or issue key, such as ABC-12." } },
       required: ["issueId"],
     },
   },
   async handler({ issueId }, ctx) {
-    const row = await ctx.db
-      .select()
-      .from(issues)
-      .where(eq(issues.id, issueId))
-      .then((r) => r[0] ?? null);
-    if (!row) throw notFound(`Issue ${issueId} not found`);
-    await assertCompanyAccess(ctx, row.companyId);
+    const row = await resolveAccessibleIssue(ctx, issueId);
     const comments = await ctx.db
       .select({
         id: issueComments.id,
@@ -353,7 +356,7 @@ const getIssueTool: ChatToolDefinition<{ issueId: string }> = {
         createdAt: issueComments.createdAt,
       })
       .from(issueComments)
-      .where(eq(issueComments.issueId, issueId))
+      .where(eq(issueComments.issueId, row.id))
       .orderBy(issueComments.createdAt);
     return {
       issue: { ...summarizeIssue(row), description: row.description },
@@ -491,7 +494,7 @@ const updateIssueTool: ChatToolDefinition<{
     input_schema: {
       type: "object",
       properties: {
-        issueId: { type: "string" },
+        issueId: { type: "string", description: "Issue UUID or issue key, such as ABC-12." },
         status: {
           type: "string",
           enum: [...ISSUE_STATUSES],
@@ -511,20 +514,14 @@ const updateIssueTool: ChatToolDefinition<{
     },
   },
   async handler({ issueId, status, priority, comment }, ctx) {
-    const existing = await ctx.db
-      .select({ id: issues.id, companyId: issues.companyId })
-      .from(issues)
-      .where(eq(issues.id, issueId))
-      .then((r) => r[0] ?? null);
-    if (!existing) throw notFound(`Issue ${issueId} not found`);
-    await assertCompanyAccess(ctx, existing.companyId, "write");
+    const existing = await resolveAccessibleIssue(ctx, issueId, "write");
 
     const attribution = attributionFor(ctx);
     // Through the service rather than straight at the table: closing an issue
     // has consequences (parents, blockers, execution state) that a bare
     // UPDATE would skip, and skipping them is how a "done" issue keeps
     // behaving like an open one.
-    const updated = await issueService(ctx.db).update(issueId, {
+    const updated = await issueService(ctx.db).update(existing.id, {
       ...(status !== undefined ? { status } : {}),
       ...(priority !== undefined ? { priority } : {}),
       ...attribution,
@@ -534,7 +531,7 @@ const updateIssueTool: ChatToolDefinition<{
     if (comment) {
       await ctx.db.insert(issueComments).values({
         companyId: existing.companyId,
-        issueId,
+        issueId: existing.id,
         body: comment,
         ...(attribution.actorAgentId
           ? { authorAgentId: attribution.actorAgentId }
@@ -560,27 +557,24 @@ const addCommentTool: ChatToolDefinition<{ issueId: string; body: string }> = {
     input_schema: {
       type: "object",
       properties: {
-        issueId: { type: "string" },
+        issueId: { type: "string", description: "Issue UUID or issue key, such as ABC-12." },
         body: { type: "string" },
       },
       required: ["issueId", "body"],
     },
   },
   async handler({ issueId, body }, ctx) {
-    const issueRow = await ctx.db
-      .select({ id: issues.id, companyId: issues.companyId })
-      .from(issues)
-      .where(eq(issues.id, issueId))
-      .then((r) => r[0] ?? null);
-    if (!issueRow) throw notFound(`Issue ${issueId} not found`);
-    await assertCompanyAccess(ctx, issueRow.companyId, "write");
+    const issueRow = await resolveAccessibleIssue(ctx, issueId, "write");
+    const attribution = attributionFor(ctx);
     const created = await ctx.db
       .insert(issueComments)
       .values({
         companyId: issueRow.companyId,
-        issueId,
+        issueId: issueRow.id,
         body,
-        authorUserId: ctx.actor.userId,
+        ...(attribution.actorAgentId
+          ? { authorAgentId: attribution.actorAgentId }
+          : { authorUserId: ctx.actor.userId }),
       })
       .returning()
       .then((rows) => rows[0]);

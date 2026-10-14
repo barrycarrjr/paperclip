@@ -512,6 +512,10 @@ pnpm paperclipai dashboard get
 
 See full command reference in `doc/CLI.md`.
 
+The built-in chat tools exposed through the internal MCP bridge accept either an issue UUID or a readable issue key such as `ABC-12` in `issueId` for `get_issue`, `update_issue`, and `add_comment`. Keys are case-insensitive and surrounding whitespace is ignored. Company access and read-only viewer permissions still apply.
+
+An agent run can use these tools inside its own Personal company, matching REST API access. The bridge derives the agent's company from its run session; a user id that resembles an agent does not grant access. Other agents and users, including instance administrators, cannot access someone else's Personal company.
+
 ## OpenClaw Invite Onboarding Endpoints
 
 Agent-oriented invite onboarding now exposes machine-readable API docs:

@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 
 const mockIssueService = vi.hoisted(() => ({
+  getById: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 }));
@@ -65,6 +66,7 @@ function pluginDispatcher() {
 describe("Clippy's own tools for a viewer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIssueService.getById.mockResolvedValue({ id: ISSUE_ID, companyId: COMPANY_ID });
     mockIssueService.create.mockResolvedValue({
       id: ISSUE_ID,
       identifier: "AC-1",
