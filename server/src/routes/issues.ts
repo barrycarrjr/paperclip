@@ -224,6 +224,22 @@ function shouldImplicitlyMoveCommentedIssueToTodo(input: {
   return true;
 }
 
+const AGENT_USER_HANDOFF_NOTE_REQUIRED =
+  "An agent that assigns an issue to a person must say what they need to do: send a comment with the update (or a description when creating the issue)";
+
+// A person picking up an issue from an agent should never have to guess what is
+// being asked of them, so an agent handing work to a user must leave a note.
+function isAgentHandoffToUserMissingNote(input: {
+  actorType: Request["actor"]["type"];
+  previousAssigneeUserId: string | null;
+  nextAssigneeUserId: string | null | undefined;
+  note: string | null | undefined;
+}) {
+  if (input.actorType !== "agent") return false;
+  if (!input.nextAssigneeUserId || input.nextAssigneeUserId === input.previousAssigneeUserId) return false;
+  return !input.note?.trim();
+}
+
 function isExplicitResumeCapableStatus(status: string | null | undefined) {
   return status === "done" || status === "blocked" || status === "todo" || status === "in_progress";
 }
@@ -2152,6 +2168,17 @@ export function issueRoutes(
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
     }
+    if (
+      isAgentHandoffToUserMissingNote({
+        actorType: req.actor.type,
+        previousAssigneeUserId: null,
+        nextAssigneeUserId: req.body.assigneeUserId,
+        note: req.body.description,
+      })
+    ) {
+      res.status(422).json({ error: AGENT_USER_HANDOFF_NOTE_REQUIRED });
+      return;
+    }
     await assertIssueEnvironmentSelection(companyId, req.body.executionWorkspaceSettings?.environmentId);
 
     const actor = getActorInfo(req);
@@ -2228,6 +2255,17 @@ export function issueRoutes(
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, parent.companyId);
+    }
+    if (
+      isAgentHandoffToUserMissingNote({
+        actorType: req.actor.type,
+        previousAssigneeUserId: null,
+        nextAssigneeUserId: req.body.assigneeUserId,
+        note: req.body.description,
+      })
+    ) {
+      res.status(422).json({ error: AGENT_USER_HANDOFF_NOTE_REQUIRED });
+      return;
     }
     await assertIssueEnvironmentSelection(parent.companyId, req.body.executionWorkspaceSettings?.environmentId);
 
@@ -2470,6 +2508,18 @@ export function issueRoutes(
       typeof nextAssigneeUserId === "string" &&
       !!existing.createdByUserId &&
       nextAssigneeUserId === existing.createdByUserId;
+
+    if (
+      isAgentHandoffToUserMissingNote({
+        actorType: req.actor.type,
+        previousAssigneeUserId: existing.assigneeUserId,
+        nextAssigneeUserId,
+        note: commentBody,
+      })
+    ) {
+      res.status(422).json({ error: AGENT_USER_HANDOFF_NOTE_REQUIRED });
+      return;
+    }
 
     if (assigneeWillChange && !transition.workflowControlledAssignment) {
       if (!isAgentReturningIssueToCreator) {
