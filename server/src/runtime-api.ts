@@ -96,6 +96,11 @@ export function choosePrimaryRuntimeApiUrl(input: {
   bindHost: string;
   port: number;
 }): string {
+  const bindHost = normalizeHost(input.bindHost);
+  if (isLoopbackHost(bindHost)) {
+    return formatOrigin("http:", bindHost, input.port);
+  }
+
   const explicitPublicBaseUrl = input.authPublicBaseUrl?.trim();
   if (explicitPublicBaseUrl) {
     const corrected = reachableRuntimeOrigin(
@@ -115,7 +120,6 @@ export function choosePrimaryRuntimeApiUrl(input: {
     return formatOrigin("http:", allowedHostname, input.port);
   }
 
-  const bindHost = normalizeHost(input.bindHost);
   if (bindHost && !isWildcardHost(bindHost)) {
     return formatOrigin("http:", bindHost, input.port);
   }
