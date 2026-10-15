@@ -17,6 +17,28 @@ async function fixture() {
   return { ctx, source, cwd };
 }
 describe("Aider complete read-only procedure staging", () => {
+  it("delivers approved rules before correction workflow with an HTTP fallback", async () => {
+    const { ctx } = await fixture();
+    ctx.context.paperclipApprovedRulesMarkdown = "- Verify totals before reporting them.";
+    ctx.context.paperclipWake = {
+      issue: { id: "11111111-1111-4111-8111-111111111111", title: "Correct behavior" },
+      comments: [{
+        id: "22222222-2222-4222-8222-222222222222",
+        intent: "correction",
+        body: "Always verify the total first.",
+        author: { type: "user", id: "board-user" },
+      }],
+    };
+    mocks.run.mockImplementation(async (_run, _target, _command, _args, options) => {
+      expect(options.stdin).toContain("Approved Paperclip Standing Rules");
+      expect(options.stdin).toContain("Verify totals before reporting them.");
+      expect(options.stdin).toContain("POST /api/companies/{companyId}/approvals");
+      expect(options.stdin).toContain("Authorization: Bearer $PAPERCLIP_API_KEY");
+      return { stdout: "drafted", stderr: "", exitCode: 0, signal: null, timedOut: false };
+    });
+    expect((await execute(ctx)).exitCode).toBe(0);
+  });
+
   it.each([undefined, "Custom task for {{agentName}}", "Custom task {{ paperclipWake }}"])("delivers counts to actual CLI stdin with default or custom template %s", async (promptTemplate) => {
     const { ctx } = await fixture();
     if (promptTemplate) ctx.config.promptTemplate = promptTemplate;

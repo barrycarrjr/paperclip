@@ -806,6 +806,20 @@
       "when": 1792021641412,
       "tag": "0115_motionless_ricochet",
       "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1792034874153,
+      "tag": "0116_closed_miss_america",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1792059194478,
+      "tag": "0117_secret_blue_blade",
+      "breakpoints": true
     }
   ]
 }

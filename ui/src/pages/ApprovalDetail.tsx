@@ -34,6 +34,7 @@ export function ApprovalDetail() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [commentBody, setCommentBody] = useState("");
+  const [revisionNote, setRevisionNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const { data: approval, isLoading } = useQuery({
@@ -118,8 +119,9 @@ export function ApprovalDetail() {
   });
 
   const revisionMutation = useMutation({
-    mutationFn: () => approvalsApi.requestRevision(approvalId!),
+    mutationFn: () => approvalsApi.requestRevision(approvalId!, revisionNote.trim() || undefined),
     onSuccess: () => {
+      setRevisionNote("");
       setError(null);
       refresh();
     },
@@ -127,7 +129,13 @@ export function ApprovalDetail() {
   });
 
   const resubmitMutation = useMutation({
-    mutationFn: () => approvalsApi.resubmit(approvalId!),
+    mutationFn: () => approvalsApi.resubmit(
+      approvalId!,
+      undefined,
+      approval?.type === "instruction_change" && approval.decidedAt
+        ? new Date(approval.decidedAt).toISOString()
+        : undefined,
+    ),
     onSuccess: () => {
       setError(null);
       refresh();
@@ -165,6 +173,7 @@ export function ApprovalDetail() {
   const isClippyAgent = linkedAgentId?.startsWith("clippy:") ?? false;
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
   const isBudgetApproval = approval.type === "budget_override_required";
+  const isInstructionChange = approval.type === "instruction_change";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
   const showApprovedBanner = searchParams.get("resolved") === "approved" && approval.status === "approved";
   const primaryLinkedIssue = linkedIssues?.[0] ?? null;
@@ -307,7 +316,7 @@ export function ApprovalDetail() {
               Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.
             </p>
           )}
-          {approval.status === "pending" && (
+          {approval.status === "pending" && !isInstructionChange && (
             <Button
               size="sm"
               variant="outline"
@@ -317,7 +326,7 @@ export function ApprovalDetail() {
               Request revision
             </Button>
           )}
-          {approval.status === "revision_requested" && (
+          {approval.status === "revision_requested" && !isInstructionChange && (
             <Button
               size="sm"
               variant="outline"
@@ -342,6 +351,33 @@ export function ApprovalDetail() {
             </Button>
           )}
         </div>
+        {approval.status === "pending" && isInstructionChange && (
+          <div className="space-y-2 border-t border-border/60 pt-3">
+            <label htmlFor="instruction-revision-note" className="text-xs font-medium">
+              What should the corrected agent change?
+            </label>
+            <Textarea
+              id="instruction-revision-note"
+              value={revisionNote}
+              onChange={(event) => setRevisionNote(event.target.value)}
+              placeholder="Explain the change needed before this can become a standing rule."
+              rows={3}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => revisionMutation.mutate()}
+              disabled={!revisionNote.trim() || revisionMutation.isPending}
+            >
+              Request revision
+            </Button>
+          </div>
+        )}
+        {approval.status === "revision_requested" && isInstructionChange && (
+          <p className="border-t border-border/60 pt-3 text-sm text-muted-foreground">
+            Waiting for the corrected agent to submit a revised rule.
+          </p>
+        )}
         </CardContent>
       </Card>
 

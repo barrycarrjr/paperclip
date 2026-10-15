@@ -275,6 +275,17 @@ Invariant: each event must attach to agent and company; rollups are aggregation,
 - `decided_by_user_id` uuid fk `users.id` null
 - `decided_at` timestamptz null
 
+Instruction correction rules:
+
+- A board-authored issue comment may use `intent=correction` only when the issue has an assigned agent.
+- The corrected agent drafts an `instruction_change` approval. It cannot directly install the rule.
+- The payload records the exact proposed rule, `agent` or `company` scope, the target agent, and the source issue and comment.
+- `instruction_rule_proposals` stores the durable rule text and source. Its unique source-comment and target-agent key makes creation retries return the same approval.
+- Approval creation, source issue linking, and proposal storage are one database transaction.
+- Approved company rules apply to every company agent; approved agent rules apply only to their target agent. Rejected and pending rules never enter run instructions.
+- Approval stops before the status changes if the active rules would exceed the standing-rule instruction capacity. An approved rule is never silently omitted.
+- Adapters deliver approved rules through a native system, developer, rules, or instructions channel when the runtime offers one. Prompt-only runtimes receive a clearly bounded trusted section before task content, and webhook or custom-process runtimes also receive structured rule provenance.
+
 ## 7.11 `activity_log`
 
 - `id` uuid pk

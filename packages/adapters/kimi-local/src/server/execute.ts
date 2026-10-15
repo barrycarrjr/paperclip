@@ -31,6 +31,7 @@ import {
   resolvePaperclipDesiredSkillNames,
   parseObject,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -395,12 +396,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ? ""
     : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
   const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const apiAccessNote = renderApiAccessNote(env);
+  // Kimi's print mode has no per-run system or rules argument. Keep the
+  // bounded approved-rule block before all task-controlled content.
   const prompt = appendSourceEvidenceInstructions(joinPromptSections([
     instructionsPrefix,
+    approvedRulesNote,
     renderedBootstrapPrompt,
     memoriesNote,
     wakePrompt,

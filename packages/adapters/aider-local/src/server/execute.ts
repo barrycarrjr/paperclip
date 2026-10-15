@@ -11,6 +11,7 @@ import {
   ensureAbsoluteDirectory,
   ensurePathInEnv,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   redactEnvForLogs,
@@ -138,16 +139,26 @@ async function buildAiderRuntime(input: {
 
   const promptTemplate = asString(config.promptTemplate, DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE);
   const wake = context.paperclipWake ?? context;
+  const approvedRules = renderPaperclipApprovedRules(context);
+  const wakePrompt = renderPaperclipWakePrompt(wake);
+  const templateRendersWake = /{{\s*paperclipWake\s*}}/.test(promptTemplate);
   const renderedPrompt = renderTemplate(promptTemplate, {
-    paperclipWake: renderPaperclipWakePrompt(wake),
+    paperclipWake: wakePrompt,
     agentName: agent.name,
     agentId: agent.id,
     companyId: agent.companyId,
     runId: input.runId,
   });
   // Custom templates may omit the wake token, but cannot omit required reporting.
-  const countsInstructions = /{{\s*paperclipWake\s*}}/.test(promptTemplate) ? "" : runCountsPromptForWake(wake);
-  const prompt = appendSourceEvidenceInstructions(countsInstructions ? `${renderedPrompt}\n\n${countsInstructions}` : renderedPrompt);
+  const countsInstructions = wakePrompt ? "" : runCountsPromptForWake(wake);
+  // Aider's message-file mode has no system or rules role. Keep the bounded,
+  // board-provenance block before all task text as the explicit fallback.
+  const prompt = appendSourceEvidenceInstructions([
+    approvedRules,
+    templateRendersWake ? "" : wakePrompt,
+    renderedPrompt,
+    countsInstructions,
+  ].filter(Boolean).join("\n\n"));
 
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
   // Resolution check is deferred to ensureAiderInstalled() so we can attempt

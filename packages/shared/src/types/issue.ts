@@ -1,6 +1,7 @@
 import type { ExecutionProjection, ExecutionBlocker } from "./execution-projection.js";
 import type {
   IssueCommentAuthorType,
+  IssueCommentIntent,
   IssueCommentMetadataRowType,
   IssueCommentPresentationKind,
   IssueCommentPresentationTone,
@@ -958,6 +959,8 @@ export interface IssueComment {
   companyId: string;
   issueId: string;
   authorType?: IssueCommentAuthorType;
+  intent?: IssueCommentIntent;
+  idempotencyKey?: string | null;
   authorAgentId: string | null;
   authorUserId: string | null;
   /** Responsible user attribution. Legacy and plugin-provided comment values may omit it. */

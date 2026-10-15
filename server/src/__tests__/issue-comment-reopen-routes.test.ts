@@ -7,6 +7,7 @@ const mockIssueService = vi.hoisted(() => ({
   assertCheckoutOwner: vi.fn(),
   update: vi.fn(),
   addComment: vi.fn(),
+  addCommentIdempotent: vi.fn(),
   getDependencyReadiness: vi.fn(),
   findMentionedAgents: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
@@ -180,6 +181,25 @@ function agentActor(agentId = "22222222-2222-4222-8222-222222222222") {
   };
 }
 
+function toolSessionActor() {
+  return {
+    type: "tool_session",
+    userId: "tool-user",
+    companyId: "company-1",
+    companyIds: ["company-1"],
+    source: "tool_session",
+    isInstanceAdmin: false,
+    person: {
+      type: "board",
+      userId: "tool-user",
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active" }],
+      source: "session",
+      isInstanceAdmin: false,
+    },
+  };
+}
+
 async function waitForWakeup(assertion: () => void) {
   await vi.waitFor(assertion);
 }
@@ -191,6 +211,7 @@ describe.sequential("issue comment reopen routes", () => {
     mockIssueService.assertCheckoutOwner.mockReset();
     mockIssueService.update.mockReset();
     mockIssueService.addComment.mockReset();
+    mockIssueService.addCommentIdempotent.mockReset();
     mockIssueService.getDependencyReadiness.mockReset();
     mockIssueService.findMentionedAgents.mockReset();
     mockIssueService.listWakeableBlockedDependents.mockReset();
@@ -240,6 +261,21 @@ describe.sequential("issue comment reopen routes", () => {
       updatedAt: new Date(),
       authorAgentId: null,
       authorUserId: "local-board",
+    });
+    mockIssueService.addCommentIdempotent.mockResolvedValue({
+      created: true,
+      comment: {
+        id: "comment-idempotent-1",
+        issueId: "11111111-1111-4111-8111-111111111111",
+        companyId: "company-1",
+        body: "hello",
+        intent: "message",
+        idempotencyKey: "ollama.mixed:v1_test",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        authorAgentId: "22222222-2222-4222-8222-222222222222",
+        authorUserId: null,
+      },
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.getDependencyReadiness.mockResolvedValue({
@@ -308,6 +344,78 @@ describe.sequential("issue comment reopen routes", () => {
         details: expect.not.objectContaining({ reopened: true }),
       }),
     );
+  });
+
+  it("records board correction intent and wakes the assigned agent", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("in_progress"));
+    const res = await request(await installActor(createApp()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "Always verify the total first.", intent: "correction" });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "Always verify the total first.",
+      expect.objectContaining({ intent: "correction", userId: "local-board" }),
+    );
+    await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+      expect.objectContaining({ reason: "issue_commented" }),
+    ));
+  });
+
+  it("does not let an agent mark its own comment as a correction", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("in_progress"));
+    const res = await request(await installActor(createApp(), agentActor()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "I changed my own rules.", intent: "correction" });
+    expect(res.status).toBe(403);
+    expect(mockIssueService.addComment).not.toHaveBeenCalled();
+  });
+
+  it("lets a user-driven tool session mark a correction", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("in_progress"));
+    const res = await request(await installActor(createApp(), toolSessionActor()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "Always verify the source first.", intent: "correction" });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "Always verify the source first.",
+      expect.objectContaining({ intent: "correction", userId: "tool-user" }),
+    );
+  });
+
+  it("returns an existing idempotent agent comment without duplicate activity or wakeups", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("in_progress"));
+    const existing = {
+      id: "comment-existing",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      body: "The ordinary answer.",
+      intent: "message",
+      idempotencyKey: "ollama.mixed:v1_retry",
+      authorAgentId: "22222222-2222-4222-8222-222222222222",
+      authorUserId: null,
+    };
+    mockIssueService.addCommentIdempotent.mockResolvedValue({ comment: existing, created: false });
+
+    const res = await request(await installActor(createApp(), agentActor()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "A regenerated answer.", idempotencyKey: "ollama.mixed:v1_retry" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject(existing);
+    expect(mockIssueService.addCommentIdempotent).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "A regenerated answer.",
+      expect.objectContaining({
+        idempotencyKey: "ollama.mixed:v1_retry",
+        agentId: "22222222-2222-4222-8222-222222222222",
+      }),
+    );
+    expect(mockIssueService.addComment).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 
   it("implicitly reopens closed issues via the PATCH comment path when reassigning to an agent", async () => {

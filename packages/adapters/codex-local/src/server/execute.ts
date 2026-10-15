@@ -29,6 +29,7 @@ import {
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -710,6 +711,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   })();
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
   const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   const prompt = appendSourceEvidenceInstructions(joinPromptSections([
@@ -725,6 +727,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const promptMetrics = {
     promptChars: prompt.length,
     instructionsChars,
+    approvedRulesChars: approvedRulesNote.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     memoriesPromptChars: memoriesNote.length,
     wakePromptChars: wakePrompt.length,
@@ -736,13 +739,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runAttempt = async (resumeSessionId: string | null) => {
     const execArgs = buildCodexExecArgs(
       forceSaferInvocation ? { ...config, fastMode: false } : config,
-      { resumeSessionId },
+      { resumeSessionId, developerInstructions: approvedRulesNote },
     );
     const args = execArgs.args;
     const commandNotesWithFastMode =
       execArgs.fastModeIgnoredReason == null
-        ? commandNotes
+        ? [...commandNotes]
         : [...commandNotes, execArgs.fastModeIgnoredReason];
+    if (approvedRulesNote) {
+      commandNotesWithFastMode.push("Injected approved standing rules through Codex developer instructions.");
+    }
     if (onMeta) {
       await onMeta({
         adapterType: "codex_local",

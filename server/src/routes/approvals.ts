@@ -1,8 +1,11 @@
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
+import { issueComments, issues } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
 import {
   addApprovalCommentSchema,
   createApprovalSchema,
+  instructionChangePayloadSchema,
   requestApprovalRevisionSchema,
   resolveApprovalSchema,
   resubmitApprovalSchema,
@@ -24,6 +27,7 @@ import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 import { approvalDecisionService } from "../services/approval-decisions.js";
+import { instructionRuleService } from "../services/instruction-rules.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -47,6 +51,7 @@ export function approvalRoutes(
   const router = Router();
   const svc = approvalService(db);
   const issueApprovalsSvc = issueApprovalService(db);
+  const instructionRulesSvc = instructionRuleService(db);
   const secretsSvc = secretService(db);
   const decisions = approvalDecisionService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
@@ -134,9 +139,9 @@ export function approvalRoutes(
     const issueIds = Array.isArray(rawIssueIds)
       ? rawIssueIds.filter((value: unknown): value is string => typeof value === "string")
       : [];
-    const uniqueIssueIds = Array.from(new Set(issueIds));
+    let uniqueIssueIds = Array.from(new Set(issueIds));
     const { issueIds: _issueIds, ...approvalInput } = req.body;
-    const normalizedPayload =
+    let normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
             companyId,
@@ -146,38 +151,99 @@ export function approvalRoutes(
         : approvalInput.payload;
 
     const actor = getActorInfo(req);
-    const approval = await svc.create(companyId, {
-      ...approvalInput,
-      payload: normalizedPayload,
-      requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
-      requestedByAgentId:
-        approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
-      status: "pending",
-      decisionNote: null,
-      decidedByUserId: null,
-      decidedAt: null,
-      updatedAt: new Date(),
-    });
+    if (approvalInput.type === "instruction_change") {
+      if (req.actor.type !== "agent" || !actor.agentId) {
+        res.status(403).json({ error: "Instruction changes must be drafted by the corrected agent" });
+        return;
+      }
+      const parsedPayload = instructionChangePayloadSchema.safeParse(normalizedPayload);
+      if (!parsedPayload.success) {
+        res.status(400).json({ error: "Invalid instruction change payload", details: parsedPayload.error.flatten() });
+        return;
+      }
+      const payload = parsedPayload.data;
+      if (payload.targetAgentId !== actor.agentId) {
+        res.status(403).json({ error: "Agents can only propose instruction changes for themselves" });
+        return;
+      }
+      if (approvalInput.requestedByAgentId && approvalInput.requestedByAgentId !== actor.agentId) {
+        res.status(403).json({ error: "The approval requester must be the corrected agent" });
+        return;
+      }
+      const source = await db
+        .select({
+          commentId: issueComments.id,
+          commentIntent: issueComments.intent,
+          commentAuthorUserId: issueComments.authorUserId,
+          issueId: issues.id,
+          issueCompanyId: issues.companyId,
+          assigneeAgentId: issues.assigneeAgentId,
+        })
+        .from(issueComments)
+        .innerJoin(issues, eq(issues.id, issueComments.issueId))
+        .where(and(
+          eq(issueComments.id, payload.sourceCommentId),
+          eq(issueComments.companyId, companyId),
+          eq(issues.id, payload.sourceIssueId),
+          eq(issues.companyId, companyId),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!source || source.commentIntent !== "correction" || !source.commentAuthorUserId) {
+        res.status(422).json({ error: "Instruction changes require a board-authored correction comment" });
+        return;
+      }
+      if (source.assigneeAgentId !== actor.agentId) {
+        res.status(409).json({ error: "The correction is no longer assigned to the requesting agent" });
+        return;
+      }
+      normalizedPayload = payload;
+      uniqueIssueIds = [payload.sourceIssueId];
+    }
+    const result = approvalInput.type === "instruction_change"
+      ? await instructionRulesSvc.create({
+          companyId,
+          payload: instructionChangePayloadSchema.parse(normalizedPayload),
+          requestedByAgentId: actor.agentId!,
+          linkedIssueIds: uniqueIssueIds,
+        })
+      : {
+          approval: await svc.create(companyId, {
+            ...approvalInput,
+            payload: normalizedPayload,
+            requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
+            requestedByAgentId:
+              approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
+            status: "pending",
+            decisionNote: null,
+            decidedByUserId: null,
+            decidedAt: null,
+            updatedAt: new Date(),
+          }),
+          created: true,
+        };
+    const approval = result.approval;
 
-    if (uniqueIssueIds.length > 0) {
+    if (result.created && approvalInput.type !== "instruction_change" && uniqueIssueIds.length > 0) {
       await issueApprovalsSvc.linkManyForApproval(approval.id, uniqueIssueIds, {
         agentId: actor.agentId,
         userId: actor.actorType === "user" ? actor.actorId : null,
       });
     }
 
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      action: "approval.created",
-      entityType: "approval",
-      entityId: approval.id,
-      details: { type: approval.type, issueIds: uniqueIssueIds },
-    });
+    if (result.created && approvalInput.type !== "instruction_change") {
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "approval.created",
+        entityType: "approval",
+        entityId: approval.id,
+        details: { type: approval.type, issueIds: uniqueIssueIds },
+      });
+    }
 
-    res.status(201).json(redactApprovalPayload(approval));
+    res.status(result.created ? 201 : 200).json(redactApprovalPayload(approval));
   });
 
   router.get("/approvals/:id/issues", async (req, res) => {
@@ -235,21 +301,23 @@ export function approvalRoutes(
     async (req, res) => {
       assertBoard(req);
       const id = req.params.id as string;
-      if (!(await requireApprovalAccess(req, id))) {
+      const existing = await requireApprovalAccess(req, id);
+      if (!existing) {
         res.status(404).json({ error: "Approval not found" });
         return;
       }
+      if (
+        existing.type === "instruction_change" &&
+        (typeof req.body.decisionNote !== "string" || !req.body.decisionNote.trim())
+      ) {
+        res.status(422).json({ error: "A revision note is required for instruction changes" });
+        return;
+      }
       const decidedByUserId = req.actor.userId ?? "board";
-      const approval = await svc.requestRevision(id, decidedByUserId, req.body.decisionNote);
-
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
-        action: "approval.revision_requested",
-        entityType: "approval",
-        entityId: approval.id,
-        details: { type: approval.type },
+      const { approval } = await decisions.requestRevision({
+        approvalId: id,
+        decidedByUserId,
+        decisionNote: req.body.decisionNote,
       });
 
       res.json(redactApprovalPayload(approval));
@@ -270,7 +338,7 @@ export function approvalRoutes(
       return;
     }
 
-    const normalizedPayload = req.body.payload
+    let normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
             existing.companyId,
@@ -279,7 +347,53 @@ export function approvalRoutes(
           )
         : req.body.payload
       : undefined;
-    const approval = await svc.resubmit(id, normalizedPayload);
+    if (existing.type === "instruction_change") {
+      if (req.actor.type !== "agent" || req.actor.agentId !== existing.requestedByAgentId) {
+        res.status(403).json({ error: "Only the corrected agent can revise this instruction change" });
+        return;
+      }
+      if (typeof req.body.revisionCycle !== "string" || !req.body.revisionCycle) {
+        res.status(422).json({ error: "The instruction revision cycle is required" });
+        return;
+      }
+      const previous = instructionChangePayloadSchema.safeParse(existing.payload);
+      const next = instructionChangePayloadSchema.safeParse(normalizedPayload ?? existing.payload);
+      if (!previous.success || !next.success) {
+        res.status(400).json({ error: "Invalid instruction change payload" });
+        return;
+      }
+      if (
+        next.data.targetAgentId !== previous.data.targetAgentId ||
+        next.data.sourceIssueId !== previous.data.sourceIssueId ||
+        next.data.sourceCommentId !== previous.data.sourceCommentId
+      ) {
+        res.status(422).json({ error: "A revised rule cannot change its agent or source correction" });
+        return;
+      }
+      const source = await db
+        .select({ intent: issueComments.intent, authorUserId: issueComments.authorUserId, assigneeAgentId: issues.assigneeAgentId })
+        .from(issueComments)
+        .innerJoin(issues, eq(issues.id, issueComments.issueId))
+        .where(and(
+          eq(issueComments.id, next.data.sourceCommentId),
+          eq(issueComments.issueId, next.data.sourceIssueId),
+          eq(issueComments.companyId, existing.companyId),
+          eq(issues.companyId, existing.companyId),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!source || source.intent !== "correction" || !source.authorUserId || source.assigneeAgentId !== req.actor.agentId) {
+        res.status(409).json({ error: "The source correction is no longer assigned to this agent" });
+        return;
+      }
+      normalizedPayload = next.data;
+    }
+    const approval = existing.type === "instruction_change"
+      ? await instructionRulesSvc.resubmit(
+          id,
+          instructionChangePayloadSchema.parse(normalizedPayload ?? existing.payload),
+          req.body.revisionCycle,
+        )
+      : await svc.resubmit(id, normalizedPayload);
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: approval.companyId,

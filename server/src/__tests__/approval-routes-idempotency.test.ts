@@ -25,6 +25,7 @@ const mockIssueApprovalService = vi.hoisted(() => ({
 
 const mockIssuesService = vi.hoisted(() => ({
   addComment: vi.fn(async () => ({ id: "comment-1" })),
+  getById: vi.fn(),
 }));
 
 const mockSecretService = vi.hoisted(() => ({
@@ -32,6 +33,12 @@ const mockSecretService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockInstructionRuleService = vi.hoisted(() => ({
+  create: vi.fn(),
+  resubmit: vi.fn(),
+}));
+const mockDbSelect = vi.hoisted(() => vi.fn());
+const mockDb = vi.hoisted(() => ({ select: mockDbSelect }));
 
 const mockAppendChatResult = vi.hoisted(() =>
   vi.fn(async () => ({ messageId: "msg-1" })),
@@ -57,6 +64,9 @@ function registerModuleMocks() {
   vi.doMock("../services/chat.js", () => ({
     appendApprovedDraftResultToChatSession: mockAppendChatResult,
   }));
+  vi.doMock("../services/instruction-rules.js", () => ({
+    instructionRuleService: () => mockInstructionRuleService,
+  }));
 }
 
 async function createApp(
@@ -80,12 +90,12 @@ async function createApp(
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any, routeOptions as any));
+  app.use("/api", approvalRoutes(mockDb as any, routeOptions as any));
   app.use(errorHandler);
   return app;
 }
 
-async function createAgentApp() {
+async function createAgentApp(agentId = "agent-1") {
   const [{ errorHandler }, { approvalRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/approvals.js"),
@@ -95,14 +105,14 @@ async function createAgentApp() {
   app.use((req, _res, next) => {
     (req as any).actor = {
       type: "agent",
-      agentId: "agent-1",
+      agentId,
       companyId: "company-1",
       source: "api_key",
       isInstanceAdmin: false,
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes(mockDb as any));
   app.use(errorHandler);
   return app;
 }
@@ -113,6 +123,7 @@ describe("approval routes idempotent retries", () => {
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/approvals.js");
     vi.doUnmock("../services/chat.js");
+    vi.doUnmock("../services/instruction-rules.js");
     vi.doUnmock("../routes/approvals.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
@@ -132,11 +143,390 @@ describe("approval routes idempotent retries", () => {
     mockIssueApprovalService.linkManyForApproval.mockReset();
     mockSecretService.normalizeHireApprovalPayloadForPersistence.mockReset();
     mockLogActivity.mockReset();
+    mockIssuesService.getById.mockReset();
+    mockIssuesService.getById.mockImplementation(async (id: string) => ({ id, companyId: "company-1" }));
+    mockInstructionRuleService.create.mockReset();
+    mockInstructionRuleService.resubmit.mockReset();
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
     mockLogActivity.mockResolvedValue(undefined);
     mockAppendChatResult.mockReset();
     mockAppendChatResult.mockResolvedValue({ messageId: "msg-1" });
+    mockDbSelect.mockReset();
+  });
+
+  it("lets only the corrected agent draft an instruction change and links its source issue", async () => {
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const issueId = "22222222-2222-4222-8222-222222222222";
+    const commentId = "33333333-3333-4333-8333-333333333333";
+    mockDbSelect.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          where: async () => [{
+            commentId,
+            commentIntent: "correction",
+            commentAuthorUserId: "board-user",
+            issueId,
+            issueCompanyId: "company-1",
+            assigneeAgentId: agentId,
+          }],
+        }),
+      }),
+    });
+    const payload = {
+      version: 1,
+      scope: "agent",
+      targetAgentId: agentId,
+      sourceIssueId: issueId,
+      sourceCommentId: commentId,
+      rule: "Verify totals before posting.",
+    };
+    mockInstructionRuleService.create.mockResolvedValue({
+      approval: {
+        id: "approval-rule-1",
+        companyId: "company-1",
+        type: "instruction_change",
+        status: "pending",
+        payload,
+        requestedByAgentId: agentId,
+      },
+      created: true,
+    });
+    const res = await request(await createAgentApp(agentId))
+      .post("/api/companies/company-1/approvals")
+      .send({
+        type: "instruction_change",
+        payload,
+        issueIds: ["44444444-4444-4444-8444-444444444444", issueId],
+      });
+    expect(res.status).toBe(201);
+    expect(mockInstructionRuleService.create).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-1",
+      requestedByAgentId: agentId,
+      payload,
+      linkedIssueIds: [issueId],
+    }));
+    expect(mockIssueApprovalService.linkManyForApproval).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("wakes the corrected agent after the instruction service atomically approves the rule", async () => {
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const issueId = "22222222-2222-4222-8222-222222222222";
+    const commentId = "33333333-3333-4333-8333-333333333333";
+    const payload = {
+      version: 1,
+      scope: "company",
+      targetAgentId: agentId,
+      sourceIssueId: issueId,
+      sourceCommentId: commentId,
+      rule: "Verify totals before posting.",
+    };
+    mockDbSelect.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          innerJoin: () => ({
+            where: async () => [{
+              intent: "correction",
+              authorUserId: "board-user",
+              issueCompanyId: "company-1",
+              targetCompanyId: "company-1",
+            }],
+          }),
+        }),
+      }),
+    });
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-rule-1",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "pending",
+      payload,
+      requestedByAgentId: agentId,
+    });
+    mockApprovalService.approve.mockResolvedValue({
+      approval: {
+        id: "approval-rule-1",
+        companyId: "company-1",
+        type: "instruction_change",
+        status: "approved",
+        payload,
+        requestedByAgentId: agentId,
+      },
+      applied: true,
+    });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: issueId }]);
+    const res = await request(await createApp())
+      .post("/api/approvals/approval-rule-1/approve")
+      .send({});
+    expect(res.status).toBe(200);
+    expect(mockApprovalService.approve).toHaveBeenCalledWith(
+      "approval-rule-1",
+      "user-1",
+      undefined,
+      {},
+    );
+    expect(mockIssuesService.addComment).not.toHaveBeenCalled();
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "approval.requester_wakeup_queued",
+    }));
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({
+        idempotencyKey: "approval:approval-rule-1:requester-wakeup:approved",
+      }),
+    );
+  });
+
+  it("retries a failed instruction approval wake without repeating durable approval effects", async () => {
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const issueId = "22222222-2222-4222-8222-222222222222";
+    const payload = {
+      version: 1,
+      scope: "agent",
+      targetAgentId: agentId,
+      sourceIssueId: issueId,
+      sourceCommentId: "33333333-3333-4333-8333-333333333333",
+      rule: "Verify totals before posting.",
+    };
+    const approved = {
+      id: "approval-rule-retry",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "approved",
+      payload,
+      requestedByAgentId: agentId,
+    };
+    mockApprovalService.getById.mockResolvedValue(approved);
+    mockApprovalService.approve
+      .mockResolvedValueOnce({ approval: approved, applied: true })
+      .mockResolvedValueOnce({ approval: approved, applied: false });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: issueId }]);
+    mockHeartbeatService.wakeup
+      .mockRejectedValueOnce(new Error("queue unavailable"))
+      .mockResolvedValueOnce({ id: "wake-retry" });
+    const app = await createApp();
+
+    await request(app).post("/api/approvals/approval-rule-retry/approve").send({}).expect(200);
+    await request(app).post("/api/approvals/approval-rule-retry/approve").send({}).expect(200);
+
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(2);
+    expect(mockHeartbeatService.wakeup).toHaveBeenNthCalledWith(
+      2,
+      agentId,
+      expect.objectContaining({
+        idempotencyKey: "approval:approval-rule-retry:requester-wakeup:approved",
+      }),
+    );
+    expect(mockIssuesService.addComment).not.toHaveBeenCalled();
+  });
+
+  it("retries rejected instruction wakes with one delivery key and the original decision actor", async () => {
+    const rejected = {
+      id: "approval-rule-rejected",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "rejected",
+      decidedByUserId: "original-board",
+      requestedByAgentId: "11111111-1111-4111-8111-111111111111",
+      payload: {
+        version: 1, scope: "agent",
+        targetAgentId: "11111111-1111-4111-8111-111111111111",
+        sourceIssueId: "22222222-2222-4222-8222-222222222222",
+        sourceCommentId: "33333333-3333-4333-8333-333333333333",
+        rule: "Verify totals before posting.",
+      },
+    };
+    mockApprovalService.getById.mockResolvedValue(rejected);
+    mockApprovalService.reject
+      .mockResolvedValueOnce({ approval: rejected, applied: true })
+      .mockResolvedValue({ approval: rejected, applied: false });
+    mockHeartbeatService.wakeup.mockRejectedValueOnce(new Error("queue unavailable"))
+      .mockResolvedValue({ id: "wake-retry" });
+    const app = await createApp();
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await request(app).post("/api/approvals/approval-rule-rejected/reject").send({}).expect(200);
+    }
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(3);
+    for (const [agentId, options] of mockHeartbeatService.wakeup.mock.calls) {
+      expect(agentId).toBe(rejected.requestedByAgentId);
+      expect(options).toMatchObject({
+        idempotencyKey: "approval:approval-rule-rejected:requester-wakeup:rejected",
+        requestedByActorId: "original-board",
+        reason: "approval_rejected",
+        payload: { approvalId: rejected.id, approvalStatus: "rejected", issueId: rejected.payload.sourceIssueId },
+      });
+    }
+    expect(mockIssuesService.addComment).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("retries instruction revision wakes with the original note and one delivery key", async () => {
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const issueId = "22222222-2222-4222-8222-222222222222";
+    const commentId = "33333333-3333-4333-8333-333333333333";
+    const revised = {
+      id: "approval-rule-revision",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "revision_requested",
+      decidedByUserId: "original-board",
+      decisionNote: "State when this check applies.",
+      decidedAt: new Date("2026-10-15T10:00:00.000Z"),
+      updatedAt: new Date("2026-10-15T10:00:00.000Z"),
+      requestedByAgentId: agentId,
+      payload: {
+        version: 1,
+        scope: "agent",
+        targetAgentId: agentId,
+        sourceIssueId: issueId,
+        sourceCommentId: commentId,
+        rule: "Verify totals before posting.",
+      },
+    };
+    mockApprovalService.getById.mockResolvedValue(revised);
+    mockApprovalService.requestRevision
+      .mockResolvedValueOnce({ approval: revised, applied: true })
+      .mockResolvedValueOnce({ approval: revised, applied: false });
+    mockHeartbeatService.wakeup
+      .mockRejectedValueOnce(new Error("queue unavailable"))
+      .mockResolvedValueOnce({ id: "wake-retry" });
+    const app = await createApp();
+
+    await request(app)
+      .post(`/api/approvals/${revised.id}/request-revision`)
+      .send({ decisionNote: revised.decisionNote })
+      .expect(200);
+    await request(app)
+      .post(`/api/approvals/${revised.id}/request-revision`)
+      .send({ decisionNote: "A different retry note must not replace the decision" })
+      .expect(200);
+
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(2);
+    for (const [wokenAgentId, options] of mockHeartbeatService.wakeup.mock.calls) {
+      expect(wokenAgentId).toBe(agentId);
+      expect(options).toMatchObject({
+        idempotencyKey: `approval:${revised.id}:requester-wakeup:revision-requested:2026-10-15T10:00:00.000Z`,
+        requestedByActorId: "original-board",
+        reason: "approval_revision_requested",
+        payload: {
+          approvalId: revised.id,
+          approvalStatus: "revision_requested",
+          decisionNote: revised.decisionNote,
+          revisionCycle: "2026-10-15T10:00:00.000Z",
+          issueId,
+          sourceIssueId: issueId,
+          sourceCommentId: commentId,
+          targetAgentId: agentId,
+          scope: "agent",
+          rule: revised.payload.rule,
+        },
+        contextSnapshot: {
+          source: "approval.revision_requested",
+          decisionNote: revised.decisionNote,
+          issueId,
+          taskId: issueId,
+          sourceIssueId: issueId,
+          sourceCommentId: commentId,
+          revisionCycle: "2026-10-15T10:00:00.000Z",
+          wakeReason: "approval_revision_requested",
+        },
+      });
+    }
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      actorId: "original-board",
+      action: "approval.revision_requested",
+    }));
+  });
+
+  it.each([
+    { label: "missing", body: {} },
+    { label: "null", body: { decisionNote: null } },
+    { label: "blank", body: { decisionNote: "   " } },
+  ])("requires a revision note for instruction changes when it is $label", async ({ body }) => {
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-rule-note",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "pending",
+      requestedByAgentId: "11111111-1111-4111-8111-111111111111",
+      payload: {},
+    });
+
+    const res = await request(await createApp())
+      .post("/api/approvals/approval-rule-note/request-revision")
+      .send(body);
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: "A revision note is required for instruction changes" });
+    expect(mockApprovalService.requestRevision).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("uses a new delivery key for a later revision cycle of the same instruction approval", async () => {
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const issueId = "22222222-2222-4222-8222-222222222222";
+    const payload = {
+      version: 1,
+      scope: "agent",
+      targetAgentId: agentId,
+      sourceIssueId: issueId,
+      sourceCommentId: "33333333-3333-4333-8333-333333333333",
+      rule: "Verify totals before posting.",
+    };
+    const pending = {
+      id: "approval-rule-cycles",
+      companyId: "company-1",
+      type: "instruction_change",
+      status: "pending",
+      requestedByAgentId: agentId,
+      payload,
+    };
+    mockApprovalService.getById.mockResolvedValue(pending);
+    mockApprovalService.requestRevision
+      .mockResolvedValueOnce({
+        approval: { ...pending, status: "revision_requested", decisionNote: "First revision.", decidedByUserId: "user-1", decidedAt: new Date("2026-10-15T10:00:00.000Z"), updatedAt: new Date("2026-10-15T10:00:00.000Z") },
+        applied: true,
+      })
+      .mockResolvedValueOnce({
+        approval: { ...pending, status: "revision_requested", decisionNote: "Second revision.", decidedByUserId: "user-1", decidedAt: new Date("2026-10-15T11:00:00.000Z"), updatedAt: new Date("2026-10-15T11:00:00.000Z") },
+        applied: true,
+      });
+    const app = await createApp();
+
+    await request(app).post(`/api/approvals/${pending.id}/request-revision`).send({ decisionNote: "First revision." }).expect(200);
+    await request(app).post(`/api/approvals/${pending.id}/request-revision`).send({ decisionNote: "Second revision." }).expect(200);
+
+    expect(mockHeartbeatService.wakeup.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+      `approval:${pending.id}:requester-wakeup:revision-requested:2026-10-15T10:00:00.000Z`,
+      `approval:${pending.id}:requester-wakeup:revision-requested:2026-10-15T11:00:00.000Z`,
+    ]);
+  });
+
+  it("wakes the requester without a task when the rejected instruction source issue was deleted", async () => {
+    const rejected = {
+      id: "approval-rule-deleted-source", companyId: "company-1",
+      type: "instruction_change", status: "rejected", decidedByUserId: "board",
+      requestedByAgentId: "11111111-1111-4111-8111-111111111111",
+      payload: {
+        version: 1, scope: "agent", rule: "Verify totals.",
+        targetAgentId: "11111111-1111-4111-8111-111111111111",
+        sourceIssueId: "22222222-2222-4222-8222-222222222222",
+        sourceCommentId: "33333333-3333-4333-8333-333333333333",
+      },
+    };
+    mockApprovalService.getById.mockResolvedValue(rejected);
+    mockApprovalService.reject.mockResolvedValue({ approval: rejected, applied: false });
+    mockIssuesService.getById.mockResolvedValue(null);
+    await request(await createApp()).post(`/api/approvals/${rejected.id}/reject`).send({}).expect(200);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(rejected.requestedByAgentId, expect.objectContaining({
+      idempotencyKey: `approval:${rejected.id}:requester-wakeup:rejected`,
+      payload: { approvalId: rejected.id, approvalStatus: "rejected", issueId: null },
+      contextSnapshot: expect.objectContaining({ issueId: null, taskId: null }),
+    }));
   });
 
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
@@ -257,7 +647,7 @@ describe("approval routes idempotent retries", () => {
       .send({ decidedByUserId: "forged-user", decisionNote: "ship it" });
 
     expect(res.status).toBe(200);
-    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-4", "user-1", "ship it");
+    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-4", "user-1", "ship it", {});
   });
 
   it("derives approval attribution from the authenticated actor on reject", async () => {
@@ -284,7 +674,7 @@ describe("approval routes idempotent retries", () => {
       .send({ decidedByUserId: "forged-user", decisionNote: "not now" });
 
     expect(res.status).toBe(200);
-    expect(mockApprovalService.reject).toHaveBeenCalledWith("approval-5", "user-1", "not now");
+    expect(mockApprovalService.reject).toHaveBeenCalledWith("approval-5", "user-1", "not now", {});
   });
 
   it("derives approval attribution from the authenticated actor on request revision", async () => {
@@ -296,11 +686,14 @@ describe("approval routes idempotent retries", () => {
       payload: {},
     });
     mockApprovalService.requestRevision.mockResolvedValue({
-      id: "approval-6",
-      companyId: "company-1",
-      type: "hire_agent",
-      status: "revision_requested",
-      payload: {},
+      approval: {
+        id: "approval-6",
+        companyId: "company-1",
+        type: "hire_agent",
+        status: "revision_requested",
+        payload: {},
+      },
+      applied: true,
     });
 
     const res = await request(await createApp())

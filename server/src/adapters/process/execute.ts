@@ -9,6 +9,8 @@ import {
   ensurePathInEnv,
   resolveCommandForLogs,
   runChildProcess,
+  stringifyPaperclipApprovedRulesPayload,
+  stringifyPaperclipWakePayload,
 } from "../utils.js";
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -41,7 +43,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [k, v] of Object.entries(envConfig)) {
     if (typeof v === "string") env[k] = v;
   }
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  // This adapter has no model prompt or native instruction role. Deliver
+  // control-plane context as structured, server-owned environment values so a
+  // custom runner can keep it separate from untrusted task input. Apply these
+  // after user config so adapterConfig cannot replace trusted wake/rule data.
+  delete env.PAPERCLIP_WAKE_PAYLOAD_JSON;
+  delete env.PAPERCLIP_APPROVED_RULES_JSON;
+  const wakePayloadJson = stringifyPaperclipWakePayload(ctx.context.paperclipWake);
+  const approvedRulesJson = stringifyPaperclipApprovedRulesPayload(ctx.context);
+  if (wakePayloadJson) env.PAPERCLIP_WAKE_PAYLOAD_JSON = wakePayloadJson;
+  if (approvedRulesJson) env.PAPERCLIP_APPROVED_RULES_JSON = approvedRulesJson;
+  const inheritedRuntimeEnv = { ...process.env };
+  delete inheritedRuntimeEnv.PAPERCLIP_WAKE_PAYLOAD_JSON;
+  delete inheritedRuntimeEnv.PAPERCLIP_APPROVED_RULES_JSON;
+  const runtimeEnv = ensurePathInEnv({ ...inheritedRuntimeEnv, ...env });
   const resolvedCommand = await resolveCommandForLogs(command, cwd, runtimeEnv);
   const loggedEnv = buildInvocationEnvForLogs(env, {
     runtimeEnv,

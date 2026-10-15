@@ -161,6 +161,7 @@ export {
   issueReviewRequestSchema,
   issueExecutionWorkspaceSettingsSchema,
   checkoutIssueSchema,
+  addIssueCommentInputSchema,
   addIssueCommentSchema,
   issueThreadInteractionStatusSchema,
   issueThreadInteractionKindSchema,
@@ -326,12 +327,14 @@ export {
 } from "./work-queue.js";
 
 export {
+  instructionChangePayloadSchema,
   createApprovalSchema,
   resolveApprovalSchema,
   requestApprovalRevisionSchema,
   resubmitApprovalSchema,
   addApprovalCommentSchema,
   type CreateApproval,
+  type InstructionChangePayload,
   type ResolveApproval,
   type RequestApprovalRevision,
   type ResubmitApproval,

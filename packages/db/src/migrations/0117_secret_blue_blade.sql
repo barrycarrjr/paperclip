@@ -1,0 +1,2 @@
+ALTER TABLE "issue_comments" ADD COLUMN "idempotency_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "issue_comments_issue_idempotency_key_unique_idx" ON "issue_comments" USING btree ("issue_id","idempotency_key");

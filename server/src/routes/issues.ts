@@ -58,7 +58,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, validationErrorMessage } from "../errors.js";
-import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -2305,6 +2305,7 @@ export function issueRoutes(
         : null;
     const {
       comment: commentBody,
+      commentIntent,
       reviewRequest,
       reopen: reopenRequested,
       resume: resumeRequested,
@@ -2325,6 +2326,20 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(existing.companyId, updateFields.executionWorkspaceSettings?.environmentId);
     const requestedAssigneeAgentId =
       normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
+    if (commentIntent === "correction") {
+      if (!isUserDrivenActor(req)) {
+        res.status(403).json({ error: "Only board users can mark a comment as a correction" });
+        return;
+      }
+      if (!commentBody) {
+        res.status(400).json({ error: "Correction intent requires a comment" });
+        return;
+      }
+      if (!requestedAssigneeAgentId) {
+        res.status(422).json({ error: "Correction comments require an assigned agent" });
+        return;
+      }
+    }
     const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
     const effectiveMoveToTodoRequested =
       explicitMoveToTodoRequested ||
@@ -2739,6 +2754,7 @@ export function issueRoutes(
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
+        intent: commentIntent,
       });
       await issueReferencesSvc.syncComment(comment.id);
       const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2765,6 +2781,7 @@ export function issueRoutes(
         entityId: issue.id,
         details: {
           commentId: comment.id,
+          intent: comment.intent,
           bodySnippet: comment.body.slice(0, 120),
           identifier: issue.identifier,
           issueTitle: issue.title,
@@ -3738,6 +3755,16 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    if (req.body.intent === "correction") {
+      if (!isUserDrivenActor(req)) {
+        res.status(403).json({ error: "Only board users can mark a comment as a correction" });
+        return;
+      }
+      if (!issue.assigneeAgentId) {
+        res.status(422).json({ error: "Correction comments require an assigned agent" });
+        return;
+      }
+    }
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
     const interruptRequested = req.body.interrupt === true;
@@ -3763,6 +3790,21 @@ export function issueRoutes(
     if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
       res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
       return;
+    }
+    let comment: Awaited<ReturnType<typeof svc.addComment>> | null = null;
+    if (req.body.idempotencyKey) {
+      const idempotentResult = await svc.addCommentIdempotent(id, req.body.body, {
+        idempotencyKey: req.body.idempotencyKey,
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        runId: actor.runId,
+        intent: req.body.intent,
+      });
+      comment = idempotentResult.comment;
+      if (!idempotentResult.created) {
+        res.status(200).json(comment);
+        return;
+      }
     }
     let reopened = false;
     let reopenFromStatus: string | null = null;
@@ -3826,11 +3868,14 @@ export function issueRoutes(
       }
     }
 
-    const comment = await svc.addComment(id, req.body.body, {
-      agentId: actor.agentId ?? undefined,
-      userId: actor.actorType === "user" ? actor.actorId : undefined,
-      runId: actor.runId,
-    });
+    if (!comment) {
+      comment = await svc.addComment(id, req.body.body, {
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        runId: actor.runId,
+        intent: req.body.intent,
+      });
+    }
     await issueReferencesSvc.syncComment(comment.id);
     const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(currentIssue.id);
     const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
@@ -3854,6 +3899,7 @@ export function issueRoutes(
       entityId: currentIssue.id,
       details: {
         commentId: comment.id,
+        intent: comment.intent,
         bodySnippet: comment.body.slice(0, 120),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,

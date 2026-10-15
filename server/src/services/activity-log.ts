@@ -63,6 +63,19 @@ export interface LogActivityInput {
   details?: Record<string, unknown> | null;
 }
 
+export interface PersistedActivityLogInput {
+  companyId: string;
+  actorType: LogActivityInput["actorType"];
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  agentId: string | null;
+  runId: string | null;
+  responsibleUserId: string | null;
+  details: Record<string, unknown> | null;
+}
+
 // Redacts details read back from the log the same way logActivity redacts
 // them on the way in, for rows written before a redaction rule existed. It
 // also clears tokens written into free text, such as a comment snippet, which
@@ -78,7 +91,15 @@ export async function createActivityDetailsRedactor(db: Db) {
   );
 }
 
-export async function logActivity(db: Db, input: LogActivityInput) {
+/**
+ * Persist one activity row without publishing process-local or plugin events.
+ * Callers that include the row in a larger transaction can publish the
+ * returned value only after that transaction commits.
+ */
+export async function persistActivityLog(
+  db: Db,
+  input: LogActivityInput,
+): Promise<PersistedActivityLogInput> {
   const currentUserRedactionOptions = {
     enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
   };
@@ -86,7 +107,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
-  await db.insert(activityLog).values({
+  const persisted: PersistedActivityLogInput = {
     companyId: input.companyId,
     actorType: input.actorType,
     actorId: input.actorId,
@@ -97,8 +118,13 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     runId: input.runId ?? null,
     responsibleUserId: input.responsibleUserId ?? null,
     details: redactedDetails,
-  });
+  };
+  await db.insert(activityLog).values(persisted);
+  return persisted;
+}
 
+/** Publish the non-durable notifications for an activity row that committed. */
+export function publishPersistedActivityLog(input: PersistedActivityLogInput) {
   publishLiveEvent({
     companyId: input.companyId,
     type: "activity.logged",
@@ -108,10 +134,10 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       action: input.action,
       entityType: input.entityType,
       entityId: input.entityId,
-      agentId: input.agentId ?? null,
-      runId: input.runId ?? null,
-      responsibleUserId: input.responsibleUserId ?? null,
-      details: redactedDetails,
+      agentId: input.agentId,
+      runId: input.runId,
+      responsibleUserId: input.responsibleUserId,
+      details: input.details,
     },
   });
 
@@ -127,12 +153,17 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       entityType: input.entityType,
       companyId: input.companyId,
       payload: {
-        ...redactedDetails,
-        agentId: input.agentId ?? null,
-        runId: input.runId ?? null,
-        responsibleUserId: input.responsibleUserId ?? null,
+        ...input.details,
+        agentId: input.agentId,
+        runId: input.runId,
+        responsibleUserId: input.responsibleUserId,
       },
     };
     publishPluginDomainEvent(event);
   }
+}
+
+export async function logActivity(db: Db, input: LogActivityInput) {
+  const persisted = await persistActivityLog(db, input);
+  publishPersistedActivityLog(persisted);
 }

@@ -35,6 +35,7 @@ import {
   ensureAbsoluteDirectory,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   joinPromptSections,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -163,6 +164,7 @@ export function buildPrompt(
     resumedSession: options.resumedSession === true,
   });
   const paperclipTaskMarkdown = cfgString(context.paperclipTaskMarkdown)?.trim() || "";
+  const approvedRulesMarkdown = renderPaperclipApprovedRules(context);
   const sessionHandoffMarkdown = cfgString(context.paperclipSessionHandoffMarkdown)?.trim() || "";
   const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake) || "";
 
@@ -196,7 +198,10 @@ export function buildPrompt(
   const rendersWakePrompt = /\{\{\s*paperclipWakePrompt\s*\}\}/.test(activeTemplate);
   const rendered = renderTemplate(activeTemplate, vars);
   const wakePromptPrefix = rendersWakePrompt ? "" : wakePrompt;
+  // Hermes local chat exposes only its query text at invocation time. Keep the
+  // bounded approved-rule block before task content as the explicit fallback.
   return appendSourceEvidenceInstructions(joinPromptSections([
+    approvedRulesMarkdown,
     wakePromptPrefix,
     sessionHandoffMarkdown,
     paperclipTaskMarkdown,

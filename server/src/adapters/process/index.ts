@@ -21,5 +21,9 @@ Core fields:
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
+
+Runtime context:
+- PAPERCLIP_WAKE_PAYLOAD_JSON: structured issue and comment wake payload, including correction intent
+- PAPERCLIP_APPROVED_RULES_JSON: board-approved standing rules with provenance metadata
 `,
 };

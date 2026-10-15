@@ -242,6 +242,22 @@ describe("ApprovalPayloadRenderer", () => {
     });
   });
 
+  it("renders the exact instruction rule and scope", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <ApprovalPayloadRenderer
+          type="instruction_change"
+          payload={{ scope: "company", rule: "Verify totals before posting.", rationale: "Prevents repeated errors." }}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Every agent in this company");
+    expect(container.querySelector("blockquote")?.textContent).toBe("Verify totals before posting.");
+    expect(container.textContent).toContain("Prevents repeated errors.");
+    act(() => root.unmount());
+  });
+
   it("can hide the repeated title when the card header already shows it", () => {
     const root = createRoot(container);
 

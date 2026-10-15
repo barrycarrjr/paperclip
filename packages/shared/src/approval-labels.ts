@@ -11,6 +11,7 @@ export const APPROVAL_TYPE_LABEL: Record<string, string> = {
   budget_override_required: "Budget Override",
   request_board_approval: "Board Approval",
   outbound_tool_draft: "Draft",
+  instruction_change: "Instruction Rule",
 };
 
 /**
@@ -77,6 +78,12 @@ export function approvalLabel(type: string, payload?: Record<string, unknown> | 
     const summary = typeof payload?.summary === "string" ? payload.summary : null;
     if (summary) return `${verb}: ${summary}`;
     return verb;
+  }
+  if (type === "instruction_change") {
+    const rule = firstNonEmptyString(payload?.rule);
+    if (!rule) return APPROVAL_TYPE_LABEL.instruction_change;
+    const compactRule = rule.replace(/\s+/g, " ");
+    return `Instruction Rule: ${compactRule.length > 100 ? `${compactRule.slice(0, 97)}...` : compactRule}`;
   }
   const base = APPROVAL_TYPE_LABEL[type] ?? type;
   const subject = approvalSubject(payload);

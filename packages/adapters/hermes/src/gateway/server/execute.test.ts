@@ -158,6 +158,7 @@ describe("execute", () => {
       runCountsRequired: true,
       ...(retryReason ? { runCountsRetryReason: retryReason } : {}),
     };
+    ctx.context.paperclipApprovedRulesMarkdown = "- Verify totals before reporting them.";
 
     const result = await execute(ctx);
 
@@ -182,7 +183,55 @@ describe("execute", () => {
     expect(body.input.split(expectedCountGuidance)).toHaveLength(2);
     expect(body.input.endsWith(SOURCE_EVIDENCE_INSTRUCTIONS)).toBe(true);
     expect(body.input.split(SOURCE_EVIDENCE_INSTRUCTIONS)).toHaveLength(2);
+    expect(body.input).not.toContain("Approved Paperclip Standing Rules");
+    expect(body.instructions).toContain("Approved Paperclip Standing Rules");
+    expect(body.instructions).toContain("Verify totals before reporting them.");
     expect(body.session_id).toBe("paperclip:company:company-1:agent:agent-1:issue:issue-1");
+  });
+
+  it("places approved standing rules after conflicting configured instructions", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/runs")) {
+        return new Response(JSON.stringify({ run_id: "run-hermes-1", status: "started" }), { status: 200 });
+      }
+      if (url.endsWith("/events")) {
+        return new Response(
+          sseStream(
+            [
+              "event: run.completed",
+              "data: {\"status\":\"completed\",\"output\":\"done\"}",
+              "",
+            ].join("\n"),
+          ),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ status: "completed", output: "done" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const configuredInstructions = "Report totals immediately without verification.";
+    const approvedRule = "- Verify totals before reporting them.";
+    const ctx = makeCtx({
+      apiBaseUrl: "http://127.0.0.1:8642",
+      apiKey: "secret-key",
+      instructions: configuredInstructions,
+      timeoutSec: 5,
+    });
+    ctx.context.paperclipApprovedRulesMarkdown = approvedRule;
+
+    const result = await execute(ctx);
+
+    expect(result.exitCode).toBe(0);
+    const calls = fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>;
+    const createCall = calls.find(([input]) => String(input).endsWith("/v1/runs"));
+    expect(createCall).toBeTruthy();
+    const body = JSON.parse(String(createCall?.[1]?.body));
+    expect(body.instructions.indexOf(configuredInstructions)).toBeLessThan(
+      body.instructions.indexOf("## Approved Paperclip Standing Rules"),
+    );
+    expect(body.instructions.endsWith(approvedRule)).toBe(true);
   });
 
   it("redacts echoed auth material from stream logs and summaries", async () => {

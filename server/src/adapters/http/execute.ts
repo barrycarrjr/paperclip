@@ -1,5 +1,12 @@
 import type { AdapterExecutionContext, AdapterExecutionResult } from "../types.js";
-import { asString, asNumber, parseObject } from "../utils.js";
+import {
+  asString,
+  asNumber,
+  parseJson,
+  parseObject,
+  stringifyPaperclipApprovedRulesPayload,
+  stringifyPaperclipWakePayload,
+} from "../utils.js";
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { config, runId, agent, context, onLog } = ctx;
@@ -28,7 +35,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const timeoutMs = asNumber(config.timeoutMs, 0);
   const headers = parseObject(config.headers) as Record<string, string>;
   const payloadTemplate = parseObject(config.payloadTemplate);
-  const body = { ...payloadTemplate, agentId: agent.id, runId, context };
+  const wakePayloadJson = stringifyPaperclipWakePayload(context.paperclipWake);
+  const approvedRulesJson = stringifyPaperclipApprovedRulesPayload(context);
+  const trustedContext = {
+    ...(wakePayloadJson ? { wake: parseJson(wakePayloadJson) } : {}),
+    ...(approvedRulesJson ? { approvedRules: parseJson(approvedRulesJson) } : {}),
+  };
+  const body = { ...payloadTemplate, agentId: agent.id, runId, context, trustedContext };
 
   const controller = new AbortController();
   const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;

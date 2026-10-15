@@ -3204,6 +3204,8 @@ export function issueService(db: Db) {
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
 
+        await tx.delete(issueComments).where(eq(issueComments.issueId, id));
+
         const removedIssue = await tx
           .delete(issues)
           .where(eq(issues.id, id))
@@ -3698,7 +3700,13 @@ export function issueService(db: Db) {
     addComment: async (
       issueId: string,
       body: string,
-      actor: { agentId?: string; userId?: string; runId?: string | null; authorType?: "agent" | "user" | "system" },
+      actor: {
+        agentId?: string;
+        userId?: string;
+        runId?: string | null;
+        authorType?: "agent" | "user" | "system";
+        intent?: "message" | "correction";
+      },
     ) => {
       const issue = await db
         .select({ companyId: issues.companyId })
@@ -3720,6 +3728,7 @@ export function issueService(db: Db) {
           authorAgentId: actor.agentId ?? null,
           authorUserId: actor.userId ?? null,
           authorType: actor.authorType ?? null,
+          intent: actor.intent ?? "message",
           createdByRunId: actor.runId ?? null,
           body: redactedBody,
         })
@@ -3732,6 +3741,84 @@ export function issueService(db: Db) {
         .where(eq(issues.id, issueId));
 
       return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+    },
+
+    addCommentIdempotent: async (
+      issueId: string,
+      body: string,
+      actor: {
+        idempotencyKey: string;
+        agentId?: string;
+        userId?: string;
+        runId?: string | null;
+        authorType?: "agent" | "user" | "system";
+        intent?: "message" | "correction";
+      },
+    ) => {
+      const issue = await db
+        .select({ companyId: issues.companyId })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+
+      if (!issue) throw notFound("Issue not found");
+
+      const currentUserRedactionOptions = {
+        enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+      };
+      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      const requestedAuthorAgentId = actor.agentId ?? null;
+      const requestedAuthorUserId = actor.userId ?? null;
+      const requestedAuthorType = actor.authorType ?? null;
+      const requestedIntent = actor.intent ?? "message";
+      const [inserted] = await db
+        .insert(issueComments)
+        .values({
+          companyId: issue.companyId,
+          issueId,
+          authorAgentId: requestedAuthorAgentId,
+          authorUserId: requestedAuthorUserId,
+          authorType: requestedAuthorType,
+          intent: requestedIntent,
+          idempotencyKey: actor.idempotencyKey,
+          createdByRunId: actor.runId ?? null,
+          body: redactedBody,
+        })
+        .onConflictDoNothing({ target: [issueComments.issueId, issueComments.idempotencyKey] })
+        .returning();
+
+      if (inserted) {
+        await db
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+        return {
+          comment: redactIssueComment(inserted, currentUserRedactionOptions.enabled),
+          created: true as const,
+        };
+      }
+
+      const existing = await db
+        .select()
+        .from(issueComments)
+        .where(and(
+          eq(issueComments.issueId, issueId),
+          eq(issueComments.idempotencyKey, actor.idempotencyKey),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!existing) throw conflict("Issue comment idempotency conflict could not be resolved");
+      if (
+        existing.authorAgentId !== requestedAuthorAgentId ||
+        existing.authorUserId !== requestedAuthorUserId ||
+        existing.authorType !== requestedAuthorType ||
+        existing.intent !== requestedIntent
+      ) {
+        throw conflict("Issue comment idempotency key was already used by another comment request");
+      }
+      return {
+        comment: redactIssueComment(existing, currentUserRedactionOptions.enabled),
+        created: false as const,
+      };
     },
 
     createAttachment: async (input: {

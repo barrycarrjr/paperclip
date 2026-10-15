@@ -104,4 +104,54 @@ describe("approvalService resolution idempotency", () => {
     expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
     expect(mockNotifyHireApproved).toHaveBeenCalledTimes(1);
   });
+
+  it("returns an existing revision request as an idempotent retry", async () => {
+    const revised = {
+      ...createApproval("revision_requested"),
+      decidedByUserId: "original-board",
+      decisionNote: "Tighten the wording.",
+    };
+    const dbStub = createDbStub([[revised]], []);
+
+    const result = await approvalService(dbStub.db as any)
+      .requestRevision("approval-1", "retrying-board", "Replace the note");
+
+    expect(result).toEqual({ approval: revised, applied: false });
+    expect(dbStub.returning).not.toHaveBeenCalled();
+  });
+
+  it("returns a concurrent revision request after losing the pending update race", async () => {
+    const revised = {
+      ...createApproval("revision_requested"),
+      decidedByUserId: "other-board",
+      decisionNote: "Original decision note.",
+    };
+    const dbStub = createDbStub(
+      [[createApproval("pending")], [revised]],
+      [],
+    );
+
+    const result = await approvalService(dbStub.db as any)
+      .requestRevision("approval-1", "board", "Racing note");
+
+    expect(result).toEqual({ approval: revised, applied: false });
+    expect(dbStub.returning).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an instruction change revision without an actionable note", async () => {
+    const instructionApproval = {
+      ...createApproval("pending"),
+      type: "instruction_change",
+      payload: {},
+    };
+    const dbStub = createDbStub([[instructionApproval]], []);
+
+    await expect(
+      approvalService(dbStub.db as any).requestRevision("approval-1", "board", "   "),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "A revision note is required for instruction changes",
+    });
+    expect(dbStub.returning).not.toHaveBeenCalled();
+  });
 });

@@ -30,7 +30,7 @@ function formatFastModeSupportedModels(): string {
 
 export function buildCodexExecArgs(
   config: unknown,
-  options: { resumeSessionId?: string | null } = {},
+  options: { resumeSessionId?: string | null; developerInstructions?: string | null } = {},
 ): BuildCodexExecArgsResult {
   const record = asRecord(config);
   const model = asString(record.model, "").trim();
@@ -58,6 +58,12 @@ export function buildCodexExecArgs(
     args.push("-c", 'service_tier="fast"', "-c", "features.fast_mode=true");
   }
   if (extraArgs.length > 0) args.push(...extraArgs);
+  // Put server-owned instructions after operator-provided extra args so a
+  // conflicting config override cannot demote or replace approved rules.
+  const developerInstructions = options.developerInstructions?.trim();
+  if (developerInstructions) {
+    args.push("-c", `developer_instructions=${JSON.stringify(developerInstructions)}`);
+  }
   if (options.resumeSessionId) args.push("resume", options.resumeSessionId, "-");
   else args.push("-");
 

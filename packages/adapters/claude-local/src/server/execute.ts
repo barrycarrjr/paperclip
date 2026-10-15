@@ -33,6 +33,7 @@ import {
   ensureAbsoluteDirectory,
   ensurePathInEnv,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -107,6 +108,33 @@ function isBedrockAuth(env: Record<string, string>): boolean {
 function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscription" | "metered_api" {
   if (isBedrockAuth(env)) return "metered_api";
   return hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY") ? "api" : "subscription";
+}
+
+function extractConfiguredAppendSystemPrompts(args: string[]): { args: string[]; prompts: string[] } {
+  const filteredArgs: string[] = [];
+  const prompts: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--append-system-prompt") {
+      const value = args[index + 1];
+      if (typeof value !== "string" || value.trim().length === 0 || value.startsWith("-")) {
+        throw new Error("Invalid Claude extraArgs: --append-system-prompt requires a non-empty value.");
+      }
+      prompts.push(value);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--append-system-prompt=")) {
+      const value = argument.slice("--append-system-prompt=".length);
+      if (value.trim().length === 0) {
+        throw new Error("Invalid Claude extraArgs: --append-system-prompt requires a non-empty value.");
+      }
+      prompts.push(value);
+      continue;
+    }
+    filteredArgs.push(argument);
+  }
+  return { args: filteredArgs, prompts };
 }
 
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {
@@ -446,8 +474,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     loggedEnv,
     timeoutSec,
     graceSec,
-    extraArgs,
+    extraArgs: configuredExtraArgs,
   } = runtimeConfig;
+  const configuredPromptArgs = extractConfiguredAppendSystemPrompts(configuredExtraArgs);
+  const extraArgs = configuredPromptArgs.args;
   // Advice is an explicit per-agent opt-in, never silently inherited from host settings.
   // Keep the user's files and all unrelated settings unchanged.
   if (!advisorModel) env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1";
@@ -468,6 +498,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const billingType = resolveClaudeBillingType(effectiveEnv);
   const claudeSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkillNames = new Set(resolveClaudeDesiredSkillNames(config, claudeSkillEntries));
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
   // When instructionsFilePath is configured, build a stable content-addressed
   // file that includes both the file content and the path directive, so we only
   // need --append-system-prompt-file (Claude CLI forbids using both flags together).
@@ -489,6 +520,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
     }
   }
+  combinedInstructionsContents = joinPromptSections([
+    combinedInstructionsContents ?? "",
+    ...configuredPromptArgs.prompts,
+    approvedRulesNote,
+  ]) || null;
   const promptBundle = await prepareClaudePromptBundle({
     companyId: agent.companyId,
     skills: claudeSkillEntries.filter((entry) => desiredSkillNames.has(entry.key)),
@@ -534,7 +570,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runtimeRemoteExecution = parseObject(runtimeSessionParams.remoteExecution);
   const runtimePromptBundleKey = asString(runtimeSessionParams.promptBundleKey, "");
   const hasMatchingPromptBundle =
-    runtimePromptBundleKey.length === 0 || runtimePromptBundleKey === promptBundle.bundleKey;
+    !promptBundle.instructionsFileRepaired && runtimePromptBundleKey.length > 0
+      ? runtimePromptBundleKey === promptBundle.bundleKey
+      : !promptBundle.instructionsFileRepaired &&
+        approvedRulesNote.length === 0 &&
+        configuredPromptArgs.prompts.length === 0;
   const canResumeSession =
     runtimeSessionId.length > 0 &&
     hasMatchingPromptBundle &&
@@ -549,6 +589,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await onLog(
       "stdout",
       `[paperclip] Claude session "${runtimeSessionId}" does not match the current remote execution identity and will not be resumed in "${effectiveExecutionCwd}". Starting a fresh remote session.\n`,
+    );
+  } else if (runtimeSessionId && promptBundle.instructionsFileRepaired) {
+    await onLog(
+      "stdout",
+      `[paperclip] Claude prompt bundle "${promptBundle.bundleKey}" had altered cached instructions. Paperclip repaired the file and will start a fresh session.\n`,
     );
   } else if (
     runtimeSessionId &&
@@ -685,12 +730,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (effort) args.push("--effort", effort);
     if (advisorModel) args.push("--advisor", advisorModel);
     if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
-    // On resumed sessions the instructions are already in the session cache;
-    // re-injecting them via --append-system-prompt-file wastes 5-10K tokens
-    // per heartbeat and the Claude CLI may reject the combination outright.
-    if (attemptInstructionsFilePath && !resumeSessionId) {
-      args.push("--append-system-prompt-file", attemptInstructionsFilePath);
-    }
     args.push("--add-dir", effectivePromptBundleAddDir);
     // Plugin MCP bridge: makes Paperclip plugin tools callable from
     // inside the spawned Claude Code session as MCP tools.
@@ -708,6 +747,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // The agent's forbiddenWritePaths, as deny rules the CLI enforces itself.
     if (forbiddenPathSettings) args.push("--settings", forbiddenPathSettings);
     if (extraArgs.length > 0) args.push(...extraArgs);
+    // On resumed sessions the instructions are already in the session cache;
+    // re-injecting them via --append-system-prompt-file wastes 5-10K tokens
+    // per heartbeat and the Claude CLI may reject the combination outright.
+    // Keep this Paperclip-owned flag after configurable arguments so another
+    // prompt-file option cannot replace approved standing rules.
+    if (attemptInstructionsFilePath && !resumeSessionId) {
+      args.push("--append-system-prompt-file", attemptInstructionsFilePath);
+    }
     return args;
   };
 

@@ -321,6 +321,7 @@ function createCommentMessage(args: {
     queueReason: comment.queueReason ?? null,
     interruptedRunId: comment.interruptedRunId ?? null,
     followUpRequested: comment.followUpRequested === true,
+    intent: comment.intent ?? "message",
   };
 
   if (comment.authorAgentId) {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck, Pencil, ChevronRight } from "lucide-react";
+import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck, Pencil, ChevronRight, BookCheck } from "lucide-react";
 import {
   APPROVAL_TYPE_LABEL,
   approvalLabel,
@@ -30,6 +30,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   budget_override_required: ShieldAlert,
   request_board_approval: ShieldCheck,
   outbound_tool_draft: Pencil,
+  instruction_change: BookCheck,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -359,6 +360,23 @@ export function BoardApprovalPayload({
   );
 }
 
+export function InstructionChangePayload({ payload }: { payload: Record<string, unknown> }) {
+  const scope = payload.scope === "company" ? "Every agent in this company" : "This agent only";
+  const rule = firstNonEmptyString(payload.rule);
+  const rationale = firstNonEmptyString(payload.rationale);
+  return (
+    <div className="mt-3 min-w-0 space-y-2 text-sm">
+      <PayloadField label="Applies to" value={scope} />
+      {rule ? (
+        <blockquote className="rounded-md border-l-2 border-primary/50 bg-muted/40 px-3 py-2 leading-6 whitespace-pre-wrap wrap-anywhere">
+          {rule}
+        </blockquote>
+      ) : null}
+      {rationale ? <p className="text-xs text-muted-foreground whitespace-pre-wrap">{rationale}</p> : null}
+    </div>
+  );
+}
+
 function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unknown> }) {
   const risks = Array.isArray(payload.risks)
     ? payload.risks
@@ -451,5 +469,6 @@ export function ApprovalPayloadRenderer({
     const preview = outboundDraftPreview(payload);
     if (preview) return <OutboundDraftPayload preview={preview} compact={compact} />;
   }
+  if (type === "instruction_change") return <InstructionChangePayload payload={payload} />;
   return <CeoStrategyPayload payload={payload} hideRawFallback={compact} />;
 }

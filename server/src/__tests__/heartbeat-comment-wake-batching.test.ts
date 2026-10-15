@@ -160,7 +160,24 @@ describe("heartbeat comment wake batching", () => {
     await tempDb?.cleanup();
   });
 
-  it("defers approval-approved wakes for a running issue so the assignee resumes after the run", async () => {
+  it.each([
+    {
+      label: "approval-approved",
+      wakeReason: "approval_approved",
+      approvalStatus: "approved",
+      idempotencyKey: "approval:approval-1:requester-wakeup:approved",
+    },
+    {
+      label: "approval-revision-requested",
+      wakeReason: "approval_revision_requested",
+      approvalStatus: "revision_requested",
+      idempotencyKey: "approval:approval-1:requester-wakeup:revision-requested",
+    },
+  ])("defers $label wakes for a running issue so the assignee resumes after the run", async ({
+    wakeReason,
+    approvalStatus,
+    idempotencyKey,
+  }) => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -215,27 +232,31 @@ describe("heartbeat comment wake batching", () => {
       identifier: `${issuePrefix}-1`,
     });
 
-    const followupRun = await heartbeat.wakeup(agentId, {
+    const approvalWake = {
       source: "automation",
       triggerDetail: "system",
-      reason: "approval_approved",
+      reason: wakeReason,
       payload: {
         issueId,
         approvalId: "approval-1",
-        approvalStatus: "approved",
+        approvalStatus,
       },
       contextSnapshot: {
         issueId,
         taskId: issueId,
         approvalId: "approval-1",
-        approvalStatus: "approved",
-        wakeReason: "approval_approved",
+        approvalStatus,
+        wakeReason,
       },
       requestedByActorType: "user",
       requestedByActorId: "local-board",
-    });
+      idempotencyKey,
+    } as const;
+    const followupRun = await heartbeat.wakeup(agentId, approvalWake);
+    const retriedRun = await heartbeat.wakeup(agentId, approvalWake);
 
     expect(followupRun).toBeNull();
+    expect(retriedRun).toBeNull();
 
     const deferred = await db
       .select()
@@ -247,21 +268,22 @@ describe("heartbeat comment wake batching", () => {
           eq(agentWakeupRequests.status, "deferred_issue_execution"),
         ),
       )
-      .then((rows) => rows[0] ?? null);
+      .then((rows) => rows);
 
-    expect(deferred).not.toBeNull();
-    expect(deferred?.reason).toBe("issue_execution_deferred");
-    expect(deferred?.payload).toMatchObject({
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]?.reason).toBe("issue_execution_deferred");
+    expect(deferred[0]?.idempotencyKey).toBe(idempotencyKey);
+    expect(deferred[0]?.payload).toMatchObject({
       issueId,
       approvalId: "approval-1",
-      approvalStatus: "approved",
+      approvalStatus,
     });
-    expect((deferred?.payload as Record<string, unknown>)._paperclipWakeContext).toMatchObject({
+    expect((deferred[0]?.payload as Record<string, unknown>)._paperclipWakeContext).toMatchObject({
       issueId,
       taskId: issueId,
       approvalId: "approval-1",
-      approvalStatus: "approved",
-      wakeReason: "approval_approved",
+      approvalStatus,
+      wakeReason,
     });
 
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
@@ -269,7 +291,102 @@ describe("heartbeat comment wake batching", () => {
     expect(runs[0]?.id).toBe(runId);
   });
 
-  it("batches deferred comment wakes and forwards the ordered batch to the next run", async () => {
+  it("carries actionable instruction revision details into the adapter wake", async () => {
+    const gateway = await createControlledGatewayServer();
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const approvalId = randomUUID();
+    const sourceCommentId = randomUUID();
+    const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    const heartbeat = heartbeatService(db);
+
+    try {
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "Gateway Agent",
+        role: "engineer",
+        status: "idle",
+        adapterType: "openclaw_gateway",
+        adapterConfig: {
+          url: gateway.url,
+          headers: { "x-openclaw-token": "gateway-token" },
+          payloadTemplate: { message: "wake now" },
+          waitTimeoutMs: 2_000,
+        },
+        runtimeConfig: {},
+        permissions: {},
+      });
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Revise standing rule",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: agentId,
+        issueNumber: 10,
+        identifier: `${issuePrefix}-10`,
+      });
+
+      const revisionContext = {
+        issueId,
+        taskId: issueId,
+        approvalId,
+        approvalStatus: "revision_requested",
+        decisionNote: "Require a cited source.",
+        revisionCycle: "2026-10-15T10:00:00.000Z",
+        sourceIssueId: issueId,
+        sourceCommentId,
+        targetAgentId: agentId,
+        scope: "agent",
+        rule: "Verify totals before reporting.",
+        wakeReason: "approval_revision_requested",
+      };
+      const run = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "approval_revision_requested",
+        payload: revisionContext,
+        contextSnapshot: revisionContext,
+        requestedByActorType: "user",
+        requestedByActorId: "board",
+        idempotencyKey: `approval:${approvalId}:requester-wakeup:revision-requested`,
+      });
+
+      expect(run).not.toBeNull();
+      await waitFor(() => gateway.getAgentPayloads().length === 1);
+      const payload = gateway.getAgentPayloads()[0] ?? {};
+      expect(payload.paperclip).toMatchObject({
+        wake: {
+          reason: "approval_revision_requested",
+          approvalRevision: {
+            approvalId,
+            decisionNote: "Require a cited source.",
+            revisionCycle: "2026-10-15T10:00:00.000Z",
+            sourceIssueId: issueId,
+            sourceCommentId,
+            targetAgentId: agentId,
+            scope: "agent",
+            rule: "Verify totals before reporting.",
+          },
+        },
+      });
+      expect(String(payload.message ?? "")).toContain(`POST /api/approvals/${approvalId}/resubmit`);
+      expect(String(payload.message ?? "")).toContain("Require a cited source.");
+    } finally {
+      gateway.releaseFirstWait();
+      await gateway.close();
+    }
+  }, 120_000);
+
+  it("batches deferred wakes and preserves a correction beyond the eight inline comments", async () => {
     const gateway = await createControlledGatewayServer();
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -406,6 +523,29 @@ describe("heartbeat comment wake batching", () => {
       expect(secondRun).toBeNull();
       expect(thirdRun).toBeNull();
 
+      const additionalComments = await db.insert(issueComments).values(
+        Array.from({ length: 7 }, (_, index) => ({
+          companyId,
+          issueId,
+          authorUserId: "user-1",
+          body: index === 6 ? "Always verify the source before reporting totals." : `Additional comment ${index}`,
+          intent: index === 6 ? "correction" as const : "message" as const,
+        })),
+      ).returning();
+      for (const comment of additionalComments) {
+        expect(await heartbeat.wakeup(agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_commented",
+          payload: { issueId, commentId: comment.id },
+          contextSnapshot: { issueId, taskId: issueId, commentId: comment.id, wakeReason: "issue_commented" },
+          requestedByActorType: "user",
+          requestedByActorId: "user-1",
+        })).toBeNull();
+      }
+      const batchedIds = [comment2.id, comment3.id, ...additionalComments.map((comment) => comment.id)];
+      const correction = additionalComments[6]!;
+
       await waitFor(async () => {
         const deferred = await db
           .select()
@@ -436,7 +576,7 @@ describe("heartbeat comment wake batching", () => {
       const deferredContext = (deferredWake?.payload as Record<string, unknown> | null)?._paperclipWakeContext as
         | Record<string, unknown>
         | undefined;
-      expect(deferredContext?.wakeCommentIds).toEqual([comment2.id, comment3.id]);
+      expect(deferredContext?.wakeCommentIds).toEqual(batchedIds);
 
       gateway.releaseFirstWait();
 
@@ -449,13 +589,20 @@ describe("heartbeat comment wake batching", () => {
       const secondPayload = gateway.getAgentPayloads()[1] ?? {};
       expect(secondPayload.paperclip).toMatchObject({
         wake: {
-          commentIds: [comment2.id, comment3.id],
-          latestCommentId: comment3.id,
+          commentIds: batchedIds,
+          latestCommentId: correction.id,
+          correctionCommentSources: [{ id: correction.id, issueId }],
+          commentWindow: { requestedCount: 9, includedCount: 8 },
+          fallbackFetchNeeded: true,
         },
       });
       expect(String(secondPayload.message ?? "")).toContain("Second comment");
       expect(String(secondPayload.message ?? "")).toContain("Third comment");
       expect(String(secondPayload.message ?? "")).not.toContain("First comment");
+      expect(String(secondPayload.message ?? "")).toContain("instruction_change");
+      expect(String(secondPayload.message ?? "")).toContain(`sourceCommentId: ${correction.id}; sourceIssueId: ${issueId}`);
+      expect(String(secondPayload.message ?? "")).toContain("must be fetched before drafting");
+      expect(String(secondPayload.message ?? "")).not.toContain(correction.body);
     } finally {
       gateway.releaseFirstWait();
       await gateway.close();

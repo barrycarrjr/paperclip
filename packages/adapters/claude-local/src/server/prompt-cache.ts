@@ -1,8 +1,7 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash, type Hash } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { ensurePaperclipSkillSymlink, type PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
 
@@ -15,6 +14,7 @@ export interface ClaudePromptBundle {
   rootDir: string;
   addDir: string;
   instructionsFilePath: string | null;
+  instructionsFileRepaired: boolean;
 }
 
 function nonEmpty(value: string | undefined): string | null {
@@ -106,27 +106,64 @@ async function buildClaudePromptBundleKey(input: {
   return hash.digest("hex");
 }
 
-async function ensureReadableFile(targetPath: string, contents: string): Promise<void> {
+async function inspectExactFile(targetPath: string, expected: Buffer): Promise<{
+  exists: boolean;
+  matches: boolean;
+}> {
   try {
-    await fs.access(targetPath, fsConstants.R_OK);
-    return;
-  } catch {
-    // Fall through and materialize the file.
+    const stat = await fs.lstat(targetPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return { exists: true, matches: false };
+    }
+    const actual = await fs.readFile(targetPath);
+    return { exists: true, matches: actual.equals(expected) };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false, matches: false };
+    }
+    return { exists: true, matches: false };
   }
+}
+
+async function ensureExactFile(
+  targetPath: string,
+  contents: string,
+): Promise<"unchanged" | "created" | "repaired"> {
+  const expected = Buffer.from(contents, "utf8");
+  const before = await inspectExactFile(targetPath, expected);
+  if (before.matches) return "unchanged";
 
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(tempPath, contents, "utf8");
-    await fs.rename(tempPath, targetPath);
-  } catch (err) {
-    const targetReadable = await fs.access(targetPath, fsConstants.R_OK).then(() => true).catch(() => false);
-    if (!targetReadable) {
-      throw err;
+    const handle = await fs.open(tempPath, "wx", 0o600);
+    try {
+      await handle.writeFile(expected);
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
+
+    try {
+      await fs.rename(tempPath, targetPath);
+    } catch (err) {
+      // Another invocation may have installed the same content first. Only
+      // accept the failed rename when the destination now has the exact bytes.
+      const raced = await inspectExactFile(targetPath, expected);
+      if (!raced.matches) throw err;
+    }
+
+    const after = await inspectExactFile(targetPath, expected);
+    if (!after.matches) {
+      throw new Error(`Claude prompt cache file did not retain the expected contents: ${targetPath}`);
+    }
+  } catch (err) {
+    throw new Error(`Failed to materialize exact Claude prompt cache file ${targetPath}`, { cause: err });
   } finally {
     await fs.rm(tempPath, { force: true }).catch(() => {});
   }
+
+  return before.exists ? "repaired" : "created";
 }
 
 export async function prepareClaudePromptBundle(input: {
@@ -159,8 +196,10 @@ export async function prepareClaudePromptBundle(input: {
   const instructionsFilePath = instructionsContents
     ? path.join(rootDir, "agent-instructions.md")
     : null;
+  let instructionsFileRepaired = false;
   if (instructionsFilePath && instructionsContents) {
-    await ensureReadableFile(instructionsFilePath, instructionsContents);
+    instructionsFileRepaired =
+      (await ensureExactFile(instructionsFilePath, instructionsContents)) === "repaired";
   }
 
   return {
@@ -168,5 +207,6 @@ export async function prepareClaudePromptBundle(input: {
     rootDir,
     addDir: rootDir,
     instructionsFilePath,
+    instructionsFileRepaired,
   };
 }

@@ -35,6 +35,7 @@ import {
   resolvePaperclipDesiredSkillNames,
   removeMaintainerOnlySkillSymlinks,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -433,6 +434,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const shouldUseResumeDeltaPrompt = canResumeSession && wakePrompt.length > 0;
   const renderedHeartbeatPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
+  const trustedSystemPromptExtension = joinPromptSections([renderedSystemPromptExtension, approvedRulesNote]);
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
   const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   const userPrompt = appendSourceEvidenceInstructions(joinPromptSections([
@@ -442,9 +445,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionHandoffNote,
     taskContextNote,
     renderedHeartbeatPrompt,
-  ]), resolvedInstructionsFilePath && !instructionsReadFailed ? renderedSystemPromptExtension : null);
+  ]), trustedSystemPromptExtension || null);
   const promptMetrics = {
-    systemPromptChars: renderedSystemPromptExtension.length,
+    systemPromptChars: trustedSystemPromptExtension.length,
     promptChars: userPrompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     memoriesPromptChars: memoriesNote.length,
@@ -474,9 +477,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     args.push("--mode", "json");
     args.push("-p"); // Non-interactive mode: process prompt and exit
 
-    // Use --append-system-prompt to extend Pi's default system prompt
-    args.push("--append-system-prompt", renderedSystemPromptExtension);
-
     if (provider) args.push("--provider", provider);
     if (modelId) args.push("--model", modelId);
     if (thinking) args.push("--thinking", thinking);
@@ -486,6 +486,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     args.push("--skill", remoteSkillsDir ?? PI_AGENT_SKILLS_DIR);
 
     if (extraArgs.length > 0) args.push(...extraArgs);
+
+    // Keep Paperclip-owned instructions after configurable arguments so a
+    // second --append-system-prompt cannot replace approved standing rules.
+    args.push("--append-system-prompt", trustedSystemPromptExtension);
 
     // Add the user prompt as the last argument
     args.push(userPrompt);

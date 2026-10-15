@@ -123,6 +123,7 @@ describe("usePaperclipIssueRuntime", () => {
     expect(firstOnSend).not.toHaveBeenCalled();
     expect(secondOnSend).toHaveBeenCalledWith({
       body: "latest callback",
+      intent: "message",
       reopen: undefined,
       reassignment: undefined,
     });

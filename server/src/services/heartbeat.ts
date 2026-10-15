@@ -60,6 +60,11 @@ import { costService } from "./costs.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
+import {
+  buildApprovedInstructionRulesMarkdown,
+  instructionRuleService,
+} from "./instruction-rules.js";
+export { buildApprovedInstructionRulesMarkdown } from "./instruction-rules.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
@@ -330,7 +335,13 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved", "issue_children_completed", "issue_blockers_resolved"]);
+const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
+  "approval_approved",
+  "approval_rejected",
+  "approval_revision_requested",
+  "issue_children_completed",
+  "issue_blockers_resolved",
+]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -2003,6 +2014,18 @@ export function mergeCoalescedContextSnapshot(
     ...existing,
     ...incoming,
   };
+  const existingWakeReason = readNonEmptyString(existing.wakeReason);
+  const incomingWakeReason = readNonEmptyString(incoming.wakeReason);
+  const existingApprovalDecision = existingWakeReason?.startsWith("approval_") === true;
+  const incomingApprovalDecision = incomingWakeReason?.startsWith("approval_") === true;
+  if (
+    existingApprovalDecision &&
+    !incomingApprovalDecision
+  ) {
+    // Keep an approval decision actionable when an ordinary comment joins the
+    // queued run. A later approval decision supersedes the older one.
+    merged.wakeReason = existingWakeReason;
+  }
   // Messages handed over with each wake are kept, never overwritten: a second
   // Slack message landing on a run that is still queued joins the first one
   // instead of replacing it.
@@ -2050,6 +2073,20 @@ async function buildPaperclipWakePayload(input: {
     | null;
 }) {
   const executionStage = parseObject(input.contextSnapshot.executionStage);
+  const wakeReason = readNonEmptyString(input.contextSnapshot.wakeReason);
+  const approvalRevision = wakeReason === "approval_revision_requested"
+    ? {
+        approvalId: readNonEmptyString(input.contextSnapshot.approvalId),
+        approvalStatus: readNonEmptyString(input.contextSnapshot.approvalStatus),
+        decisionNote: readNonEmptyString(input.contextSnapshot.decisionNote),
+        revisionCycle: readNonEmptyString(input.contextSnapshot.revisionCycle),
+        sourceIssueId: readNonEmptyString(input.contextSnapshot.sourceIssueId),
+        sourceCommentId: readNonEmptyString(input.contextSnapshot.sourceCommentId),
+        targetAgentId: readNonEmptyString(input.contextSnapshot.targetAgentId),
+        scope: readNonEmptyString(input.contextSnapshot.scope),
+        rule: readNonEmptyString(input.contextSnapshot.rule),
+      }
+    : null;
   const commentIds = extractWakeCommentIds(input.contextSnapshot);
   const issueId = readNonEmptyString(input.contextSnapshot.issueId);
   const continuationSummary = input.continuationSummary ?? null;
@@ -2078,6 +2115,7 @@ async function buildPaperclipWakePayload(input: {
             id: issueComments.id,
             issueId: issueComments.issueId,
             body: issueComments.body,
+            intent: issueComments.intent,
             authorAgentId: issueComments.authorAgentId,
             authorUserId: issueComments.authorUserId,
             createdAt: issueComments.createdAt,
@@ -2124,6 +2162,7 @@ async function buildPaperclipWakePayload(input: {
       id: row.id,
       issueId: row.issueId,
       body,
+      intent: row.intent,
       bodyTruncated,
       createdAt: row.createdAt.toISOString(),
       author: row.authorAgentId
@@ -2135,7 +2174,8 @@ async function buildPaperclipWakePayload(input: {
   }
 
   return {
-    reason: readNonEmptyString(input.contextSnapshot.wakeReason),
+    reason: wakeReason,
+    approvalRevision: approvalRevision?.approvalId ? approvalRevision : null,
     runCountsRequired: input.runCountsRequired === true,
     runCountsRetryReason: input.runCountsRetryReason ?? null,
     issue: issueSummary
@@ -2189,6 +2229,11 @@ async function buildPaperclipWakePayload(input: {
       : null,
     commentIds,
     latestCommentId: commentIds[commentIds.length - 1] ?? null,
+    // Keep correction provenance outside the bounded inline body window.
+    correctionCommentSources: commentIds.flatMap((id) => {
+      const comment = commentsById.get(id);
+      return comment?.intent === "correction" ? [{ id: comment.id, issueId: comment.issueId }] : [];
+    }),
     comments,
     commentWindow: {
       requestedCount: commentIds.length,
@@ -5966,6 +6011,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             .select({
               id: issueComments.id,
               body: issueComments.body,
+              intent: issueComments.intent,
             })
             .from(issueComments)
             .where(and(
@@ -6128,6 +6174,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       context[PAPERCLIP_WAKE_PAYLOAD_KEY] = paperclipWakePayload;
     } else {
       delete context[PAPERCLIP_WAKE_PAYLOAD_KEY];
+    }
+    const approvedInstructionRows = await instructionRuleService(db).listApprovedForAgent(
+      agent.companyId,
+      agent.id,
+    );
+    const approvedRulesMarkdown = buildApprovedInstructionRulesMarkdown(approvedInstructionRows);
+    if (approvedRulesMarkdown) {
+      context.paperclipApprovedRulesMarkdown = approvedRulesMarkdown;
+    } else {
+      delete context.paperclipApprovedRulesMarkdown;
     }
     const taskMarkdown = buildPaperclipTaskMarkdown({
       issue: issueRef
@@ -8169,13 +8225,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           return { kind: "skipped" as const };
         }
 
-        if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
+        if (opts.idempotencyKey) {
           const existingDelivery = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
             .where(and(
               eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.agentId, agentId),
               eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey), ne(agentWakeupRequests.status, "skipped"),
             )).limit(1);
           if (existingDelivery.length > 0) return { kind: "duplicate" as const };
+        }
+        if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
           const currentWake = reason === "issue_children_completed" || reason === "issue_blockers_resolved"
             ? await buildIssueDependencyWakeup(tx as unknown as Db, agent.companyId, issue.id, reason)
             : null;
@@ -8484,7 +8542,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             // The deferred row can already carry a different delivery key.
             // Retain a receipt for this key as well, so crash retries and other
             // sources in the same child/blocker set do not enqueue it again.
-            if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
+            if (opts.idempotencyKey) {
               await tx.insert(agentWakeupRequests).values({
                 companyId: agent.companyId, agentId, source, triggerDetail, reason, payload,
                 status: "coalesced", coalescedCount: 1, idempotencyKey: opts.idempotencyKey,
@@ -8584,111 +8642,131 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return newRun;
     }
 
-    const activeRuns = await db
-      .select()
-      .from(heartbeatRuns)
-      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES])))
-      .orderBy(desc(heartbeatRuns.createdAt));
+    const outcome = await db.transaction(async (tx) => {
+      if (opts.idempotencyKey) {
+        // An issue-less wake has no issue row to serialize concurrent retries.
+        // Lock its requester instead, and commit the receipt with its run.
+        await tx.select({ id: agents.id }).from(agents)
+          .where(eq(agents.id, agentId)).for("update");
+        const existingDelivery = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
+          .where(and(
+            eq(agentWakeupRequests.companyId, agent.companyId),
+            eq(agentWakeupRequests.agentId, agentId),
+            eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey),
+            ne(agentWakeupRequests.status, "skipped"),
+          )).limit(1);
+        if (existingDelivery.length > 0) return { kind: "duplicate" as const };
+      }
+      const activeRuns = await tx
+        .select()
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES])))
+        .orderBy(desc(heartbeatRuns.createdAt));
 
-    // A wake merges only into a run of the same conversation. Runs with no
-    // task have no task key, so comparing task keys alone would let a plugin's
-    // message waiting behind a busy agent absorb a timer tick or another
-    // plugin's message, and then run it in the wrong conversation.
-    const wakeConversationKey = deriveTaskKeyWithHeartbeatFallback(enrichedContextSnapshot, null);
-    const isSameConversation = (candidate: typeof heartbeatRuns.$inferSelect) =>
-      deriveTaskKeyWithHeartbeatFallback(parseObject(candidate.contextSnapshot), null) === wakeConversationKey;
-    const sameScopeQueuedRun = activeRuns.find(
-      (candidate) => candidate.status === "queued" && isSameConversation(candidate),
-    );
-    const sameScopeScheduledRetryRun = activeRuns.find(
-      (candidate) => candidate.status === "scheduled_retry" && isSameConversation(candidate),
-    );
-    const sameScopeRunningRun = activeRuns.find(
-      (candidate) => candidate.status === "running" && isSameConversation(candidate),
-    );
-    const shouldQueueFollowupForRunningWake =
-      Boolean(sameScopeRunningRun) &&
-      !sameScopeQueuedRun &&
-      shouldQueueFollowupForRunningIssueWake({ contextSnapshot: enrichedContextSnapshot, wakeCommentId });
-
-    const coalescedTargetRun =
-      sameScopeQueuedRun ??
-      sameScopeScheduledRetryRun ??
-      (shouldQueueFollowupForRunningWake ? null : sameScopeRunningRun ?? null);
-
-    if (coalescedTargetRun) {
-      const mergedContextSnapshot = mergeCoalescedContextSnapshot(
-        coalescedTargetRun.contextSnapshot,
-        contextSnapshot,
+      // A wake merges only into a run of the same conversation. Runs with no
+      // task have no task key, so comparing task keys alone would let a plugin's
+      // message waiting behind a busy agent absorb a timer tick or another
+      // plugin's message, and then run it in the wrong conversation.
+      const wakeConversationKey = deriveTaskKeyWithHeartbeatFallback(enrichedContextSnapshot, null);
+      const isSameConversation = (candidate: typeof heartbeatRuns.$inferSelect) =>
+        deriveTaskKeyWithHeartbeatFallback(parseObject(candidate.contextSnapshot), null) === wakeConversationKey;
+      const sameScopeQueuedRun = activeRuns.find(
+        (candidate) => candidate.status === "queued" && isSameConversation(candidate),
       );
-      const mergedRun = await db
-        .update(heartbeatRuns)
+      const sameScopeScheduledRetryRun = activeRuns.find(
+        (candidate) => candidate.status === "scheduled_retry" && isSameConversation(candidate),
+      );
+      const sameScopeRunningRun = activeRuns.find(
+        (candidate) => candidate.status === "running" && isSameConversation(candidate),
+      );
+      const shouldQueueFollowupForRunningWake =
+        Boolean(sameScopeRunningRun) &&
+        !sameScopeQueuedRun &&
+        shouldQueueFollowupForRunningIssueWake({ contextSnapshot: enrichedContextSnapshot, wakeCommentId });
+
+      const coalescedTargetRun =
+        sameScopeQueuedRun ??
+        sameScopeScheduledRetryRun ??
+        (shouldQueueFollowupForRunningWake ? null : sameScopeRunningRun ?? null);
+
+      if (coalescedTargetRun) {
+        const mergedContextSnapshot = mergeCoalescedContextSnapshot(
+          coalescedTargetRun.contextSnapshot,
+          contextSnapshot,
+        );
+        const mergedRun = await tx
+          .update(heartbeatRuns)
+          .set({
+            contextSnapshot: mergedContextSnapshot,
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
+          .returning()
+          .then((rows) => rows[0] ?? coalescedTargetRun);
+
+        await tx.insert(agentWakeupRequests).values({
+          companyId: agent.companyId,
+          agentId,
+          source,
+          triggerDetail,
+          reason,
+          payload,
+          status: "coalesced",
+          coalescedCount: 1,
+          requestedByActorType: opts.requestedByActorType ?? null,
+          requestedByActorId: opts.requestedByActorId ?? null,
+          idempotencyKey: opts.idempotencyKey ?? null,
+          runId: mergedRun.id,
+          finishedAt: new Date(),
+        });
+        return { kind: "coalesced" as const, run: mergedRun };
+      }
+
+      const wakeupRequest = await tx
+        .insert(agentWakeupRequests)
+        .values({
+          companyId: agent.companyId,
+          agentId,
+          source,
+          triggerDetail,
+          reason,
+          payload,
+          status: "queued",
+          requestedByActorType: opts.requestedByActorType ?? null,
+          requestedByActorId: opts.requestedByActorId ?? null,
+          idempotencyKey: opts.idempotencyKey ?? null,
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const newRun = await tx
+        .insert(heartbeatRuns)
+        .values({
+          companyId: agent.companyId,
+          agentId,
+          invocationSource: source,
+          triggerDetail,
+          status: "queued",
+          wakeupRequestId: wakeupRequest.id,
+          contextSnapshot: enrichedContextSnapshot,
+          sessionIdBefore: sessionBefore,
+          continuationAttempt,
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      await tx
+        .update(agentWakeupRequests)
         .set({
-          contextSnapshot: mergedContextSnapshot,
+          runId: newRun.id,
           updatedAt: new Date(),
         })
-        .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
-        .returning()
-        .then((rows) => rows[0] ?? coalescedTargetRun);
-
-      await db.insert(agentWakeupRequests).values({
-        companyId: agent.companyId,
-        agentId,
-        source,
-        triggerDetail,
-        reason,
-        payload,
-        status: "coalesced",
-        coalescedCount: 1,
-        requestedByActorType: opts.requestedByActorType ?? null,
-        requestedByActorId: opts.requestedByActorId ?? null,
-        idempotencyKey: opts.idempotencyKey ?? null,
-        runId: mergedRun.id,
-        finishedAt: new Date(),
-      });
-      return mergedRun;
-    }
-
-    const wakeupRequest = await db
-      .insert(agentWakeupRequests)
-      .values({
-        companyId: agent.companyId,
-        agentId,
-        source,
-        triggerDetail,
-        reason,
-        payload,
-        status: "queued",
-        requestedByActorType: opts.requestedByActorType ?? null,
-        requestedByActorId: opts.requestedByActorId ?? null,
-        idempotencyKey: opts.idempotencyKey ?? null,
-      })
-      .returning()
-      .then((rows) => rows[0]);
-
-    const newRun = await db
-      .insert(heartbeatRuns)
-      .values({
-        companyId: agent.companyId,
-        agentId,
-        invocationSource: source,
-        triggerDetail,
-        status: "queued",
-        wakeupRequestId: wakeupRequest.id,
-        contextSnapshot: enrichedContextSnapshot,
-        sessionIdBefore: sessionBefore,
-        continuationAttempt,
-      })
-      .returning()
-      .then((rows) => rows[0]);
-
-    await db
-      .update(agentWakeupRequests)
-      .set({
-        runId: newRun.id,
-        updatedAt: new Date(),
-      })
-      .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+        .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+      return { kind: "queued" as const, run: newRun };
+    });
+    if (outcome.kind === "duplicate") return null;
+    if (outcome.kind === "coalesced") return outcome.run;
+    const newRun = outcome.run;
 
     publishLiveEvent({
       companyId: newRun.companyId,
