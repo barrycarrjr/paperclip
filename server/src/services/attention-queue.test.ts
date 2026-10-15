@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AttentionRow } from "@paperclipai/shared";
 import {
   STALE_EMAIL_HANDOFF_AFTER_MS,
+  dropFailuresOnClosedWork,
+  dropRecoveredSingleCauseFailures,
   groupUnaddressedRunFailures,
   isAttentionRowDismissed,
   isAttentionRowSetAside,
@@ -231,6 +233,95 @@ describe("mergeRunFailuresBySharedCause", () => {
     ]);
     expect(merged).toHaveLength(2);
     expect(merged.map((g) => g.head.id).sort()).toEqual(["auth-1", "crash"]);
+  });
+});
+
+describe("dropFailuresOnClosedWork", () => {
+  function group(issueId: string | null) {
+    const head: RunFailureCandidate = {
+      id: `run-${issueId ?? "none"}`,
+      agentId: "agent-1",
+      status: "failed",
+      scheduledRetryAt: null,
+      contextSnapshot: issueId ? { issueId } : null,
+    };
+    return { head, failures: 1, oldestFailureMs: 1_000, stalledWork: 1 };
+  }
+
+  it("drops failures on work that was cancelled or finished", () => {
+    // A routine's stalled copy gets cancelled and a fresh copy succeeds.
+    // Nothing reruns the cancelled one, so its failure is nobody's decision.
+    const open = dropFailuresOnClosedWork(
+      [group("cancelled-issue"), group("open-issue")],
+      new Set(["cancelled-issue"]),
+    );
+    expect(open.map((g) => g.head.id)).toEqual(["run-open-issue"]);
+  });
+
+  it("keeps failures that belong to no issue", () => {
+    expect(dropFailuresOnClosedWork([group(null)], new Set(["anything"]))).toHaveLength(1);
+  });
+});
+
+describe("dropRecoveredSingleCauseFailures", () => {
+  function run(overrides: Partial<RunFailureCandidate> = {}): RunFailureCandidate {
+    return {
+      id: "run-1",
+      agentId: "agent-1",
+      status: "failed",
+      errorCode: "claude_auth_required",
+      scheduledRetryAt: null,
+      contextSnapshot: { issueId: "issue-1" },
+      finishedAt: new Date(1_000).toISOString(),
+      ...overrides,
+    };
+  }
+
+  function group(head: RunFailureCandidate) {
+    return { head, failures: 1, oldestFailureMs: 1_000, stalledWork: 1 };
+  }
+
+  const success = (overrides: Partial<RunFailureCandidate> = {}) =>
+    run({
+      id: "ok",
+      status: "succeeded",
+      errorCode: null,
+      contextSnapshot: { issueId: "issue-2" },
+      finishedAt: new Date(9_000).toISOString(),
+      ...overrides,
+    });
+
+  it("clears a sign-in failure once the agent succeeded on any work", () => {
+    // The sign-in was fixed and the agent has worked every day since, but the
+    // row still told the operator to sign in again.
+    const failure = run();
+    expect(dropRecoveredSingleCauseFailures([group(failure)], [success(), failure])).toEqual([]);
+  });
+
+  it("keeps a sign-in failure that came after the last success", () => {
+    const failure = run({ finishedAt: new Date(9_000).toISOString() });
+    const earlier = success({ finishedAt: new Date(1_000).toISOString() });
+    expect(dropRecoveredSingleCauseFailures([group(failure)], [failure, earlier])).toHaveLength(1);
+  });
+
+  it("does not count another agent's success", () => {
+    const failure = run();
+    expect(
+      dropRecoveredSingleCauseFailures([group(failure)], [success({ agentId: "agent-2" }), failure]),
+    ).toHaveLength(1);
+  });
+
+  it("does not count a cancelled run as a success", () => {
+    const failure = run();
+    expect(
+      dropRecoveredSingleCauseFailures([group(failure)], [success({ status: "cancelled" }), failure]),
+    ).toHaveLength(1);
+  });
+
+  it("leaves failures with other causes alone", () => {
+    // A success elsewhere says nothing about why this piece of work crashed.
+    const crash = run({ errorCode: null });
+    expect(dropRecoveredSingleCauseFailures([group(crash)], [success(), crash])).toHaveLength(1);
   });
 });
 
