@@ -1,6 +1,8 @@
 import type {
   Company,
   CompanyAgentDefaults,
+  CompanyActionPolicyResponse,
+  PatchCompanyActionPolicy,
   PatchCompanyAgentDefaults,
   CompanyPortabilityExportRequest,
   CompanyPortabilityExportPreviewResult,
@@ -46,6 +48,10 @@ export const companiesApi = {
     api.get<CompanyAgentDefaults>(`/companies/${companyId}/agent-defaults`),
   updateAgentDefaults: (companyId: string, patch: PatchCompanyAgentDefaults) =>
     api.patch<CompanyAgentDefaults>(`/companies/${companyId}/agent-defaults`, patch),
+  getActionPolicies: (companyId: string) =>
+    api.get<CompanyActionPolicyResponse>(`/companies/${companyId}/action-policies`),
+  updateActionPolicy: (companyId: string, patch: PatchCompanyActionPolicy) =>
+    api.patch<CompanyActionPolicyResponse>(`/companies/${companyId}/action-policies`, patch),
   archive: (companyId: string) => api.post<Company>(`/companies/${companyId}/archive`, {}),
   remove: (companyId: string) => api.delete<{ ok: true }>(`/companies/${companyId}`),
   exportBundle: (

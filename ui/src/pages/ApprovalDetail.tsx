@@ -174,6 +174,7 @@ export function ApprovalDetail() {
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
   const isBudgetApproval = approval.type === "budget_override_required";
   const isInstructionChange = approval.type === "instruction_change";
+  const isOutboundToolDraft = approval.type === "outbound_tool_draft";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
   const showApprovedBanner = searchParams.get("resolved") === "approved" && approval.status === "approved";
   const primaryLinkedIssue = linkedIssues?.[0] ?? null;
@@ -316,7 +317,7 @@ export function ApprovalDetail() {
               Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.
             </p>
           )}
-          {approval.status === "pending" && !isInstructionChange && (
+          {approval.status === "pending" && !isInstructionChange && !isOutboundToolDraft && (
             <Button
               size="sm"
               variant="outline"
@@ -326,7 +327,7 @@ export function ApprovalDetail() {
               Request revision
             </Button>
           )}
-          {approval.status === "revision_requested" && !isInstructionChange && (
+          {approval.status === "revision_requested" && !isInstructionChange && !isOutboundToolDraft && (
             <Button
               size="sm"
               variant="outline"

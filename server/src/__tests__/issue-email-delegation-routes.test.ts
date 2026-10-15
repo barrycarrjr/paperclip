@@ -231,7 +231,7 @@ describeEmbeddedPostgres("email delegation routes", () => {
       "email-tools:email_reply",
       expect.objectContaining({ mailbox: "personal", messageId: "<invoice@customer.example>" }),
       expect.anything(),
-      { forceDraftGate: true, bypassDraftGate: false },
+      undefined,
     );
   });
 

@@ -20,6 +20,7 @@
  */
 
 import type {
+  AgentActionType,
   PaperclipPluginManifestV1,
   PluginOperationAudience,
   PluginOperationDeclaration,
@@ -97,7 +98,9 @@ export interface RegisteredTool {
    *
    * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
    */
-  writes: boolean;
+  writes?: boolean;
+  /** Operator-facing action category used by the agent action checkpoint. */
+  actionType: AgentActionType | null;
   requiredUserPermission?: import("@paperclipai/shared").PermissionKey;
   requiresUserConfirmation?: boolean;
   executionTimeoutMs?: number;
@@ -317,7 +320,8 @@ export function createPluginToolRegistry(
       requiresUserConfirmation: decl.requiresUserConfirmation,
       executionTimeoutMs: decl.executionTimeoutMs,
       audience: "agents",
-      writes: decl.writes === true,
+      writes: decl.writes,
+      actionType: decl.actionType ?? null,
       requiresApproval: false,
     });
   }
@@ -356,7 +360,8 @@ export function createPluginToolRegistry(
       parametersSchema: decl.parametersSchema,
       isOperation: true,
       audience: resolved.audience as PluginOperationAudience,
-      writes: decl.writes === true,
+      writes: decl.writes,
+      actionType: decl.actionType ?? null,
       requiresApproval: resolved.requiresApproval,
     });
     return true;

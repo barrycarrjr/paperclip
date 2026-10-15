@@ -5,6 +5,7 @@ import {
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
   createCompanySchema,
+  patchCompanyActionPolicySchema,
   patchCompanyAgentDefaultsSchema,
   updateCompanyBrandingSchema,
   updateCompanySchema,
@@ -27,6 +28,7 @@ import {
 } from "../services/index.js";
 import { agentInstructionsBundleMode } from "../services/agent-instructions.js";
 import { resolvePortableExportAgentSelection } from "../services/company-portability-agent-selection.js";
+import { agentActionPolicyService } from "../services/agent-action-policy.js";
 import type { StorageService } from "../storage/types.js";
 import {
   assertAuthenticated,
@@ -44,6 +46,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   const portability = companyPortabilityService(db, storage);
   const access = accessService(db);
   const budgets = budgetService(db);
+  const actionPolicies = agentActionPolicyService(db);
 
   function assertImportTargetAccess(
     req: Request,
@@ -344,6 +347,52 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     res.json(await companyAgentDefaultsService(db).get(companyId));
   });
 
+  router.get("/:companyId/action-policies", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId, "read");
+    const existingCompany = await svc.getById(companyId);
+    if (!existingCompany) {
+      res.status(404).json({ error: "Company not found" });
+      return;
+    }
+    res.json(await actionPolicies.listCompanyPolicies(companyId));
+  });
+
+  router.patch(
+    "/:companyId/action-policies",
+    validate(patchCompanyActionPolicySchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertBoard(req);
+      assertCompanyAccess(req, companyId);
+      const existingCompany = await svc.getById(companyId);
+      if (!existingCompany) {
+        res.status(404).json({ error: "Company not found" });
+        return;
+      }
+
+      const { actionType, mode } = req.body;
+      const actor = getActorInfo(req);
+      const next = await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Db;
+        const result = await agentActionPolicyService(txDb).updateCompanyPolicy(companyId, actionType, mode);
+        await logActivity(txDb, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "company.action_policies_updated",
+          entityType: "company",
+          entityId: companyId,
+          details: { actionType, mode, previous: result.previous, actionPolicies: result.next },
+        });
+        return result.next;
+      });
+      res.json(next);
+    },
+  );
+
   // Company defaults change what many agents may do at once, so only a board
   // user may set them (never an agent or tool session), and every change is
   // logged with the before and after values.
@@ -359,22 +408,26 @@ export function companyRoutes(db: Db, storage?: StorageService) {
         res.status(404).json({ error: "Company not found" });
         return;
       }
-      const { previous, next } = await companyAgentDefaultsService(db).update(companyId, req.body);
       const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "company.agent_defaults_updated",
-        entityType: "company",
-        entityId: companyId,
-        details: {
-          previous,
-          agentDefaults: next,
-          changedKeys: Object.keys(req.body).sort(),
-        },
+      const next = await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Db;
+        const result = await companyAgentDefaultsService(txDb).update(companyId, req.body);
+        await logActivity(txDb, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "company.agent_defaults_updated",
+          entityType: "company",
+          entityId: companyId,
+          details: {
+            previous: result.previous,
+            agentDefaults: result.next,
+            changedKeys: Object.keys(req.body).sort(),
+          },
+        });
+        return result.next;
       });
       res.json(next);
     },

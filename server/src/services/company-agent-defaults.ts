@@ -2,6 +2,7 @@ import type { Db } from "@paperclipai/db";
 import { companyAgentDefaults } from "@paperclipai/db";
 import {
   companyAgentDefaultsSchema,
+  mergeActionApprovalModes,
   mergeSkipPermissionsByAdapterType,
   resolveAgentSkipPermissions,
   type CompanyAgentDefaults,
@@ -9,15 +10,18 @@ import {
   type PatchCompanyAgentDefaults,
   type ResolvedAgentPermission,
 } from "@paperclipai/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { instanceSettingsService } from "./instance-settings.js";
 
 function normalizeCompanyAgentDefaults(raw: unknown): CompanyAgentDefaults {
   const parsed = companyAgentDefaultsSchema.safeParse(raw ?? {});
   if (parsed.success) {
-    return { skipPermissionsByAdapterType: parsed.data.skipPermissionsByAdapterType ?? {} };
+    return {
+      skipPermissionsByAdapterType: parsed.data.skipPermissionsByAdapterType ?? {},
+      actionApprovalModes: parsed.data.actionApprovalModes ?? {},
+    };
   }
-  return { skipPermissionsByAdapterType: {} };
+  return { skipPermissionsByAdapterType: {}, actionApprovalModes: {} };
 }
 
 export function companyAgentDefaultsService(db: Db) {
@@ -46,14 +50,50 @@ export function companyAgentDefaultsService(db: Db) {
           previous.skipPermissionsByAdapterType,
           patch.skipPermissionsByAdapterType,
         ),
+        actionApprovalModes: mergeActionApprovalModes(
+          previous.actionApprovalModes,
+          patch.actionApprovalModes,
+        ),
       });
       const now = new Date();
+      const stored = sql`coalesce(${companyAgentDefaults.agentDefaults}, '{}'::jsonb)`;
+      let nextSkipPermissions = sql`case
+        when jsonb_typeof(${companyAgentDefaults.agentDefaults}->'skipPermissionsByAdapterType') = 'object'
+          then ${companyAgentDefaults.agentDefaults}->'skipPermissionsByAdapterType'
+        else '{}'::jsonb
+      end`;
+      for (const [adapterType, value] of Object.entries(patch.skipPermissionsByAdapterType ?? {})) {
+        nextSkipPermissions = value === null
+          ? sql`(${nextSkipPermissions}) - ${adapterType}::text`
+          : sql`(${nextSkipPermissions}) || jsonb_build_object(${adapterType}::text, ${value}::boolean)`;
+      }
+      let nextActionModes = sql`case
+        when jsonb_typeof(${companyAgentDefaults.agentDefaults}->'actionApprovalModes') = 'object'
+          then ${companyAgentDefaults.agentDefaults}->'actionApprovalModes'
+        else '{}'::jsonb
+      end`;
+      for (const [actionType, mode] of Object.entries(patch.actionApprovalModes ?? {})) {
+        nextActionModes = mode === null
+          ? sql`(${nextActionModes}) - ${actionType}::text`
+          : sql`(${nextActionModes}) || jsonb_build_object(${actionType}::text, ${mode}::text)`;
+      }
+      const mergedStored = sql`jsonb_set(
+        jsonb_set(
+          ${stored},
+          '{skipPermissionsByAdapterType}',
+          ${nextSkipPermissions},
+          true
+        ),
+        '{actionApprovalModes}',
+        ${nextActionModes},
+        true
+      )`;
       await db
         .insert(companyAgentDefaults)
         .values({ companyId, agentDefaults: { ...next }, createdAt: now, updatedAt: now })
         .onConflictDoUpdate({
           target: [companyAgentDefaults.companyId],
-          set: { agentDefaults: { ...next }, updatedAt: now },
+          set: { agentDefaults: mergedStored, updatedAt: now },
         });
       return { previous, next };
     },

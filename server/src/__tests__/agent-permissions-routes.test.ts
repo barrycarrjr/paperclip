@@ -101,6 +101,11 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
   getGeneral: vi.fn(),
 }));
 
+const mockAgentActionPolicyService = vi.hoisted(() => ({
+  listAgentPolicies: vi.fn(),
+  updateAgentPolicy: vi.fn(),
+}));
+
 const mockCurrentCodexDefaultModel = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 
 function registerModuleMocks() {
@@ -174,6 +179,10 @@ function registerModuleMocks() {
     instanceSettingsService: () => mockInstanceSettingsService,
   }));
 
+  vi.doMock("../services/agent-action-policy.js", () => ({
+    agentActionPolicyService: () => mockAgentActionPolicyService,
+  }));
+
   vi.doMock("../services/index.js", () => ({
     agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
@@ -209,7 +218,7 @@ function createDbStub(
     then: vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve(resolve(rows))),
   });
 
-  return {
+  const db = {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue(
@@ -224,6 +233,10 @@ function createDbStub(
         }),
       }),
     }),
+  };
+  return {
+    ...db,
+    transaction: (callback: (tx: unknown) => unknown) => callback(db),
   };
 }
 
@@ -337,10 +350,39 @@ describe.sequential("agent permission routes", () => {
     mockLogActivity.mockReset();
     mockSyncInstructionsBundleConfigFromFilePath.mockReset();
     mockInstanceSettingsService.getGeneral.mockReset();
+    mockAgentActionPolicyService.listAgentPolicies.mockReset();
+    mockAgentActionPolicyService.updateAgentPolicy.mockReset();
     mockEnvironmentService.getById.mockReset();
     mockEnsureOpenCodeModelConfiguredAndAvailable.mockReset();
     mockSyncInstructionsBundleConfigFromFilePath.mockImplementation((_agent, config) => config);
     mockAgentService.getById.mockResolvedValue(baseAgent);
+    mockAgentActionPolicyService.listAgentPolicies.mockResolvedValue({
+      overrides: [],
+      effective: [{
+        companyId,
+        agentId,
+        actionType: "send_message",
+        companyMode: "ask_first",
+        overrideMode: null,
+        effectiveMode: "ask_first",
+        source: "company",
+      }],
+    });
+    mockAgentActionPolicyService.updateAgentPolicy.mockResolvedValue({
+      previous: { overrides: [], effective: [] },
+      next: {
+        overrides: [{ companyId, agentId, actionType: "send_message", mode: "go_ahead" }],
+        effective: [{
+          companyId,
+          agentId,
+          actionType: "send_message",
+          companyMode: "ask_first",
+          overrideMode: "go_ahead",
+          effectiveMode: "go_ahead",
+          source: "agent",
+        }],
+      },
+    });
     mockAgentService.list.mockResolvedValue([baseAgent]);
     mockAgentService.getChainOfCommand.mockResolvedValue([]);
     mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: baseAgent });
@@ -1825,6 +1867,77 @@ describe.sequential("agent permission routes", () => {
 
       expect(res.status).toBe(404);
       expect(mockAgentService.updateForbiddenWritePaths).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("action policies", () => {
+    it("returns effective policies and supports the companyId shortname convention", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "owner",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .get(`/api/agents/builder/action-policies?companyId=${companyId}`));
+
+      expect(res.status).toBe(200);
+      expect(mockAgentService.resolveByReference).toHaveBeenCalledWith(companyId, "builder");
+      expect(res.body).toEqual({
+        overrides: [],
+        effective: [expect.objectContaining({ actionType: "send_message", effectiveMode: "ask_first" })],
+      });
+    });
+
+    it("lets a board member set an override and logs the change", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "owner",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: [companyId],
+        memberships: [{ companyId, status: "active", membershipRole: "owner" }],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/action-policies`)
+        .send({ actionType: "send_message", mode: "go_ahead" }));
+
+      expect(res.status).toBe(200);
+      expect(res.body.overrides).toEqual([
+        { companyId, agentId, actionType: "send_message", mode: "go_ahead" },
+      ]);
+      expect(mockAgentActionPolicyService.updateAgentPolicy).toHaveBeenCalledWith(
+        agentId,
+        "send_message",
+        "go_ahead",
+      );
+      expect(mockLogActivity).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "agent.action_policies_updated",
+          entityId: agentId,
+          details: expect.objectContaining({ actionType: "send_message", mode: "go_ahead" }),
+        }),
+      );
+    });
+
+    it("rejects an agent changing its own override", async () => {
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/action-policies`)
+        .send({ actionType: "send_message", mode: "go_ahead" }));
+
+      expect(res.status).toBe(403);
+      expect(mockAgentActionPolicyService.updateAgentPolicy).not.toHaveBeenCalled();
     });
   });
 

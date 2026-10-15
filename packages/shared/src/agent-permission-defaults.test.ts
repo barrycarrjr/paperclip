@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  companyAgentDefaultsSchema,
+  mergeActionApprovalModes,
   mergeSkipPermissionsByAdapterType,
   patchCompanyAgentDefaultsSchema,
   resolveAgentSkipPermissions,
 } from "./agent-permission-defaults.js";
+import { agentPermissionsSchema } from "./validators/agent.js";
 import { patchInstanceAgentDefaultsSchema } from "./validators/instance.js";
 
 describe("resolveAgentSkipPermissions", () => {
@@ -69,10 +72,48 @@ describe("mergeSkipPermissionsByAdapterType", () => {
   });
 });
 
+describe("action approval modes", () => {
+  it("stores company modes and supplies an empty default", () => {
+    expect(companyAgentDefaultsSchema.parse({})).toEqual({
+      skipPermissionsByAdapterType: {},
+      actionApprovalModes: {},
+    });
+    expect(
+      companyAgentDefaultsSchema.parse({ actionApprovalModes: { send_message: "ask_first" } }),
+    ).toMatchObject({ actionApprovalModes: { send_message: "ask_first" } });
+  });
+
+  it("sets modes, clears on null and leaves unmentioned entries alone", () => {
+    expect(
+      mergeActionApprovalModes(
+        { send_message: "ask_first", move_money: "ask_first" },
+        { move_money: null, change_files: "go_ahead" },
+      ),
+    ).toEqual({ send_message: "ask_first", change_files: "go_ahead" });
+  });
+
+  it("validates action modes stored in agent permissions", () => {
+    expect(
+      agentPermissionsSchema.safeParse({ actionApprovalModes: { post_publicly: "go_ahead" } }).success,
+    ).toBe(true);
+    expect(
+      agentPermissionsSchema.safeParse({ actionApprovalModes: { post_publicly: "sometimes" } }).success,
+    ).toBe(false);
+    expect(
+      agentPermissionsSchema.safeParse({ actionApprovalModes: { unknown_action: "ask_first" } }).success,
+    ).toBe(false);
+  });
+});
+
 describe("patch schemas", () => {
   it("reject unknown adapter types and non-boolean values", () => {
     expect(patchCompanyAgentDefaultsSchema.safeParse({ skipPermissionsByAdapterType: { http: true } }).success).toBe(false);
     expect(patchCompanyAgentDefaultsSchema.safeParse({ skipPermissionsByAdapterType: { claude_local: "yes" } }).success).toBe(false);
     expect(patchInstanceAgentDefaultsSchema.safeParse({ skipPermissionsByAdapterType: { claude_local: null } }).success).toBe(true);
+  });
+
+  it("accepts null to clear an action mode and rejects unknown action types", () => {
+    expect(patchCompanyAgentDefaultsSchema.safeParse({ actionApprovalModes: { send_message: null } }).success).toBe(true);
+    expect(patchCompanyAgentDefaultsSchema.safeParse({ actionApprovalModes: { unknown_action: "ask_first" } }).success).toBe(false);
   });
 });

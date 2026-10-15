@@ -197,4 +197,20 @@ describe("the registry honours the policy", () => {
     expect(tool?.requiresApproval).toBe(false);
     expect(tool?.writes).toBe(true);
   });
+
+  it("preserves an explicit read declaration for legacy tools", () => {
+    const registry = createPluginToolRegistry();
+    registry.registerPlugin("acme.ops", {
+      ...manifest([]),
+      tools: [{
+        name: "archive_record",
+        displayName: "Describe archive",
+        description: "Read only.",
+        writes: false,
+        parametersSchema: { type: "object" },
+      }],
+    }, "acme.ops");
+
+    expect(registry.getTool("acme.ops:archive_record")?.writes).toBe(false);
+  });
 });

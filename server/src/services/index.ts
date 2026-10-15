@@ -90,6 +90,11 @@ export { accessService } from "./access.js";
 export { boardAuthService } from "./board-auth.js";
 export { instanceSettingsService } from "./instance-settings.js";
 export { companyAgentDefaultsService } from "./company-agent-defaults.js";
+export { agentActionPolicyService } from "./agent-action-policy.js";
+export {
+  agentActionPermissionReviewService,
+  type AgentActionPermissionReviewService,
+} from "./agent-action-permission-review.js";
 export { companyPortabilityService } from "./company-portability.js";
 export { environmentService } from "./environments.js";
 export { executionWorkspaceService } from "./execution-workspaces.js";

@@ -687,6 +687,32 @@ Board can at any time:
 - edit budgets and limits
 - approve/reject/cancel pending approvals
 
+## 12.4 Agent Action Checkpoint
+
+The board sets Ask first or Go ahead for each company and may override each
+setting for one agent. The controlled action types are sending messages,
+moving money, changing files, posting publicly, and changing the shared
+knowledge base.
+
+The agent setting takes precedence over the company setting. A plugin
+operation that separately requires approval remains Ask first. Existing
+outbound draft mode supplies the fallback for messages and public posts until
+the board saves an explicit company setting. Other action types default to Ask
+first.
+
+Paperclip enforces these settings on brokered plugin tools and operations.
+Plugin declarations classify writes with `actionType`; an unclassified write
+defaults to Ask first. Direct shell, browser, and filesystem activity outside
+the tool broker requires runtime isolation and is outside this checkpoint.
+For older plugin manifests and external MCP tools, Paperclip conservatively
+infers common mutation names and action categories. A configured MCP write
+that cannot be categorized remains unclassified and defaults to Ask first.
+
+Action activity records allowed, refused, failed, and approval-requested
+outcomes. Structural review reports agent Go ahead exceptions when the company
+setting is Ask first. A daily scheduled review writes each new exception to the
+activity log so the operator can compare it with the agent's current job.
+
 ## 13. Cost and Budget System
 
 ## 13.1 Budget Layers

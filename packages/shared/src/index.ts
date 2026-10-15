@@ -27,6 +27,18 @@ export {
   outboundToolLabel,
 } from "./approval-labels.js";
 export {
+  AGENT_ACTION_TYPE_LABELS,
+  AGENT_ACTION_TYPE_DESCRIPTIONS,
+} from "./agent-action-policy.js";
+export {
+  patchCompanyActionPolicySchema,
+  patchAgentActionPolicyOverrideSchema,
+  companyActionPolicyPatchSchema,
+  agentActionPolicyOverridePatchSchema,
+  type PatchCompanyActionPolicyInput,
+  type PatchAgentActionPolicyOverrideInput,
+} from "./validators/agent-action-policy.js";
+export {
   DEFAULT_MAX_ATTACHMENT_BYTES,
   formatByteSize,
   tooLargeMessage,
@@ -101,6 +113,8 @@ export {
   PROJECT_COLORS,
   APPROVAL_TYPES,
   APPROVAL_STATUSES,
+  AGENT_ACTION_TYPES,
+  AGENT_ACTION_MODES,
   OUTBOUND_TOOL_DRAFT_GATE,
   OUTBOUND_SELF_RECIPIENT_RULES,
   SECRET_PROVIDERS,
@@ -170,6 +184,8 @@ export {
   type DeploymentExposure,
   type BindMode,
   type AuthBaseUrlMode,
+  type AgentActionType,
+  type AgentActionMode,
   type AgentStatus,
   type AgentAdapterType,
   type AgentRole,
@@ -284,6 +300,14 @@ export {
 
 export type {
   Company,
+  CompanyActionPolicy,
+  AgentActionPolicyOverride,
+  AgentActionPolicySource,
+  EffectiveAgentActionPolicy,
+  CompanyActionPolicyResponse,
+  AgentActionPolicyResponse,
+  PatchCompanyActionPolicy,
+  PatchAgentActionPolicyOverride,
   Environment,
   EnvironmentLease,
   EnvironmentProbeResult,

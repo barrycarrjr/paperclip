@@ -785,6 +785,18 @@ export const APPROVAL_STATUSES = [
 ] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
+export const AGENT_ACTION_TYPES = [
+  "send_message",
+  "move_money",
+  "change_files",
+  "post_publicly",
+  "change_knowledge_base",
+] as const;
+export type AgentActionType = (typeof AGENT_ACTION_TYPES)[number];
+
+export const AGENT_ACTION_MODES = ["ask_first", "go_ahead"] as const;
+export type AgentActionMode = (typeof AGENT_ACTION_MODES)[number];
+
 export const SECRET_PROVIDERS = [
   "local_encrypted",
   "aws_secrets_manager",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, heartbeatRuns, routines } from "@paperclipai/db";
+import { agents, companies, companyAgentDefaults, createDb, heartbeatRuns, routines } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -34,6 +34,7 @@ describeEmbeddedPostgres("structural finding service", () => {
     await db.delete(routines);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
+    await db.delete(companyAgentDefaults);
     await db.delete(companies);
   });
 
@@ -181,6 +182,121 @@ describeEmbeddedPostgres("structural finding service", () => {
     expect(findings).toHaveLength(0);
   });
 
+  it("flags agent go-ahead exceptions that are broader than company policy", async () => {
+    const companyId = await createCompany();
+    const agentId = await createAgent(companyId, {
+      name: "Builder",
+      role: "engineer",
+      permissions: { actionApprovalModes: { post_publicly: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        kind: "broad_agent_action_permission",
+        subjectId: agentId,
+        details: expect.objectContaining({
+          actionType: "post_publicly",
+          companyMode: "ask_first",
+          agentMode: "go_ahead",
+        }),
+      }),
+    ]);
+  });
+
+  it("does not flag an agent exception that is no broader than company policy", async () => {
+    const companyId = await createCompany();
+    await createAgent(companyId, {
+      permissions: { actionApprovalModes: { post_publicly: "ask_first" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("does not flag go-ahead access that matches the agent's stated job", async () => {
+    const companyId = await createCompany();
+    await createAgent(companyId, {
+      role: "finance",
+      title: "Billing specialist",
+      permissions: { actionApprovalModes: { move_money: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("does not confuse accounting with account when reviewing messaging access", async () => {
+    const companyId = await createCompany();
+    const agentId = await createAgent(companyId, {
+      role: "accounting",
+      permissions: { actionApprovalModes: { send_message: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        subjectId: agentId,
+        details: expect.objectContaining({ actionType: "send_message" }),
+      }),
+    ]);
+  });
+
+  it("does not confuse underwriter with writer when reviewing file access", async () => {
+    const companyId = await createCompany();
+    const agentId = await createAgent(companyId, {
+      role: "underwriter",
+      permissions: { actionApprovalModes: { change_files: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        subjectId: agentId,
+        details: expect.objectContaining({ actionType: "change_files" }),
+      }),
+    ]);
+  });
+
+  it("flags company-wide go-ahead permissions for each active agent", async () => {
+    const companyId = await createCompany();
+    const agentId = await createAgent(companyId, { role: "engineer" });
+    await db.insert(companyAgentDefaults).values({
+      companyId,
+      agentDefaults: { actionApprovalModes: { move_money: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        subjectId: agentId,
+        details: expect.objectContaining({
+          actionType: "move_money",
+          companyMode: "go_ahead",
+          agentMode: "go_ahead",
+          policySource: "company",
+          role: "engineer",
+        }),
+      }),
+    ]);
+  });
+
+  it("does not review permissions for terminated agents", async () => {
+    const companyId = await createCompany();
+    await createAgent(companyId, {
+      status: "terminated",
+      permissions: { actionApprovalModes: { move_money: "go_ahead" } },
+    });
+
+    const findings = await structuralFindingService(db).detectBroadAgentActionPermissions(companyId);
+
+    expect(findings).toHaveLength(0);
+  });
+
   it("scan() runs every detector by default and respects an opt-in kinds list", async () => {
     const companyId = await createCompany();
     await createAgent(companyId, { name: "Solo", reportsTo: null, role: "engineer" });
@@ -189,6 +305,7 @@ describeEmbeddedPostgres("structural finding service", () => {
     const kinds = new Set(all.map((f) => f.kind));
     expect(kinds.has("orphan_no_manager")).toBe(true);
     expect(kinds.has("company_no_routines")).toBe(true);
+    expect(kinds.has("broad_agent_action_permission")).toBe(false);
 
     const onlyOne = await structuralFindingService(db).scan(companyId, ["orphan_no_manager"]);
     expect(onlyOne.every((f) => f.kind === "orphan_no_manager")).toBe(true);

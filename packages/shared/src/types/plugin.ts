@@ -20,6 +20,7 @@ import type {
   PluginDatabaseMigrationStatus,
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
+  AgentActionType,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,8 @@ export interface PluginToolDeclaration {
    * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
    */
   writes?: boolean;
+  /** Action category used by the host's agent approval policy. */
+  actionType?: AgentActionType;
 }
 
 /**
@@ -165,6 +168,8 @@ export interface PluginOperationDeclaration {
    * @see PLUGIN_SPEC.md §11.7 — Repeat-safe operations
    */
   writes?: boolean;
+  /** Action category used by the host's agent approval policy. */
+  actionType?: AgentActionType;
 }
 
 /**

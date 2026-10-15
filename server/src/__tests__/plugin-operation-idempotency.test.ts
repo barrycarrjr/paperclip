@@ -414,6 +414,7 @@ describeWithDatabase("plugin operation repeat protection", () => {
       try {
         expect(second.result.failure?.code).toBe("unavailable");
         expect(second.result.error).toContain("already running");
+        expect(second.result.data).toBeUndefined();
       } finally {
         release?.();
         await inFlight;

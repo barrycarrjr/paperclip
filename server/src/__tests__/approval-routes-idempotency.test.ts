@@ -587,6 +587,42 @@ describe("approval routes idempotent retries", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
+  it("logs a refused unclassified write when the board rejects its draft", async () => {
+    const pending = {
+      id: "approval-action-rejected",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "pending",
+      payload: {
+        toolName: "files:replace",
+        actionType: null,
+        actionPolicySource: "unclassified",
+        runId: "run-1",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(pending);
+    mockApprovalService.reject.mockResolvedValue({
+      approval: { ...pending, status: "rejected" },
+      applied: true,
+    });
+
+    const res = await request(await createApp())
+      .post(`/api/approvals/${pending.id}/reject`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.refused",
+        agentId: "agent-1",
+        details: expect.objectContaining({ actionType: null, policySource: "unclassified" }),
+      }),
+    );
+  });
+
   it("rejects approval decisions for companies outside the caller scope", async () => {
     mockApprovalService.getById.mockResolvedValue({
       id: "approval-2",
@@ -757,6 +793,71 @@ describe("approval routes idempotent retries", () => {
     );
   });
 
+  it("rejects executable outbound drafts created through the generic approval API", async () => {
+    const res = await request(await createAgentApp())
+      .post("/api/companies/company-1/approvals")
+      .send({
+        type: "outbound_tool_draft",
+        payload: {
+          toolName: "email-tools:email_send",
+          parameters: { to: "customer@example.com", body: "Forged" },
+          summary: "Harmless-looking summary",
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("action checkpoint");
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects payload replacement when an outbound draft is resubmitted", async () => {
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-draft-revision",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "revision_requested",
+      requestedByAgentId: "agent-1",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Original" },
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+    });
+
+    const res = await request(await createAgentApp())
+      .post("/api/approvals/approval-draft-revision/resubmit")
+      .send({
+        payload: {
+          toolName: "email-tools:email_send",
+          parameters: { to: "attacker@example.com", body: "Replacement" },
+        },
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("cannot be revised");
+    expect(mockApprovalService.resubmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects revision requests for immutable outbound drafts", async () => {
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-draft-pending",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "pending",
+      requestedByAgentId: "agent-1",
+      payload: { toolName: "email-tools:email_send" },
+    });
+
+    const res = await request(await createApp())
+      .post("/api/approvals/approval-draft-pending/request-revision")
+      .send({ decisionNote: "Change the recipient" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("cannot be revised");
+    expect(mockApprovalService.requestRevision).not.toHaveBeenCalled();
+  });
+
   it("re-dispatches an approved outbound_tool_draft with bypassDraftGate so the gate does not loop", async () => {
     const draftedApproval = {
       id: "approval-loop",
@@ -796,10 +897,563 @@ describe("approval routes idempotent retries", () => {
       "3cx-tools:pbx_click_to_call",
       { toNumber: "+15555550199", fromExtension: "200" },
       expect.any(Object),
-      { bypassDraftGate: true },
+      { bypassDraftGate: true, approvedDraftConfirmation: true },
     );
     // No chatSessionId on payload → no chat-session wake.
     expect(mockAppendChatResult).not.toHaveBeenCalled();
+  });
+
+  it("records a governed action failure when its approved draft has no dispatcher", async () => {
+    const draftedApproval = {
+      id: "approval-no-dispatcher",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Hello" },
+        agentId: "agent-1",
+        runId: null,
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({
+      approval: draftedApproval,
+      applied: true,
+    });
+
+    const res = await request(await createApp())
+      .post("/api/approvals/approval-no-dispatcher/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actorType: "user",
+        action: "approval.execute_failed",
+        entityId: "approval-no-dispatcher",
+        details: expect.objectContaining({ reason: "no_tool_dispatcher", ok: false }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actorType: "agent",
+        actorId: "agent-1",
+        action: "agent_action.failed",
+        entityId: "approval-no-dispatcher",
+        details: expect.objectContaining({
+          actionType: "send_message",
+          policySource: "company",
+          error: "Plugin tools were not available, so the approved call did not run.",
+        }),
+      }),
+    );
+  });
+
+  it("records a policy refusal once when an approved draft is blocked before dispatch", async () => {
+    const draftedApproval = {
+      id: "approval-policy-refused",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "mcp:social:post_comment",
+        parameters: { body: "Hello" },
+        agentId: "agent-1",
+        runId: null,
+        actionType: "post_publicly",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: true });
+    const dispatcher = {
+      executeTool: vi.fn().mockRejectedValue(new Error(
+        '[EDISABLED] mutation tool "post_comment" is gated by allowMutations',
+      )),
+    };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-policy-refused/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.refused",
+        entityId: "approval-policy-refused",
+      }),
+    );
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.failed",
+        entityId: "approval-policy-refused",
+      }),
+    );
+  });
+
+  it("records a returned plugin mutation-switch refusal after approval", async () => {
+    const draftedApproval = {
+      id: "approval-result-refused",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "slack-tools:slack_update_message",
+        parameters: { channelId: "C1", ts: "1", text: "Updated" },
+        agentId: "agent-1",
+        runId: null,
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: true });
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "slack-tools",
+        toolName: "slack_update_message",
+        result: { error: "[EDISABLED] Mutations are disabled" },
+      }),
+    };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-result-refused/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.refused",
+        entityId: "approval-result-refused",
+      }),
+    );
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.failed",
+        entityId: "approval-result-refused",
+      }),
+    );
+  });
+
+  it("refuses a pending action after its requesting agent was deleted", async () => {
+    const deletedAgentId = "11111111-1111-4111-8111-111111111111";
+    const draftedApproval = {
+      id: "approval-deleted-agent",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Hello" },
+        agentId: deletedAgentId,
+        runId: "22222222-2222-4222-8222-222222222222",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: true });
+    const dispatcher = { executeTool: vi.fn() };
+
+    const res = await request(
+      await createApp({}, { getToolDispatcher: () => dispatcher }),
+    )
+      .post("/api/approvals/approval-deleted-agent/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actorId: deletedAgentId,
+        agentId: null,
+        action: "agent_action.refused",
+        entityId: "approval-deleted-agent",
+      }),
+    );
+  });
+
+  it("audits rejection after the requesting agent was deleted", async () => {
+    const deletedAgentId = "11111111-1111-4111-8111-111111111111";
+    const draftedApproval = {
+      id: "rejection-deleted-agent",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "rejected",
+      payload: {
+        toolName: "email-tools:email_send",
+        agentId: deletedAgentId,
+        runId: "22222222-2222-4222-8222-222222222222",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: null,
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.reject.mockResolvedValue({ approval: draftedApproval, applied: true });
+
+    const res = await request(await createApp())
+      .post("/api/approvals/rejection-deleted-agent/reject")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actorId: deletedAgentId,
+        agentId: null,
+        action: "agent_action.refused",
+        entityId: "rejection-deleted-agent",
+      }),
+    );
+  });
+
+  it("returns an explicit uncertain failure when an approved action outcome cannot be audited", async () => {
+    const draftedApproval = {
+      id: "approval-audit-failed",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Hello" },
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: true });
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "agent_action.allowed") throw new Error("activity store unavailable");
+    });
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "email-tools",
+        toolName: "email-tools:email_send",
+        result: { content: "sent" },
+      }),
+    };
+
+    const res = await request(await createApp({}, { getToolDispatcher: () => dispatcher }))
+      .post("/api/approvals/approval-audit-failed/approve")
+      .send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain("may have completed");
+  });
+
+  it("repairs a missing approved action audit on an idempotent retry without rerunning the action", async () => {
+    const draftedApproval = {
+      id: "approval-audit-retry",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      decidedByUserId: "user-1",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Hello" },
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve
+      .mockResolvedValueOnce({ approval: draftedApproval, applied: true })
+      .mockResolvedValueOnce({ approval: draftedApproval, applied: false });
+    let failAudit = true;
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "agent_action.allowed" && failAudit) {
+        failAudit = false;
+        throw new Error("activity store unavailable");
+      }
+    });
+    const dispatcher = {
+      executeTool: vi.fn().mockResolvedValue({
+        pluginId: "email-tools",
+        toolName: "email-tools:email_send",
+        result: { content: "sent" },
+      }),
+    };
+    const findActionAudit = vi.fn().mockResolvedValue([
+      { action: "approval.executed", details: { ok: true } },
+    ]);
+    const app = await createApp({}, { getToolDispatcher: () => dispatcher, findActionAudit });
+
+    await request(app).post("/api/approvals/approval-audit-retry/approve").send({}).expect(503);
+    await request(app).post("/api/approvals/approval-audit-retry/approve").send({}).expect(200);
+
+    expect(dispatcher.executeTool).toHaveBeenCalledTimes(1);
+    expect(findActionAudit).toHaveBeenCalledWith("company-1", "approval-audit-retry");
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent_action.allowed",
+      details: expect.objectContaining({ recoveredOnRetry: true }),
+    }));
+  });
+
+  it("repairs a missing approval execution receipt independently of the action outcome", async () => {
+    const draftedApproval = {
+      id: "approval-receipt-retry",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      decidedByUserId: "user-1",
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: false });
+    const findActionAudit = vi.fn().mockResolvedValue([{
+      action: "agent_action.refused",
+      details: { actionType: "send_message" },
+    }]);
+
+    await request(await createApp({}, { findActionAudit }))
+      .post("/api/approvals/approval-receipt-retry/approve")
+      .send({})
+      .expect(200);
+
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "approval.execute_failed",
+      details: expect.objectContaining({ outcome: "refused", recoveredOnRetry: true }),
+    }));
+    expect(mockLogActivity).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent_action.refused",
+    }));
+  });
+
+  it("records an uncertain failure when an approved retry has no execution receipt", async () => {
+    const draftedApproval = {
+      id: "approval-audit-no-receipt",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      decidedByUserId: "user-1",
+      decidedAt: "2020-01-01T00:00:00.000Z",
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: false });
+    const dispatcher = { executeTool: vi.fn() };
+    const findActionAudit = vi.fn().mockResolvedValue([{
+      action: "approval.execution_started",
+      details: { leaseExpiresAt: "2020-01-01T00:10:00.000Z" },
+    }]);
+
+    await request(await createApp({}, { getToolDispatcher: () => dispatcher, findActionAudit }))
+      .post("/api/approvals/approval-audit-no-receipt/approve")
+      .send({})
+      .expect(200);
+
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent_action.failed",
+      details: expect.objectContaining({
+        recoveredOnRetry: true,
+        outcomeUncertain: true,
+      }),
+    }));
+  });
+
+  it("does not finalize a receipt-free retry while the first approval handler may still be running", async () => {
+    const draftedApproval = {
+      id: "approval-audit-in-progress",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      decidedByUserId: "user-1",
+      decidedAt: new Date().toISOString(),
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: false });
+    const findActionAudit = vi.fn().mockResolvedValue([{
+      action: "approval.execution_started",
+      details: { leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() },
+    }]);
+
+    await request(await createApp({}, { findActionAudit }))
+      .post("/api/approvals/approval-audit-in-progress/approve")
+      .send({})
+      .expect(200);
+
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "agent_action.failed" }),
+    );
+  });
+
+  it("does not finalize a retry during the gap before the execution lease is recorded", async () => {
+    const draftedApproval = {
+      id: "approval-audit-before-start",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      decidedByUserId: "user-1",
+      decidedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: false });
+    const findActionAudit = vi.fn().mockResolvedValue([]);
+
+    await request(await createApp({}, { findActionAudit }))
+      .post("/api/approvals/approval-audit-before-start/approve")
+      .send({})
+      .expect(200);
+
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "agent_action.failed" }),
+    );
+  });
+
+  it("does not run an approved action when its durable execution start cannot be recorded", async () => {
+    const draftedApproval = {
+      id: "approval-start-audit-failed",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "approved",
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com", body: "Hello" },
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.approve.mockResolvedValue({ approval: draftedApproval, applied: true });
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "approval.execution_started") throw new Error("activity store unavailable");
+    });
+    const dispatcher = { executeTool: vi.fn() };
+
+    const res = await request(await createApp({}, { getToolDispatcher: () => dispatcher }))
+      .post("/api/approvals/approval-start-audit-failed/approve")
+      .send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain("action was not run");
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when a rejected action outcome cannot be audited", async () => {
+    const draftedApproval = {
+      id: "rejection-audit-failed",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "rejected",
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.reject.mockResolvedValue({ approval: draftedApproval, applied: true });
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "agent_action.refused") throw new Error("activity store unavailable");
+    });
+
+    const res = await request(await createApp())
+      .post("/api/approvals/rejection-audit-failed/reject")
+      .send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain("audit record is missing");
+  });
+
+  it("repairs a missing refused action audit on an idempotent retry", async () => {
+    const draftedApproval = {
+      id: "rejection-audit-retry",
+      companyId: "company-1",
+      type: "outbound_tool_draft",
+      status: "rejected",
+      decidedByUserId: "user-1",
+      payload: {
+        toolName: "email-tools:email_send",
+        actionType: "send_message",
+        actionPolicySource: "company",
+      },
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+    };
+    mockApprovalService.getById.mockResolvedValue(draftedApproval);
+    mockApprovalService.reject
+      .mockResolvedValueOnce({ approval: draftedApproval, applied: true })
+      .mockResolvedValueOnce({ approval: draftedApproval, applied: false });
+    let failAudit = true;
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "agent_action.refused" && failAudit) {
+        failAudit = false;
+        throw new Error("activity store unavailable");
+      }
+    });
+    const findActionAudit = vi.fn().mockResolvedValue([]);
+    const app = await createApp({}, { findActionAudit });
+
+    await request(app).post("/api/approvals/rejection-audit-retry/reject").send({}).expect(503);
+    await request(app).post("/api/approvals/rejection-audit-retry/reject").send({}).expect(200);
+
+    expect(findActionAudit).toHaveBeenCalledWith("company-1", "rejection-audit-retry");
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent_action.refused",
+      details: expect.objectContaining({ recoveredOnRetry: true }),
+    }));
   });
 
   it("appends a chat-session wake message when an approved draft carries chatSessionId", async () => {
@@ -910,6 +1564,8 @@ describe("approval routes idempotent retries", () => {
         agentId: "agent-uuid-1",
         runId: "run-1",
         chatSessionId: "heartbeat:run-1",
+        actionType: "send_message",
+        actionPolicySource: "company",
       },
       requestedByAgentId: "agent-uuid-1",
       requestedByUserId: null,
@@ -953,6 +1609,13 @@ describe("approval routes idempotent retries", () => {
         }),
       }),
     );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.allowed",
+        details: expect.objectContaining({ actionType: "send_message" }),
+      }),
+    );
   });
 
   it("says on the issue when an approved message did not go out", async () => {
@@ -967,6 +1630,8 @@ describe("approval routes idempotent retries", () => {
         summary: '— "hello"',
         agentId: "agent-uuid-1",
         runId: "run-2",
+        actionType: "send_message",
+        actionPolicySource: "company",
       },
       requestedByAgentId: "agent-uuid-1",
       requestedByUserId: null,
@@ -1003,6 +1668,20 @@ describe("approval routes idempotent retries", () => {
         payload: expect.objectContaining({
           draftExecution: expect.objectContaining({ ok: false }),
         }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "approval.execute_failed",
+        details: expect.objectContaining({ ok: false, hadError: true }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent_action.failed",
+        details: expect.objectContaining({ actionType: "send_message" }),
       }),
     );
   });

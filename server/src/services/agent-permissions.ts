@@ -1,5 +1,8 @@
+import { actionApprovalModesSchema, type ActionApprovalModes } from "@paperclipai/shared";
+
 export type NormalizedAgentPermissions = Record<string, unknown> & {
   canCreateAgents: boolean;
+  actionApprovalModes?: ActionApprovalModes;
 };
 
 export function defaultPermissionsForRole(role: string): NormalizedAgentPermissions {
@@ -18,10 +21,14 @@ export function normalizeAgentPermissions(
   }
 
   const record = permissions as Record<string, unknown>;
+  const actionApprovalModes = actionApprovalModesSchema.safeParse(record.actionApprovalModes);
+  const { actionApprovalModes: _storedActionApprovalModes, ...storedPermissions } = record;
   return {
+    ...storedPermissions,
     canCreateAgents:
       typeof record.canCreateAgents === "boolean"
         ? record.canCreateAgents
         : defaults.canCreateAgents,
+    ...(actionApprovalModes.success ? { actionApprovalModes: actionApprovalModes.data } : {}),
   };
 }

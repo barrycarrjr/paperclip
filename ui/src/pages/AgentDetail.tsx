@@ -42,6 +42,7 @@ import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { ClaudeSignInScope } from "../components/ClaudeSignInScope";
 import { RunFailureGuidance } from "../components/RunFailureGuidance";
+import { ActionPolicyControls } from "../components/ActionPolicyControls";
 import { RunReportCard, runReportText } from "../components/RunReportCard";
 import { RunWorkProductsCard } from "../components/RunWorkProductsCard";
 import { RunDocumentsCard } from "../components/RunDocumentsCard";
@@ -1791,6 +1792,25 @@ function ConfigurationTab({
     enabled: Boolean(companyId),
   });
 
+  const actionPoliciesQuery = useQuery({
+    queryKey: queryKeys.agents.actionPolicies(agent.id, companyId),
+    queryFn: () => agentsApi.getActionPolicies(agent.id, companyId),
+  });
+  const actionPolicyMutation = useMutation({
+    mutationFn: (patch: Parameters<typeof agentsApi.updateActionPolicy>[1]) =>
+      agentsApi.updateActionPolicy(agent.id, patch, companyId),
+    onSuccess: (policies) => {
+      queryClient.setQueryData(queryKeys.agents.actionPolicies(agent.id, companyId), policies);
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Could not save action approval",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
+    },
+  });
+
   const updateAgent = useSaveMutation({
     mutationFn: (data: Record<string, unknown>) => agentsApi.update(agent.id, data, companyId),
     successMessage: "Configuration saved",
@@ -1861,6 +1881,31 @@ function ConfigurationTab({
         hideInstructionsFile={hideInstructionsFile}
         sectionLayout="cards"
       />
+
+      <div>
+        <h3 className="text-sm font-medium mb-3">Action approvals</h3>
+        <div className="border border-border rounded-lg p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Set exceptions for this agent or use the company setting. These apply to brokered plugin
+            actions.
+          </p>
+          {actionPoliciesQuery.error ? (
+            <div className="text-xs text-destructive">
+              {actionPoliciesQuery.error instanceof Error
+                ? actionPoliciesQuery.error.message
+                : "Failed to load action approvals."}
+            </div>
+          ) : (
+            <ActionPolicyControls
+              scope="agent"
+              overrides={actionPoliciesQuery.data?.overrides ?? []}
+              effective={actionPoliciesQuery.data?.effective ?? []}
+              disabled={actionPoliciesQuery.isLoading || actionPolicyMutation.isPending}
+              onChange={(actionType, mode) => actionPolicyMutation.mutate({ actionType, mode })}
+            />
+          )}
+        </div>
+      </div>
 
       <div>
         <h3 className="text-sm font-medium mb-3">Permissions</h3>

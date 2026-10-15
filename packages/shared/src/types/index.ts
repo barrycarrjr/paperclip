@@ -1,5 +1,15 @@
 export type { Company } from "./company.js";
 export type {
+  CompanyActionPolicy,
+  AgentActionPolicyOverride,
+  AgentActionPolicySource,
+  EffectiveAgentActionPolicy,
+  CompanyActionPolicyResponse,
+  AgentActionPolicyResponse,
+  PatchCompanyActionPolicy,
+  PatchAgentActionPolicyOverride,
+} from "./agent-action-policy.js";
+export type {
   Environment,
   EnvironmentLease,
   EnvironmentProbeResult,

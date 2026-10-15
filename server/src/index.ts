@@ -35,6 +35,7 @@ import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
   adapterModelRefreshService,
+  agentActionPermissionReviewService,
   calendarService,
   memoryFolderService,
   heartbeatService,
@@ -984,6 +985,49 @@ export async function startServer(): Promise<StartedServer> {
       logger.error({ err }, "starter routine instruction reconciliation failed");
     });
   
+  const actionPermissionReview = agentActionPermissionReviewService(db as any);
+  let lastActionPermissionReviewDay: string | null = null;
+  let actionPermissionReviewInFlight = false;
+
+  const runDailyActionPermissionReview = async (now = new Date()) => {
+    const day = now.toISOString().slice(0, 10);
+    if (day === lastActionPermissionReviewDay || actionPermissionReviewInFlight) return;
+    actionPermissionReviewInFlight = true;
+    try {
+      const result = await actionPermissionReview.runDailyReview(now);
+      lastActionPermissionReviewDay = day;
+      if (result.flagged > 0) {
+        logger.warn({ ...result }, "daily agent action permission review flagged broad permissions");
+      } else {
+        logger.info({ ...result }, "daily agent action permission review completed");
+      }
+    } finally {
+      actionPermissionReviewInFlight = false;
+    }
+  };
+
+  const reconcileStaleAgentActions = async (now = new Date()) => {
+    const result = await actionPermissionReview.reconcileStaleExecutions(now);
+    if (result.reconciled > 0) {
+      logger.warn({ ...result }, "reconciled agent actions with missing outcome receipts");
+    }
+  };
+
+  void reconcileStaleAgentActions().catch((err) => {
+    logger.error({ err }, "agent action outcome reconciliation failed");
+  });
+  void runDailyActionPermissionReview().catch((err) => {
+    logger.error({ err }, "daily agent action permission review failed");
+  });
+  setInterval(() => {
+    void reconcileStaleAgentActions().catch((err) => {
+      logger.error({ err }, "agent action outcome reconciliation failed");
+    });
+    void runDailyActionPermissionReview().catch((err) => {
+      logger.error({ err }, "daily agent action permission review failed");
+    });
+  }, 60 * 60_000);
+
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any, { pluginWorkerManager });
     const routines = routineService(db as any, { pluginWorkerManager });
@@ -993,7 +1037,7 @@ export async function startServer(): Promise<StartedServer> {
     // Adapter model lists are refreshed at most once per calendar day (UTC).
     // Tracks the last day we ran so the frequent scheduler tick fires it just once.
     let lastAdapterModelRefreshDay: string | null = null;
-  
+
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
     void heartbeat

@@ -21,6 +21,7 @@ import { instanceSettingsApi } from "../api/instanceSettings";
 import { secretsApi } from "../api/secrets";
 import { queryKeys } from "../lib/queryKeys";
 import { RunPermissionDefaultsEditor } from "../components/RunPermissionDefaults";
+import { ActionPolicyControls } from "../components/ActionPolicyControls";
 import { resolveAgentSkipPermissions } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { Settings, Check, Download, Upload, History } from "lucide-react";
@@ -272,16 +273,48 @@ export function CompanySettings() {
     queryFn: () => instanceSettingsApi.getAgentDefaults(),
   });
   const agentDefaultsMutation = useMutation({
-    mutationFn: (patch: Parameters<typeof companiesApi.updateAgentDefaults>[1]) =>
-      companiesApi.updateAgentDefaults(selectedCompanyId!, patch),
-    onSuccess: async () => {
+    mutationFn: ({
+      companyId,
+      patch,
+    }: {
+      companyId: string;
+      patch: Parameters<typeof companiesApi.updateAgentDefaults>[1];
+    }) => companiesApi.updateAgentDefaults(companyId, patch),
+    onSuccess: async (_defaults, { companyId }) => {
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.companies.agentDefaults(selectedCompanyId!),
+        queryKey: queryKeys.companies.agentDefaults(companyId),
       });
     },
     onError: (error) => {
       pushToast({
         title: "Could not save run permission default",
+        body: error instanceof Error ? error.message : undefined,
+        tone: "error",
+      });
+    },
+  });
+  const companyActionPoliciesQuery = useQuery({
+    queryKey: selectedCompanyId
+      ? queryKeys.companies.actionPolicies(selectedCompanyId)
+      : ["companies", "none", "action-policies"],
+    queryFn: () => companiesApi.getActionPolicies(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId),
+  });
+  const companyActionPolicyMutation = useMutation({
+    mutationFn: ({
+      companyId,
+      patch,
+    }: {
+      companyId: string;
+      patch: Parameters<typeof companiesApi.updateActionPolicy>[1];
+    }) => companiesApi.updateActionPolicy(companyId, patch),
+    onSuccess: (policies, { companyId }) => {
+      queryClient.setQueryData(queryKeys.companies.actionPolicies(companyId), policies);
+      queryClient.invalidateQueries({ queryKey: ["agents", "action-policies"] });
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Could not save action approval",
         body: error instanceof Error ? error.message : undefined,
         tone: "error",
       });
@@ -1183,6 +1216,41 @@ export function CompanySettings() {
         </div>
       </div>
 
+      <div className="space-y-4" data-testid="company-settings-action-policies-section">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Action approvals
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          <p className="text-xs text-muted-foreground">
+              Choose which brokered plugin actions need approval before an agent continues.
+              Direct shell, browser, and filesystem activity depends on the agent runtime's own
+              controls.
+          </p>
+          {companyActionPoliciesQuery.error ? (
+            <div className="text-xs text-destructive">
+              {companyActionPoliciesQuery.error instanceof Error
+                ? companyActionPoliciesQuery.error.message
+                : "Failed to load action approvals."}
+            </div>
+          ) : (
+            <ActionPolicyControls
+              scope="company"
+              policies={companyActionPoliciesQuery.data ?? []}
+              disabled={
+                companyActionPoliciesQuery.isLoading || companyActionPolicyMutation.isPending
+              }
+              onChange={(actionType, mode) => {
+                if (!selectedCompanyId) return;
+                companyActionPolicyMutation.mutate({
+                  companyId: selectedCompanyId,
+                  patch: { actionType, mode },
+                });
+              }}
+            />
+          )}
+        </div>
+      </div>
+
       {/* Run permissions */}
       <div className="space-y-4" data-testid="company-settings-run-permissions-section">
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -1213,7 +1281,10 @@ export function CompanySettings() {
               }}
               inheritedLabel="Use instance setting"
               onChange={(adapterType, value) =>
-                agentDefaultsMutation.mutate({ skipPermissionsByAdapterType: { [adapterType]: value } })
+                selectedCompanyId && agentDefaultsMutation.mutate({
+                  companyId: selectedCompanyId,
+                  patch: { skipPermissionsByAdapterType: { [adapterType]: value } },
+                })
               }
               disabled={agentDefaultsMutation.isPending || companyAgentDefaultsQuery.isLoading}
               testIdPrefix="company-run-permission"

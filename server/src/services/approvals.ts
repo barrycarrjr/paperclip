@@ -102,6 +102,32 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]),
 
+    createPendingDraft: async (
+      companyId: string,
+      data: Omit<typeof approvals.$inferInsert, "companyId"> & { dedupeKey: string },
+    ) => {
+      const inserted = await db
+        .insert(approvals)
+        .values({ ...data, companyId })
+        .onConflictDoNothing()
+        .returning();
+      if (inserted[0]) return { approval: inserted[0], created: true };
+      const existing = await db
+        .select()
+        .from(approvals)
+        .where(and(
+          eq(approvals.companyId, companyId),
+          eq(approvals.type, "outbound_tool_draft"),
+          eq(approvals.status, "pending"),
+          eq(approvals.dedupeKey, data.dedupeKey),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!existing) {
+        throw new Error("Pending draft conflict could not be resolved");
+      }
+      return { approval: existing, created: false };
+    },
+
     approve: async (
       id: string,
       decidedByUserId: string,

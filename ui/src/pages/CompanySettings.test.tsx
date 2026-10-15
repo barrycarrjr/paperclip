@@ -7,9 +7,14 @@ import { AGENT_ADAPTER_TYPES, getEnvironmentCapabilities } from "@paperclipai/sh
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompanySettings } from "./CompanySettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { queryKeys } from "@/lib/queryKeys";
 
 const mockCompaniesApi = vi.hoisted(() => ({
   update: vi.fn(),
+  getAgentDefaults: vi.fn(),
+  updateAgentDefaults: vi.fn(),
+  getActionPolicies: vi.fn(),
+  updateActionPolicy: vi.fn(),
 }));
 
 const mockAccessApi = vi.hoisted(() => ({
@@ -33,6 +38,7 @@ const mockEnvironmentsApi = vi.hoisted(() => ({
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
+  getAgentDefaults: vi.fn(),
 }));
 
 const mockSecretsApi = vi.hoisted(() => ({
@@ -53,10 +59,19 @@ const mockCompanies = vi.hoisted(() => [
     logoUrl: null,
     issuePrefix: "PAP",
   },
+  {
+    id: "company-2",
+    name: "Second Company",
+    description: null,
+    brandColor: null,
+    logoUrl: null,
+    issuePrefix: "SEC",
+  },
 ]);
 // The real context has no companies until its list loads. Tests see the loaded
 // list unless they set `loading`.
 const mockCompanyListState = vi.hoisted(() => ({ loading: false }));
+const mockSelectedCompanyState = vi.hoisted(() => ({ id: "company-1" }));
 const mockNoCompanies = vi.hoisted((): typeof mockCompanies => []);
 
 vi.mock("../api/companies", () => ({
@@ -107,8 +122,8 @@ vi.mock("../context/CompanyContext", () => ({
     const companies = mockCompanyListState.loading ? mockNoCompanies : mockCompanies;
     return {
       companies,
-      selectedCompany: companies[0] ?? null,
-      selectedCompanyId: "company-1",
+      selectedCompany: companies.find((company) => company.id === mockSelectedCompanyState.id) ?? null,
+      selectedCompanyId: mockSelectedCompanyState.id,
       setSelectedCompanyId: mockSetSelectedCompanyId,
     };
   },
@@ -151,11 +166,21 @@ describe("CompanySettings", () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableEnvironments: true,
     });
+    mockInstanceSettingsApi.getAgentDefaults.mockResolvedValue({
+      skipPermissionsByAdapterType: {},
+    });
     mockEnvironmentsApi.list.mockResolvedValue([]);
     mockEnvironmentsApi.capabilities.mockResolvedValue(
       getEnvironmentCapabilities(AGENT_ADAPTER_TYPES),
     );
     mockSecretsApi.list.mockResolvedValue([]);
+    mockCompaniesApi.getAgentDefaults.mockResolvedValue({
+      skipPermissionsByAdapterType: {},
+    });
+    mockCompaniesApi.updateAgentDefaults.mockResolvedValue({
+      skipPermissionsByAdapterType: {},
+    });
+    mockCompaniesApi.getActionPolicies.mockResolvedValue([]);
     mockCompaniesApi.update.mockResolvedValue({
       id: "company-1",
       name: "Paperclip",
@@ -171,6 +196,7 @@ describe("CompanySettings", () => {
     document.body.innerHTML = "";
     vi.clearAllMocks();
     mockCompanyListState.loading = false;
+    mockSelectedCompanyState.id = "company-1";
   });
 
   // Opening the page by its address renders it first while the company list is
@@ -378,5 +404,61 @@ describe("CompanySettings", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("keeps an action policy response in the company where the save started", async () => {
+    let resolveUpdate!: (value: Array<{
+      companyId: string;
+      actionType: "send_message";
+      mode: "go_ahead";
+    }>) => void;
+    mockCompaniesApi.updateActionPolicy.mockReturnValue(new Promise((resolve) => {
+      resolveUpdate = resolve;
+    }));
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const renderPage = () => root.render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <CompanySettings />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await act(async () => renderPage());
+    await flushReact();
+    await flushReact();
+
+    const select = container.querySelector(
+      '[data-testid="action-policy-send_message"]',
+    ) as HTMLSelectElement;
+    await act(async () => {
+      select.value = "go_ahead";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(mockCompaniesApi.updateActionPolicy).toHaveBeenCalledWith("company-1", {
+      actionType: "send_message",
+      mode: "go_ahead",
+    });
+
+    mockSelectedCompanyState.id = "company-2";
+    await act(async () => renderPage());
+    await flushReact();
+
+    const response = [{
+      companyId: "company-1",
+      actionType: "send_message" as const,
+      mode: "go_ahead" as const,
+    }];
+    await act(async () => resolveUpdate(response));
+    await flushReact();
+
+    expect(queryClient.getQueryData(queryKeys.companies.actionPolicies("company-1"))).toEqual(response);
+    expect(queryClient.getQueryData(queryKeys.companies.actionPolicies("company-2"))).toEqual([]);
+
+    await act(async () => root.unmount());
   });
 });

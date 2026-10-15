@@ -78,6 +78,17 @@ function makeInstructionApproval(status: Approval["status"]): Approval {
   };
 }
 
+function makeOutboundDraft(status: Approval["status"]): Approval {
+  return {
+    ...makeInstructionApproval(status),
+    type: "outbound_tool_draft",
+    payload: {
+      toolName: "email-tools:email_send",
+      summary: "Email a customer",
+    },
+  };
+}
+
 async function flushReact() {
   await act(async () => {
     await Promise.resolve();
@@ -157,5 +168,12 @@ describe("ApprovalDetail instruction changes", () => {
     expect(container.textContent).toContain("Waiting for the corrected agent to submit a revised rule.");
     expect(container.textContent).not.toContain("Mark resubmitted");
     expect(resubmitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not offer revision controls for an executable outbound draft", async () => {
+    await renderApproval(makeOutboundDraft("pending"));
+
+    expect(container.textContent).not.toContain("Request revision");
+    expect(container.textContent).not.toContain("Mark resubmitted");
   });
 });

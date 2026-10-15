@@ -210,6 +210,16 @@ describe("plugin operations — host registry publishing", () => {
     expect(registry.getTool("acme.reporting:build-report")?.audience).toBe("agents");
   });
 
+  it("keeps the declared action category on the registered tool", () => {
+    const registry = createPluginToolRegistry();
+    registry.registerPlugin(
+      "acme.reporting",
+      manifest({ operations: [operation({ writes: true, actionType: "change_files" })] }),
+    );
+
+    expect(registry.getTool("acme.reporting:build-report")?.actionType).toBe("change_files");
+  });
+
   it("keeps a user-only operation out of the agent tool list entirely", () => {
     const registry = createPluginToolRegistry();
     registry.registerPlugin(

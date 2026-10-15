@@ -2,11 +2,19 @@ import { createHash } from "node:crypto";
 import { and, eq, gte, isNull, lte, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, heartbeatRuns, routines } from "@paperclipai/db";
+import {
+  AGENT_ACTION_TYPE_LABELS,
+  AGENT_ACTION_TYPES,
+  type AgentActionMode,
+  type AgentActionType,
+} from "@paperclipai/shared";
+import { agentActionPolicyService } from "./agent-action-policy.js";
 
 export const STRUCTURAL_FINDING_KINDS = [
   "orphan_no_manager",
   "idle_agent",
   "company_no_routines",
+  "broad_agent_action_permission",
 ] as const;
 
 export type StructuralFindingKind = (typeof STRUCTURAL_FINDING_KINDS)[number];
@@ -24,7 +32,56 @@ export interface StructuralFinding {
 const NEW_AGENT_GRACE_DAYS = 7;
 const IDLE_AGENT_DAYS = 30;
 const ROOT_ROLES = new Set(["ceo"]);
-const NON_ARCHIVED_AGENT_STATUSES_GUARD = "archived";
+const TERMINATED_AGENT_STATUS = "terminated";
+const ACTION_JOB_TERMS: Record<AgentActionType, string[]> = {
+  send_message: [
+    "account", "assistant", "communications", "customer", "email", "marketing",
+    "outreach", "phone", "recruit", "recruiter", "recruiting", "sales", "social", "support",
+  ],
+  move_money: [
+    "accounting", "billing", "bookkeeper", "bookkeeping", "cfo", "finance", "financial", "invoice",
+    "payment", "revenue", "treasury",
+  ],
+  change_files: [
+    "code", "content", "design", "develop", "developer", "development", "devops", "document", "engineer",
+    "file", "repository", "software", "writer",
+  ],
+  post_publicly: [
+    "communications", "community", "content", "marketing", "media", "public relations",
+    "publisher", "social", "writer",
+  ],
+  change_knowledge_base: [
+    "account", "admin", "analyst", "assistant", "customer", "documentation", "knowledge",
+    "operations", "product", "project", "research", "sales", "support",
+  ],
+};
+
+function jobSupportsAction(
+  actionType: AgentActionType,
+  agent: { role: string; title: string | null; capabilities: string | null },
+): boolean {
+  if (ROOT_ROLES.has(agent.role.toLowerCase())) return true;
+  const job = [agent.role, agent.title, agent.capabilities]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const paddedJob = ` ${job} `;
+  return ACTION_JOB_TERMS[actionType].some((term) => paddedJob.includes(` ${term} `));
+}
+
+function readActionApprovalModes(value: unknown): Partial<Record<AgentActionType, AgentActionMode>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const raw = (value as Record<string, unknown>).actionApprovalModes;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    AGENT_ACTION_TYPES.flatMap((actionType) => {
+      const mode = (raw as Record<string, unknown>)[actionType];
+      return mode === "ask_first" || mode === "go_ahead" ? [[actionType, mode]] : [];
+    }),
+  );
+}
 
 function fingerprint(parts: Array<string | number | undefined | null>): string {
   const text = parts.filter((p) => p !== undefined && p !== null).join("|");
@@ -50,7 +107,7 @@ export function structuralFindingService(db: Db) {
         and(
           eq(agents.companyId, companyId),
           isNull(agents.reportsTo),
-          ne(agents.status, NON_ARCHIVED_AGENT_STATUSES_GUARD),
+          ne(agents.status, TERMINATED_AGENT_STATUS),
           lte(agents.createdAt, cutoff),
         ),
       );
@@ -90,7 +147,7 @@ export function structuralFindingService(db: Db) {
       .where(
         and(
           eq(agents.companyId, companyId),
-          ne(agents.status, NON_ARCHIVED_AGENT_STATUSES_GUARD),
+          ne(agents.status, TERMINATED_AGENT_STATUS),
           lte(agents.createdAt, cutoff),
         ),
       );
@@ -159,10 +216,61 @@ export function structuralFindingService(db: Db) {
     ];
   }
 
+  async function detectBroadAgentActionPermissions(companyId: string): Promise<StructuralFinding[]> {
+    const [companyPolicies, companyAgents] = await Promise.all([
+      agentActionPolicyService(db).listCompanyPolicies(companyId),
+      db
+        .select({
+          id: agents.id,
+          name: agents.name,
+          role: agents.role,
+          title: agents.title,
+          capabilities: agents.capabilities,
+          permissions: agents.permissions,
+        })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), ne(agents.status, TERMINATED_AGENT_STATUS))),
+    ]);
+    const companyModes = new Map(companyPolicies.map((policy) => [policy.actionType, policy.mode]));
+    const findings: StructuralFinding[] = [];
+    for (const agent of companyAgents) {
+      const overrides = readActionApprovalModes(agent.permissions);
+      for (const actionType of AGENT_ACTION_TYPES) {
+        const companyMode = companyModes.get(actionType) ?? "ask_first";
+        const agentMode = overrides[actionType] ?? companyMode;
+        if (agentMode !== "go_ahead") continue;
+        if (jobSupportsAction(actionType, agent)) continue;
+        const policySource = overrides[actionType] ? "agent" : "company";
+        findings.push({
+          kind: "broad_agent_action_permission",
+          fingerprint: fingerprint(["broad_agent_action_permission", agent.id, actionType]),
+          severity: "medium",
+          subjectType: "agent",
+          subjectId: agent.id,
+          summary: `${agent.name} can ${AGENT_ACTION_TYPE_LABELS[actionType].toLowerCase()} without approval`,
+          details: {
+            agentId: agent.id,
+            agentName: agent.name,
+            role: agent.role,
+            title: agent.title,
+            capabilities: agent.capabilities,
+            actionType,
+            companyMode,
+            agentMode,
+            policySource,
+            recommendation: "Confirm this permission is required for the agent's current job, or change it to Ask first",
+          },
+        });
+      }
+    }
+    return findings;
+  }
+
   return {
     detectOrphanNoManager,
     detectIdleAgents,
     detectCompanyNoRoutines,
+    detectBroadAgentActionPermissions,
     scan: async (companyId: string, kinds?: StructuralFindingKind[]): Promise<StructuralFinding[]> => {
       const requested = new Set<StructuralFindingKind>(kinds ?? STRUCTURAL_FINDING_KINDS);
       const out: StructuralFinding[] = [];
@@ -174,6 +282,9 @@ export function structuralFindingService(db: Db) {
       }
       if (requested.has("company_no_routines")) {
         out.push(...(await detectCompanyNoRoutines(companyId)));
+      }
+      if (requested.has("broad_agent_action_permission")) {
+        out.push(...(await detectBroadAgentActionPermissions(companyId)));
       }
       return out;
     },

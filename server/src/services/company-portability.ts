@@ -4115,6 +4115,25 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           desiredSkills,
           mode,
         );
+        let importedPermissions = manifestAgent.permissions;
+        if (mode === "agent_safe" && isPlainRecord(importedPermissions)) {
+          const { actionApprovalModes: requestedActionModes, ...safePermissions } = importedPermissions;
+          importedPermissions = safePermissions;
+          if (requestedActionModes !== undefined) {
+            warnings.push(
+              `Ignored board-owned action approval modes for ${manifestAgent.slug} during safe import.`,
+            );
+          }
+          if (planAgent.action === "update" && planAgent.existingAgentId) {
+            const existingAgent = await agents.getById(planAgent.existingAgentId);
+            const existingModes = isPlainRecord(existingAgent?.permissions)
+              ? existingAgent.permissions.actionApprovalModes
+              : undefined;
+            if (isPlainRecord(existingModes)) {
+              importedPermissions = { ...safePermissions, actionApprovalModes: existingModes };
+            }
+          }
+        }
         const patch = {
           name: planAgent.plannedName,
           role: manifestAgent.role,
@@ -4127,7 +4146,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           adapterConfig: normalizedAdapter.adapterConfig,
           runtimeConfig: disableImportedTimerHeartbeat(manifestAgent.runtimeConfig),
           budgetMonthlyCents: manifestAgent.budgetMonthlyCents,
-          permissions: manifestAgent.permissions,
+          permissions: importedPermissions,
           metadata: manifestAgent.metadata,
         };
 

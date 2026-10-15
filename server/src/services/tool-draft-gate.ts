@@ -25,13 +25,19 @@
  *     and worker routing are all unchanged.
  */
 
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { heartbeatRuns, issueApprovals } from "@paperclipai/db";
+import { agents, heartbeatRuns, issueApprovals } from "@paperclipai/db";
+import { isAgentStatusInvokable } from "@paperclipai/shared/agent-eligibility";
 import {
   DEFAULT_SELF_NOTIFY_SETTINGS,
+  isUuidLike,
+  isLikelyMutationToolName,
   OUTBOUND_SELF_RECIPIENT_RULES,
   OUTBOUND_TOOL_DRAFT_GATE,
+  type AgentActionMode,
+  type AgentActionType,
   type SelfNotifySettings,
   type SelfRecipientKind,
   type SelfRecipientRule,
@@ -40,10 +46,18 @@ import type { ToolRunContext, ToolResult } from "@paperclipai/plugin-sdk";
 import { approvalService } from "./approvals.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import { instanceSettingsService } from "./instance-settings.js";
-import { logActivity } from "./activity-log.js";
+import { deterministicActivityId, logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
+import { HttpError } from "../errors.js";
 
 const log = logger.child({ service: "tool-draft-gate" });
+
+export function isAgentActionRefusalReason(reason: unknown): boolean {
+  if (typeof reason !== "string") return false;
+  return reason.startsWith("[EDISABLED]") ||
+    reason.startsWith("[ETOOL_BLOCKED]") ||
+    reason.startsWith("[ECOMPANY_NOT_ALLOWED]");
+}
 
 /**
  * The set of tool names the gate intercepts, materialized as a Set for O(1)
@@ -51,6 +65,433 @@ const log = logger.child({ service: "tool-draft-gate" });
  * names that flow through `dispatcher.executeTool`.
  */
 const GATED_TOOLS = new Set<string>(OUTBOUND_TOOL_DRAFT_GATE);
+
+const LEGACY_ACTION_TYPES = new Map<string, AgentActionType>([
+  ["github-tools:github_create_release", "post_publicly"],
+  ["email-tools:email_send", "send_message"],
+  ["email-tools:email_reply", "send_message"],
+  ["email-tools:email_mark_read", "change_knowledge_base"],
+  ["email-tools:email_mark_unread", "change_knowledge_base"],
+  ["email-tools:email_move", "change_knowledge_base"],
+  ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
+  ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
+  ["email-tools:email_save_contact", "change_knowledge_base"],
+  ["email-tools:email_import_contacts", "change_knowledge_base"],
+  ["help-scout:helpscout_send_reply", "send_message"],
+  ["help-scout:helpscout_create_conversation", "send_message"],
+  ["slack-tools:slack_send_dm", "send_message"],
+  ["slack-tools:slack_send_channel", "send_message"],
+  ["slack-tools:slack_update_message", "send_message"],
+  ["slack-tools:slack_delete_message", "send_message"],
+  ["phone-tools:phone_call_make", "send_message"],
+  ["phone-tools:phone_call_end", "send_message"],
+  ["phone-tools:phone_campaign_start", "send_message"],
+  ["phone-tools:phone_campaign_pause", "send_message"],
+  ["phone-tools:phone_campaign_resume", "send_message"],
+  ["phone-tools:phone_campaign_stop", "send_message"],
+  ["phone-tools:phone_assistant_create", "change_knowledge_base"],
+  ["phone-tools:phone_assistant_update", "change_knowledge_base"],
+  ["phone-tools:phone_assistant_delete", "change_knowledge_base"],
+  ["phone-tools:phone_campaign_create", "change_knowledge_base"],
+  ["phone-tools:phone_campaign_update", "change_knowledge_base"],
+  ["phone-tools:phone_dnc_add", "change_knowledge_base"],
+  ["phone-tools:phone_dnc_remove", "change_knowledge_base"],
+  ["3cx-tools:pbx_click_to_call", "send_message"],
+  ["3cx-tools:pbx_park_call", "send_message"],
+  ["3cx-tools:pbx_pickup_park", "send_message"],
+  ["3cx-tools:pbx_transfer_call", "send_message"],
+  ["3cx-tools:pbx_hangup_call", "send_message"],
+  ["gbp-reviews:gbp_reply_to_review", "post_publicly"],
+  ["review-tools:gbp_reply_to_review", "post_publicly"],
+  ["social-poster:post_to_facebook", "post_publicly"],
+  ["social-poster:post_to_instagram", "post_publicly"],
+  ["social-poster:post_to_x", "post_publicly"],
+  ["social-poster:post_to_tiktok", "post_publicly"],
+  ["social-poster:post_to_threads", "post_publicly"],
+  ["instagram-tools:instagram_post_photo", "post_publicly"],
+  ["instagram-tools:instagram_post_carousel", "post_publicly"],
+  ["instagram-tools:instagram_post_reel", "post_publicly"],
+  ["instagram-tools:instagram_post_story", "post_publicly"],
+  ["youtube-tools:youtube_upload", "post_publicly"],
+  ["youtube-tools:youtube_post_comment", "post_publicly"],
+  ["youtube-tools:youtube_mark_posted", "change_files"],
+  ["kdp-tools:kdp_publish", "post_publicly"],
+  ["rollbar-tools:rollbar_mute_item", "change_knowledge_base"],
+  ["business-records:business_link_issue", "change_knowledge_base"],
+  ["review-tools:gbp_sync_location", "change_knowledge_base"],
+  ["google-workspace:gsheet_append", "change_files"],
+  ["google-workspace:gsheet_update", "change_files"],
+  ["google-workspace:gsheet_create", "change_files"],
+  ["google-workspace:gcal_create_event", "change_knowledge_base"],
+  ["google-workspace:gcal_update_event", "change_knowledge_base"],
+  ["google-workspace:gcal_delete_event", "change_knowledge_base"],
+  ["google-workspace:gtasks_create_task", "change_knowledge_base"],
+  ["google-workspace:gtasks_update_task", "change_knowledge_base"],
+  ["google-workspace:gtasks_complete_task", "change_knowledge_base"],
+  ["google-workspace:gtasks_delete_task", "change_knowledge_base"],
+  ["acx-tools:acx_move_project", "change_files"],
+  ["revenuecat-tools:revenuecat_set_subscriber_attribute", "change_knowledge_base"],
+  ["revenuecat-tools:revenuecat_delete_subscriber", "change_knowledge_base"],
+  ["slack-tools:slack_create_channel", "change_knowledge_base"],
+  ["slack-tools:slack_invite_users", "change_knowledge_base"],
+  ["slack-tools:slack_add_reaction", "send_message"],
+  ["slack-tools:slack_remove_reaction", "send_message"],
+  ["slack-tools:slack_upload_file", "send_message"],
+  ["stripe-tools:stripe_create_promotion_code", "move_money"],
+  ["todo-list:todo_add", "change_knowledge_base"],
+  ["todo-list:todo_complete", "change_knowledge_base"],
+  ["todo-list:todo_remove", "change_knowledge_base"],
+  ["s3-tools:s3_download", "change_files"],
+  ["stripe-tools:stripe_export_charges_csv", "change_files"],
+  ["print-tools:print_text", "change_files"],
+  ["customer-support:support_save_directory", "change_knowledge_base"],
+  ["customer-support:support_report_ticket", "send_message"],
+  ["insurance-portals:insurance_fetch_documents", "change_files"],
+  ["insurance-portals:insurance_start_fetch", "change_files"],
+  ["phone-tools:phone_lead_list_append", "change_knowledge_base"],
+  ["phone-tools:phone_lead_list_import_csv", "change_knowledge_base"],
+  ["phone-tools:phone_dnc_federal_refresh", "change_knowledge_base"],
+  ["backup-tools:backup_run_now", "change_files"],
+  ["deal-desk:deal_scenario_run", "change_knowledge_base"],
+  ["image-tools:image_generate", "change_files"],
+  ["image-tools:image_edit", "change_files"],
+  ["image-tools:image_resize", "change_files"],
+  ["image-tools:image_upscale", "change_files"],
+  ["image-tools:image_compose", "change_files"],
+]);
+
+export function legacyAgentActionTypeForTool(namespacedName: string): AgentActionType | null {
+  return LEGACY_ACTION_TYPES.get(namespacedName) ?? null;
+}
+
+function bareToolName(namespacedName: string): string {
+  return namespacedName.split(":").at(-1)?.toLowerCase() ?? namespacedName.toLowerCase();
+}
+
+const LEGACY_BARE_ACTION_TYPES = new Map<string, AgentActionType>();
+const AMBIGUOUS_LEGACY_BARE_ACTION_TYPES = new Set<string>();
+for (const [namespacedName, actionType] of LEGACY_ACTION_TYPES) {
+  const bareName = bareToolName(namespacedName);
+  const previous = LEGACY_BARE_ACTION_TYPES.get(bareName);
+  if (previous && previous !== actionType) {
+    LEGACY_BARE_ACTION_TYPES.delete(bareName);
+    AMBIGUOUS_LEGACY_BARE_ACTION_TYPES.add(bareName);
+  } else if (!AMBIGUOUS_LEGACY_BARE_ACTION_TYPES.has(bareName)) {
+    LEGACY_BARE_ACTION_TYPES.set(bareName, actionType);
+  }
+}
+
+function toolNameTokens(namespacedName: string): Set<string> {
+  const bareName = namespacedName.split(":").at(-1) ?? namespacedName;
+  const normalized = bareName.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  return new Set(normalized.split(/[^a-z0-9]+/).filter(Boolean));
+}
+
+const MUTATION_TOKENS = new Set([
+  "accept", "acknowledge", "activate", "add", "append", "approve", "apply", "archive", "assign", "attach", "ban", "cancel",
+  "capture", "change", "charge", "clear", "close", "commit", "complete", "confirm", "connect", "copy", "create",
+  "delete", "demote", "deploy", "deposit", "destroy", "detach", "disable", "disconnect", "dismiss", "download", "edit",
+  "enable", "execute", "expire", "export", "finalize", "fork", "grant", "hangup", "import", "install", "invite", "launch", "link", "lock", "mark",
+  "merge", "modify", "move", "park", "patch", "pause", "pickup", "post",
+  "pay", "payout", "print", "promote", "provision", "publish", "purchase", "push", "put", "redeem", "refund", "reject", "remove", "rename", "renew", "reply",
+  "reboot", "replace", "reset", "resize", "resolve", "restart", "restore", "resume", "revoke", "rotate", "save", "scale", "schedule", "send", "set", "share", "sign", "start",
+  "stop", "submit", "subscribe", "suspend", "sync", "terminate", "transfer", "trigger", "unarchive", "unban", "uninstall", "unlock", "unsubscribe", "update",
+  "overwrite", "upload", "upsert", "withdraw", "write",
+]);
+
+const READ_SHAPED_TOKENS = new Set([
+  "calculate", "check", "compare", "describe", "estimate", "find", "get",
+  "history", "inspect", "list", "lookup", "predict", "preview", "query",
+  "read", "report", "scan", "search", "status", "summary", "transcript",
+  "validate",
+]);
+
+const MUTATION_AFTER_READ_TOKENS = new Set([
+  "add", "apply", "complete", "create", "delete", "edit", "execute", "modify", "move",
+  "post", "publish", "remove", "send", "set", "submit", "trigger", "update",
+  "upload", "upsert", "write",
+]);
+
+const LEGACY_READ_TOOLS = new Set([
+  "backup-tools:backup_archive_describe",
+  "code-scanner:code_dead_export_scan",
+  "customer-support:support_check_skill_sync",
+  "customer-support:support_resolve_owner",
+  "phone-tools:phone_audit_export",
+  "unifi-tools:unifi_restart_status",
+]);
+
+export function isLikelyBrokeredMutationToolName(namespacedName: string): boolean {
+  if (legacyAgentActionTypeForTool(namespacedName)) return true;
+  if (LEGACY_READ_TOOLS.has(namespacedName)) return false;
+  const tokenList = [...toolNameTokens(namespacedName)];
+  const readTokenIndex = tokenList.findIndex((token) => READ_SHAPED_TOKENS.has(token));
+  const compoundRunIndex = tokenList.findIndex((token) => token === "run");
+  const hasCommandShape = tokenList.some(
+    (token) => token === "command" || token === "script" || token === "shell",
+  );
+  if (
+    compoundRunIndex >= 0 &&
+    hasCommandShape &&
+    (readTokenIndex < 0 || compoundRunIndex < readTokenIndex)
+  ) {
+    return true;
+  }
+  const mutationTokenIndex = tokenList.findIndex((token) => MUTATION_TOKENS.has(token));
+  const hasMutationToken = tokenList.some((token) => MUTATION_TOKENS.has(token));
+  const connectorIndex = tokenList.findIndex((token) => token === "and" || token === "or" || token === "then");
+  const hasMutationAfterConnector =
+    connectorIndex >= 0 &&
+    tokenList.slice(connectorIndex + 1).some((token) => MUTATION_TOKENS.has(token));
+  const hasCommandRunAfterConnector =
+    connectorIndex >= 0 &&
+    tokenList.slice(connectorIndex + 1).includes("run") &&
+    hasCommandShape;
+  if (mutationTokenIndex >= 0 && (readTokenIndex < 0 || mutationTokenIndex < readTokenIndex)) {
+    return true;
+  }
+  if (
+    readTokenIndex >= 0 &&
+    !hasMutationAfterConnector &&
+    !hasCommandRunAfterConnector &&
+    !tokenList.slice(readTokenIndex + 1).some((token) => MUTATION_AFTER_READ_TOKENS.has(token))
+  ) return false;
+  const bareName = bareToolName(namespacedName);
+  if (isLikelyMutationToolName(bareName)) return true;
+  return hasMutationToken;
+}
+
+export function inferAgentActionTypeForTool(namespacedName: string): AgentActionType | null {
+  const legacy = legacyAgentActionTypeForTool(namespacedName);
+  if (legacy) return legacy;
+  const knownBareActionType = LEGACY_BARE_ACTION_TYPES.get(bareToolName(namespacedName));
+  if (knownBareActionType) return knownBareActionType;
+  const namespaceTokens = new Set(
+    namespacedName
+      .split(":")
+      .slice(0, -1)
+      .join(":")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+  const namespaceHasAny = (...values: string[]) => values.some((value) => namespaceTokens.has(value));
+  const bareTokens = toolNameTokens(namespacedName);
+  const bareHasAny = (...values: string[]) => values.some((value) => bareTokens.has(value));
+  if (
+    namespaceHasAny("slack") &&
+    (
+      bareHasAny("post") ||
+      bareHasAny("reaction", "upload") ||
+      (bareHasAny("message") && bareHasAny("delete", "post", "send", "update")) ||
+      (bareHasAny("channel") && bareHasAny("post", "publish", "send"))
+    )
+  ) {
+    return "send_message";
+  }
+  if (
+    namespaceHasAny("teams") &&
+    (
+      bareHasAny("post") ||
+      (bareHasAny("message", "channel") && bareHasAny("publish", "send"))
+    )
+  ) {
+    return "send_message";
+  }
+  if (namespaceHasAny("jira") && bareHasAny("comment")) {
+    return "change_knowledge_base";
+  }
+  const isPublicCodeHost =
+    namespaceHasAny("github", "gitlab", "bitbucket", "gitea", "forgejo", "codeberg") ||
+    (namespaceTokens.has("azure") && namespaceTokens.has("devops"));
+  if (
+    isPublicCodeHost &&
+    (
+      bareTokens.has("comment") ||
+      (namespaceHasAny("gitlab") && bareTokens.has("note")) ||
+      bareHasAny("review", "reviewer", "reviewers")
+    )
+  ) {
+    return "post_publicly";
+  }
+  if (
+    namespaceHasAny("gmail") &&
+    bareHasAny("message") &&
+    bareHasAny("archive", "delete", "label", "mark", "move", "read", "save", "set", "status", "unread", "update")
+  ) {
+    return "change_knowledge_base";
+  }
+  if (
+    bareHasAny("payment", "payments", "pay", "charge", "refund", "invoice", "coupon", "discount", "credit", "debit", "subscription", "payout", "price", "checkout", "purchase", "funds", "money", "bank", "transaction")
+  ) {
+    return "move_money";
+  }
+  if (
+    bareHasAny("hangup", "pickup", "park", "call") ||
+    (bareHasAny("phone", "pbx") && bareHasAny("transfer"))
+  ) {
+    return "send_message";
+  }
+  if (bareHasAny("public")) {
+    return "post_publicly";
+  }
+  if (
+    bareHasAny("email", "mail") &&
+    bareHasAny("archive", "delete", "label", "mark", "move", "read", "save", "set", "status", "unread", "update")
+  ) {
+    return "change_knowledge_base";
+  }
+  if (
+    bareHasAny("message") &&
+    bareHasAny("archive", "label", "mark", "move", "read", "save", "set", "status", "unread")
+  ) {
+    return "change_knowledge_base";
+  }
+  if (
+    bareHasAny("dm") ||
+    (bareHasAny("direct") && bareHasAny("message")) ||
+    (bareHasAny("message") && bareHasAny("delete", "post", "reply", "send", "update")) ||
+    (
+      bareHasAny("send", "reply", "notify") &&
+      bareHasAny("email", "mail", "message", "sms", "notification")
+    )
+  ) {
+    return "send_message";
+  }
+  if (bareTokens.has("issue") && bareTokens.has("comment")) {
+    if (
+      namespaceHasAny("jira", "linear", "helpscout") ||
+      (namespaceTokens.has("help") && namespaceTokens.has("scout"))
+    ) {
+      return "change_knowledge_base";
+    }
+    return null;
+  }
+  if (
+    bareHasAny("issue", "ticket", "conversation", "customer", "linear", "jira", "knowledge", "kb", "business", "deal", "fact", "memory", "wiki", "page", "document", "docs") &&
+    bareHasAny("add", "archive", "assign", "change", "close", "complete", "create", "delete", "edit", "link", "mark", "move", "remove", "save", "set", "status", "update", "write")
+  ) {
+    return "change_knowledge_base";
+  }
+  if (
+    bareHasAny("file", "files", "folder", "directory", "blob", "object", "storage", "image", "images", "screenshot") &&
+    bareHasAny("add", "capture", "change", "copy", "create", "delete", "download", "edit", "move", "remove", "rename", "replace", "resize", "save", "transfer", "upload", "write")
+  ) {
+    return "change_files";
+  }
+  if (
+    bareHasAny("facebook", "instagram", "youtube", "tiktok", "threads", "gbp", "tweet") ||
+    (bareHasAny("github") && bareHasAny("comment", "release"))
+  ) {
+    return "post_publicly";
+  }
+  if (bareHasAny("deposit", "withdraw")) {
+    return "move_money";
+  }
+  const normalizedName = namespacedName.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  const tokens = new Set(normalizedName.split(/[^a-z0-9]+/).filter(Boolean));
+  const hasAny = (...values: string[]) => values.some((value) => tokens.has(value));
+  if (
+    hasAny("slack") &&
+    (
+      hasAny("upload", "reaction") ||
+      (hasAny("message") && hasAny("post", "send", "update", "delete"))
+    )
+  ) {
+    return "send_message";
+  }
+  if (hasAny("slack") && hasAny("channel", "invite", "member", "user", "users")) {
+    return "change_knowledge_base";
+  }
+  if (hasAny("helpscout") && hasAny("create") && hasAny("conversation")) {
+    return "send_message";
+  }
+  if (hasAny("public")) {
+    return "post_publicly";
+  }
+  if (
+    hasAny("dm") ||
+    (hasAny("direct") && hasAny("message")) ||
+    (hasAny("message") && hasAny("send"))
+  ) {
+    return "send_message";
+  }
+  if (hasAny("social", "tweet", "facebook", "instagram", "youtube", "tiktok", "threads", "gbp", "x")) {
+    return "post_publicly";
+  }
+  if (
+    hasAny("hangup", "pickup", "park", "call") ||
+    (hasAny("phone", "pbx") && hasAny("transfer"))
+  ) {
+    return "send_message";
+  }
+  if (
+    hasAny("payment", "payments", "pay", "charge", "refund", "invoice", "coupon", "discount", "credit", "debit", "subscription", "payout", "price", "checkout", "purchase", "funds", "money", "bank", "transaction")
+  ) {
+    return "move_money";
+  }
+  if (
+    hasAny("email", "mail", "message") &&
+    hasAny("archive", "delete", "label", "mark", "move", "read", "save", "set", "status", "unread", "update")
+  ) {
+    return "change_knowledge_base";
+  }
+  if (hasAny("s3", "file", "files", "folder", "directory", "blob", "object", "storage", "upload", "image", "images", "screenshot", "video")) {
+    return "change_files";
+  }
+  if (hasAny("deposit", "withdraw")) {
+    return "move_money";
+  }
+  if (hasAny("message", "email", "mail", "sms", "notify", "notification", "reply", "send")) {
+    return "send_message";
+  }
+  if (hasAny("github") && hasAny("comment")) {
+    return "post_publicly";
+  }
+  if (hasAny("issue", "ticket", "helpscout", "rollbar", "conversation", "customer", "linear", "jira")) {
+    return "change_knowledge_base";
+  }
+  if (hasAny("github") && hasAny("release")) {
+    return "post_publicly";
+  }
+  if (hasAny("github", "git", "repository", "repo", "pull", "branch", "commit", "command", "script", "shell")) {
+    return "change_files";
+  }
+  if (hasAny("knowledge", "kb", "business", "deal", "fact", "memory", "wiki", "page", "document", "docs", "helpscout", "rollbar", "issue", "ticket", "conversation", "customer", "label", "status", "assignee")) {
+    return "change_knowledge_base";
+  }
+  return null;
+}
+
+export function classifyBrokeredAgentAction(
+  namespacedName: string,
+  declaration: {
+    actionType?: AgentActionType | null;
+    writes?: boolean;
+    requiresApproval?: boolean;
+    externalDeclaredWrite?: boolean;
+  } = {},
+): { actionType: AgentActionType | null } | null {
+  if (
+    declaration.writes === false &&
+    declaration.actionType == null &&
+    declaration.requiresApproval !== true &&
+    declaration.externalDeclaredWrite !== true
+  ) {
+    return null;
+  }
+  const isWrite =
+    declaration.actionType != null ||
+    declaration.writes === true ||
+    declaration.requiresApproval === true ||
+    declaration.externalDeclaredWrite === true ||
+    isLikelyBrokeredMutationToolName(namespacedName);
+  if (!isWrite) return null;
+  return {
+    actionType: declaration.actionType ?? inferAgentActionTypeForTool(namespacedName),
+  };
+}
 
 /**
  * Header marker placed in the agent-facing tool result when a call is
@@ -83,11 +524,23 @@ interface DraftGateOptions {
    * @see PLUGIN_SPEC.md §11.8 — Operator control over operations
    */
   isAdditionallyGated?: (namespacedName: string) => boolean;
+  /** Resolve the operator's action policy for this caller and tool. */
+  resolveActionPolicy?: (
+    namespacedName: string,
+    runContext: ToolRunContext,
+  ) => Promise<ResolvedDraftActionPolicy | null>;
+}
+
+export interface ResolvedDraftActionPolicy {
+  actionType: AgentActionType | null;
+  mode: AgentActionMode;
+  source: "agent" | "company" | "legacy" | "default" | "operation" | "unclassified";
 }
 
 export interface DraftGateInterceptResult {
   intercepted: boolean;
   result?: ToolResult;
+  actionPolicy?: ResolvedDraftActionPolicy | null;
 }
 
 export interface DraftGateInterceptOptions {
@@ -105,6 +558,13 @@ export interface DraftGateInterceptOptions {
    * it after approval.
    */
   force?: boolean;
+  /**
+   * A call-specific legacy setting. Agent and company action policies still
+   * take precedence when either one is configured.
+   */
+  legacyActionMode?: AgentActionMode;
+  /** Policy already resolved by the dispatcher so early refusals share the same audit context. */
+  resolvedActionPolicy?: ResolvedDraftActionPolicy | null;
 }
 
 export interface DraftGate {
@@ -128,6 +588,11 @@ export interface DraftGate {
    * Cheap; safe to call on every dispatch. Does not consult the DB.
    */
   isGated(namespacedName: string): boolean;
+
+  resolveActionPolicy(
+    namespacedName: string,
+    runContext: ToolRunContext,
+  ): Promise<ResolvedDraftActionPolicy | null>;
 }
 
 /**
@@ -243,8 +708,8 @@ function resolveRunActor(runContext: ToolRunContext): ResolvedRunActor {
   }
   if (rawAgentId) {
     return {
-      agentUuid: rawAgentId,
-      runUuid: runContext.runId ?? null,
+      agentUuid: isUuidLike(rawAgentId) ? rawAgentId : null,
+      runUuid: runContext.runId && isUuidLike(runContext.runId) ? runContext.runId : null,
       userId: null,
       actorType: "agent",
       actorId: rawAgentId,
@@ -677,6 +1142,22 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
     return GATED_TOOLS.has(namespacedName) || extraGated(namespacedName);
   }
 
+  async function resolveActionPolicy(
+    namespacedName: string,
+    runContext: ToolRunContext,
+  ): Promise<ResolvedDraftActionPolicy | null> {
+    if (!opts.resolveActionPolicy) return null;
+    try {
+      return await opts.resolveActionPolicy(namespacedName, runContext);
+    } catch (err) {
+      log.error(
+        { err, tool: namespacedName, agentId: runContext.agentId, companyId: runContext.companyId },
+        "agent action policy lookup failed",
+      );
+      throw err;
+    }
+  }
+
   async function readGateSettings(): Promise<{
     enabled: boolean;
     selfNotify: SelfNotifySettings;
@@ -706,6 +1187,8 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       return isGatedName(namespacedName);
     },
 
+    resolveActionPolicy,
+
     async intercept(
       namespacedName: string,
       parameters: unknown,
@@ -713,8 +1196,56 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       options?: DraftGateInterceptOptions,
     ): Promise<DraftGateInterceptResult> {
       const operatorRequired = extraGated(namespacedName);
-      if (!GATED_TOOLS.has(namespacedName) && !operatorRequired) {
-        return { intercepted: false };
+      const resolvedActionPolicy = options && "resolvedActionPolicy" in options
+        ? options.resolvedActionPolicy ?? null
+        : await resolveActionPolicy(namespacedName, runContext);
+      const actionPolicy = options?.legacyActionMode && (
+        !resolvedActionPolicy ||
+        resolvedActionPolicy.source === "legacy" ||
+        resolvedActionPolicy.source === "default"
+      )
+        ? {
+            actionType: resolvedActionPolicy?.actionType ?? legacyAgentActionTypeForTool(namespacedName),
+            mode: options.legacyActionMode,
+            source: "legacy" as const,
+          }
+        : resolvedActionPolicy;
+      if (!GATED_TOOLS.has(namespacedName) && !operatorRequired && !actionPolicy) {
+        return { intercepted: false, actionPolicy: null };
+      }
+      if (!runContext.companyId) {
+        log.warn(
+          { tool: namespacedName, agentId: runContext.agentId },
+          "draft gate skipped because runContext has no companyId",
+        );
+        return { intercepted: false, actionPolicy };
+      }
+      const actor = resolveRunActor(runContext);
+      const identity = draftIdentity(namespacedName, parameters);
+      const dedupeKey = createHash("sha256")
+        .update([
+          runContext.companyId,
+          runContext.agentId ?? "",
+          runContext.userId ?? actor.userId ?? "",
+          identity,
+        ].join("\u0000"))
+        .digest("hex");
+      let duplicate: Awaited<ReturnType<typeof approvals.list>>[number] | undefined;
+      let duplicateLookupFailed = false;
+      try {
+        const pending = await approvals.list(runContext.companyId, "pending");
+        duplicate = pending.find((row) => {
+          if (row.type !== "outbound_tool_draft") return false;
+          if (row.dedupeKey) return row.dedupeKey === dedupeKey;
+          const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
+          if (rowPayload.toolName !== namespacedName) return false;
+          if ((rowPayload.agentId ?? null) !== (runContext.agentId ?? null)) return false;
+          if ((rowPayload.userId ?? null) !== (runContext.userId ?? actor.userId ?? null)) return false;
+          return draftIdentity(namespacedName, rowPayload.parameters) === identity;
+        });
+      } catch (err) {
+        duplicateLookupFailed = true;
+        log.warn({ err, tool: namespacedName }, "could not check for a duplicate pending draft");
       }
       // A caller can hold a call the instance would have let through, but not
       // the other way around: `bypassDraftGate` on the dispatcher is what
@@ -723,15 +1254,27 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       // An operator asking for approval on a specific operation is its own
       // reason to hold the call: they said so about this operation, so the
       // instance-wide outbound toggle does not get to overrule them.
-      const force = options?.force === true || operatorRequired;
+      const explicitlyRequiresApproval =
+        actionPolicy?.mode === "ask_first" &&
+        (actionPolicy.source === "agent" || actionPolicy.source === "company");
+      const force = options?.force === true || operatorRequired || explicitlyRequiresApproval;
       const { enabled, selfNotify } = await readGateSettings();
-      if (!enabled && !force) {
-        return { intercepted: false };
+      const shouldAsk = actionPolicy
+        ? actionPolicy.mode === "ask_first"
+        : enabled;
+      if (!shouldAsk && !force && !duplicate) {
+        if (duplicateLookupFailed) {
+          throw new Error(`Could not verify whether "${namespacedName}" already has a pending approval`);
+        }
+        return { intercepted: false, actionPolicy };
       }
       // Self-notifications (every recipient is the operator) are the agent
       // talking TO its user, not acting outward on their behalf — approving
       // your own incoming message defeats the purpose of the notification.
-      if (!force && isSelfAddressed(namespacedName, parameters, selfNotify)) {
+      if (!force && !duplicate && isSelfAddressed(namespacedName, parameters, selfNotify)) {
+        if (duplicateLookupFailed) {
+          throw new Error(`Could not verify whether "${namespacedName}" already has a pending approval`);
+        }
         log.info(
           {
             tool: namespacedName,
@@ -740,20 +1283,8 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
           },
           "outbound call addressed to the operator; sending without approval",
         );
-        return { intercepted: false };
+        return { intercepted: false, actionPolicy };
       }
-      // The gate is meaningless without a company to scope the approval to.
-      // Bail out (uncaptured) rather than fail the call — the dispatcher's
-      // existing checks will surface a clearer error if companyId truly is
-      // required for this tool.
-      if (!runContext.companyId) {
-        log.warn(
-          { tool: namespacedName, agentId: runContext.agentId },
-          "draft gate skipped — no companyId on runContext",
-        );
-        return { intercepted: false };
-      }
-
       // The summary only describes the call. If reading the parameters for it
       // goes wrong, the call is still drafted under its tool name: a throw
       // here would fail the agent's tool call with nothing sent and nothing
@@ -765,8 +1296,6 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         log.warn({ err, tool: namespacedName }, "could not summarise the draft; using the tool name");
         summary = namespacedName;
       }
-      const actor = resolveRunActor(runContext);
-
       // An identical call that is already waiting is the same request, not a
       // new one.
       //
@@ -778,53 +1307,66 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       // instead of queueing a second one makes the loop terminate: the agent
       // is told the message is already waiting, and the operator has one
       // decision to make rather than a growing pile of the same one.
-      const identity = draftIdentity(namespacedName, parameters);
-      try {
-        const pending = await approvals.list(runContext.companyId, "pending");
-        const duplicate = pending.find((row) => {
-          const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
-          if (row.type !== "outbound_tool_draft") return false;
-          if (rowPayload.toolName !== namespacedName) return false;
-          return draftIdentity(namespacedName, rowPayload.parameters) === identity;
-        });
-        if (duplicate) {
-          log.info(
-            { approvalId: duplicate.id, tool: namespacedName, companyId: runContext.companyId },
-            "identical outbound draft already awaiting approval; not queueing another",
-          );
-          return {
-            intercepted: true,
-            result: {
-              content: [
-                DRAFT_RESULT_HEADER,
-                `Tool: ${namespacedName}`,
-                `Approval ID: ${duplicate.id}`,
-                "",
-                "This exact message is ALREADY waiting for approval from an earlier attempt. " +
-                  "Nothing has been sent and nothing new has been queued. Do not draft it again " +
-                  "and do not rephrase it to get around this — say it is waiting and stop.",
-              ].join("\n"),
-              data: {
-                drafted: true,
-                duplicateOf: duplicate.id,
-                approvalId: duplicate.id,
-                status: "pending",
-                tool: namespacedName,
-                summary,
-              },
+      const duplicateResult = async (
+        duplicateApproval: NonNullable<typeof duplicate>,
+      ): Promise<DraftGateInterceptResult> => {
+        if (actor.actorType === "agent" && actionPolicy) {
+          await logActivity(db, {
+            id: deterministicActivityId("agent-action-approval-requested", duplicateApproval.id),
+            companyId: runContext.companyId,
+            actorType: "agent",
+            actorId: actor.actorId,
+            action: "agent_action.approval_requested",
+            entityType: "approval",
+            entityId: duplicateApproval.id,
+            agentId: actor.agentUuid,
+            runId: actor.runUuid,
+            details: {
+              actionType: actionPolicy.actionType,
+              tool: namespacedName,
+              policySource: actionPolicy.source,
+              summary,
+              recoveredOnRetry: true,
             },
-          };
+          });
         }
-      } catch (err) {
-        // Better to risk a second draft than to drop the call entirely.
-        log.warn({ err, tool: namespacedName }, "could not check for a duplicate pending draft");
-      }
+        log.info(
+          { approvalId: duplicateApproval.id, tool: namespacedName, companyId: runContext.companyId },
+          "identical outbound draft already awaiting approval; not queueing another",
+        );
+        return {
+          intercepted: true,
+          actionPolicy,
+          result: {
+            content: [
+              DRAFT_RESULT_HEADER,
+              `Tool: ${namespacedName}`,
+              `Approval ID: ${duplicateApproval.id}`,
+              "",
+              "This exact message is ALREADY waiting for approval from an earlier attempt. " +
+                "Nothing has been sent and nothing new has been queued. Do not draft it again " +
+                "and do not rephrase it to get around this; say it is waiting and stop.",
+            ].join("\n"),
+            data: {
+              drafted: true,
+              duplicateOf: duplicateApproval.id,
+              approvalId: duplicateApproval.id,
+              status: "pending",
+              tool: namespacedName,
+              summary,
+            },
+          },
+        };
+      };
+      if (duplicate) return duplicateResult(duplicate);
       const payload = {
         toolName: namespacedName,
         parameters: parameters ?? null,
         summary,
         agentId: runContext.agentId ?? null,
-        runId: runContext.runId ?? null,
+        runId: actor.runUuid,
+        projectId: runContext.projectId || null,
+        idempotencyKey: runContext.idempotencyKey ?? null,
         // Set when the gate is invoked from a chat-Agent (Clippy) turn — see
         // chat-tools.ts and plugin-mcp-bridge.ts. Used by the approve route to
         // append a follow-up tool-result message into the chat transcript so
@@ -837,11 +1379,14 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         // where the Clippy user id was only encoded in the agentId prefix.
         userId: runContext.userId ?? actor.userId ?? null,
         draftedAt: new Date().toISOString(),
+        actionType: actionPolicy?.actionType ?? null,
+        actionPolicySource: actionPolicy?.source ?? null,
       } satisfies Record<string, unknown>;
 
-      const approval = await approvals.create(runContext.companyId, {
+      const createdDraft = await approvals.createPendingDraft(runContext.companyId, {
         type: "outbound_tool_draft",
         status: "pending",
+        dedupeKey,
         requestedByAgentId: actor.agentUuid,
         requestedByUserId: actor.userId,
         payload,
@@ -849,12 +1394,14 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         decidedByUserId: null,
         decidedAt: null,
       });
+      if (!createdDraft.created) return duplicateResult(createdDraft.approval);
+      const approval = createdDraft.approval;
 
       // Tie the draft to the issue it came out of, so the issue shows the
       // message was drafted and (after approval) sent. This is also what puts
       // an issue id on the post-approval wake, so the agent is woken about the
       // work rather than about a bare approval id.
-      const draftIssueId = await issueIdForRun(db, runContext.runId ?? null);
+      const draftIssueId = await issueIdForRun(db, actor.runUuid);
       if (draftIssueId) {
         try {
           await issueApprovalService(db).link(draftIssueId, approval.id, {
@@ -888,10 +1435,31 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
             type: "outbound_tool_draft",
             tool: namespacedName,
             summary,
+            actionType: actionPolicy?.actionType ?? null,
+            policySource: actionPolicy?.source ?? null,
           },
         });
       } catch (err) {
         log.warn({ err, approvalId: approval.id }, "failed to log draft activity (non-fatal)");
+      }
+      if (actor.actorType === "agent" && actionPolicy) {
+        await logActivity(db, {
+          id: deterministicActivityId("agent-action-approval-requested", approval.id),
+          companyId: runContext.companyId,
+          actorType: "agent",
+          actorId: actor.actorId,
+          action: "agent_action.approval_requested",
+          entityType: "approval",
+          entityId: approval.id,
+          agentId: actor.agentUuid,
+          runId: actor.runUuid,
+          details: {
+            actionType: actionPolicy.actionType,
+            tool: namespacedName,
+            policySource: actionPolicy.source,
+            summary,
+          },
+        });
       }
 
       log.info(
@@ -940,6 +1508,7 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
 
       return {
         intercepted: true,
+        actionPolicy,
         result: {
           content,
           data: {
@@ -976,7 +1545,12 @@ export interface ExecuteDraftedApprovalArgs {
 
 export async function executeDraftedApproval(
   args: ExecuteDraftedApprovalArgs,
-): Promise<{ ok: boolean; toolResult?: ToolResult; reason?: string }> {
+): Promise<{
+  ok: boolean;
+  toolResult?: ToolResult;
+  reason?: string;
+  outcome?: "refused" | "failed";
+}> {
   const approvals = approvalService(args.db);
   const approval = await approvals.getById(args.approvalId);
   if (!approval) return { ok: false, reason: "approval_not_found" };
@@ -989,6 +1563,35 @@ export async function executeDraftedApproval(
   const parameters = payload?.parameters ?? {};
   const originalAgentId =
     typeof payload?.agentId === "string" ? payload.agentId : approval.requestedByAgentId;
+  if (
+    originalAgentId &&
+    isUuidLike(originalAgentId) &&
+    approval.requestedByAgentId !== originalAgentId
+  ) {
+    return {
+      ok: false,
+      reason: "The agent that requested this action no longer exists.",
+      outcome: "refused",
+    };
+  }
+  if (originalAgentId && isUuidLike(originalAgentId)) {
+    const [requestingAgent] = await args.db
+      .select({ companyId: agents.companyId, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, originalAgentId))
+      .limit(1);
+    if (
+      !requestingAgent ||
+      requestingAgent.companyId !== approval.companyId ||
+      !isAgentStatusInvokable(requestingAgent.status)
+    ) {
+      return {
+        ok: false,
+        reason: "The agent that requested this action is no longer allowed to run it.",
+        outcome: "refused",
+      };
+    }
+  }
 
   // Re-dispatch via the same dispatcher path. The agentId is the same one
   // that drafted, so company-scope checks and audit attribution stay correct.
@@ -1000,8 +1603,10 @@ export async function executeDraftedApproval(
   const runContext: ToolRunContext = {
     companyId: approval.companyId,
     agentId: originalAgentId ?? "draft-approval",
-    runId: typeof payload?.runId === "string" ? payload.runId : `approval:${approval.id}`,
-    projectId: "",
+    runId: typeof payload?.runId === "string" && isUuidLike(payload.runId) ? payload.runId : "",
+    projectId: typeof payload?.projectId === "string" ? payload.projectId : "",
+    idempotencyKey:
+      typeof payload?.idempotencyKey === "string" ? payload.idempotencyKey : undefined,
     userId: typeof payload?.userId === "string" ? payload.userId : null,
   };
 
@@ -1016,12 +1621,26 @@ export async function executeDraftedApproval(
       },
       "drafted tool executed after approval",
     );
+    if (exec.result.error) {
+      const reason = exec.result.error;
+      return {
+        ok: false,
+        toolResult: exec.result,
+        reason,
+        outcome: isAgentActionRefusalReason(reason) ? "refused" : "failed",
+      };
+    }
     return { ok: true, toolResult: exec.result };
   } catch (err) {
+    const reason = err instanceof Error ? err.message : "execution_failed";
+    const outcome = (err instanceof HttpError && err.status === 403) ||
+      isAgentActionRefusalReason(reason)
+      ? "refused"
+      : "failed";
     log.error(
       { err, approvalId: args.approvalId, tool: toolName },
       "drafted tool execution failed",
     );
-    return { ok: false, reason: err instanceof Error ? err.message : "execution_failed" };
+    return { ok: false, reason, outcome };
   }
 }

@@ -97,7 +97,7 @@ describe("email handoff resolution", () => {
       "email-tools:email_reply",
       expect.anything(),
       expect.anything(),
-      { forceDraftGate: true, bypassDraftGate: false },
+      { legacyActionMode: "ask_first" },
     );
   });
 
@@ -120,7 +120,7 @@ describe("email handoff resolution", () => {
       "email-tools:email_reply",
       expect.anything(),
       expect.anything(),
-      { forceDraftGate: false, bypassDraftGate: true },
+      { legacyActionMode: "go_ahead" },
     );
   });
 
@@ -143,7 +143,7 @@ describe("email handoff resolution", () => {
       "email-tools:email_reply",
       expect.anything(),
       expect.anything(),
-      { forceDraftGate: false, bypassDraftGate: true },
+      undefined,
     );
   });
 
@@ -163,7 +163,7 @@ describe("email handoff resolution", () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
-      { forceDraftGate: true, bypassDraftGate: false },
+      { legacyActionMode: "ask_first" },
     );
   });
 
@@ -296,7 +296,7 @@ describe("email handoff resolution", () => {
       "email-tools:email_reply",
       expect.objectContaining({ body: "All sorted via IMAP." }),
       expect.anything(),
-      expect.anything(),
+      undefined,
     );
   });
 });

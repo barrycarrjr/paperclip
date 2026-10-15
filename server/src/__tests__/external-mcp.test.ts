@@ -56,6 +56,29 @@ describe("isLikelyMutationToolName", () => {
     expect(isLikelyMutationToolName("send_message")).toBe(true);
     expect(isLikelyMutationToolName("post_reply")).toBe(true);
     expect(isLikelyMutationToolName("Modify_Foo")).toBe(true);
+    expect(isLikelyMutationToolName("upload_file")).toBe(true);
+    expect(isLikelyMutationToolName("upsert_page")).toBe(true);
+    expect(isLikelyMutationToolName("publish_post")).toBe(true);
+    expect(isLikelyMutationToolName("resolve_item")).toBe(true);
+    expect(isLikelyMutationToolName("refundPayment")).toBe(true);
+    expect(isLikelyMutationToolName("pause_campaign")).toBe(true);
+    expect(isLikelyMutationToolName("refund")).toBe(true);
+    expect(isLikelyMutationToolName("delete")).toBe(true);
+    expect(isLikelyMutationToolName("send")).toBe(true);
+    expect(isLikelyMutationToolName("publish")).toBe(true);
+    expect(isLikelyMutationToolName("create-page")).toBe(true);
+    expect(isLikelyMutationToolName("delete-item")).toBe(true);
+    expect(isLikelyMutationToolName("stripe_create_refund")).toBe(true);
+    expect(isLikelyMutationToolName("notion-create_page")).toBe(true);
+    expect(isLikelyMutationToolName("github-delete-issue")).toBe(true);
+    expect(isLikelyMutationToolName("stripe_get_or_create_customer")).toBe(true);
+    expect(isLikelyMutationToolName("gsheet_append")).toBe(true);
+    expect(isLikelyMutationToolName("email_import_contacts")).toBe(true);
+    expect(isLikelyMutationToolName("business_link_issue")).toBe(true);
+    expect(isLikelyMutationToolName("apply_manifest")).toBe(true);
+    expect(isLikelyMutationToolName("supabase_apply_migration")).toBe(true);
+    expect(isLikelyMutationToolName("gbp_sync_location")).toBe(true);
+    expect(isLikelyMutationToolName("print_text")).toBe(true);
   });
 
   it("does not flag read-shaped names", () => {
@@ -63,6 +86,12 @@ describe("isLikelyMutationToolName", () => {
     expect(isLikelyMutationToolName("get_user")).toBe(false);
     expect(isLikelyMutationToolName("search")).toBe(false);
     expect(isLikelyMutationToolName("read_doc")).toBe(false);
+    expect(isLikelyMutationToolName("email_search")).toBe(false);
+    expect(isLikelyMutationToolName("call_status")).toBe(false);
+    expect(isLikelyMutationToolName("stripe_get_charge")).toBe(false);
+    expect(isLikelyMutationToolName("calculate_transfer_fee")).toBe(false);
+    expect(isLikelyMutationToolName("compare_sync_status")).toBe(false);
+    expect(isLikelyMutationToolName("predict_refund_rate")).toBe(false);
   });
 });
 

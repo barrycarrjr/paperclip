@@ -14,6 +14,7 @@ const companySvc = {
 
 const agentSvc = {
   list: vi.fn(),
+  getById: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 };
@@ -128,6 +129,10 @@ describe("company portability", () => {
     vi.clearAllMocks();
     agentSvc.create.mockReset();
     agentSvc.update.mockReset();
+    agentSvc.getById.mockImplementation(async (id: string) => {
+      const rows = await agentSvc.list();
+      return rows.find((row: { id: string }) => row.id === id) ?? null;
+    });
     secretSvc.normalizeAdapterConfigForPersistence.mockImplementation(async (_companyId, config) => config);
     secretSvc.resolveAdapterConfigForRuntime.mockImplementation(async (_companyId, config) => ({
       config,
@@ -2227,6 +2232,46 @@ describe("company portability", () => {
     expect(companySkillSvc.importPackageFiles).toHaveBeenCalledWith("company-imported", textOnlyFiles, {
       onConflict: "rename",
     });
+  });
+
+  it("does not grant board-owned action permissions through a safe import", async () => {
+    const portability = companyPortabilityService({} as any);
+    const sourceAgents = await agentSvc.list();
+    agentSvc.list.mockResolvedValue(sourceAgents.map((agent: Record<string, unknown>, index: number) => (
+      index === 0
+        ? {
+            ...agent,
+            permissions: {
+              canCreateAgents: false,
+              actionApprovalModes: { move_money: "go_ahead" },
+            },
+          }
+        : agent
+    )));
+    const exported = await portability.exportBundle("company-1", {
+      include: { company: false, agents: true, projects: false, issues: false },
+    });
+
+    agentSvc.list.mockResolvedValue([]);
+    agentSvc.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
+      id: `created-${String(input.name)}`,
+      ...input,
+    }));
+    const result = await portability.importBundle({
+      source: { type: "inline", rootPath: exported.rootPath, files: exported.files },
+      include: { company: false, agents: true, projects: false, issues: false },
+      target: { mode: "existing_company", companyId: "company-1" },
+      agents: ["claudecoder"],
+      collisionStrategy: "rename",
+    }, null, { mode: "agent_safe", sourceCompanyId: "company-1" });
+
+    expect(agentSvc.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({ permissions: {} }),
+    );
+    expect(result.warnings).toContain(
+      "Ignored board-owned action approval modes for claudecoder during safe import.",
+    );
   });
 
   it("disables timer heartbeats on imported agents", async () => {

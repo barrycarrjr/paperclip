@@ -107,7 +107,7 @@ describeEmbeddedPostgres("cleanup removal services", () => {
     return { agentId, companyId, issueId, runId };
   }
 
-  it("removes agent-owned issue comments and run-linked activity before deleting the agent", async () => {
+  it("removes transient agent activity but preserves the governed-action audit before deleting the agent", async () => {
     const { agentId, companyId, issueId, runId } = await seedFixture();
 
     await db.insert(issueComments).values({
@@ -130,6 +130,19 @@ describeEmbeddedPostgres("cleanup removal services", () => {
       details: {},
     });
 
+    await db.insert(activityLog).values({
+      id: randomUUID(),
+      companyId,
+      actorType: "agent",
+      actorId: agentId,
+      action: "agent_action.allowed",
+      entityType: "tool",
+      entityId: "email-tools:email_send",
+      agentId,
+      runId,
+      details: { actionType: "send_message" },
+    });
+
     await db.insert(issueExecutionDecisions).values({
       id: randomUUID(),
       companyId,
@@ -148,7 +161,15 @@ describeEmbeddedPostgres("cleanup removal services", () => {
     await expect(db.select().from(agents).where(eq(agents.id, agentId))).resolves.toHaveLength(0);
     await expect(db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId))).resolves.toHaveLength(0);
     await expect(db.select().from(issueComments).where(eq(issueComments.issueId, issueId))).resolves.toHaveLength(0);
-    await expect(db.select().from(activityLog).where(eq(activityLog.companyId, companyId))).resolves.toHaveLength(0);
+    const remainingActivity = await db.select().from(activityLog).where(eq(activityLog.companyId, companyId));
+    expect(remainingActivity).toEqual([
+      expect.objectContaining({
+        action: "agent_action.allowed",
+        actorId: agentId,
+        agentId: null,
+        runId: null,
+      }),
+    ]);
   });
 
   it("removes issue read states and activity rows before deleting the company", async () => {

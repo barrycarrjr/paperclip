@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { companies, companyAgentDefaults, createDb, instanceSettings } from "@paperclipai/db";
 import { companyAgentDefaultsService } from "../services/company-agent-defaults.ts";
+import { agentActionPolicyService } from "../services/agent-action-policy.ts";
 import { instanceSettingsService } from "../services/instance-settings.ts";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.ts";
 
@@ -45,18 +46,30 @@ describe("companyAgentDefaultsService", () => {
 
   it("returns empty defaults for a company with no row", async () => {
     await seedCompanies();
-    expect(await svc.get(companyId)).toEqual({ skipPermissionsByAdapterType: {} });
+    expect(await svc.get(companyId)).toEqual({
+      skipPermissionsByAdapterType: {},
+      actionApprovalModes: {},
+    });
   });
 
   it("stores per-company values, keeps companies apart and clears on null", async () => {
     await seedCompanies();
     const first = await svc.update(companyId, { skipPermissionsByAdapterType: { claude_local: false, codex_local: false } });
-    expect(first.previous).toEqual({ skipPermissionsByAdapterType: {} });
-    expect(first.next).toEqual({ skipPermissionsByAdapterType: { claude_local: false, codex_local: false } });
+    expect(first.previous).toEqual({ skipPermissionsByAdapterType: {}, actionApprovalModes: {} });
+    expect(first.next).toEqual({
+      skipPermissionsByAdapterType: { claude_local: false, codex_local: false },
+      actionApprovalModes: {},
+    });
 
     const second = await svc.update(companyId, { skipPermissionsByAdapterType: { codex_local: null } });
-    expect(second.next).toEqual({ skipPermissionsByAdapterType: { claude_local: false } });
-    expect(await svc.get(otherCompanyId)).toEqual({ skipPermissionsByAdapterType: {} });
+    expect(second.next).toEqual({
+      skipPermissionsByAdapterType: { claude_local: false },
+      actionApprovalModes: {},
+    });
+    expect(await svc.get(otherCompanyId)).toEqual({
+      skipPermissionsByAdapterType: {},
+      actionApprovalModes: {},
+    });
   });
 
   it("fills the inherited value into a run config in the documented order", async () => {
@@ -100,5 +113,36 @@ describe("companyAgentDefaultsService", () => {
     await svc.update(companyId, { skipPermissionsByAdapterType: { claude_local: false } });
     await db.delete(companies);
     expect(await db.select().from(companyAgentDefaults)).toEqual([]);
+  });
+
+  it("keeps concurrent run defaults and action policies", async () => {
+    await seedCompanies();
+    await Promise.all([
+      svc.update(companyId, { skipPermissionsByAdapterType: { claude_local: false } }),
+      agentActionPolicyService(db).updateCompanyPolicy(companyId, "send_message", "go_ahead"),
+    ]);
+
+    expect(await svc.get(companyId)).toEqual({
+      skipPermissionsByAdapterType: { claude_local: false },
+      actionApprovalModes: { send_message: "go_ahead" },
+    });
+  });
+
+  it("applies mixed set and clear patches to stored defaults", async () => {
+    await seedCompanies();
+    await svc.update(companyId, {
+      skipPermissionsByAdapterType: { claude_local: false, codex_local: false },
+      actionApprovalModes: { send_message: "go_ahead", move_money: "go_ahead" },
+    });
+
+    await svc.update(companyId, {
+      skipPermissionsByAdapterType: { claude_local: true, codex_local: null },
+      actionApprovalModes: { send_message: "ask_first", move_money: null },
+    });
+
+    expect(await svc.get(companyId)).toEqual({
+      skipPermissionsByAdapterType: { claude_local: true },
+      actionApprovalModes: { send_message: "ask_first" },
+    });
   });
 });

@@ -35,6 +35,17 @@ export function calendarRoutes(db: Db, options: CalendarSourceOptions = {}) {
   const companySvc = companyService(db);
   const access = accessService(db);
 
+  function googleCalendarExecution(req: Request) {
+    const actor = getActorInfo(req);
+    return {
+      agentId: actor.agentId,
+      runId: actor.runId,
+      userId: actor.actorType === "user" ? actor.actorId : null,
+      bypassDraftGate: actor.actorType !== "agent",
+      localTrustedUser: req.actor.type === "board" && req.actor.source === "local_implicit",
+    };
+  }
+
   /**
    * The person an agent's reminders belong to, or null when the agent may not
    * create reminders in this company. An agent needs the
@@ -153,7 +164,11 @@ export function calendarRoutes(db: Db, options: CalendarSourceOptions = {}) {
   router.post("/companies/:companyId/calendar/google-events", validate(createGoogleCalendarEventSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const created = await svc.createGoogleEvent(companyId, req.body);
+    const created = await svc.createGoogleEvent(companyId, req.body, googleCalendarExecution(req));
+    if ((created as any)?.data?.drafted === true) {
+      res.status(202).json({ draft: (created as any).data });
+      return;
+    }
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
@@ -172,7 +187,11 @@ export function calendarRoutes(db: Db, options: CalendarSourceOptions = {}) {
     const eventId = req.params.eventId as string;
     assertCompanyAccess(req, companyId);
     const calendarId = (req.query.calendarId as string) || "primary";
-    const result = await svc.deleteGoogleEvent(companyId, eventId, calendarId);
+    const result = await svc.deleteGoogleEvent(companyId, eventId, calendarId, googleCalendarExecution(req));
+    if ((result as any)?.data?.drafted === true) {
+      res.status(202).json({ draft: (result as any).data });
+      return;
+    }
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
