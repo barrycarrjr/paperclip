@@ -25,6 +25,7 @@ import {
 import { classifyAiderFailure, extractAiderSummary, parseAiderUsage } from "./parse.js";
 import { ensureAiderInstalled, ensureOllamaModelPulled } from "./prepare.js";
 import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
+import { runCountsPromptForWake } from "@paperclipai/adapter-utils/run-counts";
 import { loadEphemeralProcedures, requireCompleteEphemeralProcedures, EphemeralProcedureError } from "@paperclipai/adapter-utils/ephemeral-skills";
 import { procedureModuleDir, stageAiderProcedures } from "./skills.js";
 
@@ -136,13 +137,17 @@ async function buildAiderRuntime(input: {
   }
 
   const promptTemplate = asString(config.promptTemplate, DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE);
-  const prompt = appendSourceEvidenceInstructions(renderTemplate(promptTemplate, {
-    paperclipWake: renderPaperclipWakePrompt(context),
+  const wake = context.paperclipWake ?? context;
+  const renderedPrompt = renderTemplate(promptTemplate, {
+    paperclipWake: renderPaperclipWakePrompt(wake),
     agentName: agent.name,
     agentId: agent.id,
     companyId: agent.companyId,
     runId: input.runId,
-  }));
+  });
+  // Custom templates may omit the wake token, but cannot omit required reporting.
+  const countsInstructions = /{{\s*paperclipWake\s*}}/.test(promptTemplate) ? "" : runCountsPromptForWake(wake);
+  const prompt = appendSourceEvidenceInstructions(countsInstructions ? `${renderedPrompt}\n\n${countsInstructions}` : renderedPrompt);
 
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
   // Resolution check is deferred to ensureAiderInstalled() so we can attempt

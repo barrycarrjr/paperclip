@@ -6,6 +6,46 @@ afterEach(() => {
 });
 
 describe("http adapter execute", () => {
+  it("does not repeat an external request for a reporting-only correction", async () => {
+    const fetchMock = vi.fn();
+    const onLog = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await execute({
+      runId: "run-correction",
+      agent: {
+        id: "agent-1",
+        companyId: "company-1",
+        name: "Agent",
+        adapterType: "http",
+        adapterConfig: {},
+      },
+      runtime: {
+        sessionId: null,
+        sessionParams: null,
+        sessionDisplayId: null,
+        taskKey: null,
+      },
+      config: { url: "https://example.test/webhook" },
+      context: {
+        paperclipWake: {
+          runCountsRetryReason: "missing_run_counts",
+        },
+      },
+      onLog,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onLog).toHaveBeenCalledWith(
+      "stderr",
+      expect.stringContaining("may only correct its prior report"),
+    );
+    expect(result.resultJson).toEqual({
+      reportingCorrectionSkipped: true,
+      retryReason: "missing_run_counts",
+    });
+  });
+
   it("reports configured request timeout as timed_out", async () => {
     vi.stubGlobal(
       "fetch",

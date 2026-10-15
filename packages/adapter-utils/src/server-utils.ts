@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { buildSshSpawnTarget, type SshRemoteExecutionSpec } from "./ssh.js";
+import { runCountsPromptForWake } from "./run-counts.js";
 import type {
   AdapterSkillEntry,
   AdapterSkillSnapshot,
@@ -41,6 +42,7 @@ interface SpawnTarget {
   args: string[];
   cwd?: string;
   cleanup?: () => Promise<void>;
+  windowsVerbatimArguments?: boolean;
 }
 
 type RemoteExecutionSpec = SshRemoteExecutionSpec;
@@ -397,6 +399,8 @@ type PaperclipWakeTreeHoldSummary = {
 
 type PaperclipWakePayload = {
   reason: string | null;
+  runCountsRequired?: boolean;
+  runCountsRetryReason?: string | null;
   issue: PaperclipWakeIssue | null;
   checkedOutByHarness: boolean;
   dependencyBlockedInteraction: boolean;
@@ -607,6 +611,7 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
 
   return {
     reason: asString(payload.reason, "").trim() || null,
+    ...(payload.runCountsRequired === true ? { runCountsRequired: true, runCountsRetryReason: asString(payload.runCountsRetryReason, "").trim() || null } : {}),
     issue: normalizePaperclipWakeIssue(payload.issue),
     checkedOutByHarness: asBoolean(payload.checkedOutByHarness, false),
     dependencyBlockedInteraction: asBoolean(payload.dependencyBlockedInteraction, false),
@@ -848,6 +853,8 @@ export function renderPaperclipWakePrompt(
     lines.push("");
   }
 
+  const countsInstructions = runCountsPromptForWake(normalized);
+  if (countsInstructions) lines.push("", countsInstructions);
   return lines.join("\n").trim();
 }
 
@@ -1021,8 +1028,11 @@ export async function resolveCommandForLogs(
 
 function quoteForCmd(arg: string) {
   if (!arg.length) return '""';
-  const escaped = arg.replace(/"/g, '""');
-  return /[\s"&<>|^()]/.test(escaped) ? `"${escaped}"` : escaped;
+  if (!/[\s"&<>|^()]/.test(arg)) return arg;
+  const escaped = arg
+    .replace(/(\\*)"/g, "$1$1\\\"")
+    .replace(/(\\+)$/g, "$1$1");
+  return `"${escaped}"`;
 }
 
 function resolveWindowsCmdShell(env: NodeJS.ProcessEnv): string {
@@ -1077,6 +1087,7 @@ async function resolveSpawnTarget(
     return {
       command: shell,
       args: ["/d", "/s", "/c", commandLine],
+      windowsVerbatimArguments: true,
     };
   }
 
@@ -1653,6 +1664,7 @@ export async function runChildProcess(
           env: mergedEnv,
           detached: process.platform !== "win32",
           shell: false,
+          windowsVerbatimArguments: target.windowsVerbatimArguments,
           stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
         }) as ChildProcessWithEvents;
         // Decode stdout/stderr as UTF-8 at the stream level so Node's internal

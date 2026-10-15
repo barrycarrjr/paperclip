@@ -62,7 +62,7 @@ export const calendarEventDeliveries = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    eventId: uuid("event_id").notNull().references(() => calendarEvents.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id").references(() => calendarEvents.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
     channel: text("channel").notNull(),
     status: text("status").notNull().default("pending"),

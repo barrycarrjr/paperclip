@@ -196,9 +196,9 @@ describe("claude execute", () => {
       const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
       const settingsIndex = captured.argv.indexOf("--settings");
       expect(settingsIndex).toBeGreaterThanOrEqual(0);
-      expect(JSON.parse(captured.argv[settingsIndex + 1]!)).toEqual({
+      expect(captured.argv[settingsIndex + 1]).toBe(JSON.stringify({
         permissions: { deny: ["Edit(**/AGENTS.md)", "Edit(//**/AGENTS.md)"] },
-      });
+      }));
     } finally {
       restore();
       await fs.rm(root, { recursive: true, force: true });

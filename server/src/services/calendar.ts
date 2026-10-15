@@ -480,6 +480,37 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
       return updated.map((row) => row.id);
     },
 
+    /** Queue a desktop notification that is not backed by a calendar event. */
+    enqueueDesktopNotification: async (input: {
+      companyId: string;
+      userId: string;
+      title: string;
+      body?: string | null;
+      url?: string | null;
+      dedupeKey: string;
+      scheduledFor?: Date;
+    }) => {
+      const now = new Date();
+      return db
+        .insert(calendarEventDeliveries)
+        .values({
+          companyId: input.companyId,
+          eventId: null,
+          userId: input.userId,
+          channel: "desktop",
+          status: "pending",
+          title: input.title,
+          body: input.body ?? null,
+          url: input.url ?? null,
+          scheduledFor: input.scheduledFor ?? now,
+          firedAt: now,
+          dedupeKey: input.dedupeKey,
+        })
+        .onConflictDoNothing({ target: calendarEventDeliveries.dedupeKey })
+        .returning()
+        .then((rows) => rows[0] ?? null);
+    },
+
 
     createGoogleEvent: async (
       companyId: string,

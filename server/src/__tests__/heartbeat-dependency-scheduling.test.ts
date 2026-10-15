@@ -26,13 +26,15 @@ import {
 import { heartbeatService } from "../services/heartbeat.ts";
 import { runningProcesses } from "../adapters/index.ts";
 
+const runCountsFooter = "Counts: items read 0; entries added 0; changes proposed 0.";
+
 const mockAdapterExecute = vi.hoisted(() =>
   vi.fn(async () => ({
     exitCode: 0,
     signal: null,
     timedOut: false,
     errorMessage: null,
-    summary: "Dependency-aware heartbeat test run.",
+    summary: `Dependency-aware heartbeat test run.\n${runCountsFooter}`,
     provider: "test",
     model: "test-model",
   })),
@@ -102,7 +104,7 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       signal: null,
       timedOut: false,
       errorMessage: null,
-      summary: "Dependency-aware heartbeat test run.",
+      summary: `Dependency-aware heartbeat test run.\n${runCountsFooter}`,
       provider: "test",
       model: "test-model",
     }));
@@ -373,7 +375,7 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
         signal: null,
         timedOut: false,
         errorMessage: null,
-        summary: "First assignment run completed.",
+        summary: `First assignment run completed.\n${runCountsFooter}`,
         provider: "test",
         model: "test-model",
       };

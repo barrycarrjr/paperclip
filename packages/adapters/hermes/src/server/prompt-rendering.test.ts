@@ -219,7 +219,9 @@ test("renders safe Paperclip API examples from environment variables with multil
 });
 
 test("preserves custom prompt templates while exposing runtime and wake variables", () => {
-  const prompt = buildPrompt(baseContext(), {
+  const ctx = baseContext();
+  ctx.context.paperclipWake.runCountsRequired = true;
+  const prompt = buildPrompt(ctx, {
     paperclipApiUrl: "http://paperclip.local/api",
     promptTemplate: [
       "CUSTOM TEMPLATE",
@@ -244,10 +246,48 @@ test("preserves custom prompt templates while exposing runtime and wake variable
   expect(prompt).toContain("wakeJson={\"reason\":\"issue_assigned\"");
   expect(prompt).toContain('"reason":"issue_assigned"');
   expect(prompt).toContain("## Paperclip Wake Payload");
+  expect(prompt.match(/Run count reporting:/g)).toHaveLength(1);
   expect(prompt).toContain("Issue description:\n```text\nUse the wake payload as runtime authority.\n```");
   expect(prompt).not.toContain("Paperclip runtime identity:");
 });
 
+test("renders whitespace-delimited wake prompt variables exactly once", () => {
+  const ctx = baseContext();
+  ctx.context.paperclipWake.runCountsRequired = true;
+
+  const prompt = buildPrompt(ctx, {
+    promptTemplate: "CUSTOM TEMPLATE\n{{ paperclipWakePrompt }}",
+  });
+
+  expect(prompt.match(/## Paperclip Wake Payload/g)).toHaveLength(1);
+  expect(prompt.match(/Run count reporting:/g)).toHaveLength(1);
+});
+
+test("prefixes wake guidance when its variable only occurs in a false conditional", () => {
+  const ctx = baseContext();
+  ctx.context.paperclipWake.runCountsRequired = true;
+
+  const prompt = buildPrompt(ctx, {
+    promptTemplate: "CUSTOM TEMPLATE\n{{#missingValue}}{{ paperclipWakePrompt }}{{/missingValue}}",
+  });
+
+  expect(prompt.match(/## Paperclip Wake Payload/g)).toHaveLength(1);
+  expect(prompt.match(/Run count reporting:/g)).toHaveLength(1);
+  expect(prompt).toContain("CUSTOM TEMPLATE");
+});
+
+test("does not mistake literal wake variable text for an interpolation", () => {
+  const ctx = baseContext();
+  ctx.context.paperclipWake.runCountsRequired = true;
+
+  const prompt = buildPrompt(ctx, {
+    promptTemplate: "CUSTOM TEMPLATE describing paperclipWakePrompt without a mustache tag.",
+  });
+
+  expect(prompt.match(/## Paperclip Wake Payload/g)).toHaveLength(1);
+  expect(prompt.match(/Run count reporting:/g)).toHaveLength(1);
+  expect(prompt).toContain("describing paperclipWakePrompt without a mustache tag");
+});
 
 test("retains custom and resumed task composition while adding source evidence guidance once", () => {
   for (const resumedSession of [false, true]) {

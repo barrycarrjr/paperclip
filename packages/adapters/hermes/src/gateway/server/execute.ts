@@ -294,8 +294,12 @@ function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null
 function buildRunBody(ctx: AdapterExecutionContext, sessionKey: string | null, procedureContext: string): Record<string, unknown> {
   const paperclipApiUrl = nonEmpty(ctx.config.paperclipApiUrl);
   const payloadTemplate = parseObject(ctx.config.payloadTemplate);
+  const customInput = nonEmpty(payloadTemplate.input);
+  const trustedInput = customInput
+    ? [renderPaperclipWakePrompt(ctx.context.paperclipWake), customInput].filter(Boolean).join("\n\n")
+    : buildInput(ctx, paperclipApiUrl);
   const input = appendSourceEvidenceInstructions([
-    nonEmpty(payloadTemplate.input) ?? buildInput(ctx, paperclipApiUrl), procedureContext,
+    trustedInput, procedureContext,
   ].filter(Boolean).join("\n\n"));
   const instructions =
     nonEmpty(ctx.config.instructions) ??

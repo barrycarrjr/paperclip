@@ -2,9 +2,27 @@ import type { AdapterExecutionContext, AdapterExecutionResult } from "../types.j
 import { asString, asNumber, parseObject } from "../utils.js";
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { config, runId, agent, context } = ctx;
+  const { config, runId, agent, context, onLog } = ctx;
   const url = asString(config.url, "");
   if (!url) throw new Error("HTTP adapter missing url");
+
+  const wake = parseObject(context.paperclipWake);
+  const reportingRetryReason = asString(wake.runCountsRetryReason, "");
+  if (["missing_issue_comment", "missing_run_counts", "invalid_run_counts"].includes(reportingRetryReason)) {
+    await onLog(
+      "stderr",
+      "Skipped the configured HTTP request because this run may only correct its prior report.\n",
+    );
+    return {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      resultJson: {
+        reportingCorrectionSkipped: true,
+        retryReason: reportingRetryReason,
+      },
+    };
+  }
 
   const method = asString(config.method, "POST");
   const timeoutMs = asNumber(config.timeoutMs, 0);

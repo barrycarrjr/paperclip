@@ -16,6 +16,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const command = asString(config.command, "");
   if (!command) throw new Error("Process adapter missing command");
 
+  const wake = parseObject(ctx.context.paperclipWake);
+  const reportingRetryReason = asString(wake.runCountsRetryReason, "");
+  if (["missing_issue_comment", "missing_run_counts", "invalid_run_counts"].includes(reportingRetryReason)) {
+    await onLog(
+      "stderr",
+      "Skipped the configured process command because this run may only correct its prior report.\n",
+    );
+    return {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      resultJson: {
+        reportingCorrectionSkipped: true,
+        retryReason: reportingRetryReason,
+      },
+    };
+  }
+
   const args = asStringArray(config.args);
   const cwd = asString(config.cwd, process.cwd());
   const envConfig = parseObject(config.env);

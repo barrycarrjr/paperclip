@@ -59,6 +59,7 @@ export interface LogActivityInput {
   entityId: string;
   agentId?: string | null;
   runId?: string | null;
+  responsibleUserId?: string | null;
   details?: Record<string, unknown> | null;
 }
 
@@ -94,6 +95,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     entityId: input.entityId,
     agentId: input.agentId ?? null,
     runId: input.runId ?? null,
+    responsibleUserId: input.responsibleUserId ?? null,
     details: redactedDetails,
   });
 
@@ -108,6 +110,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       entityId: input.entityId,
       agentId: input.agentId ?? null,
       runId: input.runId ?? null,
+      responsibleUserId: input.responsibleUserId ?? null,
       details: redactedDetails,
     },
   });
@@ -127,6 +130,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
         ...redactedDetails,
         agentId: input.agentId ?? null,
         runId: input.runId ?? null,
+        responsibleUserId: input.responsibleUserId ?? null,
       },
     };
     publishPluginDomainEvent(event);

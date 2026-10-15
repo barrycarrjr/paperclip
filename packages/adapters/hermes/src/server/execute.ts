@@ -192,9 +192,12 @@ export function buildPrompt(
     paperclipRunIdEnv: "PAPERCLIP_RUN_ID",
   };
 
-  const rendered = renderTemplate(renderConditionalSections(template, vars), vars);
+  const activeTemplate = renderConditionalSections(template, vars);
+  const rendersWakePrompt = /\{\{\s*paperclipWakePrompt\s*\}\}/.test(activeTemplate);
+  const rendered = renderTemplate(activeTemplate, vars);
+  const wakePromptPrefix = rendersWakePrompt ? "" : wakePrompt;
   return appendSourceEvidenceInstructions(joinPromptSections([
-    wakePrompt,
+    wakePromptPrefix,
     sessionHandoffMarkdown,
     paperclipTaskMarkdown,
     rendered,

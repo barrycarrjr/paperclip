@@ -430,6 +430,34 @@ describe("LiveUpdatesProvider issue invalidation", () => {
     expect(invalidated).toBe(false);
     expect(invalidations).toEqual([]);
   });
+
+  it("refreshes a completed issue ledger when persisted run details arrive after terminal status", () => {
+    const invalidations: unknown[] = [];
+    const queryClient = {
+      invalidateQueries: (input: unknown) => {
+        invalidations.push(input);
+      },
+      getQueryData: (key: unknown) => {
+        if (JSON.stringify(key) === JSON.stringify(queryKeys.issues.detail("PAP-759"))) {
+          return { id: "issue-1", identifier: "PAP-759", assigneeAgentId: null };
+        }
+        return undefined;
+      },
+      setQueryData: vi.fn(),
+    };
+
+    const invalidated = __liveUpdatesTestUtils.invalidateVisibleIssueRunQueries(
+      queryClient as never,
+      "/PAP/issues/PAP-759",
+      { runId: "run-1", issueId: "issue-1", update: "run_counts" },
+      { isForegrounded: true },
+    );
+
+    expect(invalidated).toBe(true);
+    expect(invalidations).toContainEqual({
+      queryKey: queryKeys.issues.runs("PAP-759"),
+    });
+  });
 });
 
 describe("LiveUpdatesProvider visible issue comment hydration", () => {

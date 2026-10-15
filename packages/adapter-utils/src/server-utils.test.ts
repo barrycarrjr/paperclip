@@ -380,6 +380,16 @@ describe("runChildProcess", () => {
 });
 
 describe("renderPaperclipWakePrompt", () => {
+  it.each([false, true])("delivers trusted run count instructions for fresh and resumed wakes (%s)", (resumedSession) => {
+    const payload = { issue: { id: "issue-1", title: "Read notes" }, runCountsRequired: true, runCountsRetryReason: "missing_run_counts" };
+    const prompt = renderPaperclipWakePrompt(payload, { resumedSession });
+    expect(prompt).toContain("corrected final task comment");
+    expect(prompt).toContain("preceding run's actual work");
+    expect(prompt).toContain("Counts: items read 0; entries added 0; changes proposed 0.");
+    expect(JSON.parse(stringifyPaperclipWakePayload(payload)!)).toMatchObject({ runCountsRequired: true, runCountsRetryReason: "missing_run_counts" });
+    expect(renderPaperclipWakePrompt({ ...payload, runCountsRequired: false })).not.toContain("Run count reporting:");
+    expect(renderPaperclipWakePrompt({ runCountsRequired: true, comments: [{ body: "No assigned issue" }] })).not.toContain("Run count reporting:");
+  });
   it("keeps the default local-agent prompt action-oriented", () => {
     expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Start actionable work in this heartbeat");
     expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("do not stop at a plan");

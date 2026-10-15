@@ -19,7 +19,7 @@
 
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, plugins } from "@paperclipai/db";
+import { agents, plugins, routines as routinesTable } from "@paperclipai/db";
 import {
   STARTER_CARDS,
   findStarterCard,
@@ -28,6 +28,7 @@ import {
 import { notFound, unprocessable } from "../errors.js";
 import { routineService } from "./routines.js";
 import { logger } from "../middleware/logger.js";
+import { logActivity } from "./activity-log.js";
 
 /** Why a card cannot run yet, in words an operator can act on. */
 export interface StarterBlocker {
@@ -80,6 +81,18 @@ type Actor = { userId?: string | null };
 export function starterRoutineMarker(cardId: string): string {
   return `<!-- paperclip:starter-card=${cardId} -->`;
 }
+
+export const LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION = [
+  "Write one page for the owner, covering the last seven days:",
+  "",
+  "- What actually got finished.",
+  "- What is due this week.",
+  "- Anything that slipped past its date, and by how long.",
+  "- Anything waiting on a person rather than an agent.",
+  "",
+  "Lead with whatever needs a decision. Keep it to one page \u2014 if it is longer",
+  "than that, it is not a brief.",
+].join("\n");
 
 /**
  * Agent statuses that can never be handed work, so nothing offers one.
@@ -204,6 +217,45 @@ export function starterCatalogService(
 ) {
   const routines = routineService(db);
 
+  async function upgradeUneditedStarterRoutine(
+    companyId: string,
+    card: StarterCard,
+    routine: { id: string; description: string | null },
+  ): Promise<boolean> {
+    if (card.id !== "monday-morning-brief") return false;
+    const marker = starterRoutineMarker(card.id);
+    const legacyDescription = `${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`;
+    if (routine.description !== legacyDescription) return false;
+    const nextDescription = `${card.routine.description}\n\n${marker}`;
+
+    return db.transaction(async (tx) => {
+      const txDb = tx as unknown as Db;
+      const updated = await txDb
+        .update(routinesTable)
+        .set({ description: nextDescription, updatedAt: new Date() })
+        .where(
+          and(
+            eq(routinesTable.id, routine.id),
+            eq(routinesTable.companyId, companyId),
+            eq(routinesTable.description, legacyDescription),
+          ),
+        )
+        .returning({ id: routinesTable.id })
+        .then((rows) => rows[0] ?? null);
+      if (!updated) return false;
+      await logActivity(txDb, {
+        companyId,
+        actorType: "system",
+        actorId: "starter-catalog",
+        action: "routine.starter_instructions_updated",
+        entityType: "routine",
+        entityId: routine.id,
+        details: { cardId: card.id },
+      });
+      return true;
+    });
+  }
+
   /**
    * Find a routine this company already made from `cardId`, so the panel can
    * show "already on" instead of silently creating a second copy of the same
@@ -214,7 +266,9 @@ export function starterCatalogService(
     const list = await routines.list(companyId);
     for (const routine of list) {
       const detail = await routines.getDetail(routine.id);
-      if (detail?.description?.includes(marker)) return routine.id;
+      if (detail?.description?.includes(marker)) {
+        return routine.id;
+      }
     }
     return null;
   }
@@ -374,5 +428,21 @@ export function starterCatalogService(
     };
   }
 
-  return { listForCompany, activate };
+  async function reconcileRoutineInstructions() {
+    const card = findStarterCard("monday-morning-brief");
+    if (!card) return { updated: 0 };
+    const marker = starterRoutineMarker(card.id);
+    const legacyDescription = `${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`;
+    const candidates = await db
+      .select({ id: routinesTable.id, companyId: routinesTable.companyId, description: routinesTable.description })
+      .from(routinesTable)
+      .where(eq(routinesTable.description, legacyDescription));
+    let updated = 0;
+    for (const routine of candidates) {
+      if (await upgradeUneditedStarterRoutine(routine.companyId, card, routine)) updated += 1;
+    }
+    return { updated };
+  }
+
+  return { listForCompany, reconcileRoutineInstructions, activate };
 }

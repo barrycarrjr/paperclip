@@ -3,13 +3,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { STARTER_CARDS, type PluginStatus } from "@paperclipai/shared";
-import { agents, companies, createDb, plugins } from "@paperclipai/db";
+import { activityLog, agents, companies, createDb, plugins, routines } from "@paperclipai/db";
 import {
   blockersForPlugins,
   pickAssigneeForCompany,
   pluginStateByKey,
   starterCatalogService,
   starterRoutineMarker,
+  LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION,
   type PluginStateByKey,
 } from "../services/starter-catalog.js";
 import {
@@ -127,6 +128,8 @@ describeEmbeddedPostgres("starter catalog against a database", () => {
   }, 90_000);
 
   afterEach(async () => {
+    await db.delete(activityLog);
+    await db.delete(routines);
     await db.delete(plugins);
     await db.delete(agents);
     await db.delete(companies);
@@ -270,6 +273,51 @@ describeEmbeddedPostgres("starter catalog against a database", () => {
     expect(byId.get("daily-support-numbers")?.blockers).toEqual([
       { pluginKey: "slack-tools", kind: "missing", detail: "slack-tools is not installed" },
     ]);
+  });
+
+  it("keeps catalog reads read-only, then system reconciliation updates untouched briefs across companies", async () => {
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany();
+    const marker = starterRoutineMarker("monday-morning-brief");
+    const [routine] = await db.insert(routines).values({
+      companyId,
+      title: "Monday morning brief",
+      description: `${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`,
+    }).returning();
+    const [otherRoutine] = await db.insert(routines).values({
+      companyId: otherCompanyId,
+      title: "Monday morning brief",
+      description: `${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`,
+    }).returning();
+
+    await starterCatalogService(db).listForCompany(companyId);
+
+    const beforeReconcile = await db.select().from(routines);
+    expect(beforeReconcile.find((row) => row.id === routine.id)?.description).toBe(`${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`);
+    expect(beforeReconcile.find((row) => row.id === otherRoutine.id)?.description).toBe(`${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\n${marker}`);
+
+    await expect(starterCatalogService(db).reconcileRoutineInstructions()).resolves.toEqual({ updated: 2 });
+
+    const [updated] = await db.select().from(routines).where(eq(routines.id, routine.id));
+    const current = STARTER_CARDS.find((card) => card.id === "monday-morning-brief")!;
+    expect(updated.description).toBe(`${current.routine.description}\n\n${marker}`);
+    expect(updated.description).toContain("stalled active matters with no activity in 14 days");
+  });
+
+  it("preserves operator edits to an existing Monday brief", async () => {
+    const companyId = await seedCompany();
+    const marker = starterRoutineMarker("monday-morning-brief");
+    const editedDescription = `${LEGACY_MONDAY_MORNING_BRIEF_DESCRIPTION}\n\nKeep the owner's custom finance section.\n\n${marker}`;
+    const [routine] = await db.insert(routines).values({
+      companyId,
+      title: "Monday morning brief",
+      description: editedDescription,
+    }).returning();
+
+    await starterCatalogService(db).reconcileRoutineInstructions();
+
+    const [unchanged] = await db.select().from(routines).where(eq(routines.id, routine.id));
+    expect(unchanged.description).toBe(editedDescription);
   });
 });
 

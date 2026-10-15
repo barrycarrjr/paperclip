@@ -14,6 +14,7 @@ import {
 } from "../index.js";
 import { ensureOllamaModelPulled } from "./prepare.js";
 import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
+import { runCountsPromptForWake } from "@paperclipai/adapter-utils/run-counts";
 import { loadEphemeralProcedures, renderEphemeralProcedureContext, requireCompleteEphemeralProcedures, EphemeralProcedureError } from "@paperclipai/adapter-utils/ephemeral-skills";
 import { assertOllamaProcedureContext, procedureModuleDir } from "./skills.js";
 
@@ -102,6 +103,8 @@ function buildLocalModelPrompt(input: {
   lines.push(
     "Write a concise, helpful reply that addresses the issue. Your reply will be posted as a comment on this issue.",
   );
+  const countsInstructions = runCountsPromptForWake(wake);
+  if (countsInstructions) lines.push("", countsInstructions);
 
   return {
     issueId,

@@ -204,6 +204,8 @@ describeEmbeddedPostgres("activity service", () => {
         effectiveTimeoutSec: 30,
         timeoutFired: true,
         summary: "done",
+        runCounts: { itemsRead: 7, entriesAdded: 0, changesProposed: 2 },
+        runCountsReporting: { status: "reported", source: "issue_comment" },
         nestedHuge: { payload: "y".repeat(256_000) },
       },
       livenessState: "advanced",
@@ -242,6 +244,8 @@ describeEmbeddedPostgres("activity service", () => {
       cost_usd: 0.42,
       total_cost_usd: 0.42,
       stopReason: "timeout",
+      runCounts: { itemsRead: 7, entriesAdded: 0, changesProposed: 2 },
+      runCountsReporting: { status: "reported", source: "issue_comment" },
       effectiveTimeoutSec: 30,
       timeoutFired: true,
     });

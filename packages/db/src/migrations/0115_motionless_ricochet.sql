@@ -1,0 +1,1 @@
+ALTER TABLE "routine_runs" ADD COLUMN "completion_notification_eligible" boolean DEFAULT false NOT NULL;

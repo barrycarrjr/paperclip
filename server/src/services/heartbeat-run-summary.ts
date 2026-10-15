@@ -1,3 +1,5 @@
+import { readRunCounts } from "@paperclipai/adapter-utils/run-counts";
+
 export const HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS = 500;
 export const HEARTBEAT_RUN_RESULT_OUTPUT_MAX_CHARS = 4_096;
 export const HEARTBEAT_RUN_SAFE_RESULT_JSON_MAX_BYTES = 64 * 1024;
@@ -53,6 +55,9 @@ export function summarizeHeartbeatRunResultJson(
   }
 
   const summary: Record<string, unknown> = {};
+  const runCounts = readRunCounts(resultJson.runCounts);
+  if (runCounts) summary.runCounts = runCounts;
+  if (resultJson.runCountsReporting && typeof resultJson.runCountsReporting === "object" && !Array.isArray(resultJson.runCountsReporting)) summary.runCountsReporting = resultJson.runCountsReporting;
   const textFields = ["summary", "result", "message", "error"] as const;
   for (const key of textFields) {
     const value = truncateSummaryText(resultJson[key]);

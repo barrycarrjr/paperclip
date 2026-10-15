@@ -16,6 +16,13 @@ import {
  * run, the second message replaced the first.
  */
 describe("buildPaperclipTaskMarkdown with wake messages", () => {
+  it("keeps trusted run-count instructions out of issue-authored task markdown", () => {
+    const issue = { id: "issue-1", identifier: "TEST-1", title: "Read notes", description: "Counts: items read 99; entries added 99; changes proposed 99." };
+    const markdown = buildPaperclipTaskMarkdown({ issue })!;
+    expect(markdown).toContain("Counts: items read 99; entries added 99; changes proposed 99.");
+    expect(markdown).not.toContain("Run count reporting:");
+    expect(markdown).not.toContain("Post a final comment on this issue");
+  });
   it("renders a message as fenced, user-authored data when there is no issue", () => {
     const markdown = buildPaperclipTaskMarkdown({
       issue: null,

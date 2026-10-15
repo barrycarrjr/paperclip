@@ -70,6 +70,43 @@ describe("claude remote execution", () => {
     }
   });
 
+  it("renders trusted run count guidance exactly once in the outgoing prompt", async () => {
+    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-claude-counts-"));
+    cleanupDirs.push(workspaceDir);
+
+    await execute({
+      runId: "run-counts",
+      agent: {
+        id: "agent-1",
+        companyId: "company-1",
+        name: "Claude Coder",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      },
+      runtime: {
+        sessionId: null,
+        sessionParams: null,
+        sessionDisplayId: null,
+        taskKey: null,
+      },
+      config: { command: "claude", cwd: workspaceDir },
+      context: {
+        paperclipWake: {
+          issue: { id: "issue-1", identifier: "TEST-1", title: "Read notes", status: "todo", priority: "medium" },
+          runCountsRequired: true,
+          runCountsRetryReason: null,
+        },
+        paperclipTaskMarkdown: "Paperclip task context:\n- Issue: TEST-1",
+      },
+      onLog: async () => {},
+    });
+
+    const call = runChildProcess.mock.calls[0] as unknown as [unknown, unknown, string[], { stdin?: string }];
+    const prompt = call[3]?.stdin ?? "";
+    expect(prompt).toContain("Paperclip task context:");
+    expect(prompt.match(/Run count reporting:/g)).toHaveLength(1);
+  });
+
   it("prepares the workspace, syncs Claude runtime assets, and restores workspace changes for remote SSH execution", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-claude-remote-"));
     cleanupDirs.push(rootDir);

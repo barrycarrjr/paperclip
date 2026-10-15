@@ -792,6 +792,20 @@
       "when": 1792014361995,
       "tag": "0113_outstanding_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1792017409644,
+      "tag": "0114_first_glorian",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1792021641412,
+      "tag": "0115_motionless_ricochet",
+      "breakpoints": true
     }
   ]
 }

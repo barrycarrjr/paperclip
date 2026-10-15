@@ -28,6 +28,19 @@ function provider(options: { contextLength?: number; models?: unknown[]; version
   }); vi.stubGlobal("fetch", mock); return requests;
 }
 describe("Ollama attached procedure execution", () => {
+  it("delivers count correction guidance in the compact prompt and counts its bytes for admission", async () => {
+    const ctx = await context();
+    ctx.context.paperclipWake = { issue: { id: "issue-1", title: "Read notes" }, runCountsRequired: true, runCountsRetryReason: "missing_run_counts" };
+    const first = provider(); expect((await execute(ctx)).exitCode).toBe(0);
+    const messages = first.find(request => request.url.endsWith("/api/chat"))!.body!.messages as Array<{ content: string }>;
+    expect(messages[1]!.content).toContain("corrected final task comment");
+    expect(messages[1]!.content).toContain("preceding run's actual work");
+    expect(messages[1]!.content).toContain("Counts: items read 0; entries added 0; changes proposed 0.");
+    const required = messages.reduce((sum, message) => sum + Buffer.byteLength(message.content), 0) + 1024 + 100;
+    const second = provider({ contextLength: required - 1 });
+    expect((await execute(ctx)).errorCode).toBe("procedure_context_too_small");
+    expect(second.some(request => request.url.endsWith("/api/chat"))).toBe(false);
+  });
   it("sends complete selected procedure and evidence guidance with no truncation, shift, or num_ctx", async () => {
     const ctx = await context(); const requests = provider(); expect((await execute(ctx)).exitCode).toBe(0);
     const request = requests.find(request => request.url.endsWith("/api/chat"))!.body!;
