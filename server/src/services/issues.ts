@@ -56,6 +56,10 @@ import {
   issueTreeControlService,
   type ActiveIssueTreePauseHoldGate,
 } from "./issue-tree-control.js";
+import {
+  applyIssueExecutionPolicyTransition,
+  normalizeIssueExecutionPolicy,
+} from "./issue-execution-policy.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -1432,6 +1436,7 @@ const issueListSelect = {
   billingCode: issues.billingCode,
   assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
   executionPolicy: sql<null>`null`,
+  executionPolicyExplicit: sql<boolean>`false`,
   executionState: sql<null>`null`,
   executionWorkspaceId: issues.executionWorkspaceId,
   executionWorkspacePreference: issues.executionWorkspacePreference,
@@ -1642,6 +1647,53 @@ async function blockedByMapForIssues(
   return map;
 }
 
+export async function defaultExecutionPolicyForAssignee(
+  companyId: string,
+  assigneeAgentId: string,
+  dbOrTx: any,
+): Promise<Record<string, unknown> | null> {
+  const assignee = await dbOrTx
+    .select({ defaultReviewerAgentId: agents.defaultReviewerAgentId })
+    .from(agents)
+    .where(and(eq(agents.id, assigneeAgentId), eq(agents.companyId, companyId)))
+    .then((rows: Array<{ defaultReviewerAgentId: string | null }>) => rows[0] ?? null);
+  if (!assignee?.defaultReviewerAgentId) return null;
+
+  const reviewer = await dbOrTx
+    .select({ status: agents.status })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.id, assignee.defaultReviewerAgentId),
+        eq(agents.companyId, companyId),
+      ),
+    )
+    .then((rows: Array<{ status: string }>) => rows[0] ?? null);
+  if (!reviewer || reviewer.status === "pending_approval" || reviewer.status === "terminated") {
+    throw conflict(
+      "The assigned agent's automatic reviewer is unavailable. Choose another reviewer or remove the automatic reviewer setting.",
+    );
+  }
+
+  const policy = normalizeIssueExecutionPolicy({
+    mode: "normal",
+    commentRequired: true,
+    stages: [
+      {
+        type: "review",
+        approvalsNeeded: 1,
+        participants: [
+          { type: "agent", agentId: assignee.defaultReviewerAgentId },
+        ],
+      },
+    ],
+  });
+  if (!policy) {
+    throw conflict("Could not create the assigned agent's automatic review policy");
+  }
+  return { ...policy };
+}
+
 export function issueService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
@@ -1675,8 +1727,8 @@ export function issueService(db: Db) {
     };
   }
 
-  async function assertAssignableAgent(companyId: string, agentId: string) {
-    const assignee = await db
+  async function assertAssignableAgent(companyId: string, agentId: string, dbOrTx: any = db) {
+    const assignee = await dbOrTx
       .select({
         id: agents.id,
         companyId: agents.companyId,
@@ -1684,7 +1736,7 @@ export function issueService(db: Db) {
       })
       .from(agents)
       .where(eq(agents.id, agentId))
-      .then((rows) => rows[0] ?? null);
+      .then((rows: Array<{ id: string; companyId: string; status: string }>) => rows[0] ?? null);
 
     if (!assignee) throw notFound("Assignee agent not found");
     if (assignee.companyId !== companyId) {
@@ -1753,8 +1805,8 @@ export function issueService(db: Db) {
     });
   }
 
-  async function assertAssignableUser(companyId: string, userId: string) {
-    const membership = await db
+  async function assertAssignableUser(companyId: string, userId: string, dbOrTx: any = db) {
+    const membership = await dbOrTx
       .select({ id: companyMemberships.id })
       .from(companyMemberships)
       .where(
@@ -1765,9 +1817,26 @@ export function issueService(db: Db) {
           eq(companyMemberships.status, "active"),
         ),
       )
-      .then((rows) => rows[0] ?? null);
+      .then((rows: Array<{ id: string }>) => rows[0] ?? null);
     if (!membership) {
       throw notFound("Assignee user not found");
+    }
+  }
+
+  async function assertExecutionPolicyParticipants(
+    companyId: string,
+    policy: ReturnType<typeof normalizeIssueExecutionPolicy>,
+    dbOrTx: any = db,
+  ) {
+    if (!policy) return;
+    for (const stage of policy.stages) {
+      for (const participant of stage.participants) {
+        if (participant.type === "agent" && participant.agentId) {
+          await assertAssignableAgent(companyId, participant.agentId, dbOrTx);
+        } else if (participant.type === "user" && participant.userId) {
+          await assertAssignableUser(companyId, participant.userId, dbOrTx);
+        }
+      }
     }
   }
 
@@ -2147,6 +2216,10 @@ export function issueService(db: Db) {
 
   return {
     clearExecutionRunIfTerminal,
+    assertAssignableAgent,
+    assertAssignableUser,
+    defaultExecutionPolicyForAssignee: (companyId: string, assigneeAgentId: string, dbOrTx: any = db) =>
+      defaultExecutionPolicyForAssignee(companyId, assigneeAgentId, dbOrTx),
 
     /**
      * Issues sitting in a review/approval gate that a HUMAN must act on:
@@ -2765,6 +2838,8 @@ export function issueService(db: Db) {
         inheritExecutionWorkspaceFromIssueId,
         ...issueData
       } = data;
+      const executionPolicyWasExplicit = data.executionPolicy !== undefined;
+      issueData.executionPolicyExplicit = executionPolicyWasExplicit;
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
       if (!isolatedWorkspacesEnabled) {
         delete issueData.executionWorkspaceId;
@@ -2788,6 +2863,47 @@ export function issueService(db: Db) {
         goalId: issueData.goalId,
       });
       return db.transaction(async (tx) => {
+        if (issueData.executionPolicy === undefined && issueData.assigneeAgentId) {
+          issueData.executionPolicy = await defaultExecutionPolicyForAssignee(
+            companyId,
+            issueData.assigneeAgentId,
+            tx,
+          );
+          issueData.executionPolicyExplicit = false;
+        }
+        const creationExecutionPolicy = normalizeIssueExecutionPolicy(issueData.executionPolicy ?? null);
+        if (issueData.executionPolicy !== undefined) {
+          issueData.executionPolicy = creationExecutionPolicy as unknown as Record<string, unknown> | null;
+        }
+        await assertExecutionPolicyParticipants(companyId, creationExecutionPolicy, tx);
+        if (
+          creationExecutionPolicy
+          && (issueData.status === "done" || issueData.status === "in_review")
+        ) {
+          const transition = applyIssueExecutionPolicyTransition({
+            issue: {
+              status: issueData.status,
+              assigneeAgentId: issueData.assigneeAgentId ?? null,
+              assigneeUserId: issueData.assigneeUserId ?? null,
+              executionPolicy: creationExecutionPolicy,
+              executionState: null,
+            },
+            policy: creationExecutionPolicy,
+            requestedStatus: issueData.status,
+            requestedAssigneePatch: {},
+            actor: {
+              agentId: issueData.createdByAgentId ?? null,
+              userId: issueData.createdByUserId ?? null,
+            },
+          });
+          Object.assign(issueData, transition.patch);
+        }
+        if (issueData.assigneeAgentId) {
+          await assertAssignableAgent(companyId, issueData.assigneeAgentId, tx);
+        }
+        if (issueData.assigneeUserId) {
+          await assertAssignableUser(companyId, issueData.assigneeUserId, tx);
+        }
         if (isAgentFindingOriginKind(issueData.originKind) && issueData.originId) {
           await assertAgentFindingNotYetReported(tx, companyId, issueData.originId, {
             agentId: issueData.createdByAgentId ?? null,
@@ -2973,6 +3089,9 @@ export function issueService(db: Db) {
         blockedByIssueIds?: string[];
         actorAgentId?: string | null;
         actorUserId?: string | null;
+        preserveExecutionPolicy?: boolean;
+        expectedExecutionPolicy?: Record<string, unknown> | null;
+        expectedExecutionState?: Record<string, unknown> | null;
       },
       dbOrTx: any = db,
     ) => {
@@ -2988,6 +3107,9 @@ export function issueService(db: Db) {
         blockedByIssueIds,
         actorAgentId,
         actorUserId,
+        preserveExecutionPolicy,
+        expectedExecutionPolicy,
+        expectedExecutionState,
         ...issueData
       } = data;
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
@@ -3005,6 +3127,9 @@ export function issueService(db: Db) {
         ...issueData,
         updatedAt: new Date(),
       };
+      if (issueData.executionPolicy !== undefined && issueData.executionPolicyExplicit === undefined) {
+        patch.executionPolicyExplicit = true;
+      }
 
       const sortOrderProvided = issueData.sortOrder !== undefined && issueData.sortOrder !== null;
       const statusChanging = issueData.status !== undefined && issueData.status !== existing.status;
@@ -3038,6 +3163,36 @@ export function issueService(db: Db) {
       }
       if (issueData.assigneeUserId) {
         await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
+      }
+      const assigneeWasSpecified =
+        issueData.assigneeAgentId !== undefined || issueData.assigneeUserId !== undefined;
+      const assigneeChanged =
+        (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
+        (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId);
+      if (
+        issueData.executionPolicy === undefined
+        && !existing.executionPolicyExplicit
+        && assigneeWasSpecified
+        && (assigneeChanged || (existing.executionPolicy == null && existing.executionState == null))
+        && !preserveExecutionPolicy
+      ) {
+        patch.executionPolicy = issueData.assigneeAgentId
+          ? await defaultExecutionPolicyForAssignee(
+            existing.companyId,
+            issueData.assigneeAgentId,
+            dbOrTx,
+          )
+          : null;
+        patch.executionPolicyExplicit = false;
+      }
+      if (patch.executionPolicy !== undefined) {
+        const normalizedPatchExecutionPolicy = normalizeIssueExecutionPolicy(patch.executionPolicy);
+        patch.executionPolicy = normalizedPatchExecutionPolicy as unknown as Record<string, unknown> | null;
+        await assertExecutionPolicyParticipants(
+          existing.companyId,
+          normalizedPatchExecutionPolicy,
+          dbOrTx,
+        );
       }
       await assertIssueProjectAndGoalInCompany(
         existing.companyId,
@@ -3082,6 +3237,11 @@ export function issueService(db: Db) {
       }
 
       let expiredInteractions: IssueThreadInteraction[] = [];
+      const guardAutomaticPolicyProvenance =
+        patch.executionPolicy !== undefined
+        && patch.executionPolicyExplicit === false;
+      const guardExecutionPolicy = expectedExecutionPolicy !== undefined;
+      const guardExecutionState = expectedExecutionState !== undefined;
       const runUpdate = async (tx: any) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
@@ -3104,10 +3264,47 @@ export function issueService(db: Db) {
         const updated = await tx
           .update(issues)
           .set(patch)
-          .where(eq(issues.id, id))
+          .where(and(
+            eq(issues.id, id),
+            ...(guardAutomaticPolicyProvenance
+              ? [eq(issues.executionPolicyExplicit, false)]
+              : []),
+            ...(guardExecutionPolicy
+              ? [expectedExecutionPolicy === null
+                ? isNull(issues.executionPolicy)
+                : eq(issues.executionPolicy, expectedExecutionPolicy)]
+              : []),
+            ...(guardExecutionState
+              ? [expectedExecutionState === null
+                ? isNull(issues.executionState)
+                : eq(issues.executionState, expectedExecutionState)]
+              : []),
+          ))
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
-        if (!updated) return null;
+        if (!updated) {
+          if (guardExecutionPolicy || guardExecutionState) {
+            const stillExists = await tx
+              .select({ id: issues.id })
+              .from(issues)
+              .where(eq(issues.id, id))
+              .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+            if (stillExists) {
+              throw conflict("Issue review state changed. Retry the update.");
+            }
+          }
+          if (guardAutomaticPolicyProvenance) {
+            const stillExists = await tx
+              .select({ id: issues.id })
+              .from(issues)
+              .where(eq(issues.id, id))
+              .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+            if (stillExists) {
+              throw conflict("Issue review policy changed during assignment. Retry the update.");
+            }
+          }
+          return null;
+        }
         if (existing.status !== updated.status && (updated.status === "done" || updated.status === "cancelled")) {
           const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
           expiredInteractions = await issueThreadInteractionService(tx).expirePendingInteractionsForTerminalIssue(updated, {
@@ -3231,12 +3428,44 @@ export function issueService(db: Db) {
 
     checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
       const issueCompany = await db
-        .select({ companyId: issues.companyId })
+        .select({
+          companyId: issues.companyId,
+          assigneeAgentId: issues.assigneeAgentId,
+          executionPolicy: issues.executionPolicy,
+          executionPolicyExplicit: issues.executionPolicyExplicit,
+          executionState: issues.executionState,
+        })
         .from(issues)
         .where(eq(issues.id, id))
         .then((rows) => rows[0] ?? null);
       if (!issueCompany) throw notFound("Issue not found");
       await assertAssignableAgent(issueCompany.companyId, agentId);
+
+      const parsedCheckoutExecutionState = issueExecutionStateSchema.safeParse(issueCompany.executionState);
+      const preservesPendingHandoff =
+        parsedCheckoutExecutionState.success
+        && parsedCheckoutExecutionState.data.status === "pending"
+        && parsedCheckoutExecutionState.data.currentParticipant?.type === "agent"
+        && parsedCheckoutExecutionState.data.currentParticipant.agentId === agentId;
+      const preservesChangesRequestedHandoff =
+        parsedCheckoutExecutionState.success
+        && parsedCheckoutExecutionState.data.status === "changes_requested"
+        && parsedCheckoutExecutionState.data.returnAssignee?.type === "agent"
+        && parsedCheckoutExecutionState.data.returnAssignee.agentId === agentId;
+      const shouldRefreshCheckoutExecutionState =
+        issueCompany.executionState == null
+        || (
+          parsedCheckoutExecutionState.success
+          && !preservesPendingHandoff
+          && !preservesChangesRequestedHandoff
+        );
+      const shouldRefreshCheckoutPolicy =
+        !issueCompany.executionPolicyExplicit
+        && shouldRefreshCheckoutExecutionState
+        && (issueCompany.assigneeAgentId == null || issueCompany.assigneeAgentId === agentId);
+      const checkoutDefaultPolicy = shouldRefreshCheckoutPolicy
+        ? await defaultExecutionPolicyForAssignee(issueCompany.companyId, agentId, db)
+        : undefined;
 
       const now = new Date();
       const activePauseHold = await treeControlSvc.getActivePauseHoldGate(issueCompany.companyId, id);
@@ -3270,27 +3499,64 @@ export function issueService(db: Db) {
       const executionLockCondition = checkoutRunId
         ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
         : isNull(issues.executionRunId);
-      const updated = await db
+      const checkoutAssigneeCondition = issueCompany.assigneeAgentId == null
+        ? isNull(issues.assigneeAgentId)
+        : sameRunAssigneeCondition;
+      const unchangedExecutionStateCondition = issueCompany.executionState == null
+        ? isNull(issues.executionState)
+        : eq(issues.executionState, issueCompany.executionState);
+      const checkoutValues = {
+        assigneeAgentId: agentId,
+        assigneeUserId: null,
+        checkoutRunId,
+        executionRunId: checkoutRunId,
+        status: "in_progress" as const,
+        startedAt: now,
+        updatedAt: now,
+      };
+      let updated = await db
         .update(issues)
         .set({
-          assigneeAgentId: agentId,
-          assigneeUserId: null,
-          checkoutRunId,
-          executionRunId: checkoutRunId,
-          status: "in_progress",
-          startedAt: now,
-          updatedAt: now,
+          ...checkoutValues,
+          ...(shouldRefreshCheckoutPolicy
+            ? {
+                executionPolicy: checkoutDefaultPolicy,
+                executionPolicyExplicit: false,
+                executionState: null,
+              }
+            : {}),
         })
         .where(
           and(
             eq(issues.id, id),
             inArray(issues.status, expectedStatuses),
-            or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
+            checkoutAssigneeCondition,
             executionLockCondition,
+            ...(shouldRefreshCheckoutPolicy
+              ? [eq(issues.executionPolicyExplicit, false), unchangedExecutionStateCondition]
+              : []),
           ),
         )
         .returning()
         .then((rows) => rows[0] ?? null);
+
+      if (!updated && shouldRefreshCheckoutPolicy) {
+        updated = await db
+          .update(issues)
+          .set(checkoutValues)
+          .where(
+            and(
+              eq(issues.id, id),
+              inArray(issues.status, expectedStatuses),
+              checkoutAssigneeCondition,
+              executionLockCondition,
+              eq(issues.executionPolicyExplicit, true),
+              unchangedExecutionStateCondition,
+            ),
+          )
+          .returning()
+          .then((rows) => rows[0] ?? null);
+      }
 
       if (updated) {
         const [enriched] = await withIssueLabels(db, [updated]);

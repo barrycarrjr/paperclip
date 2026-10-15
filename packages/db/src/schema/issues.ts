@@ -7,6 +7,7 @@ import {
   timestamp,
   integer,
   doublePrecision,
+  boolean,
   jsonb,
   index,
   uniqueIndex,
@@ -53,6 +54,7 @@ export const issues = pgTable(
     billingCode: text("billing_code"),
     assigneeAdapterOverrides: jsonb("assignee_adapter_overrides").$type<Record<string, unknown>>(),
     executionPolicy: jsonb("execution_policy").$type<Record<string, unknown>>(),
+    executionPolicyExplicit: boolean("execution_policy_explicit").notNull().default(false),
     executionState: jsonb("execution_state").$type<Record<string, unknown>>(),
     executionWorkspaceId: uuid("execution_workspace_id")
       .references((): AnyPgColumn => executionWorkspaces.id, { onDelete: "set null" }),

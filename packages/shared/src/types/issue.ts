@@ -822,6 +822,7 @@ export interface Issue {
   billingCode: string | null;
   assigneeAdapterOverrides: IssueAssigneeAdapterOverrides | null;
   executionPolicy?: IssueExecutionPolicy | null;
+  executionPolicyExplicit?: boolean;
   executionState?: IssueExecutionState | null;
   monitorNextCheckAt?: Date | null;
   monitorLastTriggeredAt?: Date | null;

@@ -12,6 +12,7 @@ import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict, forbidden } from "../errors.js";
 import { personalCompanyOwner } from "./personal-companies.js";
 import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
+import { defaultExecutionPolicyForAssignee } from "./issues.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -422,9 +423,23 @@ export function accessService(db: Db) {
       await assertAssignableArchiveTarget(companyId, input.reassignment, tx);
 
       const now = new Date();
+      const inheritedExecutionPolicy = input.reassignment?.assigneeAgentId
+        ? await defaultExecutionPolicyForAssignee(companyId, input.reassignment.assigneeAgentId, tx)
+        : null;
+      const inheritedExecutionPolicySql = inheritedExecutionPolicy
+        ? sql`${JSON.stringify(inheritedExecutionPolicy)}::jsonb`
+        : sql`null`;
       const assignmentPatch = {
         assigneeAgentId: input.reassignment?.assigneeAgentId ?? null,
         assigneeUserId: input.reassignment?.assigneeUserId ?? null,
+        executionPolicy: sql`case
+          when ${issues.executionPolicyExplicit} then ${issues.executionPolicy}
+          else ${inheritedExecutionPolicySql}
+        end`,
+        executionState: sql`case
+          when ${issues.executionPolicyExplicit} then ${issues.executionState}
+          else null
+        end`,
         updatedAt: now,
       };
       const assignedOpenIssueWhere = and(

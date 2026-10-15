@@ -220,6 +220,22 @@ describe.sequential("company portability routes", () => {
       expect(mockCompanyPortabilityService.previewExport).toHaveBeenCalledTimes(1);
     });
 
+    it.sequential("refuses a selective export whose automatic reviewer has external instructions", async () => {
+      mockAgentService.list.mockResolvedValue([
+        { ...writer, defaultReviewerAgentId: outsider.id },
+        outsider,
+      ]);
+      const app = await createApp(member);
+
+      for (const exportPath of exportPaths) {
+        const res = await request(app).post(exportPath).send({ ...exportRequest, agents: [writer.id] });
+        expect(res.status, `${exportPath}: ${JSON.stringify(res.body)}`).toBe(403);
+        expect(res.body.error).toBe(
+          "Only an instance admin can export an agent whose instructions are kept outside Paperclip.",
+        );
+      }
+    });
+
     it.sequential("lets a member export when the export leaves those agents out", async () => {
       const app = await createApp(member);
 

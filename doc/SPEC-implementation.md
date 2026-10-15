@@ -135,6 +135,7 @@ Invariant: every business record belongs to exactly one company.
 - `title` text null
 - `status` enum: `active | paused | idle | running | error | terminated`
 - `reports_to` uuid fk `agents.id` null
+- `default_reviewer_agent_id` uuid fk `agents.id` null
 - `capabilities` text null
 - `adapter_type` enum: `process | http`
 - `adapter_config` jsonb not null
@@ -147,6 +148,7 @@ Invariants:
 
 - agent and manager must be in same company
 - no cycles in reporting tree
+- an automatic reviewer must be a different approved agent in the same company
 - `terminated` agents cannot be resumed
 
 ## 7.3 `agent_api_keys`
@@ -213,6 +215,7 @@ Invariant:
 Invariants:
 
 - single assignee only
+- when task creation or assignment omits an execution policy and the assigned agent has an automatic reviewer, the server adds a review stage; an explicit policy or `null` overrides the default
 - task must trace to company goal chain via `goal_id`, `parent_id`, or project-goal linkage
 - `in_progress` requires assignee
 - terminal states: `done | cancelled`

@@ -4,6 +4,7 @@ interface ExportAgentCandidate {
   id: string;
   name: string;
   status: string;
+  defaultReviewerAgentId?: string | null;
 }
 
 /**
@@ -52,6 +53,20 @@ export function resolvePortableExportAgentSelection<T extends ExportAgentCandida
     for (const agent of liveAgentRows) {
       selectedAgents.set(agent.id, agent);
     }
+  }
+
+  const allAgentsById = new Map(liveAgentRows.map((agent) => [agent.id, agent] as const));
+  const pendingReviewerDependencies = [...selectedAgents.values()];
+  for (const agent of pendingReviewerDependencies) {
+    if (!agent.defaultReviewerAgentId || selectedAgents.has(agent.defaultReviewerAgentId)) continue;
+    const reviewer = allAgentsById.get(agent.defaultReviewerAgentId);
+    if (!reviewer) {
+      warnings.push(`Agent ${agent.name} references a missing automatic reviewer and was exported without that link.`);
+      continue;
+    }
+    selectedAgents.set(reviewer.id, reviewer);
+    pendingReviewerDependencies.push(reviewer);
+    warnings.push(`Included automatic reviewer ${reviewer.name} because it is required by ${agent.name}.`);
   }
 
   return { agents: Array.from(selectedAgents.values()), warnings };

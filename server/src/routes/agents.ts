@@ -235,6 +235,7 @@ export function agentRoutes(
     "budgetMonthlyCents",
     "spentMonthlyCents",
     "defaultEnvironmentId",
+    "defaultReviewerAgentId",
     "status",
     "adapterType",
   ] as const;
@@ -954,6 +955,8 @@ export function agentRoutes(
           ? Math.max(0, Math.floor(snapshot.budgetMonthlyCents))
           : existing.budgetMonthlyCents,
       defaultEnvironmentId: typeof snapshot.defaultEnvironmentId === "string" ? snapshot.defaultEnvironmentId : null,
+      defaultReviewerAgentId:
+        typeof snapshot.defaultReviewerAgentId === "string" ? snapshot.defaultReviewerAgentId : null,
       adapterType:
         typeof snapshot.adapterType === "string" && snapshot.adapterType.length > 0
           ? snapshot.adapterType

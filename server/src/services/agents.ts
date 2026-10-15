@@ -36,6 +36,7 @@ const CONFIG_REVISION_FIELDS = [
   "role",
   "title",
   "reportsTo",
+  "defaultReviewerAgentId",
   "capabilities",
   "adapterType",
   "adapterConfig",
@@ -97,6 +98,7 @@ function buildConfigSnapshot(
     role: row.role,
     title: row.title,
     reportsTo: row.reportsTo,
+    defaultReviewerAgentId: row.defaultReviewerAgentId,
     capabilities: row.capabilities,
     adapterType: row.adapterType,
     adapterConfig,
@@ -166,6 +168,10 @@ function configPatchFromSnapshot(snapshot: unknown): Partial<typeof agents.$infe
     title: typeof snapshot.title === "string" || snapshot.title === null ? snapshot.title : null,
     reportsTo:
       typeof snapshot.reportsTo === "string" || snapshot.reportsTo === null ? snapshot.reportsTo : null,
+    defaultReviewerAgentId:
+      typeof snapshot.defaultReviewerAgentId === "string" || snapshot.defaultReviewerAgentId === null
+        ? snapshot.defaultReviewerAgentId
+        : null,
     capabilities:
       typeof snapshot.capabilities === "string" || snapshot.capabilities === null
         ? snapshot.capabilities
@@ -289,6 +295,25 @@ export function agentService(db: Db) {
     return manager;
   }
 
+  async function ensureDefaultReviewer(
+    companyId: string,
+    reviewerAgentId: string,
+    targetAgentId?: string,
+  ) {
+    if (targetAgentId && reviewerAgentId === targetAgentId) {
+      throw unprocessable("An agent cannot review its own work");
+    }
+    const reviewer = await getById(reviewerAgentId);
+    if (!reviewer) throw notFound("Default reviewer agent not found");
+    if (reviewer.companyId !== companyId) {
+      throw unprocessable("Default reviewer must belong to the same company");
+    }
+    if (reviewer.status === "pending_approval" || reviewer.status === "terminated") {
+      throw conflict("Default reviewer cannot be pending approval or terminated");
+    }
+    return reviewer;
+  }
+
   async function assertNoCycle(agentId: string, reportsTo: string | null | undefined) {
     if (!reportsTo) return;
     if (reportsTo === agentId) throw unprocessable("Agent cannot report to itself");
@@ -351,6 +376,9 @@ export function agentService(db: Db) {
         await ensureManager(existing.companyId, data.reportsTo);
       }
       await assertNoCycle(id, data.reportsTo);
+    }
+    if (data.defaultReviewerAgentId) {
+      await ensureDefaultReviewer(existing.companyId, data.defaultReviewerAgentId, id);
     }
 
     if (data.name !== undefined) {
@@ -415,6 +443,9 @@ export function agentService(db: Db) {
     create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">) => {
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
+      }
+      if (data.defaultReviewerAgentId) {
+        await ensureDefaultReviewer(companyId, data.defaultReviewerAgentId, data.id);
       }
 
       const existingAgents = await db

@@ -1523,6 +1523,8 @@ export interface PluginIssuesClient {
       blockedByIssueIds?: string[];
       labelIds?: string[];
       executionWorkspaceSettings?: Record<string, unknown> | null;
+      /** Required explanation when approving or requesting changes in an execution review stage. */
+      comment?: string;
     },
     companyId: string,
     actor?: PluginIssueMutationActor,

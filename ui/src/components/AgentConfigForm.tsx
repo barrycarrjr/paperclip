@@ -60,6 +60,7 @@ import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, type AgentConfigOverlay } from "../lib/agent-config-patch";
 import { AgentModelSelectionSection, initialModelSelection } from "./AgentModelSelectionSection";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
+import { getAutomaticReviewerOptions } from "../lib/agent-reviewer-options";
 
 /* ---- Create mode values ---- */
 
@@ -502,6 +503,12 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const currentDefaultEnvironmentId = isCreate
     ? val!.defaultEnvironmentId ?? ""
     : eff("identity", "defaultEnvironmentId", props.agent.defaultEnvironmentId ?? "");
+  const currentDefaultReviewerAgentId = props.mode === "edit"
+    ? eff("identity", "defaultReviewerAgentId", props.agent.defaultReviewerAgentId ?? "") as string
+    : "";
+  const automaticReviewerOptions = props.mode === "edit"
+    ? getAutomaticReviewerOptions(companyAgents, props.agent.id, currentDefaultReviewerAgentId)
+    : [];
   return (
     <div className={cn("relative", cards && "space-y-6")}>
       {/* ---- Floating Save button (edit mode, when dirty) ---- */}
@@ -556,6 +563,25 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 excludeAgentIds={[props.agent.id]}
                 chooseLabel="Choose manager…"
               />
+            </Field>
+            <Field label="Automatic reviewer" hint={help.defaultReviewer}>
+              <select
+                value={currentDefaultReviewerAgentId}
+                onChange={(event) => mark(
+                  "identity",
+                  "defaultReviewerAgentId",
+                  event.target.value || null,
+                )}
+                className={inputClass}
+              >
+                <option value="">No automatic reviewer</option>
+                {automaticReviewerOptions
+                  .map((option) => (
+                    <option key={option.id} value={option.id} disabled={option.unavailable}>
+                      {option.label}
+                    </option>
+                  ))}
+              </select>
             </Field>
             <Field label="Capabilities" hint={help.capabilities}>
               <MarkdownEditor
