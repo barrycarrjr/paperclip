@@ -67,4 +67,26 @@ describe("buildCodexExecArgs", () => {
       "-",
     ]);
   });
+
+  it("delivers approved rules through native developer instructions after extra config", () => {
+    const result = buildCodexExecArgs(
+      { extraArgs: ["-c", 'developer_instructions="forged"'] },
+      {
+        resumeSessionId: "session-1",
+        developerInstructions: "## Approved rules\n\nVerify totals before reporting them.",
+      },
+    );
+
+    expect(result.args).toEqual([
+      "exec",
+      "--json",
+      "-c",
+      'developer_instructions="forged"',
+      "-c",
+      'developer_instructions="## Approved rules\\n\\nVerify totals before reporting them."',
+      "resume",
+      "session-1",
+      "-",
+    ]);
+  });
 });

@@ -7,6 +7,8 @@ import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { instructionRuleService } from "./instruction-rules.js";
+import { rejectInstructionRule } from "./instruction-rule-rejections.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -39,8 +41,9 @@ export function approvalService(db: Db) {
     targetStatus: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote: string | null | undefined,
+    knownExisting?: ApprovalRecord,
   ): Promise<ResolutionResult> {
-    const existing = await getExistingApproval(id);
+    const existing = knownExisting ?? await getExistingApproval(id);
     if (!canResolveStatuses.has(existing.status)) {
       if (existing.status === targetStatus) {
         return { approval: existing, applied: false };
@@ -99,12 +102,22 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]),
 
-    approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    approve: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote?: string | null,
+      activityDetails: Record<string, unknown> = {},
+    ) => {
+      const existing = await getExistingApproval(id);
+      if (existing.type === "instruction_change") {
+        return instructionRuleService(db).approve(id, decidedByUserId, decisionNote, activityDetails);
+      }
       const { approval: updated, applied } = await resolveApproval(
         id,
         "approved",
         decidedByUserId,
         decisionNote,
+        existing,
       );
 
       let hireApprovedAgentId: string | null = null;
@@ -168,12 +181,22 @@ export function approvalService(db: Db) {
       return { approval: updated, applied };
     },
 
-    reject: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    reject: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote?: string | null,
+      activityDetails: Record<string, unknown> = {},
+    ) => {
+      const existing = await getExistingApproval(id);
+      if (existing.type === "instruction_change") {
+        return rejectInstructionRule(db, id, decidedByUserId, decisionNote, activityDetails);
+      }
       const { approval: updated, applied } = await resolveApproval(
         id,
         "rejected",
         decidedByUserId,
         decisionNote,
+        existing,
       );
 
       if (applied && updated.type === "hire_agent") {
@@ -189,12 +212,22 @@ export function approvalService(db: Db) {
 
     requestRevision: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
       const existing = await getExistingApproval(id);
+      const normalizedDecisionNote = typeof decisionNote === "string" ? decisionNote.trim() : "";
+      if (existing.type === "instruction_change" && !normalizedDecisionNote) {
+        throw unprocessable("A revision note is required for instruction changes");
+      }
+      if (existing.type === "instruction_change") {
+        return instructionRuleService(db).requestRevision(id, decidedByUserId, normalizedDecisionNote);
+      }
+      if (existing.status === "revision_requested") {
+        return { approval: existing, applied: false };
+      }
       if (existing.status !== "pending") {
         throw unprocessable("Only pending approvals can request revision");
       }
 
       const now = new Date();
-      return db
+      const updated = await db
         .update(approvals)
         .set({
           status: "revision_requested",
@@ -203,9 +236,19 @@ export function approvalService(db: Db) {
           decidedAt: now,
           updatedAt: now,
         })
-        .where(eq(approvals.id, id))
+        .where(and(eq(approvals.id, id), eq(approvals.status, "pending")))
         .returning()
-        .then((rows) => rows[0]);
+        .then((rows) => rows[0] ?? null);
+      if (updated) return { approval: updated, applied: true };
+
+      // Another request may have committed after the read above. Returning
+      // that row lets the caller retry delivery without changing the original
+      // decision actor or note. A terminal decision still wins the race.
+      const current = await getExistingApproval(id);
+      if (current.status === "revision_requested") {
+        return { approval: current, applied: false };
+      }
+      throw unprocessable("Only pending approvals can request revision");
     },
 
     resubmit: async (id: string, payload?: Record<string, unknown>) => {
@@ -215,7 +258,7 @@ export function approvalService(db: Db) {
       }
 
       const now = new Date();
-      return db
+      const updated = await db
         .update(approvals)
         .set({
           status: "pending",
@@ -225,9 +268,14 @@ export function approvalService(db: Db) {
           decidedAt: null,
           updatedAt: now,
         })
-        .where(eq(approvals.id, id))
+        .where(and(eq(approvals.id, id), eq(approvals.status, "revision_requested")))
         .returning()
-        .then((rows) => rows[0]);
+        .then((rows) => rows[0] ?? null);
+      if (updated) return updated;
+
+      // The approval was resolved after the initial read. A stale resubmit
+      // must not reopen an approved or rejected decision.
+      throw unprocessable("Only revision requested approvals can be resubmitted");
     },
 
     listComments: async (approvalId: string) => {

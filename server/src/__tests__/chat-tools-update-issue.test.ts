@@ -15,9 +15,15 @@ const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
 }));
+const mockHeartbeatService = vi.hoisted(() => ({
+  wakeup: vi.fn(async () => undefined),
+}));
 
 vi.mock("../services/issues.js", () => ({
   issueService: () => mockIssueService,
+}));
+vi.mock("../services/heartbeat.js", () => ({
+  heartbeatService: () => mockHeartbeatService,
 }));
 
 const { executeChatTool, getChatTool } = await import("../services/chat-tools.js");
@@ -29,8 +35,11 @@ const COMPANY_ID = "22222222-2222-2222-2222-222222222222";
  * Enough database to find one issue and record any comment written about it.
  * Shaped like the drizzle chains the tool uses and nothing more.
  */
-function dbWithIssue(captured: { comment?: Record<string, unknown> } = {}): Db {
-  return {
+function dbWithIssue(captured: {
+  comment?: Record<string, unknown>;
+  decision?: Record<string, unknown>;
+} = {}): Db {
+  const database = {
     select() {
       return {
         from() {
@@ -49,12 +58,17 @@ function dbWithIssue(captured: { comment?: Record<string, unknown> } = {}): Db {
     insert() {
       return {
         values(values: Record<string, unknown>) {
-          captured.comment = values;
+          if ("outcome" in values) captured.decision = values;
+          else captured.comment = values;
           return Promise.resolve([]);
         },
       };
     },
-  } as unknown as Db;
+    transaction<T>(callback: (tx: Db) => Promise<T>) {
+      return callback(database as unknown as Db);
+    },
+  };
+  return database as unknown as Db;
 }
 
 function agentCtx(db: Db, agentId = "33333333-3333-3333-3333-333333333333") {
@@ -96,7 +110,7 @@ describe("update_issue", () => {
       agentCtx(dbWithIssue()),
     );
 
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(mockIssueService.update).toHaveBeenCalledWith(
       ISSUE_ID,
       expect.objectContaining({ status: "blocked" }),
@@ -148,6 +162,151 @@ describe("update_issue", () => {
       issueId: ISSUE_ID,
       body: "Waiting on Brandon.",
       authorAgentId: agentId,
+    });
+  });
+
+  it("routes completion through an automatic reviewer and wakes that reviewer", async () => {
+    const workerId = "33333333-3333-4333-8333-333333333333";
+    const reviewerId = "44444444-4444-4444-8444-444444444444";
+    const existing = {
+      id: ISSUE_ID,
+      identifier: "IND-1260",
+      companyId: COMPANY_ID,
+      title: "Review this work",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: workerId,
+      assigneeUserId: null,
+      createdAt: new Date("2026-09-09T16:00:00.000Z"),
+      updatedAt: new Date("2026-09-09T16:30:00.000Z"),
+      executionPolicy: {
+        mode: "normal",
+        commentRequired: true,
+        stages: [{
+          id: "55555555-5555-4555-8555-555555555555",
+          type: "review",
+          approvalsNeeded: 1,
+          participants: [{
+            id: "66666666-6666-4666-8666-666666666666",
+            type: "agent",
+            agentId: reviewerId,
+            userId: null,
+          }],
+        }],
+      },
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...existing,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+
+    const result = await executeChatTool(
+      "update_issue",
+      { issueId: ISSUE_ID, status: "done", comment: "Ready for review." },
+      agentCtx(dbWithIssue(), workerId),
+    );
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result).toMatchObject({ ok: true });
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      ISSUE_ID,
+      expect.objectContaining({ status: "in_review", assigneeAgentId: reviewerId }),
+    );
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      reviewerId,
+      expect.objectContaining({
+        reason: "execution_review_requested",
+        contextSnapshot: expect.objectContaining({
+          executionStage: expect.objectContaining({
+            wakeRole: "reviewer",
+            currentParticipant: expect.objectContaining({ type: "agent", agentId: reviewerId }),
+            returnAssignee: expect.objectContaining({ type: "agent", agentId: workerId }),
+            allowedActions: ["approve", "request_changes"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("records a reviewer approval and its required comment together", async () => {
+    const workerId = "33333333-3333-4333-8333-333333333333";
+    const reviewerId = "44444444-4444-4444-8444-444444444444";
+    const stageId = "55555555-5555-4555-8555-555555555555";
+    const existing = {
+      id: ISSUE_ID,
+      identifier: "IND-1260",
+      companyId: COMPANY_ID,
+      title: "Approve this work",
+      status: "in_review",
+      priority: "medium",
+      assigneeAgentId: reviewerId,
+      assigneeUserId: null,
+      createdAt: new Date("2026-09-09T16:00:00.000Z"),
+      updatedAt: new Date("2026-09-09T16:30:00.000Z"),
+      executionPolicy: {
+        mode: "normal",
+        commentRequired: true,
+        stages: [{
+          id: stageId,
+          type: "review",
+          approvalsNeeded: 1,
+          participants: [{
+            id: "66666666-6666-4666-8666-666666666666",
+            type: "agent",
+            agentId: reviewerId,
+            userId: null,
+          }],
+        }],
+      },
+      executionState: {
+        status: "pending",
+        currentStageId: stageId,
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: reviewerId, userId: null },
+        returnAssignee: { type: "agent", agentId: workerId, userId: null },
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: null,
+      },
+    };
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...existing,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    const captured: {
+      comment?: Record<string, unknown>;
+      decision?: Record<string, unknown>;
+    } = {};
+
+    const result = await executeChatTool(
+      "update_issue",
+      { issueId: ISSUE_ID, status: "done", comment: "Approved after checking the result." },
+      agentCtx(dbWithIssue(captured), reviewerId),
+    );
+
+    if (!result.ok) throw new Error(result.error);
+    expect(result).toMatchObject({ ok: true });
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      ISSUE_ID,
+      expect.objectContaining({ status: "done" }),
+      expect.anything(),
+    );
+    expect(captured.decision).toMatchObject({
+      stageId,
+      actorAgentId: reviewerId,
+      outcome: "approved",
+      body: "Approved after checking the result.",
+    });
+    expect(captured.comment).toMatchObject({
+      authorAgentId: reviewerId,
+      body: "Approved after checking the result.",
     });
   });
 

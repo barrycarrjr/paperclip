@@ -98,7 +98,24 @@ vi.mock("./MarkdownEditor", () => ({
 }));
 
 vi.mock("./InlineEntitySelector", () => ({
-  InlineEntitySelector: () => null,
+  InlineEntitySelector: ({
+    value,
+    options,
+    noneLabel,
+    onChange,
+  }: {
+    value: string;
+    options: Array<{ id: string; label: string }>;
+    noneLabel: string;
+    onChange: (value: string) => void;
+  }) => (
+    <select aria-label="Assignee" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{noneLabel}</option>
+      {options.map((option) => (
+        <option key={option.id} value={option.id}>{option.label}</option>
+      ))}
+    </select>
+  ),
 }));
 
 vi.mock("./Identity", () => ({
@@ -1298,6 +1315,97 @@ describe("IssueChatThread", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("marks a submitted reply as a correction", async () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            issueStatus="in_progress"
+            currentAssigneeValue="agent:agent-1"
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+    const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement;
+    const correctionButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Correction"));
+    const submitButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Send");
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "Always verify the source first.");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      correctionButton?.click();
+    });
+    await act(async () => submitButton?.click());
+    expect(appendMock).toHaveBeenCalledWith(expect.objectContaining({
+      runConfig: { custom: { intent: "correction" } },
+    }));
+    act(() => root.unmount());
+  });
+
+  it("resets correction intent when reassigned to a user or no assignee", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            issueStatus="in_progress"
+            currentAssigneeValue="agent:agent-1"
+            enableReassign
+            reassignOptions={[
+              { id: "agent:agent-1", label: "Agent One" },
+              { id: "user:user-1", label: "Board User" },
+            ]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const correctionButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Correction"),
+    ) as HTMLButtonElement;
+    const assignee = container.querySelector('select[aria-label="Assignee"]') as HTMLSelectElement;
+
+    act(() => correctionButton.click());
+    expect(correctionButton.getAttribute("aria-pressed")).toBe("true");
+
+    act(() => {
+      assignee.value = "user:user-1";
+      assignee.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(correctionButton.getAttribute("aria-pressed")).toBe("false");
+    expect(correctionButton.disabled).toBe(true);
+
+    act(() => {
+      assignee.value = "agent:agent-1";
+      assignee.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(correctionButton.disabled).toBe(false);
+    act(() => correctionButton.click());
+    expect(correctionButton.getAttribute("aria-pressed")).toBe("true");
+
+    act(() => {
+      assignee.value = "";
+      assignee.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(correctionButton.getAttribute("aria-pressed")).toBe("false");
+    expect(correctionButton.disabled).toBe(true);
+
+    act(() => root.unmount());
   });
 
   it("exposes a composer focus handle that forwards to the editor", () => {

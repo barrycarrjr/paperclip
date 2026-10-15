@@ -33,6 +33,7 @@ import {
   ensurePaperclipSkillSymlink,
   ensurePathInEnv,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -389,10 +390,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
     const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
     const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+    const approvedRulesNote = renderPaperclipApprovedRules(context);
     const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
     const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
+    // OpenCode run has no per-run system field without replacing the selected
+    // agent configuration, so keep the bounded rule block first in the prompt.
     const prompt = appendSourceEvidenceInstructions(joinPromptSections([
       instructionsPrefix,
+      approvedRulesNote,
       renderedBootstrapPrompt,
       memoriesNote,
       wakePrompt,

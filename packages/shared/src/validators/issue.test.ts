@@ -9,6 +9,26 @@ import {
 } from "./issue.js";
 
 describe("issue validators", () => {
+  it("accepts correction intent and defaults ordinary comments to message", () => {
+    expect(addIssueCommentSchema.parse({ body: "Please do this differently" }).intent).toBe("message");
+    expect(addIssueCommentSchema.parse({ body: "Please do this differently", intent: "correction" }).intent)
+      .toBe("correction");
+  });
+  it("accepts bounded portable issue-comment idempotency keys", () => {
+    expect(addIssueCommentSchema.parse({ body: "Reply", idempotencyKey: "ollama.mixed:v1_key-123" }).idempotencyKey)
+      .toBe("ollama.mixed:v1_key-123");
+    expect(() => addIssueCommentSchema.parse({ body: "Reply", idempotencyKey: "not allowed" })).toThrow();
+    expect(() => addIssueCommentSchema.parse({ body: "Reply", idempotencyKey: "x".repeat(201) })).toThrow();
+  });
+  it("keeps idempotent comment creation separate from issue and run state changes", () => {
+    for (const stateChange of ["reopen", "resume", "interrupt"] as const) {
+      expect(() => addIssueCommentSchema.parse({
+        body: "Reply once",
+        idempotencyKey: "ollama.mixed:v1_key-123",
+        [stateChange]: true,
+      })).toThrow("Idempotent comment creation cannot be combined with issue or run state changes");
+    }
+  });
   it("passes real line breaks through unchanged", () => {
     const parsed = createIssueSchema.parse({
       title: "Follow up PR",

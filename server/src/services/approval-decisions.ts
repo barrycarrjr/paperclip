@@ -13,6 +13,7 @@
  * account that pressed the button.
  */
 import type { Db } from "@paperclipai/db";
+import { instructionChangePayloadSchema } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import {
   approvalService,
@@ -60,7 +61,7 @@ export type DecidedApproval = Awaited<ReturnType<ReturnType<typeof approvalServi
 
 export interface ApprovalDecisionResult {
   approval: DecidedApproval;
-  /** False when the approval was already decided; nothing else happened. */
+  /** False when already decided; instruction decision wakeups may still retry. */
   applied: boolean;
   /** What happened to a drafted outbound call on approve; null otherwise. */
   draftExecution: DraftExecutionOutcome | null;
@@ -84,28 +85,35 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
   async function approve(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult> {
     const decidedByUserId = input.decidedByUserId;
     const pluginSource = pluginSourceDetails(input);
-    const { approval, applied } = await svc.approve(input.approvalId, decidedByUserId, input.decisionNote ?? undefined);
+    const { approval, applied } = await svc.approve(
+      input.approvalId,
+      decidedByUserId,
+      input.decisionNote ?? undefined,
+      pluginSource,
+    );
     let draftExecution: DraftExecutionOutcome | null = null;
 
-    if (applied) {
+    if (applied || (approval.type === "instruction_change" && approval.status === "approved")) {
       const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
       const linkedIssueIds = linkedIssues.map((issue) => issue.id);
       const primaryIssueId = linkedIssueIds[0] ?? null;
 
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: decidedByUserId,
-        action: "approval.approved",
-        entityType: "approval",
-        entityId: approval.id,
-        details: {
-          type: approval.type,
-          requestedByAgentId: approval.requestedByAgentId,
-          linkedIssueIds,
-          ...pluginSource,
-        },
-      });
+      if (applied && approval.type !== "instruction_change") {
+        await logActivity(db, {
+          companyId: approval.companyId,
+          actorType: "user",
+          actorId: decidedByUserId,
+          action: "approval.approved",
+          entityType: "approval",
+          entityId: approval.id,
+          details: {
+            type: approval.type,
+            requestedByAgentId: approval.requestedByAgentId,
+            linkedIssueIds,
+            ...pluginSource,
+          },
+        });
+      }
 
       // Trust loop: if this was a drafted outbound tool call, re-dispatch
       // it now that the user has approved. The re-dispatch must pass
@@ -269,6 +277,9 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
             },
             requestedByActorType: "user",
             requestedByActorId: decidedByUserId,
+            idempotencyKey: approval.type === "instruction_change"
+              ? `approval:${approval.id}:requester-wakeup:approved`
+              : null,
             contextSnapshot: {
               source: "approval.approved",
               approvalId: approval.id,
@@ -325,9 +336,14 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
   }
 
   async function reject(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult> {
-    const { approval, applied } = await svc.reject(input.approvalId, input.decidedByUserId, input.decisionNote ?? undefined);
+    const { approval, applied } = await svc.reject(
+      input.approvalId,
+      input.decidedByUserId,
+      input.decisionNote ?? undefined,
+      pluginSourceDetails(input),
+    );
 
-    if (applied) {
+    if (applied && approval.type !== "instruction_change") {
       await logActivity(db, {
         companyId: approval.companyId,
         actorType: "user",
@@ -338,9 +354,122 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
         details: { type: approval.type, ...pluginSourceDetails(input) },
       });
     }
+    // Durable instruction rejection effects commit in the approval service.
+    // Retry delivery after interruption, keeping one accepted wake request.
+    if (approval.type === "instruction_change" && approval.status === "rejected") {
+      const payload = instructionChangePayloadSchema.parse(approval.payload);
+      if (approval.requestedByAgentId) {
+        try {
+          const sourceIssue = await issuesSvc.getById(payload.sourceIssueId);
+          const issueId = sourceIssue?.companyId === approval.companyId ? sourceIssue.id : null;
+          await heartbeat.wakeup(approval.requestedByAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "approval_rejected",
+            payload: {
+              approvalId: approval.id,
+              approvalStatus: approval.status,
+              issueId,
+            },
+            requestedByActorType: "user",
+            requestedByActorId: approval.decidedByUserId ?? input.decidedByUserId,
+            idempotencyKey: `approval:${approval.id}:requester-wakeup:rejected`,
+            contextSnapshot: {
+              source: "approval.rejected",
+              approvalId: approval.id,
+              approvalStatus: approval.status,
+              issueId,
+              taskId: issueId,
+              wakeReason: "approval_rejected",
+            },
+          });
+        } catch (err) {
+          logger.warn({ err, approvalId: approval.id }, "failed to wake requester after instruction rule rejection");
+        }
+      }
+    }
 
     return { approval, applied, draftExecution: null };
   }
 
-  return { approve, reject };
+  async function requestRevision(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult> {
+    const { approval, applied } = await svc.requestRevision(
+      input.approvalId,
+      input.decidedByUserId,
+      input.decisionNote ?? undefined,
+    );
+
+    if (applied) {
+      await logActivity(db, {
+        companyId: approval.companyId,
+        actorType: "user",
+        actorId: approval.decidedByUserId ?? input.decidedByUserId,
+        action: "approval.revision_requested",
+        entityType: "approval",
+        entityId: approval.id,
+        details: { type: approval.type },
+      });
+    }
+
+    // Revision delivery is retried on every idempotent instruction-change
+    // request. The heartbeat key ensures that a successful first delivery is
+    // still accepted only once.
+    if (
+      approval.type === "instruction_change" &&
+      approval.status === "revision_requested" &&
+      approval.requestedByAgentId
+    ) {
+      const payload = instructionChangePayloadSchema.parse(approval.payload);
+      try {
+        const sourceIssue = await issuesSvc.getById(payload.sourceIssueId);
+        const issueId = sourceIssue?.companyId === approval.companyId ? sourceIssue.id : null;
+        const decisionNote = approval.decisionNote ?? null;
+        const revisionCycle = new Date(approval.decidedAt ?? approval.updatedAt).toISOString();
+        await heartbeat.wakeup(approval.requestedByAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "approval_revision_requested",
+          payload: {
+            approvalId: approval.id,
+            approvalStatus: approval.status,
+            decisionNote,
+            revisionCycle,
+            issueId,
+            sourceIssueId: payload.sourceIssueId,
+            sourceCommentId: payload.sourceCommentId,
+            targetAgentId: payload.targetAgentId,
+            scope: payload.scope,
+            rule: payload.rule,
+          },
+          requestedByActorType: "user",
+          requestedByActorId: approval.decidedByUserId ?? input.decidedByUserId,
+          idempotencyKey: `approval:${approval.id}:requester-wakeup:revision-requested:${revisionCycle}`,
+          contextSnapshot: {
+            source: "approval.revision_requested",
+            approvalId: approval.id,
+            approvalStatus: approval.status,
+            decisionNote,
+            revisionCycle,
+            issueId,
+            taskId: issueId,
+            sourceIssueId: payload.sourceIssueId,
+            sourceCommentId: payload.sourceCommentId,
+            targetAgentId: payload.targetAgentId,
+            scope: payload.scope,
+            rule: payload.rule,
+            wakeReason: "approval_revision_requested",
+          },
+        });
+      } catch (err) {
+        logger.warn(
+          { err, approvalId: approval.id },
+          "failed to wake requester after instruction rule revision request",
+        );
+      }
+    }
+
+    return { approval, applied, draftExecution: null };
+  }
+
+  return { approve, reject, requestRevision };
 }

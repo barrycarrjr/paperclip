@@ -3,10 +3,14 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
+import { createHash } from "node:crypto";
 import {
   asString,
   asNumber,
   parseObject,
+  normalizePaperclipWakePayload,
+  renderPaperclipApprovedRules,
+  renderPaperclipCorrectionWorkflow,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   DEFAULT_OLLAMA_LOCAL_BASE_URL,
@@ -14,8 +18,9 @@ import {
 } from "../index.js";
 import { ensureOllamaModelPulled } from "./prepare.js";
 import { appendSourceEvidenceInstructions } from "@paperclipai/adapter-utils/source-evidence";
+import { runCountsPromptForWake } from "@paperclipai/adapter-utils/run-counts";
 import { loadEphemeralProcedures, renderEphemeralProcedureContext, requireCompleteEphemeralProcedures, EphemeralProcedureError } from "@paperclipai/adapter-utils/ephemeral-skills";
-import { assertOllamaProcedureContext, procedureModuleDir } from "./skills.js";
+import { assertOllamaProtectedContext, procedureModuleDir } from "./skills.js";
 
 interface OllamaChatMessage {
   role: "system" | "user" | "assistant";
@@ -46,10 +51,151 @@ interface PaperclipWakeIssueShape {
 
 interface PaperclipWakeCommentShape {
   id?: string;
+  issueId?: string;
   body?: string;
+  bodyTruncated?: boolean;
+  intent?: "message" | "correction";
   authorAgentName?: string | null;
   authorUserName?: string | null;
   createdAt?: string;
+}
+
+type InstructionRevisionWake = {
+  approvalId: string;
+  decisionNote: string | null;
+  revisionCycle: string;
+  sourceIssueId: string;
+  sourceCommentId: string;
+  targetAgentId: string;
+  scope: "agent" | "company";
+  rule: string;
+};
+
+function parseInstructionRevisionWake(wake: Record<string, unknown>): InstructionRevisionWake | null {
+  if (asString(wake.reason, "") !== "approval_revision_requested") return null;
+  const revision = parseObject(wake.approvalRevision);
+  const approvalId = asString(revision.approvalId, "").trim();
+  const revisionCycle = asString(revision.revisionCycle, "").trim();
+  const sourceIssueId = asString(revision.sourceIssueId, "").trim();
+  const sourceCommentId = asString(revision.sourceCommentId, "").trim();
+  const targetAgentId = asString(revision.targetAgentId, "").trim();
+  const scope = asString(revision.scope, "").trim();
+  const rule = asString(revision.rule, "").trim();
+  if (
+    !approvalId || !revisionCycle || !sourceIssueId || !sourceCommentId || !targetAgentId || !rule ||
+    (scope !== "agent" && scope !== "company")
+  ) return null;
+  return {
+    approvalId,
+    decisionNote: asString(revision.decisionNote, "").trim() || null,
+    revisionCycle,
+    sourceIssueId,
+    sourceCommentId,
+    targetAgentId,
+    scope,
+    rule,
+  };
+}
+
+type CompleteWakeCommentsResult =
+  | { ok: true; comments: PaperclipWakeCommentShape[] }
+  | { ok: false; error: string };
+
+async function loadCompleteWakeComments(input: {
+  wake: Record<string, unknown>;
+  issueId: string | null;
+  apiUrl: string;
+  authToken: string | null | undefined;
+}): Promise<CompleteWakeCommentsResult> {
+  const inlineComments = Array.isArray(input.wake.comments)
+    ? (input.wake.comments as PaperclipWakeCommentShape[])
+    : [];
+  const inlineById = new Map(
+    inlineComments
+      .filter((comment): comment is PaperclipWakeCommentShape & { id: string } =>
+        typeof comment.id === "string" && comment.id.length > 0)
+      .map((comment) => [comment.id, comment]),
+  );
+  const correctionSources = normalizePaperclipWakePayload(input.wake)?.correctionCommentSources ?? [];
+  const expectedCorrections = new Set(correctionSources.map((source) => source.id));
+  for (const source of correctionSources) {
+    if (source.issueId !== input.issueId) {
+      return { ok: false, error: "A correction source does not belong to the wake issue, so Ollama cannot verify its provenance." };
+    }
+  }
+  for (const comment of inlineComments) {
+    if (comment.intent === "correction" && (!comment.id || typeof comment.id !== "string")) {
+      return { ok: false, error: "A correction comment has no id, so Ollama cannot load its complete source text." };
+    }
+    if (comment.intent === "correction" && typeof comment.id === "string") expectedCorrections.add(comment.id);
+    if (comment.intent === "correction" && comment.issueId && comment.issueId !== input.issueId) {
+      return { ok: false, error: "A correction comment does not belong to the wake issue." };
+    }
+  }
+
+  const idsToFetch = [...expectedCorrections].filter((id) => {
+    const inline = inlineById.get(id);
+    return !inline || (
+      inline.intent !== "correction" ||
+      inline.bodyTruncated === true || typeof inline.body !== "string" || inline.body.trim().length === 0
+    );
+  });
+  if (idsToFetch.length > 0 && (!input.issueId || !input.authToken)) {
+    return { ok: false, error: "The wake omitted or truncated comment text, and Ollama cannot fetch it without an issue id and agent API token." };
+  }
+
+  const fetched = new Map<string, PaperclipWakeCommentShape>();
+  const fetchResults = await Promise.all(idsToFetch.map(async (commentId) => {
+    try {
+      const response = await fetch(
+        `${input.apiUrl}/api/issues/${encodeURIComponent(input.issueId!)}/comments/${encodeURIComponent(commentId)}`,
+        { headers: { Authorization: `Bearer ${input.authToken}` } },
+      );
+      if (!response.ok) return { commentId, error: `HTTP ${response.status}` } as const;
+      const raw: unknown = await response.json();
+      const comment = parseObject(raw);
+      if (
+        asString(comment.id, "") !== commentId ||
+        comment.issueId !== input.issueId ||
+        typeof comment.body !== "string" || comment.body.trim().length === 0 ||
+        comment.bodyTruncated === true ||
+        (expectedCorrections.has(commentId) && comment.intent !== "correction") ||
+        (comment.intent !== "message" && comment.intent !== "correction")
+      ) {
+        return { commentId, error: "invalid comment response" } as const;
+      }
+      return {
+        commentId,
+        comment: {
+          ...(comment as PaperclipWakeCommentShape),
+          id: commentId,
+          issueId: input.issueId!,
+          body: comment.body,
+          bodyTruncated: false,
+          intent: comment.intent,
+        },
+      } as const;
+    } catch (error) {
+      return { commentId, error: error instanceof Error ? error.message : String(error) } as const;
+    }
+  }));
+  for (const result of fetchResults) {
+    if ("error" in result) {
+      return { ok: false, error: `Cannot load complete comment ${result.commentId}: ${result.error}.` };
+    }
+    fetched.set(result.commentId, result.comment);
+  }
+
+  const comments = [...inlineComments];
+  for (const correctionId of expectedCorrections) {
+    const complete = fetched.get(correctionId);
+    if (complete) {
+      const inlineIndex = comments.findIndex((comment) => comment.id === correctionId);
+      if (inlineIndex >= 0) comments[inlineIndex] = complete;
+      else comments.push(complete);
+    }
+  }
+  return { ok: true, comments };
 }
 
 /**
@@ -63,17 +209,17 @@ interface PaperclipWakeCommentShape {
 function buildLocalModelPrompt(input: {
   agent: AdapterAgent;
   context: Record<string, unknown>;
-}): { issueId: string | null; issueIdentifier: string | null; prompt: string } {
+  comments: PaperclipWakeCommentShape[];
+}): { issueId: string | null; issueIdentifier: string | null; correctionCommentIds: string[]; ordinaryReplyRequired: boolean; instructionRevision: InstructionRevisionWake | null; prompt: string } {
   const wake = parseObject(input.context.paperclipWake);
   const issue = parseObject(wake.issue) as Partial<PaperclipWakeIssueShape>;
-  const comments = Array.isArray(wake.comments)
-    ? (wake.comments as PaperclipWakeCommentShape[])
-    : [];
+  const comments = input.comments;
   const reason = typeof wake.reason === "string" ? wake.reason : null;
   const issueId = typeof issue.id === "string" ? issue.id : null;
   const issueIdentifier = typeof issue.identifier === "string" ? issue.identifier : null;
   const issueTitle = typeof issue.title === "string" ? issue.title : null;
   const issueStatus = typeof issue.status === "string" ? issue.status : null;
+  const instructionRevision = parseInstructionRevisionWake(wake);
 
   const lines: string[] = [];
   if (issueIdentifier && issueTitle) {
@@ -84,30 +230,282 @@ function buildLocalModelPrompt(input: {
   if (issueStatus) lines.push(`Status: ${issueStatus}`);
   if (reason && reason !== "manual_invoke") lines.push(`Wake reason: ${reason}`);
 
-  if (comments.length > 0) {
+  const ordinaryComments = comments.filter((comment) => comment.intent !== "correction").slice(-5);
+  const correctionComments = comments.filter((comment) => comment.intent === "correction");
+  const ordinaryReplyRequired = ordinaryComments.some((comment) => (comment.body ?? "").trim().length > 0);
+  if (ordinaryComments.length > 0 || correctionComments.length > 0) {
     lines.push("");
     lines.push("Recent comments:");
-    // Last few comments only; small models lose the plot beyond that.
-    const recent = comments.slice(-5);
-    for (const c of recent) {
+    for (const c of ordinaryComments) {
       const author = c.authorAgentName ?? c.authorUserName ?? "user";
       const body = (c.body ?? "").trim();
       if (body.length > 0) {
         lines.push(`- ${author}: ${body.slice(0, 600)}`);
       }
     }
+    for (const c of correctionComments) {
+      const author = c.authorAgentName ?? c.authorUserName ?? "user";
+      const body = c.body ?? "";
+      if (body.trim().length > 0) {
+        lines.push(`- CORRECTION comment ${c.id ?? "unknown"} by ${author}: ${body}`);
+      }
+    }
   }
 
-  lines.push("");
-  lines.push(
-    "Write a concise, helpful reply that addresses the issue. Your reply will be posted as a comment on this issue.",
-  );
+  const correctionCommentIds = comments
+    .filter((comment) => comment.intent === "correction" && typeof comment.id === "string")
+    .map((comment) => comment.id!);
+  if (instructionRevision) {
+    const proposalsExample = correctionCommentIds.length > 0
+      ? `,"proposals":[{"sourceCommentId":"correction comment id","scope":"agent"|"company","rule":"exact proposed rule","rationale":"why this prevents the repeat"}]`
+      : "";
+    const responseExample = ordinaryReplyRequired
+      ? `{"reply":"concise response that addresses the ordinary comments","revision":{"approvalId":"${instructionRevision.approvalId}","scope":"agent"|"company","rule":"exact revised rule","rationale":"why the revision addresses the request"}${proposalsExample}}`
+      : `{"revision":{"approvalId":"${instructionRevision.approvalId}","scope":"agent"|"company","rule":"exact revised rule","rationale":"why the revision addresses the request"}${proposalsExample}}`;
+    lines.push(
+      "",
+      `The board requested a revision to standing-rule approval ${instructionRevision.approvalId}.`,
+      `Board request: ${instructionRevision.decisionNote ?? "Revise the proposal and resubmit it for approval."}`,
+      `Current scope: ${instructionRevision.scope}`,
+      `Current rule: ${instructionRevision.rule}`,
+      "Revise the rule to address the board request. Paperclip will resubmit the same approval; do not create a new proposal.",
+      ...(ordinaryReplyRequired ? ["This wake also contains ordinary comments. Answer those requests in the reply field."] : []),
+      "Return only valid JSON in this form:",
+      responseExample,
+    );
+    if (correctionCommentIds.length > 0) {
+      lines.push(
+        renderPaperclipCorrectionWorkflow(),
+        "Include exactly one proposal for each correction comment listed above, alongside the revision.",
+      );
+    }
+  } else if (correctionCommentIds.length > 0) {
+    lines.push("", renderPaperclipCorrectionWorkflow());
+    if (ordinaryReplyRequired) {
+      lines.push(
+        "",
+        "This wake also contains ordinary comments. Answer those requests in the reply field and draft the correction approvals separately.",
+        "This Ollama adapter has no tools. Return only valid JSON in this form so Paperclip can post the reply and submit the approvals through its HTTP API:",
+        '`{"reply":"concise response that addresses the ordinary comments","proposals":[{"sourceCommentId":"correction comment id","scope":"agent"|"company","rule":"exact proposed rule","rationale":"why this prevents the repeat"}]}`',
+        "The reply field is required and must address the ordinary comments. Include exactly one proposal for each correction comment listed above.",
+      );
+    } else {
+      lines.push(
+        "",
+        "This Ollama adapter has no tools. Return only valid JSON in this form so Paperclip can submit the approval through its HTTP API:",
+        '`{"proposals":[{"sourceCommentId":"correction comment id","scope":"agent"|"company","rule":"exact proposed rule","rationale":"why this prevents the repeat"}]}`',
+        "Include exactly one proposal for each correction comment listed above.",
+      );
+    }
+  }
+
+  if (!instructionRevision && correctionCommentIds.length === 0) {
+    lines.push("");
+    lines.push(
+      "Write a concise, helpful reply that addresses the issue. Your reply will be posted as a comment on this issue.",
+    );
+  }
+  const countsInstructions = runCountsPromptForWake(wake);
+  if (countsInstructions) lines.push("", countsInstructions);
 
   return {
     issueId,
     issueIdentifier,
+    correctionCommentIds,
+    ordinaryReplyRequired,
+    instructionRevision,
     prompt: lines.join("\n"),
   };
+}
+
+type CorrectionProposal = {
+  sourceCommentId: string;
+  scope: "agent" | "company";
+  rule: string;
+  rationale?: string;
+};
+
+type InstructionRevisionProposal = {
+  approvalId: string;
+  scope: "agent" | "company";
+  rule: string;
+  rationale?: string;
+};
+
+function parseInstructionRevisionResponse(
+  value: string,
+  expectedApprovalId: string,
+  ordinaryReplyRequired: boolean,
+): { proposal: InstructionRevisionProposal; reply: string | null } | null {
+  const trimmed = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  const record = parseObject(parsed);
+  const revision = parseObject(record.revision);
+  const approvalId = asString(revision.approvalId, "").trim();
+  const scope = asString(revision.scope, "").trim();
+  const rule = asString(revision.rule, "").trim();
+  const rationale = asString(revision.rationale, "").trim();
+  const reply = asString(record.reply, "").trim();
+  if (ordinaryReplyRequired && !reply) return null;
+  if (approvalId !== expectedApprovalId || (scope !== "agent" && scope !== "company") || !rule) return null;
+  return {
+    proposal: { approvalId, scope, rule, ...(rationale ? { rationale } : {}) },
+    reply: reply || null,
+  };
+}
+
+function parseCorrectionResponse(
+  value: string,
+  expectedCommentIds: string[],
+  ordinaryReplyRequired: boolean,
+): { proposals: CorrectionProposal[]; reply: string | null } | null {
+  const trimmed = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  const record = parseObject(parsed);
+  if (!Array.isArray(record.proposals) || record.proposals.length !== expectedCommentIds.length) return null;
+  const reply = asString(record.reply, "").trim();
+  if (ordinaryReplyRequired && !reply) return null;
+  const expected = new Set(expectedCommentIds);
+  const proposals: CorrectionProposal[] = [];
+  for (const item of record.proposals) {
+    const proposal = parseObject(item);
+    const sourceCommentId = asString(proposal.sourceCommentId, "").trim();
+    const scope = asString(proposal.scope, "").trim();
+    const rule = asString(proposal.rule, "").trim();
+    const rationale = asString(proposal.rationale, "").trim();
+    if (!expected.delete(sourceCommentId) || (scope !== "agent" && scope !== "company") || !rule) return null;
+    proposals.push({ sourceCommentId, scope, rule, ...(rationale ? { rationale } : {}) });
+  }
+  return expected.size === 0 ? { proposals, reply: reply || null } : null;
+}
+
+async function createInstructionApproval(input: {
+  apiUrl: string;
+  authToken: string;
+  runId: string;
+  companyId: string;
+  agentId: string;
+  issueId: string;
+  proposal: CorrectionProposal;
+  onLog: AdapterExecutionContext["onLog"];
+}): Promise<{ ok: boolean; approvalId?: string; error?: string }> {
+  try {
+    const res = await fetch(`${input.apiUrl}/api/companies/${input.companyId}/approvals`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.authToken}`,
+        "X-Paperclip-Run-Id": input.runId,
+      },
+      body: JSON.stringify({
+        type: "instruction_change",
+        requestedByAgentId: input.agentId,
+        issueIds: [input.issueId],
+        payload: {
+          version: 1,
+          scope: input.proposal.scope,
+          targetAgentId: input.agentId,
+          sourceIssueId: input.issueId,
+          sourceCommentId: input.proposal.sourceCommentId,
+          rule: input.proposal.rule,
+          ...(input.proposal.rationale ? { rationale: input.proposal.rationale } : {}),
+        },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+    }
+    const body = parseObject(await res.json().catch(() => null));
+    const approvalId = asString(body.id, "").trim();
+    await input.onLog("stdout", `[paperclip] Created instruction change approval${approvalId ? ` ${approvalId}` : ""}.\n`);
+    return { ok: true, ...(approvalId ? { approvalId } : {}) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function resubmitInstructionApproval(input: {
+  apiUrl: string;
+  authToken: string;
+  runId: string;
+  revision: InstructionRevisionWake;
+  proposal: InstructionRevisionProposal;
+  onLog: AdapterExecutionContext["onLog"];
+}): Promise<{ ok: boolean; outcome?: "resubmitted" | "terminal"; terminalStatus?: "approved" | "rejected"; error?: string }> {
+  const url = `${input.apiUrl}/api/approvals/${encodeURIComponent(input.revision.approvalId)}/resubmit`;
+  const payload = {
+    version: 1,
+    scope: input.proposal.scope,
+    targetAgentId: input.revision.targetAgentId,
+    sourceIssueId: input.revision.sourceIssueId,
+    sourceCommentId: input.revision.sourceCommentId,
+    rule: input.proposal.rule,
+    ...(input.proposal.rationale ? { rationale: input.proposal.rationale } : {}),
+  };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.authToken}`,
+        "X-Paperclip-Run-Id": input.runId,
+      },
+      body: JSON.stringify({ payload, revisionCycle: input.revision.revisionCycle }),
+    });
+    if (!res.ok) {
+      // A process retry can repeat after the first response was lost. If this
+      // approval is already pending, the same durable resubmit has landed.
+      if (res.status === 422) {
+        const current = await fetch(
+          `${input.apiUrl}/api/approvals/${encodeURIComponent(input.revision.approvalId)}`,
+          { headers: { Authorization: `Bearer ${input.authToken}` } },
+        );
+        const currentBody = current.ok ? parseObject(await current.json().catch(() => null)) : {};
+        const currentPayload = parseObject(currentBody.payload);
+        const currentUpdatedAt = Date.parse(asString(currentBody.updatedAt, ""));
+        const revisionRequestedAt = Date.parse(input.revision.revisionCycle);
+        const sameRevisionLanded =
+          currentPayload.scope === payload.scope &&
+          currentPayload.targetAgentId === payload.targetAgentId &&
+          currentPayload.sourceIssueId === payload.sourceIssueId &&
+          currentPayload.sourceCommentId === payload.sourceCommentId &&
+          currentPayload.rule === payload.rule &&
+          (currentPayload.rationale ?? null) === (payload.rationale ?? null);
+        const revisionCycleHandled =
+          Number.isFinite(currentUpdatedAt) &&
+          Number.isFinite(revisionRequestedAt) &&
+          currentUpdatedAt > revisionRequestedAt;
+        if (currentBody.status === "pending" && (sameRevisionLanded || revisionCycleHandled)) {
+          await input.onLog("stdout", `[paperclip] Instruction change approval ${input.revision.approvalId} was already resubmitted.\n`);
+          return { ok: true, outcome: "resubmitted" };
+        }
+        if (
+          (currentBody.status === "approved" || currentBody.status === "rejected") &&
+          (sameRevisionLanded || revisionCycleHandled)
+        ) {
+          await input.onLog("stdout", `[paperclip] Instruction change approval ${input.revision.approvalId} was already ${currentBody.status}.\n`);
+          return { ok: true, outcome: "terminal", terminalStatus: currentBody.status };
+        }
+      }
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+    }
+    await input.onLog("stdout", `[paperclip] Resubmitted instruction change approval ${input.revision.approvalId}.\n`);
+    return { ok: true, outcome: "resubmitted" };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function postReplyAsComment(input: {
@@ -115,6 +513,7 @@ async function postReplyAsComment(input: {
   authToken: string;
   issueId: string;
   body: string;
+  idempotencyKey?: string;
   onLog: AdapterExecutionContext["onLog"];
 }): Promise<{ ok: boolean; error?: string }> {
   const url = `${input.apiUrl}/api/issues/${input.issueId}/comments`;
@@ -125,7 +524,10 @@ async function postReplyAsComment(input: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${input.authToken}`,
       },
-      body: JSON.stringify({ body: input.body }),
+      body: JSON.stringify({
+        body: input.body,
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      }),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
@@ -142,6 +544,49 @@ async function postReplyAsComment(input: {
     await input.onLog("stderr", `[paperclip] Comment POST threw: ${message}\n`);
     return { ok: false, error: message };
   }
+}
+
+function mixedReplyIdempotencyKey(input: {
+  agentId: string;
+  issueId: string;
+  comments: PaperclipWakeCommentShape[];
+  correctionCommentIds: string[];
+}) {
+  const sourceCommentIds = [...new Set([
+    ...input.comments.flatMap((comment) => typeof comment.id === "string" ? [comment.id] : []),
+    ...input.correctionCommentIds,
+  ])].sort();
+  const digest = createHash("sha256")
+    .update(JSON.stringify({
+      agentId: input.agentId,
+      issueId: input.issueId,
+      sourceCommentIds,
+    }))
+    .digest("hex");
+  return `ollama.mixed:v1_${digest}`;
+}
+
+function correctionReceiptIdempotencyKey(input: {
+  agentId: string;
+  issueId: string;
+  correctionCommentIds: string[];
+}) {
+  const sourceCommentIds = [...new Set(input.correctionCommentIds)].sort();
+  const digest = createHash("sha256")
+    .update(JSON.stringify({
+      agentId: input.agentId,
+      issueId: input.issueId,
+      sourceCommentIds,
+    }))
+    .digest("hex");
+  return `ollama.correction-receipt:v1_${digest}`;
+}
+
+function revisionReceiptIdempotencyKey(input: { agentId: string; issueId: string; approvalId: string; revisionCycle: string; correctionCommentIds: string[] }) {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(input))
+    .digest("hex");
+  return `ollama.instruction-revision-receipt:v1_${digest}`;
 }
 
 /**
@@ -233,16 +678,43 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const timeoutSec = asNumber(cfg.timeoutSec, 600);
   const explicitSystem = asString(cfg.systemPrompt, "");
   let systemPrompt = appendSourceEvidenceInstructions(explicitSystem.length > 0 ? explicitSystem : defaultSystemPromptForAgent(agent));
+  const approvedRules = renderPaperclipApprovedRules(context);
+  if (approvedRules) systemPrompt = `${systemPrompt}\n\n${approvedRules}`;
+
+  const wake = parseObject(context.paperclipWake);
+  const wakeIssue = parseObject(wake.issue);
+  const wakeIssueId = typeof wakeIssue.id === "string" ? wakeIssue.id : null;
+  const completeComments = await loadCompleteWakeComments({
+    wake,
+    issueId: wakeIssueId,
+    apiUrl: resolvePaperclipApiUrl(),
+    authToken,
+  });
+  if (!completeComments.ok) {
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorCode: "ollama_correction_context_incomplete",
+      errorMessage: completeComments.error,
+      provider: "ollama",
+      biller: "local",
+      model,
+      billingType: "subscription",
+      costUsd: 0,
+      summary: null,
+    };
+  }
 
   // Build a small-model-friendly prompt out of the wake context. The standard
   // renderPaperclipWakePrompt is too dense for 7B–14B local models — they
   // bury themselves in the "execution contract" boilerplate and reply with
   // generic acknowledgements instead of actually answering the issue.
-  const { issueId, issueIdentifier, prompt: userPrompt } = buildLocalModelPrompt({
+  const { issueId, issueIdentifier, correctionCommentIds, ordinaryReplyRequired, instructionRevision, prompt: userPrompt } = buildLocalModelPrompt({
     agent,
     context,
+    comments: completeComments.comments,
   });
-  void runId;
 
   const procedures = await loadEphemeralProcedures(cfg, procedureModuleDir);
   try {
@@ -250,7 +722,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (procedures.procedures.length) {
       if ((ctx.executionTarget && ctx.executionTarget.kind !== "local") || (parseObject(context.paperclipEnvironment).driver && parseObject(context.paperclipEnvironment).driver !== "local")) throw new EphemeralProcedureError("procedure_environment_unsupported", "Ollama attached procedures support local execution only.");
       systemPrompt += "\n\n" + renderEphemeralProcedureContext(procedures.procedures);
-      await assertOllamaProcedureContext(baseUrl, model, [systemPrompt, userPrompt], numPredict);
+    }
+    if (procedures.procedures.length || approvedRules || correctionCommentIds.length > 0 || instructionRevision) {
+      await assertOllamaProtectedContext(baseUrl, model, [systemPrompt, userPrompt], numPredict);
     }
   } catch (error) {
     return { exitCode: 1, signal: null, timedOut: false, errorCode: error instanceof EphemeralProcedureError ? error.code : "procedure_incomplete", errorMessage: error instanceof Error ? error.message : "Cannot load complete attached procedures.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
@@ -291,7 +765,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     messages,
     stream: false,
   };
-  if (procedures.procedures.length) { requestBody.truncate = false; requestBody.shift = false; }
+  if (procedures.procedures.length || approvedRules || correctionCommentIds.length > 0 || instructionRevision) {
+    requestBody.truncate = false;
+    requestBody.shift = false;
+  }
   const options: Record<string, unknown> = {};
   if (Number.isFinite(temperature)) options.temperature = temperature;
   if (numPredict > 0) options.num_predict = numPredict;
@@ -387,8 +864,119 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
-  const replyContent = body.message?.content ?? "";
-  await onLog("stdout", replyContent + "\n");
+  const modelReplyContent = body.message?.content ?? "";
+  await onLog("stdout", modelReplyContent + "\n");
+  let replyContent = modelReplyContent;
+  let replyIdempotencyKey: string | undefined;
+  if (instructionRevision) {
+    if (!issueId || issueId !== instructionRevision.sourceIssueId || !authToken) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_instruction_revision_unavailable", errorMessage: "Cannot resubmit the instruction revision without its source issue and agent API token.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    const revisionResponse = parseInstructionRevisionResponse(
+      modelReplyContent,
+      instructionRevision.approvalId,
+      ordinaryReplyRequired,
+    );
+    if (!revisionResponse) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_instruction_revision_invalid", errorMessage: "Ollama did not return one valid revision for the requested instruction approval. The approval was not changed.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    const correctionResponse = correctionCommentIds.length > 0
+      ? parseCorrectionResponse(modelReplyContent, correctionCommentIds, ordinaryReplyRequired)
+      : null;
+    if (correctionCommentIds.length > 0 && !correctionResponse) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_correction_draft_invalid", errorMessage: "Ollama did not return one valid standing-rule proposal for each new correction comment. No approval was changed.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    const apiUrl = resolvePaperclipApiUrl();
+    if (ordinaryReplyRequired && revisionResponse.reply) {
+      const ordinaryComment = await postReplyAsComment({
+        apiUrl,
+        authToken,
+        issueId,
+        body: revisionResponse.reply,
+        idempotencyKey: mixedReplyIdempotencyKey({
+          agentId: agent.id,
+          issueId,
+          comments: completeComments.comments,
+          correctionCommentIds,
+        }),
+        onLog,
+      });
+      if (!ordinaryComment.ok) {
+        return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_mixed_reply_failed", errorMessage: `Could not post the ordinary reply before resubmitting the standing-rule approval: ${ordinaryComment.error ?? "unknown error"}`, provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: revisionResponse.reply };
+      }
+    }
+    const additionalApprovalIds: string[] = [];
+    for (const proposal of correctionResponse?.proposals ?? []) {
+      const created = await createInstructionApproval({ apiUrl, authToken, runId, companyId: agent.companyId, agentId: agent.id, issueId, proposal, onLog });
+      if (!created.ok) {
+        return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_correction_approval_failed", errorMessage: `A new standing-rule approval could not be submitted before the requested revision: ${created.error ?? "unknown error"}`, provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: revisionResponse.reply };
+      }
+      if (created.approvalId) additionalApprovalIds.push(created.approvalId);
+    }
+    const resubmitted = await resubmitInstructionApproval({
+      apiUrl,
+      authToken,
+      runId,
+      revision: instructionRevision,
+      proposal: revisionResponse.proposal,
+      onLog,
+    });
+    if (!resubmitted.ok) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_instruction_revision_failed", errorMessage: `Could not resubmit the standing-rule approval: ${resubmitted.error ?? "unknown error"}`, provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    replyContent = resubmitted.outcome === "terminal"
+      ? `Standing rule approval ${instructionRevision.approvalId} is already ${resubmitted.terminalStatus ?? "resolved"}; this retry made no further change.${additionalApprovalIds.length > 0 ? ` Drafted ${additionalApprovalIds.length} additional standing rule proposal${additionalApprovalIds.length === 1 ? "" : "s"}: ${additionalApprovalIds.join(", ")}.` : ""}`
+      : `Revised standing rule approval ${instructionRevision.approvalId} and resubmitted it for board review.${additionalApprovalIds.length > 0 ? ` Drafted ${additionalApprovalIds.length} additional standing rule proposal${additionalApprovalIds.length === 1 ? "" : "s"}: ${additionalApprovalIds.join(", ")}.` : ""}`;
+    replyIdempotencyKey = revisionReceiptIdempotencyKey({
+      agentId: agent.id,
+      issueId,
+      approvalId: instructionRevision.approvalId,
+      revisionCycle: instructionRevision.revisionCycle,
+      correctionCommentIds,
+    });
+  } else if (correctionCommentIds.length > 0) {
+    if (!issueId || !authToken) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_correction_approval_unavailable", errorMessage: "Cannot submit the drafted correction approval without an issue and agent API token.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    const correctionResponse = parseCorrectionResponse(modelReplyContent, correctionCommentIds, ordinaryReplyRequired);
+    if (!correctionResponse) {
+      return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_correction_draft_invalid", errorMessage: ordinaryReplyRequired ? "Ollama did not return a non-empty ordinary reply and one valid standing-rule proposal for each correction comment. No instruction change was submitted." : "Ollama did not return one valid standing-rule proposal for each correction comment. No instruction change was submitted.", provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: null };
+    }
+    const apiUrl = resolvePaperclipApiUrl();
+    if (ordinaryReplyRequired && correctionResponse.reply) {
+      const ordinaryComment = await postReplyAsComment({
+        apiUrl,
+        authToken,
+        issueId,
+        body: correctionResponse.reply,
+        idempotencyKey: mixedReplyIdempotencyKey({
+          agentId: agent.id,
+          issueId,
+          comments: completeComments.comments,
+          correctionCommentIds,
+        }),
+        onLog,
+      });
+      if (!ordinaryComment.ok) {
+        return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_mixed_reply_failed", errorMessage: `Could not post the ordinary reply before submitting standing-rule approvals: ${ordinaryComment.error ?? "unknown error"}`, provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: correctionResponse.reply };
+      }
+    }
+    const approvalIds: string[] = [];
+    for (const proposal of correctionResponse.proposals) {
+      const created = await createInstructionApproval({ apiUrl, authToken, runId, companyId: agent.companyId, agentId: agent.id, issueId, proposal, onLog });
+      if (!created.ok) {
+        return { exitCode: 1, signal: null, timedOut: false, errorCode: "ollama_correction_approval_failed", errorMessage: `Could not submit the standing-rule approval: ${created.error ?? "unknown error"}`, provider: "ollama", biller: "local", model, billingType: "subscription", costUsd: 0, summary: ordinaryReplyRequired ? correctionResponse.reply : null };
+      }
+      if (created.approvalId) approvalIds.push(created.approvalId);
+    }
+    const approvalReceipt = `Drafted ${correctionResponse.proposals.length} standing rule proposal${correctionResponse.proposals.length === 1 ? "" : "s"} for board approval.${approvalIds.length > 0 ? ` Approval${approvalIds.length === 1 ? "" : "s"}: ${approvalIds.join(", ")}.` : ""}`;
+    replyContent = approvalReceipt;
+    replyIdempotencyKey = correctionReceiptIdempotencyKey({
+      agentId: agent.id,
+      issueId,
+      correctionCommentIds,
+    });
+  }
 
   // Post the reply as a comment on the wake issue. This is the *whole point*
   // of ollama_local — the model thinks, the adapter writes the answer to the
@@ -416,6 +1004,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         authToken,
         issueId,
         body: replyContent.trim(),
+        idempotencyKey: replyIdempotencyKey,
         onLog,
       });
       commentPosted = commentResult.ok;

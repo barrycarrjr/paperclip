@@ -18,5 +18,9 @@ Core fields:
 - headers (object, optional): request headers
 - payloadTemplate (object, optional): JSON payload template
 - timeoutSec (number, optional): request timeout in seconds
+
+Runtime context:
+- trustedContext.wake: structured issue and comment wake payload, including correction intent
+- trustedContext.approvedRules: board-approved standing rules with provenance metadata
 `,
 };

@@ -228,7 +228,12 @@ interface IssueChatThreadProps {
   currentUserId?: string | null;
   userLabelMap?: ReadonlyMap<string, string> | null;
   userProfileMap?: ReadonlyMap<string, CompanyUserProfile> | null;
-  onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
+  onAdd: (
+    body: string,
+    reopen?: boolean,
+    reassignment?: CommentReassignment,
+    intent?: "message" | "correction",
+  ) => Promise<void>;
   onCancelRun?: () => Promise<void>;
   onStopRun?: (runId: string) => Promise<void>;
   imageUploadHandler?: (file: File) => Promise<string>;
@@ -1142,6 +1147,7 @@ function IssueChatUserMessage({ message }: { message: ThreadMessage }) {
   const authorUserId = typeof custom.authorUserId === "string" ? custom.authorUserId : null;
   const queued = custom.queueState === "queued" || custom.clientStatus === "queued";
   const followUpRequested = custom.followUpRequested === true;
+  const correction = custom.intent === "correction";
   const queueReason = typeof custom.queueReason === "string" ? custom.queueReason : null;
   const queueBadgeLabel = queueReason === "hold" ? "\u23f8 Deferred wake" : "Queued";
   const pending = custom.clientStatus === "pending";
@@ -1170,6 +1176,11 @@ function IssueChatUserMessage({ message }: { message: ThreadMessage }) {
         {followUpRequested ? (
           <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">
             Follow-up
+          </Badge>
+        ) : null}
+        {correction ? (
+          <Badge variant="outline" className="border-amber-400/60 text-[10px] uppercase tracking-[0.14em] text-amber-800 dark:text-amber-200">
+            Correction
           </Badge>
         ) : null}
       </div>
@@ -1787,6 +1798,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 }, forwardedRef) {
   const api = useAui();
   const [body, setBody] = useState("");
+  const [intent, setIntent] = useState<"message" | "correction">("message");
   const [submitting, setSubmitting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -1794,6 +1806,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
   const dragDepthRef = useRef(0);
   const effectiveSuggestedAssigneeValue = suggestedAssigneeValue ?? currentAssigneeValue;
   const [reassignTarget, setReassignTarget] = useState(effectiveSuggestedAssigneeValue);
+  const correctionHasAgentTarget = reassignTarget.startsWith("agent:");
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1841,6 +1854,12 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
     setReassignTarget(effectiveSuggestedAssigneeValue);
   }, [effectiveSuggestedAssigneeValue]);
 
+  useEffect(() => {
+    if (!correctionHasAgentTarget && intent === "correction") {
+      setIntent("message");
+    }
+  }, [correctionHasAgentTarget, intent]);
+
   useImperativeHandle(forwardedRef, () => ({
     focus: focusComposer,
     restoreDraft: (submittedBody: string) => {
@@ -1879,6 +1898,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
           custom: {
             ...(reopen ? { reopen: true } : {}),
             ...(reassignment ? { reassignment } : {}),
+            ...(intent === "correction" ? { intent } : {}),
           },
         },
       });
@@ -1887,6 +1907,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
       if (draftKey) clearDraft(draftKey);
       setComposerAttachments([]);
       setReassignTarget(effectiveSuggestedAssigneeValue);
+      setIntent("message");
     } catch {
       setBody((current) =>
         restoreSubmittedCommentDraft({
@@ -2017,7 +2038,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
     void handleDroppedFiles(evt.dataTransfer?.files);
   }
 
-  const canSubmit = !submitting && !!body.trim();
+  const canSubmit = !submitting && !!body.trim() && (intent !== "correction" || correctionHasAgentTarget);
 
   if (composerDisabledReason) {
     return (
@@ -2194,6 +2215,19 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
               }}
             />
           ) : null}
+
+          <Button
+            type="button"
+            variant={intent === "correction" ? "secondary" : "ghost"}
+            size="sm"
+            aria-pressed={intent === "correction"}
+            title="Mark this as a correction so the agent proposes a standing rule for approval"
+            disabled={!correctionHasAgentTarget}
+            onClick={() => setIntent((current) => current === "correction" ? "message" : "correction")}
+          >
+            <Brain className="h-3.5 w-3.5" />
+            Correction
+          </Button>
 
           <Button size="sm" disabled={!canSubmit} onClick={() => void handleSubmit()}>
             {submitting ? "Posting..." : "Send"}
@@ -2376,9 +2410,9 @@ export function IssueChatThread({
   const runtime = usePaperclipIssueRuntime({
     messages,
     isRunning,
-    onSend: ({ body, reopen, reassignment }) => {
+    onSend: ({ body, reopen, reassignment, intent }) => {
       pendingSubmitScrollRef.current = true;
-      return onAdd(body, reopen, reassignment);
+      return onAdd(body, reopen, reassignment, intent);
     },
     onCancel: onCancelRun,
   });

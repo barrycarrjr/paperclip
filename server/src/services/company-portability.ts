@@ -2478,6 +2478,8 @@ function buildManifestFromPackageFiles(
       icon: asString(extension.icon),
       capabilities: asString(extension.capabilities),
       reportsToSlug: asString(frontmatter.reportsTo) ?? asString(extension.reportsTo),
+      defaultReviewerSlug:
+        asString(frontmatter.defaultReviewer) ?? asString(extension.defaultReviewer),
       adapterType: asString(extensionAdapter?.type) ?? "process",
       adapterConfig,
       runtimeConfig,
@@ -3234,6 +3236,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             .filter((inputValue) => inputValue.agentSlug === slug),
         );
         const reportsToSlug = agent.reportsTo ? (idToSlug.get(agent.reportsTo) ?? null) : null;
+        const defaultReviewerSlug = agent.defaultReviewerAgentId
+          ? (idToSlug.get(agent.defaultReviewerAgentId) ?? null)
+          : null;
         const desiredSkills = readPaperclipSkillSyncPreference(
           (agent.adapterConfig as Record<string, unknown>) ?? {},
         ).desiredSkills;
@@ -3251,6 +3256,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
                 name: agent.name,
                 title: agent.title ?? null,
                 reportsTo: reportsToSlug,
+                defaultReviewer: defaultReviewerSlug,
                 skills: desiredSkills.length > 0 ? desiredSkills : undefined,
               }) as Record<string, unknown>,
               content,
@@ -4116,6 +4122,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           icon: manifestAgent.icon,
           capabilities: manifestAgent.capabilities,
           reportsTo: null,
+          ...(manifestAgent.defaultReviewerSlug ? {} : { defaultReviewerAgentId: null }),
           adapterType: normalizedAdapter.adapterType,
           adapterConfig: normalizedAdapter.adapterConfig,
           runtimeConfig: disableImportedTimerHeartbeat(manifestAgent.runtimeConfig),
@@ -4194,18 +4201,35 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         });
       }
 
-      // Apply reporting links once all imported agent ids are available.
+      // Apply agent links once all imported agent ids are available.
       for (const manifestAgent of plan.selectedAgents) {
         const agentId = importedSlugToAgentId.get(manifestAgent.slug);
         if (!agentId) continue;
         const managerSlug = manifestAgent.reportsToSlug;
-        if (!managerSlug) continue;
-        const managerId = importedSlugToAgentId.get(managerSlug) ?? existingSlugToAgentId.get(managerSlug) ?? null;
-        if (!managerId || managerId === agentId) continue;
-        try {
-          await agents.update(agentId, { reportsTo: managerId });
-        } catch {
-          warnings.push(`Could not assign manager ${managerSlug} for imported agent ${manifestAgent.slug}.`);
+        if (managerSlug) {
+          const managerId = importedSlugToAgentId.get(managerSlug) ?? existingSlugToAgentId.get(managerSlug) ?? null;
+          if (managerId && managerId !== agentId) {
+            try {
+              await agents.update(agentId, { reportsTo: managerId });
+            } catch {
+              warnings.push(`Could not assign manager ${managerSlug} for imported agent ${manifestAgent.slug}.`);
+            }
+          }
+        }
+        const reviewerSlug = manifestAgent.defaultReviewerSlug;
+        if (reviewerSlug) {
+          const reviewerId = importedSlugToAgentId.get(reviewerSlug) ?? existingSlugToAgentId.get(reviewerSlug) ?? null;
+          if (reviewerId && reviewerId !== agentId) {
+            try {
+              await agents.update(agentId, { defaultReviewerAgentId: reviewerId });
+            } catch {
+              warnings.push(`Could not assign automatic reviewer ${reviewerSlug} for imported agent ${manifestAgent.slug}.`);
+            }
+          } else if (!reviewerId) {
+            warnings.push(`Automatic reviewer ${reviewerSlug} for imported agent ${manifestAgent.slug} was not imported and does not exist in the target company.`);
+          } else {
+            warnings.push(`Automatic reviewer ${reviewerSlug} for imported agent ${manifestAgent.slug} resolves to the same agent and was not assigned.`);
+          }
         }
       }
     }

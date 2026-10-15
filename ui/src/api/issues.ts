@@ -321,13 +321,20 @@ export const issuesApi = {
     api.post<IssueThreadInteraction>(`/issues/${id}/interactions/${interactionId}/respond`, data),
   getComment: (id: string, commentId: string) =>
     api.get<IssueComment>(`/issues/${id}/comments/${commentId}`),
-  addComment: (id: string, body: string, reopen?: boolean, interrupt?: boolean) =>
+  addComment: (
+    id: string,
+    body: string,
+    reopen?: boolean,
+    interrupt?: boolean,
+    intent: "message" | "correction" = "message",
+  ) =>
     api.post<IssueComment>(
       `/issues/${id}/comments`,
       {
         body,
         ...(reopen === undefined ? {} : { reopen }),
         ...(interrupt === undefined ? {} : { interrupt }),
+        ...(intent === "correction" ? { intent } : {}),
       },
     ),
   cancelComment: (id: string, commentId: string) =>

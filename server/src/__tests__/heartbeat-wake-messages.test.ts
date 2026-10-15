@@ -339,6 +339,48 @@ describeEmbeddedPostgres("wake messages and runs already in progress", () => {
     expect(await runStatus(first!.id)).toBe("cancelled");
   });
 
+  it("keeps a late cancelled session when a sessionless follow-up finishes afterward", async () => {
+    const { agentId } = await createAgent(2);
+    mockAdapterExecute.mockImplementationOnce(async () => ({ ...finishedRunResult, sessionId: "session-old" }));
+    const seed = await invoke(agentId, "start the conversation");
+    expect(await waitForRunStatus(seed!.id, "succeeded")).toBe("succeeded");
+    await vi.waitFor(async () => expect(await conversationSessionIds(agentId)).toEqual(["session-old"]));
+
+    let releaseOriginal!: () => void;
+    const originalGate = new Promise<void>((resolve) => { releaseOriginal = resolve; });
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await originalGate;
+      return { ...finishedRunResult, sessionId: "session-new" };
+    });
+    let releaseFollowup!: () => void;
+    const followupGate = new Promise<void>((resolve) => { releaseFollowup = resolve; });
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await followupGate;
+      return { ...finishedRunResult };
+    });
+
+    const original = await invoke(agentId, "continue the conversation");
+    await vi.waitFor(() => expect(mockAdapterExecute).toHaveBeenCalledTimes(2));
+    const followup = await invoke(agentId, "one more request");
+    expect(await runStatus(followup!.id)).toBe("queued");
+
+    await heartbeatService(db).cancelRun(original!.id);
+    await vi.waitFor(() => expect(mockAdapterExecute).toHaveBeenCalledTimes(3));
+    try {
+      releaseOriginal();
+      await vi.waitFor(async () => expect(await conversationSessionIds(agentId)).toEqual(["session-new"]));
+      releaseFollowup();
+      expect(await waitForRunStatus(followup!.id, "succeeded")).toBe("succeeded");
+      await vi.waitFor(async () => {
+        expect(await runtimeSessionId(agentId)).toBe("session-new");
+        expect(await conversationSessionIds(agentId)).toEqual(["session-new"]);
+      });
+    } finally {
+      releaseOriginal();
+      releaseFollowup();
+    }
+  });
+
   it("does not stall the queue when a run is cancelled as it is about to start", async () => {
     const { companyId, agentId, runId } = await createAgentWithRun("running", { wakeReason: "agent_invoked" });
     const queuedRunId = await insertRun({ companyId, agentId }, "queued", {

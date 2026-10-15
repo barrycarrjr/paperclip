@@ -6,6 +6,8 @@ import {
   budgetIncidents,
   costEvents,
   heartbeatRuns,
+  issueComments,
+  issueExecutionDecisions,
   issues as issuesTable,
   pluginLogs,
 } from "@paperclipai/db";
@@ -27,6 +29,13 @@ import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 import { issueService } from "./issues.js";
+import {
+  applyIssueExecutionPolicyTransition,
+  issueExecutionPolicyHasParticipant,
+  issueExecutionStateReturnsToAssignee,
+  normalizeIssueExecutionPolicy,
+} from "./issue-execution-policy.js";
+import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { goalService } from "./goals.js";
 import { documentService } from "./documents.js";
@@ -78,6 +87,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { logger } from "../middleware/logger.js";
+import { unprocessable } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // SSRF protection for plugin HTTP fetch
@@ -1487,6 +1497,16 @@ export function buildHostServices(
             blockedByIssueIds: params.blockedByIssueIds ?? [],
           },
         });
+        void queueIssueAssignmentWakeup({
+          heartbeat,
+          issue,
+          reason: "issue_assigned",
+          mutation: "create",
+          contextSource: "issue.execution_stage",
+          executionStageOnly: true,
+          requestedByActorType: actorAgentId ? "agent" : "user",
+          requestedByActorId: actorAgentId ?? actorUserId ?? "plugin",
+        });
         return issue;
       },
       async update(params) {
@@ -1497,17 +1517,173 @@ export function buildHostServices(
         const actorAgentId = typeof patch.actorAgentId === "string" ? patch.actorAgentId : null;
         const actorUserId = typeof patch.actorUserId === "string" ? patch.actorUserId : null;
         const actorRunId = typeof patch.actorRunId === "string" ? patch.actorRunId : null;
+        const commentBody = typeof patch.comment === "string" ? patch.comment.trim() : null;
         delete patch.actorAgentId;
         delete patch.actorUserId;
         delete patch.actorRunId;
+        delete patch.comment;
+        if (patch.assigneeAgentId && patch.assigneeUserId) {
+          throw unprocessable("Issue can only have one assignee");
+        }
+        if (typeof patch.assigneeAgentId === "string") {
+          await issues.assertAssignableAgent(companyId, patch.assigneeAgentId);
+        }
+        if (typeof patch.assigneeUserId === "string") {
+          await issues.assertAssignableUser(companyId, patch.assigneeUserId);
+        }
         if (patch.originKind !== undefined) {
           patch.originKind = normalizePluginOriginKind(patch.originKind);
         }
-        const updated = (await issues.update(params.issueId, {
+        const previousExecutionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
+        const requestedAssignee = {
+          assigneeAgentId:
+            patch.assigneeAgentId === undefined
+              ? undefined
+              : typeof patch.assigneeAgentId === "string"
+                ? patch.assigneeAgentId
+                : null,
+          assigneeUserId:
+            patch.assigneeUserId === undefined
+              ? undefined
+              : typeof patch.assigneeUserId === "string"
+                ? patch.assigneeUserId
+                : null,
+        };
+        const requestedPolicyParticipantHandoff = issueExecutionPolicyHasParticipant(
+          previousExecutionPolicy,
+          requestedAssignee,
+        ) && (
+          existing.executionState != null
+          || patch.status === "done"
+          || patch.status === "in_review"
+        );
+        const requestedReturnAssigneeHandoff = existing.executionState != null
+          && issueExecutionStateReturnsToAssignee(existing.executionState, requestedAssignee);
+        if (
+          patch.executionPolicy === undefined
+          && !existing.executionPolicyExplicit
+          && !requestedPolicyParticipantHandoff
+          && !requestedReturnAssigneeHandoff
+          && (
+            (patch.assigneeAgentId !== undefined && patch.assigneeAgentId !== existing.assigneeAgentId)
+            || (patch.assigneeUserId !== undefined && patch.assigneeUserId !== existing.assigneeUserId)
+            || (
+              existing.executionPolicy == null
+              && existing.executionState == null
+              && (patch.assigneeAgentId !== undefined || patch.assigneeUserId !== undefined)
+            )
+          )
+        ) {
+          patch.executionPolicy = typeof patch.assigneeAgentId === "string"
+            ? await issues.defaultExecutionPolicyForAssignee(companyId, patch.assigneeAgentId)
+            : null;
+          patch.executionPolicyExplicit = false;
+        }
+        const executionPolicy = patch.executionPolicy !== undefined
+          ? normalizeIssueExecutionPolicy(patch.executionPolicy)
+          : previousExecutionPolicy;
+        if (patch.executionPolicy !== undefined) {
+          patch.executionPolicy = executionPolicy;
+        }
+        const transition = applyIssueExecutionPolicyTransition({
+          issue: existing,
+          policy: executionPolicy,
+          requestedStatus: typeof patch.status === "string" ? patch.status : undefined,
+          requestedAssigneePatch: {
+            assigneeAgentId:
+              patch.assigneeAgentId === undefined
+                ? undefined
+                : typeof patch.assigneeAgentId === "string"
+                  ? patch.assigneeAgentId
+                  : null,
+            assigneeUserId:
+              patch.assigneeUserId === undefined
+                ? undefined
+                : typeof patch.assigneeUserId === "string"
+                  ? patch.assigneeUserId
+                  : null,
+          },
+          actor: { agentId: actorAgentId, userId: actorUserId },
+          commentBody,
+        });
+        const decisionId = transition.decision ? randomUUID() : null;
+        if (decisionId) {
+          const executionState = transition.patch.executionState;
+          if (!executionState || typeof executionState !== "object") {
+            throw new Error("Execution policy decision patch is missing executionState");
+          }
+          transition.patch.executionState = { ...executionState, lastDecisionId: decisionId };
+        }
+        Object.assign(patch, transition.patch);
+        if (transition.preserveExecutionPolicy || transition.workflowControlledAssignment) {
+          patch.preserveExecutionPolicy = true;
+        }
+        if (
+          patch.status === "done"
+          || patch.status === "in_review"
+          || patch.executionState !== undefined
+          || patch.executionPolicy !== undefined
+          || patch.assigneeAgentId !== undefined
+          || patch.assigneeUserId !== undefined
+          || transition.workflowControlledAssignment
+        ) {
+          patch.expectedExecutionPolicy = existing.executionPolicy ?? null;
+          patch.expectedExecutionState = existing.executionState ?? null;
+        }
+        const updateData = {
           ...(patch as any),
           actorAgentId,
           actorUserId,
-        })) as unknown as Issue;
+        };
+        const updated = (transition.decision && decisionId
+          ? await db.transaction(async (tx) => {
+            const next = await issues.update(params.issueId, updateData, tx) as unknown as Issue | null;
+            if (!next) return null;
+            await tx.insert(issueExecutionDecisions).values({
+              id: decisionId,
+              companyId: next.companyId,
+              issueId: next.id,
+              stageId: transition.decision!.stageId,
+              stageType: transition.decision!.stageType,
+              actorAgentId,
+              actorUserId,
+              outcome: transition.decision!.outcome,
+              body: transition.decision!.body,
+              createdByRunId: actorRunId,
+            });
+            if (commentBody) {
+              await tx.insert(issueComments).values({
+                companyId: next.companyId,
+                issueId: next.id,
+                body: commentBody,
+                authorAgentId: actorAgentId,
+                authorUserId: actorUserId,
+              });
+            }
+            return next;
+          })
+          : await issues.update(params.issueId, updateData)) as unknown as Issue | null;
+        if (!updated) throw new Error(`Issue ${params.issueId} not found`);
+        if (commentBody && !transition.decision) {
+          await db.insert(issueComments).values({
+            companyId: updated.companyId,
+            issueId: updated.id,
+            body: commentBody,
+            authorAgentId: actorAgentId,
+            authorUserId: actorUserId,
+          });
+        }
+        void queueIssueAssignmentWakeup({
+          heartbeat,
+          issue: updated,
+          previousExecutionState: existing.executionState,
+          reason: "issue_assigned",
+          mutation: "update",
+          contextSource: "issue.execution_stage",
+          executionStageOnly: true,
+          requestedByActorType: actorAgentId ? "agent" : "user",
+          requestedByActorId: actorAgentId ?? actorUserId ?? "plugin",
+        });
         await logPluginActivity({
           companyId,
           action: "issue.updated",

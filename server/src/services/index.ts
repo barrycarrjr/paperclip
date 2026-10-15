@@ -62,6 +62,11 @@ export {
 } from "./structural-findings.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
+export {
+  APPROVED_INSTRUCTION_RULES_MAX_CHARS,
+  buildApprovedInstructionRulesMarkdown,
+  instructionRuleService,
+} from "./instruction-rules.js";
 export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";

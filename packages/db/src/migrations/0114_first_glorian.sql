@@ -1,0 +1,1 @@
+ALTER TABLE "calendar_event_deliveries" ALTER COLUMN "event_id" DROP NOT NULL;

@@ -264,6 +264,7 @@ export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 export const updateIssueSchema = createIssueSchema.omit({ origin: true }).partial().extend({
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),
   comment: multilineTextSchema.pipe(z.string().min(1)).optional(),
+  commentIntent: z.enum(["message", "correction"]).optional(),
   reviewRequest: issueReviewRequestSchema.optional().nullable(),
   reopen: z.boolean().optional(),
   resume: z.boolean().optional(),
@@ -282,11 +283,23 @@ export const checkoutIssueSchema = z.object({
 
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;
 
-export const addIssueCommentSchema = z.object({
+export const addIssueCommentInputSchema = z.object({
   body: multilineTextSchema.pipe(z.string().min(1)),
+  intent: z.enum(["message", "correction"]).optional().default("message"),
+  idempotencyKey: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._:-]+$/).optional(),
   reopen: z.boolean().optional(),
   resume: z.boolean().optional(),
   interrupt: z.boolean().optional(),
+});
+
+export const addIssueCommentSchema = addIssueCommentInputSchema.superRefine((value, ctx) => {
+  if (value.idempotencyKey && (value.reopen || value.resume || value.interrupt)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["idempotencyKey"],
+      message: "Idempotent comment creation cannot be combined with issue or run state changes",
+    });
+  }
 });
 
 export type AddIssueComment = z.infer<typeof addIssueCommentSchema>;

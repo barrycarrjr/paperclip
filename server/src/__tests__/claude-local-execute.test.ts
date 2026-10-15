@@ -167,6 +167,37 @@ describe("claude execute", () => {
     }
   });
 
+  it("delivers approved rules only through Claude's system prompt file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-approved-rules-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
+    try {
+      await execute({
+        runId: "run-approved-rules",
+        agent: { id: "agent-1", companyId: "co-1", name: "Test", adapterType: "claude_local", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath },
+          promptTemplate: "Do work.",
+        },
+        context: {
+          paperclipApprovedRulesMarkdown: "- Verify totals before reporting them.",
+        },
+        authToken: "tok",
+        onLog: async () => {},
+        onMeta: async () => {},
+      });
+      const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
+      expect(captured.instructionsContents).toContain("Approved Paperclip Standing Rules");
+      expect(captured.instructionsContents).toContain("Verify totals before reporting them.");
+      expect(captured.prompt).not.toContain("Approved Paperclip Standing Rules");
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes the agent's forbiddenWritePaths to the CLI as deny rules", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-forbidden-"));
     const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
@@ -196,9 +227,9 @@ describe("claude execute", () => {
       const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
       const settingsIndex = captured.argv.indexOf("--settings");
       expect(settingsIndex).toBeGreaterThanOrEqual(0);
-      expect(JSON.parse(captured.argv[settingsIndex + 1]!)).toEqual({
+      expect(captured.argv[settingsIndex + 1]).toBe(JSON.stringify({
         permissions: { deny: ["Edit(**/AGENTS.md)", "Edit(//**/AGENTS.md)"] },
-      });
+      }));
     } finally {
       restore();
       await fs.rm(root, { recursive: true, force: true });

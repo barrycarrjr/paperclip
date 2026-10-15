@@ -27,8 +27,8 @@ export const approvalsApi = {
     api.post<Approval>(`/approvals/${id}/reject`, { decisionNote }),
   requestRevision: (id: string, decisionNote?: string) =>
     api.post<Approval>(`/approvals/${id}/request-revision`, { decisionNote }),
-  resubmit: (id: string, payload?: Record<string, unknown>) =>
-    api.post<Approval>(`/approvals/${id}/resubmit`, { payload }),
+  resubmit: (id: string, payload?: Record<string, unknown>, revisionCycle?: string) =>
+    api.post<Approval>(`/approvals/${id}/resubmit`, { payload, revisionCycle }),
   listComments: (id: string) => api.get<ApprovalComment[]>(`/approvals/${id}/comments`),
   addComment: (id: string, body: string) =>
     api.post<ApprovalComment>(`/approvals/${id}/comments`, { body }),

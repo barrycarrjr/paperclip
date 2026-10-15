@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  agents,
   companies,
   companyMemberships,
   createDb,
@@ -54,6 +55,7 @@ describeEmbeddedPostgres("access service", () => {
 
   afterEach(async () => {
     await db.delete(issues);
+    await db.delete(agents);
     await db.delete(principalPermissionGrants);
     await db.delete(instanceUserRoles);
     await db.delete(companyMemberships);
@@ -175,6 +177,67 @@ describeEmbeddedPostgres("access service", () => {
       .where(eq(issues.id, doneIssue.id))
       .then((rows) => rows[0]!);
     expect(historicalIssue.assigneeUserId).toBe(member.principalId);
+  });
+
+  it("applies an agent's automatic reviewer when archived work is reassigned", async () => {
+    const { company } = await createCompanyWithOwner(db);
+    const member = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `member-${randomUUID()}`,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const reviewerId = randomUUID();
+    const workerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: reviewerId,
+        companyId: company.id,
+        name: "Archive Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: workerId,
+        companyId: company.id,
+        name: "Archive Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: reviewerId,
+      },
+    ]);
+    const issue = await db
+      .insert(issues)
+      .values({
+        companyId: company.id,
+        title: "Archive reassignment",
+        status: "todo",
+        assigneeUserId: member.principalId,
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    await accessService(db).archiveMember(company.id, member.id, {
+      reassignment: { assigneeAgentId: workerId },
+    });
+
+    const reassigned = await db
+      .select()
+      .from(issues)
+      .where(eq(issues.id, issue.id))
+      .then((rows) => rows[0]!);
+    expect(reassigned.assigneeAgentId).toBe(workerId);
+    expect(reassigned.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: reviewerId }] }],
+    });
+    expect(reassigned.executionPolicyExplicit).toBe(false);
   });
 
   it("rejects instance-level company access removal for self and protected users", async () => {

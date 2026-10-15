@@ -52,6 +52,26 @@ describe("starter catalog", () => {
     expect(findStarterCard("no-such-card")).toBeNull();
   });
 
+  it("makes the Monday brief review weekly counts, stalled matters, open loops, notes and priority drift", () => {
+    const card = findStarterCard("monday-morning-brief")!;
+    const instructions = card.routine.description;
+    expect(card.requiresPlugins).toEqual([]);
+    expect(card.routine.cron).toBe("0 7 * * 1");
+    expect(card.routine.timezone).toBe("America/New_York");
+    expect(instructions).toContain("run log and task comments for the last seven days");
+    expect(instructions).toContain("items read, entries added, and changes proposed");
+    expect(instructions).toContain("Sum the seven-day totals");
+    expect(instructions).toContain("Count a corrected report once under its original run");
+    expect(instructions).toContain("zero as zero; missing counts are unknown, not zero");
+    expect(instructions).toContain("no activity in 14 days");
+    expect(instructions).toContain("last activity date");
+    expect(instructions).toContain("open loops");
+    expect(instructions).toContain("older relevant notes");
+    expect(instructions).toContain("notes actually read");
+    expect(instructions).toContain("drift from stated priorities");
+    expect(instructions).toContain("one page");
+  });
+
   describe("free-text search", () => {
     it("matches the words someone would actually type", () => {
       expect(searchStarterCards("google reviews")[0]?.id).toBe("reply-google-reviews");

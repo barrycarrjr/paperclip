@@ -216,6 +216,17 @@ export function activityRoutes(db: Db) {
     return issueSvc.getById(rawId);
   }
 
+  function assertIssueReadAccess(req: Request, companyId: string) {
+    // Tool sessions stay bound to the company in their token. The shared read
+    // check permits some HQ tool sessions to cross company boundaries, but
+    // issue activity and run ledgers are only cross-company readable by the
+    // portfolio-root agent itself.
+    if (req.actor.type === "tool_session" && req.actor.companyId !== companyId) {
+      throw forbidden("Tool session cannot access another company");
+    }
+    assertCompanyAccess(req, companyId, "read");
+  }
+
   router.get("/companies/:companyId/activity", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId, "read");
@@ -416,7 +427,7 @@ export function activityRoutes(db: Db) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    assertIssueReadAccess(req, issue.companyId);
     const result = await svc.forIssue(issue.id, issue.companyId);
     res.json(result);
   });
@@ -428,7 +439,7 @@ export function activityRoutes(db: Db) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    assertIssueReadAccess(req, issue.companyId);
     const result = await svc.runsForIssue(issue.companyId, issue.id);
     res.json(result);
   });

@@ -58,7 +58,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, validationErrorMessage } from "../errors.js";
-import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -76,7 +76,10 @@ import {
   normalizeContentType,
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
-import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import {
+  buildIssueAssignmentWakeup,
+  queueIssueAssignmentWakeup,
+} from "../services/issue-assignment-wakeup.js";
 import {
   PORTFOLIO_DIRECTIVE_ORIGIN_KIND,
   portfolioDirectiveService,
@@ -86,6 +89,8 @@ import { executionWorkspaceService as executionWorkspaceServiceDirect } from "..
 import { environmentService } from "../services/environments.js";
 import {
   applyIssueExecutionPolicyTransition,
+  issueExecutionPolicyHasParticipant,
+  issueExecutionStateReturnsToAssignee,
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
@@ -112,16 +117,6 @@ type ActivityExecutionParticipant = Pick<
   NormalizedExecutionPolicy["stages"][number]["participants"][number],
   "type" | "agentId" | "userId"
 >;
-type ExecutionStageWakeContext = {
-  wakeRole: "reviewer" | "approver" | "executor";
-  stageId: string | null;
-  stageType: ParsedExecutionState["currentStageType"];
-  currentParticipant: ParsedExecutionState["currentParticipant"];
-  returnAssignee: ParsedExecutionState["returnAssignee"];
-  reviewRequest: ParsedExecutionState["reviewRequest"];
-  lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
-  allowedActions: string[];
-};
 
 /**
  * Access mode for reading one issue. A read, so the portfolio root's agents
@@ -132,31 +127,6 @@ type ExecutionStageWakeContext = {
  */
 function issueReadAccessMode(req: Request): AccessMode {
   return req.actor.type === "tool_session" ? "write" : "read";
-}
-
-function executionPrincipalsEqual(
-  left: ParsedExecutionState["currentParticipant"] | null,
-  right: ParsedExecutionState["currentParticipant"] | null,
-) {
-  if (!left || !right || left.type !== right.type) return false;
-  return left.type === "agent" ? left.agentId === right.agentId : left.userId === right.userId;
-}
-
-function buildExecutionStageWakeContext(input: {
-  state: ParsedExecutionState;
-  wakeRole: ExecutionStageWakeContext["wakeRole"];
-  allowedActions: string[];
-}): ExecutionStageWakeContext {
-  return {
-    wakeRole: input.wakeRole,
-    stageId: input.state.currentStageId,
-    stageType: input.state.currentStageType,
-    currentParticipant: input.state.currentParticipant,
-    returnAssignee: input.state.returnAssignee,
-    reviewRequest: input.state.reviewRequest ?? null,
-    lastDecisionOutcome: input.state.lastDecisionOutcome,
-    allowedActions: input.allowedActions,
-  };
 }
 
 function summarizeIssueRelationForActivity(relation: {
@@ -325,104 +295,6 @@ function diffExecutionParticipants(
     removedParticipants: previousParticipants.filter((participant) => !nextByKey.has(activityExecutionParticipantKey(participant))),
   };
 }
-
-function buildExecutionStageWakeup(input: {
-  issueId: string;
-  previousState: ParsedExecutionState | null;
-  nextState: ParsedExecutionState | null;
-  interruptedRunId: string | null;
-  requestedByActorType: "user" | "agent";
-  requestedByActorId: string;
-}) {
-  const { issueId, previousState, nextState, interruptedRunId } = input;
-  if (!nextState) return null;
-
-  if (nextState.status === "pending") {
-    const agentId =
-      nextState.currentParticipant?.type === "agent" ? (nextState.currentParticipant.agentId ?? null) : null;
-    const stageChanged =
-      previousState?.status !== "pending" ||
-      previousState?.currentStageId !== nextState.currentStageId ||
-      !executionPrincipalsEqual(previousState?.currentParticipant ?? null, nextState.currentParticipant ?? null);
-    if (!agentId || !stageChanged) return null;
-
-    const reason =
-      nextState.currentStageType === "approval" ? "execution_approval_requested" : "execution_review_requested";
-    const executionStage = buildExecutionStageWakeContext({
-      state: nextState,
-      wakeRole: nextState.currentStageType === "approval" ? "approver" : "reviewer",
-      allowedActions: ["approve", "request_changes"],
-    });
-
-    return {
-      agentId,
-      wakeup: {
-        source: "assignment" as const,
-        triggerDetail: "system" as const,
-        reason,
-        payload: {
-          issueId,
-          mutation: "update",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-        requestedByActorType: input.requestedByActorType,
-        requestedByActorId: input.requestedByActorId,
-        contextSnapshot: {
-          issueId,
-          taskId: issueId,
-          wakeReason: reason,
-          source: "issue.execution_stage",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-      },
-    };
-  }
-
-  if (nextState.status === "changes_requested") {
-    const agentId = nextState.returnAssignee?.type === "agent" ? (nextState.returnAssignee.agentId ?? null) : null;
-    const becameChangesRequested =
-      previousState?.status !== "changes_requested" ||
-      previousState?.lastDecisionId !== nextState.lastDecisionId ||
-      !executionPrincipalsEqual(previousState?.returnAssignee ?? null, nextState.returnAssignee ?? null);
-    if (!agentId || !becameChangesRequested) return null;
-
-    const executionStage = buildExecutionStageWakeContext({
-      state: nextState,
-      wakeRole: "executor",
-      allowedActions: ["address_changes", "resubmit"],
-    });
-
-    return {
-      agentId,
-      wakeup: {
-        source: "assignment" as const,
-        triggerDetail: "system" as const,
-        reason: "execution_changes_requested",
-        payload: {
-          issueId,
-          mutation: "update",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-        requestedByActorType: input.requestedByActorType,
-        requestedByActorId: input.requestedByActorId,
-        contextSnapshot: {
-          issueId,
-          taskId: issueId,
-          wakeReason: "execution_changes_requested",
-          source: "issue.execution_stage",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-      },
-    };
-  }
-
-  return null;
-}
-
 
 async function listIssueLinkedCases(db: Db, companyId: string, issueId: string) {
   if (!db || typeof (db as any).select !== "function") {
@@ -911,6 +783,12 @@ export function issueRoutes(
     }
     if (!resolved.agent) {
       throw notFound("Agent not found");
+    }
+    if (resolved.agent.status === "pending_approval") {
+      throw conflict("Cannot assign work to pending approval agents");
+    }
+    if (resolved.agent.status === "terminated") {
+      throw conflict("Cannot assign work to terminated agents");
     }
     return resolved.agent.id;
   }
@@ -2182,7 +2060,9 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(companyId, req.body.executionWorkspaceSettings?.environmentId);
 
     const actor = getActorInfo(req);
-    const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    const executionPolicy = req.body.executionPolicy === undefined
+      ? undefined
+      : normalizeIssueExecutionPolicy(req.body.executionPolicy);
     // `origin` is the client-declarable subset (an email handoff or an agent's
     // finding key; see clientDeclarableIssueOriginSchema). A finding key that
     // was already reported is refused with 409 by issueService.create. Map it
@@ -2270,7 +2150,9 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(parent.companyId, req.body.executionWorkspaceSettings?.environmentId);
 
     const actor = getActorInfo(req);
-    const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    const executionPolicy = req.body.executionPolicy === undefined
+      ? undefined
+      : normalizeIssueExecutionPolicy(req.body.executionPolicy);
     // Same mapping as the plain create route: without it a declared origin
     // reached nothing and the child was stored as manual, so an agent's
     // finding filed under a digest skipped the duplicate check entirely.
@@ -2336,6 +2218,12 @@ export function issueRoutes(
       existing.companyId,
       req.body.assigneeAgentId as string | null | undefined,
     );
+    if (typeof req.body.assigneeUserId === "string") {
+      const membership = await access.getMembership(existing.companyId, "user", req.body.assigneeUserId);
+      if (!membership || membership.status !== "active") {
+        throw notFound("Assignee user not found");
+      }
+    }
     const titleOrDescriptionChanged = req.body.title !== undefined || req.body.description !== undefined;
     const existingRelations =
       Array.isArray(req.body.blockedByIssueIds)
@@ -2343,6 +2231,7 @@ export function issueRoutes(
         : null;
     const {
       comment: commentBody,
+      commentIntent,
       reviewRequest,
       reopen: reopenRequested,
       resume: resumeRequested,
@@ -2363,6 +2252,20 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(existing.companyId, updateFields.executionWorkspaceSettings?.environmentId);
     const requestedAssigneeAgentId =
       normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
+    if (commentIntent === "correction") {
+      if (!isUserDrivenActor(req)) {
+        res.status(403).json({ error: "Only board users can mark a comment as a correction" });
+        return;
+      }
+      if (!commentBody) {
+        res.status(400).json({ error: "Correction intent requires a comment" });
+        return;
+      }
+      if (!requestedAssigneeAgentId) {
+        res.status(422).json({ error: "Correction comments require an assigned agent" });
+        return;
+      }
+    }
     const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
     const effectiveMoveToTodoRequested =
       explicitMoveToTodoRequested ||
@@ -2439,10 +2342,49 @@ export function issueRoutes(
     ) {
       updateFields.status = "todo";
     }
+    const previousExecutionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
+    const requestedAssignee = {
+      assigneeAgentId: normalizedAssigneeAgentId,
+      assigneeUserId:
+        req.body.assigneeUserId === undefined ? undefined : (req.body.assigneeUserId as string | null),
+    };
+    const requestedPolicyParticipantHandoff = issueExecutionPolicyHasParticipant(
+      previousExecutionPolicy,
+      requestedAssignee,
+    ) && (
+      existing.executionState != null
+      || updateFields.status === "done"
+      || updateFields.status === "in_review"
+    );
+    const requestedReturnAssigneeHandoff = existing.executionState != null
+      && issueExecutionStateReturnsToAssignee(existing.executionState, requestedAssignee);
+    const requestedAssigneeWillChange =
+      (normalizedAssigneeAgentId !== undefined && normalizedAssigneeAgentId !== existing.assigneeAgentId)
+      || (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
+    const requestedAssigneeIsPolicyHandoff =
+      requestedPolicyParticipantHandoff || requestedReturnAssigneeHandoff;
     if (req.body.executionPolicy !== undefined) {
       updateFields.executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+      updateFields.executionPolicyExplicit = true;
+    } else if (
+      !existing.executionPolicyExplicit
+      && !requestedPolicyParticipantHandoff
+      && !requestedReturnAssigneeHandoff
+      && (
+        (normalizedAssigneeAgentId !== undefined && normalizedAssigneeAgentId !== existing.assigneeAgentId)
+        || (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId)
+        || (
+          existing.executionPolicy == null
+          && existing.executionState == null
+          && (normalizedAssigneeAgentId !== undefined || req.body.assigneeUserId !== undefined)
+        )
+      )
+    ) {
+      updateFields.executionPolicy = normalizedAssigneeAgentId
+        ? await svc.defaultExecutionPolicyForAssignee(existing.companyId, normalizedAssigneeAgentId)
+        : null;
+      updateFields.executionPolicyExplicit = false;
     }
-    const previousExecutionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
     const nextExecutionPolicy =
       updateFields.executionPolicy !== undefined
         ? (updateFields.executionPolicy as NormalizedExecutionPolicy | null)
@@ -2500,14 +2442,28 @@ export function issueRoutes(
       updateFields.assigneeUserId === undefined ? existing.assigneeUserId : (updateFields.assigneeUserId as string | null);
     const assigneeWillChange =
       nextAssigneeAgentId !== existing.assigneeAgentId || nextAssigneeUserId !== existing.assigneeUserId;
-    const isAgentReturningIssueToCreator =
+    const isAgentExplicitlyReturningIssueToCreator =
       req.actor.type === "agent" &&
       !!req.actor.agentId &&
       existing.assigneeAgentId === req.actor.agentId &&
+      normalizedAssigneeAgentId === null &&
+      req.body.assigneeUserId === existing.createdByUserId &&
       nextAssigneeAgentId === null &&
       typeof nextAssigneeUserId === "string" &&
       !!existing.createdByUserId &&
       nextAssigneeUserId === existing.createdByUserId;
+
+    if (
+      (assigneeWillChange || requestedAssigneeWillChange)
+      && (
+        !transition.workflowControlledAssignment
+        || (requestedAssigneeWillChange && !requestedAssigneeIsPolicyHandoff)
+      )
+    ) {
+      if (!isAgentExplicitlyReturningIssueToCreator) {
+        await assertCanAssignTasks(req, existing.companyId);
+      }
+    }
 
     if (
       isAgentHandoffToUserMissingNote({
@@ -2521,12 +2477,6 @@ export function issueRoutes(
       return;
     }
 
-    if (assigneeWillChange && !transition.workflowControlledAssignment) {
-      if (!isAgentReturningIssueToCreator) {
-        await assertCanAssignTasks(req, existing.companyId);
-      }
-    }
-
     let issue;
     try {
       if (transition.decision && decisionId) {
@@ -2538,6 +2488,10 @@ export function issueRoutes(
               ...updateFields,
               actorAgentId: actor.agentId ?? null,
               actorUserId: actor.actorType === "user" ? actor.actorId : null,
+              preserveExecutionPolicy:
+                transition.preserveExecutionPolicy === true || transition.workflowControlledAssignment === true,
+              expectedExecutionPolicy: existing.executionPolicy ?? null,
+              expectedExecutionState: existing.executionState ?? null,
             },
             tx,
           );
@@ -2563,6 +2517,20 @@ export function issueRoutes(
           ...updateFields,
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
+          preserveExecutionPolicy:
+            transition.preserveExecutionPolicy === true || transition.workflowControlledAssignment === true,
+          ...(updateFields.status === "done"
+            || updateFields.status === "in_review"
+            || updateFields.executionState !== undefined
+            || updateFields.executionPolicy !== undefined
+            || updateFields.assigneeAgentId !== undefined
+            || updateFields.assigneeUserId !== undefined
+            || transition.workflowControlledAssignment
+            ? {
+                expectedExecutionPolicy: existing.executionPolicy ?? null,
+                expectedExecutionState: existing.executionState ?? null,
+              }
+            : {}),
         });
       }
     } catch (err) {
@@ -2789,6 +2757,7 @@ export function issueRoutes(
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
+        intent: commentIntent,
       });
       await issueReferencesSvc.syncComment(comment.id);
       const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2815,6 +2784,7 @@ export function issueRoutes(
         entityId: issue.id,
         details: {
           commentId: comment.id,
+          intent: comment.intent,
           bodySnippet: comment.body.slice(0, 120),
           identifier: issue.identifier,
           issueTitle: issue.title,
@@ -2869,13 +2839,14 @@ export function issueRoutes(
       isClosedIssueStatus(existing.status) &&
       issue.status === "todo" &&
       req.body.status !== undefined;
-    const previousExecutionState = parseIssueExecutionState(existing.executionState);
-    const nextExecutionState = parseIssueExecutionState(issue.executionState);
-    const executionStageWakeup = buildExecutionStageWakeup({
-      issueId: issue.id,
-      previousState: previousExecutionState,
-      nextState: nextExecutionState,
+    const executionStageWakeup = buildIssueAssignmentWakeup({
+      issue,
+      previousExecutionState: existing.executionState,
+      reason: "issue_assigned",
+      mutation: "update",
+      contextSource: "issue.update",
       interruptedRunId,
+      executionStageOnly: true,
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
@@ -3788,6 +3759,16 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    if (req.body.intent === "correction") {
+      if (!isUserDrivenActor(req)) {
+        res.status(403).json({ error: "Only board users can mark a comment as a correction" });
+        return;
+      }
+      if (!issue.assigneeAgentId) {
+        res.status(422).json({ error: "Correction comments require an assigned agent" });
+        return;
+      }
+    }
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
     const interruptRequested = req.body.interrupt === true;
@@ -3813,6 +3794,21 @@ export function issueRoutes(
     if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
       res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
       return;
+    }
+    let comment: Awaited<ReturnType<typeof svc.addComment>> | null = null;
+    if (req.body.idempotencyKey) {
+      const idempotentResult = await svc.addCommentIdempotent(id, req.body.body, {
+        idempotencyKey: req.body.idempotencyKey,
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        runId: actor.runId,
+        intent: req.body.intent,
+      });
+      comment = idempotentResult.comment;
+      if (!idempotentResult.created) {
+        res.status(200).json(comment);
+        return;
+      }
     }
     let reopened = false;
     let reopenFromStatus: string | null = null;
@@ -3876,11 +3872,14 @@ export function issueRoutes(
       }
     }
 
-    const comment = await svc.addComment(id, req.body.body, {
-      agentId: actor.agentId ?? undefined,
-      userId: actor.actorType === "user" ? actor.actorId : undefined,
-      runId: actor.runId,
-    });
+    if (!comment) {
+      comment = await svc.addComment(id, req.body.body, {
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        runId: actor.runId,
+        intent: req.body.intent,
+      });
+    }
     await issueReferencesSvc.syncComment(comment.id);
     const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(currentIssue.id);
     const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
@@ -3904,6 +3903,7 @@ export function issueRoutes(
       entityId: currentIssue.id,
       details: {
         commentId: comment.id,
+        intent: comment.intent,
         bodySnippet: comment.body.slice(0, 120),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,

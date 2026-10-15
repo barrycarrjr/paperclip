@@ -29,6 +29,7 @@ import {
   readPaperclipIssueWorkModeFromContext,
   readPaperclipRuntimeSkillEntries,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   resolvePaperclipDesiredSkillNames,
   stringifyPaperclipWakePayload,
@@ -209,6 +210,69 @@ function resolveBillingType(env: Record<string, string>): "api" | "subscription"
   return hasNonEmptyEnvValue(env, "XAI_API_KEY") ? "api" : "subscription";
 }
 
+const GROK_RULE_OPTIONS = ["--rules", "--append-system-prompt"] as const;
+
+function extractConfiguredRules(args: string[]): { args: string[]; rules: string[] } {
+  const filteredArgs: string[] = [];
+  const rules: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    const separateOption = GROK_RULE_OPTIONS.find((option) => argument === option);
+    if (separateOption) {
+      const value = args[index + 1];
+      if (typeof value !== "string" || value.trim().length === 0 || value.startsWith("-")) {
+        throw new Error(`Invalid Grok extraArgs: ${separateOption} requires a non-empty value.`);
+      }
+      rules.push(value);
+      index += 1;
+      continue;
+    }
+
+    const equalsOption = GROK_RULE_OPTIONS.find((option) => argument.startsWith(`${option}=`));
+    if (equalsOption) {
+      const value = argument.slice(equalsOption.length + 1);
+      if (value.trim().length === 0) {
+        throw new Error(`Invalid Grok extraArgs: ${equalsOption} requires a non-empty value.`);
+      }
+      rules.push(value);
+      continue;
+    }
+
+    filteredArgs.push(argument);
+  }
+
+  return { args: filteredArgs, rules };
+}
+
+async function loadConfiguredRules(
+  rules: string[],
+  cwd: string,
+  executionTargetIsRemote: boolean,
+): Promise<string[]> {
+  return Promise.all(rules.map(async (rule) => {
+    if (!rule.startsWith("@")) return rule;
+    const configuredPath = rule.slice(1).trim();
+    if (!configuredPath) {
+      throw new Error("Invalid Grok extraArgs: --rules @file requires a file path.");
+    }
+    if (executionTargetIsRemote && path.isAbsolute(configuredPath)) {
+      throw new Error(
+        "Invalid Grok extraArgs: remote --rules @file paths must be relative to the configured workspace.",
+      );
+    }
+    const rulesPath = path.isAbsolute(configuredPath)
+      ? configuredPath
+      : path.resolve(cwd, configuredPath);
+    try {
+      return await fs.readFile(rulesPath, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not read configured Grok rules file ${rulesPath}: ${message}`);
+    }
+  }));
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
   const executionTarget = readAdapterExecutionTarget({
@@ -358,6 +422,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
     }
 
+    const configuredExtraArgs = (() => {
+      const fromExtraArgs = asStringArray(config.extraArgs);
+      if (fromExtraArgs.length > 0) return fromExtraArgs;
+      return asStringArray(config.args);
+    })();
+    const parsedExtraArgs = extractConfiguredRules(configuredExtraArgs);
+    const configuredRules = await loadConfiguredRules(parsedExtraArgs.rules, cwd, executionTargetIsRemote);
+    const approvedRulesNote = renderPaperclipApprovedRules(context);
+    const nativeRules = joinPromptSections([
+      ...configuredRules,
+      stagedAssets.rulesFilePath ? stagedAssets.deliveredInstructions ?? "" : "",
+      approvedRulesNote,
+    ]);
     const commandNotes = (() => {
       const notes: string[] = ["Prompt is passed to Grok via --single in headless mode."];
       if (alwaysApprove) notes.push("Added --always-approve for unattended execution.");
@@ -365,7 +442,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         notes.push(`Staged project instructions at ${stagedAssets.stagedInstructionsPath} for native Grok discovery.`);
       }
       if (stagedAssets.rulesFilePath) {
-        notes.push(`Applied fallback instructions via --rules @${stagedAssets.rulesFilePath}.`);
+        notes.push("Applied configured instructions through Grok's native --rules channel.");
+      }
+      if (approvedRulesNote) {
+        notes.push("Applied approved standing rules through Grok's native --rules channel.");
       }
       if (stagedAssets.stagedSkillsCount > 0) {
         notes.push(`Staged ${stagedAssets.stagedSkillsCount} Paperclip skill(s) into .claude/skills for native Grok discovery.`);
@@ -420,13 +500,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (permissionMode) args.push("--permission-mode", permissionMode);
       if (alwaysApprove) args.push("--always-approve");
       if (disableWebSearch) args.push("--disable-web-search");
-      if (stagedAssets.rulesFilePath) args.push("--rules", `@${stagedAssets.rulesFilePath}`);
-      const extraArgs = (() => {
-        const fromExtraArgs = asStringArray(config.extraArgs);
-        if (fromExtraArgs.length > 0) return fromExtraArgs;
-        return asStringArray(config.args);
-      })();
-      if (extraArgs.length > 0) args.push(...extraArgs);
+      if (parsedExtraArgs.args.length > 0) args.push(...parsedExtraArgs.args);
+      // Grok accepts only one --rules option. Merge configured rules into the
+      // Paperclip-owned value so approved standing rules cannot be displaced.
+      if (nativeRules) args.push("--rules", nativeRules);
       args.push("--single", prompt);
       return args;
     };
@@ -439,9 +516,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           command: resolvedCommand,
           cwd: effectiveExecutionCwd,
           commandNotes,
-          commandArgs: args.map((value, index) => (
-            index === args.length - 1 ? `<prompt ${prompt.length} chars>` : value
-          )),
+          commandArgs: args.map((value, index) => {
+            if (index > 0 && args[index - 1] === "--rules") return `<trusted rules ${nativeRules.length} chars>`;
+            return index === args.length - 1 ? `<prompt ${prompt.length} chars>` : value;
+          }),
           env: loggedEnv,
           prompt,
           promptMetrics,

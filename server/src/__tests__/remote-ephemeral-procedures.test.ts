@@ -103,6 +103,18 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.unstubAllGlobals(); await fs.rm(root, { recursive: true, force: true }); });
 
+it("delivers trusted count reporting through an OpenClaw custom message payload", async () => {
+  const adapter = adapters[0]!;
+  const ctx = context(adapter, { payloadTemplate: { message: "Custom wake" } });
+  ctx.context.paperclipWake = { issue: { id: "issue-1", title: "Read notes" }, runCountsRequired: true, runCountsRetryReason: "missing_run_counts" };
+  expect((await adapter.execute(ctx)).exitCode).toBe(0);
+  const prompt = outbound(adapter);
+  expect(prompt).toContain("Custom wake");
+  expect(prompt).toContain("corrected final task comment");
+  expect(prompt).toContain("preceding run's actual work");
+  expect(prompt).toContain("Counts: items read 0; entries added 0; changes proposed 0.");
+});
+
 describe.each(adapters)("$name complete procedure delivery", (adapter) => {
   it("delivers all selected text with the final outgoing prompt and preserves source evidence", async () => {
     const result = await adapter.execute(context(adapter, { payloadTemplate: { message: "Custom wake", input: "Custom input" } }));

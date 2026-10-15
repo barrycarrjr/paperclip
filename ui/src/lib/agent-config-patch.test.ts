@@ -124,4 +124,14 @@ describe("buildAgentUpdatePatch", () => {
       modelSelection,
     });
   });
+
+  it("saves an automatic reviewer as an agent identity setting", () => {
+    const reviewerId = "8a5367a7-2fb8-4891-85cd-174af1e99651";
+    const patch = buildAgentUpdatePatch(
+      makeAgent(),
+      makeOverlay({ identity: { defaultReviewerAgentId: reviewerId } }),
+    );
+
+    expect(patch).toEqual({ defaultReviewerAgentId: reviewerId });
+  });
 });

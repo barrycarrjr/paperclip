@@ -60,6 +60,28 @@ describe("runtime API discovery", () => {
     ).toBe("http://proxy.example.com");
   });
 
+  it("uses the loopback listener instead of proxy hostnames for local agents", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: null,
+        allowedHostnames: ["100.64.0.10", "paperclip.tailnet.example"],
+        bindHost: "127.0.0.1",
+        port: 3100,
+      }),
+    ).toBe("http://127.0.0.1:3100");
+  });
+
+  it("uses the loopback listener ahead of an explicit reverse proxy URL", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: "https://paperclip.tailnet.example",
+        allowedHostnames: ["paperclip.tailnet.example"],
+        bindHost: "localhost",
+        port: 3100,
+      }),
+    ).toBe("http://localhost:3100");
+  });
+
   it("puts the corrected origin first in the candidate list too", () => {
     expect(
       buildRuntimeApiCandidateUrls({

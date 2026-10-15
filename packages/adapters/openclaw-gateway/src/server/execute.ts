@@ -9,7 +9,9 @@ import {
   asString,
   buildPaperclipEnv,
   parseObject,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
+  stringifyPaperclipApprovedRulesPayload,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
 import crypto, { randomUUID } from "node:crypto";
@@ -465,7 +467,7 @@ function joinWakePayloadSections(structuredWakePrompt: string, structuredWakeJso
   return sections.join("\n");
 }
 
-function buildStandardPaperclipPayload(
+export function buildStandardPaperclipPayload(
   ctx: AdapterExecutionContext,
   wakePayload: WakePayload,
   paperclipEnv: Record<string, string>,
@@ -500,6 +502,10 @@ function buildStandardPaperclipPayload(
   const structuredWake = parseObject(ctx.context.paperclipWake);
   if (Object.keys(structuredWake).length > 0) {
     standardPaperclip.wake = structuredWake;
+  }
+  const approvedRulesJson = stringifyPaperclipApprovedRulesPayload(ctx.context);
+  if (approvedRulesJson) {
+    standardPaperclip.approvedRules = JSON.parse(approvedRulesJson);
   }
 
   if (workspace) {
@@ -1118,6 +1124,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const wakePayload = buildWakePayload(ctx);
   const paperclipEnv = buildPaperclipEnvForWake(ctx, wakePayload);
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx.context.paperclipWake);
+  const approvedRules = renderPaperclipApprovedRules(ctx.context);
   const structuredWakeJson = stringifyPaperclipWakePayload(ctx.context.paperclipWake);
   const wakeText = buildWakeText(
     wakePayload,
@@ -1138,10 +1145,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
 
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
-  const message = appendSourceEvidenceInstructions(appendWakeText(
-    templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText,
-    procedureContext,
-  ));
+  // OpenClaw's agent RPC exposes a message plus structured metadata, but no
+  // system-role field. Keep the bounded rule block first in the message and
+  // mirror its provenance under paperclip.approvedRules for capable gateways.
+  const message = appendSourceEvidenceInstructions([
+    approvedRules,
+    appendWakeText(templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText, procedureContext),
+  ].filter(Boolean).join("\n\n"));
   const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
 
   const agentParams: Record<string, unknown> = {

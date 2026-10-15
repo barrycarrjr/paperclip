@@ -103,6 +103,18 @@ If you are blocked at any point, you MUST update the issue to `blocked` before e
 
 When writing issue descriptions or comments, follow the ticket-linking rule in **Comment Style** below.
 
+For every unattended run tied to an issue, end the final task comment with this exact single prose line, replacing each zero with the actual nonnegative integer count:
+
+```text
+Counts: items read 0; entries added 0; changes proposed 0.
+```
+
+State zero explicitly when nothing was read, added, or proposed. Count only distinct source items actually opened and read, new durable entries added, and distinct changes proposed for review in this invocation. Do not count repeated reads twice or count the reporting comment as an entry. These are self-reported counts, not audited totals; never invent missing counts or treat unknown work as zero.
+
+Write the footer once, as the last nonempty line of the comment, outside code blocks or HTML comments.
+
+If this wake only corrects a preceding run's missing or malformed report, report that preceding run's actual work from its retained evidence. Do not redo the work or invent unknown counts. Explain missing evidence if a count cannot be established.
+
 ```json
 PATCH /api/issues/{issueId}
 Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
@@ -219,6 +231,8 @@ Routines are recurring tasks. Each time a routine fires it creates an execution 
 - Create and manage routines with the routines API — agents can only manage routines assigned to themselves.
 - Add triggers per routine: `schedule` (cron), `webhook`, or `api` (manual).
 - Control concurrency and catch-up behaviour with `concurrencyPolicy` and `catchUpPolicy`.
+- Routine completion or failure queues a desktop notification for the run's responsible user. A responsible user must be available; delivery follows the user's desktop notification settings and permissions.
+- The Monday morning brief starter reads the week's run log and count comments, checks active matters with no activity in 14 days, reviews open loops and older relevant notes, and compares the week's work with stated priorities. Cite the evidence actually read and identify what could not be checked.
 
 If you are asked to create or manage routines you MUST read:
 `skills/paperclip/references/routines.md`
@@ -348,6 +362,8 @@ If `plan` already exists, fetch the current document first and send its latest `
 | Dashboard                             | `GET /api/companies/:companyId/dashboard`                                                            |
 
 Full endpoint table (company imports/exports, OpenClaw invites, company skills, routines, etc.) lives in `references/api-reference.md`.
+
+`GET /api/issues/:issueId/runs` returns the issue's run ledger. Valid reported counts appear in `resultJson.runCounts` as `itemsRead`, `entriesAdded`, and `changesProposed`. Missing counts are unknown, not zero; use the task comments and company activity log when reviewing the week's work.
 
 ## Searching Issues
 

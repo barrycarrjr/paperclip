@@ -190,8 +190,8 @@ describeDatabase("transactional issue dependency wakeups", () => {
     expect(await deliveries(f.companyId)).toMatchObject([{ status: "deferred_issue_execution" }]);
     expect(execute).not.toHaveBeenCalled();
     execute.mockImplementation(async ({ runId }: { runId: string }) => {
-      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: f.agentId, createdByRunId: runId, body: "Followup received." });
-      return { exitCode: 0, signal: null, timedOut: false, summary: "Followup completed." };
+      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: f.agentId, createdByRunId: runId, body: "Followup received.\nCounts: items read 0; entries added 0; changes proposed 0." });
+      return { exitCode: 0, signal: null, timedOut: false, summary: "Followup completed.\nCounts: items read 0; entries added 0; changes proposed 0." };
     });
     await heartbeat.cancelRun(f.busyId);
     await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1), { timeout: 10_000 });
@@ -246,8 +246,8 @@ describeDatabase("transactional issue dependency wakeups", () => {
       await db.update(agents).set({ status: "idle", pauseReason: null }).where(eq(agents.id, f.agentId));
     }
     execute.mockImplementation(async ({ runId }: { runId: string }) => {
-      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: f.agentId, createdByRunId: runId, body: "Resumed completion received." });
-      return { exitCode: 0, signal: null, timedOut: false, summary: "Followup completed." };
+      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: f.agentId, createdByRunId: runId, body: "Resumed completion received.\nCounts: items read 0; entries added 0; changes proposed 0." });
+      return { exitCode: 0, signal: null, timedOut: false, summary: "Followup completed.\nCounts: items read 0; entries added 0; changes proposed 0." };
     });
     await heartbeatService(db).reconcileIssueDependencyWakeups();
     await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1), { timeout: 10_000 });
@@ -280,8 +280,8 @@ describeDatabase("transactional issue dependency wakeups", () => {
     const deferred = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.status, "deferred_issue_execution")).orderBy(agentWakeupRequests.requestedAt);
     expect(deferred.map((row) => row.agentId)).toEqual([f.agentId, helperId]);
     execute.mockImplementation(async ({ runId, agent }: { runId: string; agent: { id: string } }) => {
-      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: agent.id, createdByRunId: runId, body: "Wake received." });
-      return { exitCode: 0, signal: null, timedOut: false, summary: "Wake completed." };
+      await db.insert(issueComments).values({ companyId: f.companyId, issueId: f.parentId, authorAgentId: agent.id, createdByRunId: runId, body: "Wake received.\nCounts: items read 0; entries added 0; changes proposed 0." });
+      return { exitCode: 0, signal: null, timedOut: false, summary: "Wake completed.\nCounts: items read 0; entries added 0; changes proposed 0." };
     });
     await heartbeat.cancelRun(f.busyId);
     await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1), { timeout: 10_000 });

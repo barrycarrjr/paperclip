@@ -1,9 +1,10 @@
 import { createHmac, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
   agents,
+  calendarEventDeliveries,
   companies,
   companySecrets,
   companySecretVersions,
@@ -30,6 +31,7 @@ import {
 import { issueService } from "../services/issues.ts";
 import { instanceSettingsService } from "../services/instance-settings.ts";
 import { routineService } from "../services/routines.ts";
+import { calendarService } from "../services/calendar.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -50,6 +52,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
   }, 90_000);
 
   afterEach(async () => {
+    await db.delete(calendarEventDeliveries);
     await db.delete(activityLog);
     await db.delete(issueInboxArchives);
     await db.delete(issueReadStates);
@@ -91,6 +94,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
         contextSnapshot?: Record<string, unknown>;
       },
     ) => Promise<unknown>;
+    enqueueDesktopNotification?: ReturnType<typeof calendarService>["enqueueDesktopNotification"];
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -114,6 +118,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       name: "Paperclip",
       issuePrefix,
       requireBoardApprovalForNewAgents: false,
+      defaultResponsibleUserId: "owner-user",
     });
 
     await db.insert(agents).values({
@@ -165,6 +170,9 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
           return { id: queuedRunId };
         },
       },
+      ...(opts?.enqueueDesktopNotification
+        ? { desktopNotifications: { enqueueDesktopNotification: opts.enqueueDesktopNotification } }
+        : {}),
     });
     const issueSvc = issueService(db);
     const routine = await svc.create(
@@ -186,6 +194,178 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
 
     return { companyId, agentId, issueSvc, projectId, routine, svc, wakeups };
   }
+
+  it("queues one event-free desktop notification when a routine completes", async () => {
+    const { companyId, routine, svc } = await seedFixture();
+    expect(routine.responsibleUserId).toBe("owner-user");
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(run.responsibleUserId).toBe("owner-user");
+
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+    await Promise.all([
+      svc.syncRunStatusForIssue(run.linkedIssueId!),
+      svc.syncRunStatusForIssue(run.linkedIssueId!),
+    ]);
+
+    const deliveries = await db
+      .select()
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      eventId: null,
+      userId: "owner-user",
+      channel: "desktop",
+      status: "pending",
+      title: `Routine completed: ${routine.title}`,
+      url: `/${(await db.select({ issuePrefix: companies.issuePrefix }).from(companies).where(eq(companies.id, companyId)))[0]!.issuePrefix}/routines/${routine.id}`,
+    });
+
+    const activity = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "routine.completion_notification_enqueued"));
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      entityType: "routine_run",
+      entityId: run.id,
+      responsibleUserId: "owner-user",
+    });
+  });
+
+  it("queues one failure notification without exposing the routine-run reason", async () => {
+    const { routine, svc } = await seedFixture();
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    await db.update(issues).set({ status: "blocked" }).where(eq(issues.id, run.linkedIssueId!));
+
+    await svc.syncRunStatusForIssue(run.linkedIssueId!);
+    await svc.syncRunStatusForIssue(run.linkedIssueId!);
+
+    const deliveries = await db
+      .select()
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      eventId: null,
+      userId: "owner-user",
+      title: `Routine failed: ${routine.title}`,
+      body: "The routine did not finish successfully. Open the routine to review the failure.",
+    });
+  });
+
+  it("rolls back terminal status and retries notification delivery on the scheduler tick", async () => {
+    let attempts = 0;
+    const notifications = calendarService(db);
+    const { routine, svc } = await seedFixture({
+      enqueueDesktopNotification: async (input) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("desktop queue unavailable");
+        return notifications.enqueueDesktopNotification(input);
+      },
+    });
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+
+    await expect(svc.syncRunStatusForIssue(run.linkedIssueId!)).rejects.toThrow("desktop queue unavailable");
+    const [rolledBack] = await db.select().from(routineRuns).where(eq(routineRuns.id, run.id));
+    expect(rolledBack?.status).toBe("issue_created");
+
+    await svc.tickScheduledTriggers();
+
+    const [stored] = await db.select().from(routineRuns).where(eq(routineRuns.id, run.id));
+    expect(stored?.status).toBe("completed");
+    expect(attempts).toBe(2);
+    const deliveries = await db
+      .select()
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
+    expect(deliveries).toHaveLength(1);
+    const activity = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "routine.completion_notification_enqueued"));
+    expect(activity).toHaveLength(1);
+  });
+
+  it("does not backfill notifications for runs created before notification eligibility existed", async () => {
+    const { companyId, routine, svc } = await seedFixture();
+    const historicalRunId = randomUUID();
+    await db.insert(routineRuns).values({
+      id: historicalRunId,
+      companyId,
+      routineId: routine.id,
+      source: "schedule",
+      status: "completed",
+      completedAt: new Date(),
+    });
+
+    await svc.tickScheduledTriggers();
+
+    expect(await db.select().from(calendarEventDeliveries).where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${historicalRunId}:terminal:desktop`))).toHaveLength(0);
+    expect(await db.select().from(activityLog).where(eq(activityLog.entityId, historicalRunId))).toHaveLength(0);
+  });
+
+  it("keeps terminal synchronization and notification deduplication company scoped", async () => {
+    const { companyId, routine, svc } = await seedFixture();
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    const otherCompanyId = randomUUID();
+    await db.insert(companies).values({
+      id: otherCompanyId,
+      name: "Other Company",
+      issuePrefix: `O${otherCompanyId.replace(/-/g, "").slice(0, 8)}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    const [foreignIssue] = await db.insert(issues).values({
+      companyId: otherCompanyId,
+      title: "Imported terminal issue",
+      status: "done",
+      priority: "medium",
+      originKind: "routine_execution",
+      originId: routine.id,
+      originRunId: run.id,
+    }).returning();
+    await db.insert(activityLog).values({
+      companyId: otherCompanyId,
+      actorType: "system",
+      actorId: "importer",
+      action: "routine.completion_notification_enqueued",
+      entityType: "routine_run",
+      entityId: run.id,
+    });
+
+    expect(await svc.syncRunStatusForIssue(foreignIssue!.id)).toBeNull();
+    expect((await db.select().from(routineRuns).where(eq(routineRuns.id, run.id)))[0]?.status).toBe("issue_created");
+
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+    await svc.syncRunStatusForIssue(run.linkedIssueId!);
+
+    const ownDeliveries = await db.select().from(calendarEventDeliveries).where(eq(calendarEventDeliveries.companyId, companyId));
+    expect(ownDeliveries).toHaveLength(1);
+    const ownPrefix = (await db.select({ issuePrefix: companies.issuePrefix }).from(companies).where(eq(companies.id, companyId)))[0]!.issuePrefix;
+    expect(ownDeliveries[0]?.url).toBe(`/${ownPrefix}/routines/${routine.id}`);
+    const ownActivity = await db.select().from(activityLog).where(eq(activityLog.companyId, companyId));
+    expect(ownActivity.some((row) => row.entityId === run.id && row.action === "routine.completion_notification_enqueued")).toBe(true);
+  });
+
+  it("uses the company responsible user for a legacy routine and run without one", async () => {
+    const { routine, svc } = await seedFixture();
+    await db
+      .update(routines)
+      .set({ responsibleUserId: null, createdByUserId: null })
+      .where(eq(routines.id, routine.id));
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(run.responsibleUserId).toBeNull();
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+
+    await svc.syncRunStatusForIssue(run.linkedIssueId!);
+
+    const [delivery] = await db
+      .select()
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
+    expect(delivery?.userId).toBe("owner-user");
+  });
 
   it("creates a fresh execution issue when the previous routine issue is open but idle", async () => {
     const { companyId, issueSvc, routine, svc } = await seedFixture();
@@ -309,7 +489,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect((await statusOf(recovery.id))?.status).toBe("cancelled");
   });
 
-  it("leaves everything alone when the dispatch fails", async () => {
+  it("leaves older executions alone when assignment queueing temporarily fails", async () => {
     // The bug that forced the revert. A dispatch can fail after the point where
     // retiring used to happen, and the failure path returns normally, so the
     // cancellations committed with no replacement issue to show for them.
@@ -322,7 +502,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
 
     const run = await svc.runRoutine(routine.id, { source: "manual" });
 
-    expect(run.status).toBe("failed");
+    expect(run.status).toBe("issue_created");
     expect((await statusOf(dead.id))?.status).toBe("blocked");
   });
 
@@ -1192,7 +1372,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(routineIssues).toHaveLength(1);
   });
 
-  it("fails the run and cleans up the execution issue when wakeup queueing fails", async () => {
+  it("keeps the committed execution issue for recovery when wakeup queueing fails", async () => {
     const { routine, svc } = await seedFixture({
       wakeup: async () => {
         throw new Error("queue unavailable");
@@ -1201,16 +1381,217 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
 
     const run = await svc.runRoutine(routine.id, { source: "manual" });
 
-    expect(run.status).toBe("failed");
-    expect(run.failureReason).toContain("queue unavailable");
-    expect(run.linkedIssueId).toBeNull();
+    expect(run.status).toBe("issue_created");
+    expect(run.failureReason).toBeNull();
+    expect(run.linkedIssueId).toBeTruthy();
 
     const routineIssues = await db
       .select({ id: issues.id })
       .from(issues)
       .where(eq(issues.originId, routine.id));
 
-    expect(routineIssues).toHaveLength(0);
+    expect(routineIssues).toHaveLength(1);
+    const [delivery] = await db
+      .select()
+      .from(calendarEventDeliveries)
+      .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
+    expect(delivery).toBeUndefined();
+  });
+
+  it("commits the routine run and execution issue before attempting the wakeup", async () => {
+    let observedCommittedState = false;
+    const { routine, svc } = await seedFixture({
+      wakeup: async (_agentId, wakeupOpts) => {
+        const issueId = String(wakeupOpts.payload?.issueId ?? "");
+        const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
+        const [storedRun] = issue?.originRunId
+          ? await db.select().from(routineRuns).where(eq(routineRuns.id, issue.originRunId))
+          : [];
+        observedCommittedState = Boolean(issue && storedRun?.status === "issue_created");
+        return null;
+      },
+    });
+
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(run.status).toBe("issue_created");
+    expect(observedCommittedState).toBe(true);
+  });
+
+  it("does not queue another wakeup when an idempotent dispatch is replayed", async () => {
+    const { routine, svc, wakeups } = await seedFixture();
+    const input = {
+      source: "api" as const,
+      idempotencyKey: "one-dispatch",
+    };
+
+    const first = await svc.runRoutine(routine.id, input);
+    const replay = await svc.runRoutine(routine.id, input);
+
+    expect(replay.id).toBe(first.id);
+    expect(wakeups).toHaveLength(1);
+  });
+
+  it("rolls back the issue with the dispatch transaction before wakeup", async () => {
+    const { routine, svc } = await seedFixture();
+    await db.execute(sql.raw(`
+      create function paperclip_test_fail_routine_link() returns trigger
+      language plpgsql as $$
+      begin
+        if new.status = 'issue_created' then
+          raise exception 'injected routine link failure';
+        end if;
+        return new;
+      end;
+      $$;
+      create trigger paperclip_test_fail_routine_link
+      before update on routine_runs
+      for each row execute function paperclip_test_fail_routine_link();
+    `));
+
+    try {
+      await expect(svc.runRoutine(routine.id, { source: "manual" })).rejects.toThrow("injected routine link failure");
+    } finally {
+      await db.execute(sql.raw("drop trigger if exists paperclip_test_fail_routine_link on routine_runs"));
+      await db.execute(sql.raw("drop function if exists paperclip_test_fail_routine_link()"));
+    }
+
+    expect(await db.select().from(routineRuns).where(eq(routineRuns.routineId, routine.id))).toHaveLength(0);
+    expect(await db.select().from(issues).where(eq(issues.originId, routine.id))).toHaveLength(0);
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, routine.companyId))).toHaveLength(0);
+
+    const retried = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(retried.status).toBe("issue_created");
+    expect(await db.select().from(issues).where(eq(issues.originId, routine.id))).toHaveLength(1);
+  });
+
+  it("leaves a scheduled occurrence due when its dispatch transaction rolls back", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger } = await svc.createTrigger(routine.id, {
+      kind: "schedule",
+      cronExpression: "* * * * *",
+      timezone: "UTC",
+    }, {});
+    const occurrenceAt = new Date("2026-01-01T12:00:00.000Z");
+    const now = new Date("2026-01-01T12:05:30.000Z");
+    await db.update(routineTriggers).set({ nextRunAt: occurrenceAt }).where(eq(routineTriggers.id, trigger.id));
+
+    await db.execute(sql.raw(`
+      create function paperclip_test_fail_scheduled_dispatch() returns trigger
+      language plpgsql as $$
+      begin
+        if new.status = 'issue_created' then
+          raise exception 'injected scheduled dispatch failure';
+        end if;
+        return new;
+      end;
+      $$;
+      create trigger paperclip_test_fail_scheduled_dispatch
+      before update on routine_runs
+      for each row execute function paperclip_test_fail_scheduled_dispatch();
+    `));
+    try {
+      await expect(svc.tickScheduledTriggers(now)).rejects.toThrow("injected scheduled dispatch failure");
+    } finally {
+      await db.execute(sql.raw("drop trigger if exists paperclip_test_fail_scheduled_dispatch on routine_runs"));
+      await db.execute(sql.raw("drop function if exists paperclip_test_fail_scheduled_dispatch()"));
+    }
+
+    const [afterFailure] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    expect(afterFailure?.nextRunAt).toEqual(occurrenceAt);
+    expect(await db.select().from(routineRuns).where(eq(routineRuns.triggerId, trigger.id))).toHaveLength(0);
+
+    await expect(svc.tickScheduledTriggers(now)).resolves.toEqual({ triggered: 1 });
+
+    const [afterRetry] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    expect(afterRetry?.nextRunAt).toEqual(new Date("2026-01-01T12:06:00.000Z"));
+    const runs = await db.select().from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      source: "schedule",
+      status: "issue_created",
+      idempotencyKey: `scheduled:${occurrenceAt.toISOString()}`,
+    });
+  });
+
+  it("retries a failed catch-up occurrence without duplicating earlier occurrences", async () => {
+    const { routine, svc } = await seedFixture();
+    await db
+      .update(routines)
+      .set({ catchUpPolicy: "enqueue_missed_with_cap" })
+      .where(eq(routines.id, routine.id));
+    const { trigger } = await svc.createTrigger(routine.id, {
+      kind: "schedule",
+      cronExpression: "* * * * *",
+      timezone: "UTC",
+    }, {});
+    const occurrenceAt = new Date("2026-01-01T12:00:00.000Z");
+    const now = new Date("2026-01-01T12:02:30.000Z");
+    await db.update(routineTriggers).set({ nextRunAt: occurrenceAt }).where(eq(routineTriggers.id, trigger.id));
+
+    await db.execute(sql.raw(`
+      create sequence paperclip_test_catchup_dispatch_seq start 1;
+      create function paperclip_test_fail_second_catchup_dispatch() returns trigger
+      language plpgsql as $$
+      begin
+        if nextval('paperclip_test_catchup_dispatch_seq') = 2 then
+          raise exception 'injected catch-up dispatch failure';
+        end if;
+        return new;
+      end;
+      $$;
+      create trigger paperclip_test_fail_second_catchup_dispatch
+      before update on routine_runs
+      for each row execute function paperclip_test_fail_second_catchup_dispatch();
+    `));
+    try {
+      await expect(svc.tickScheduledTriggers(now)).rejects.toThrow("injected catch-up dispatch failure");
+    } finally {
+      await db.execute(sql.raw("drop trigger if exists paperclip_test_fail_second_catchup_dispatch on routine_runs"));
+      await db.execute(sql.raw("drop function if exists paperclip_test_fail_second_catchup_dispatch()"));
+      await db.execute(sql.raw("drop sequence if exists paperclip_test_catchup_dispatch_seq"));
+    }
+
+    const [afterFailure] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    expect(afterFailure?.nextRunAt).toEqual(new Date("2026-01-01T12:01:00.000Z"));
+    const committedBeforeRetry = await db.select().from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+    expect(committedBeforeRetry.map((run) => run.idempotencyKey)).toEqual([
+      "scheduled:2026-01-01T12:00:00.000Z",
+    ]);
+
+    await expect(svc.tickScheduledTriggers(now)).resolves.toEqual({ triggered: 2 });
+
+    const runs = await db.select().from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+    expect(runs.map((run) => run.idempotencyKey).sort()).toEqual([
+      "scheduled:2026-01-01T12:00:00.000Z",
+      "scheduled:2026-01-01T12:01:00.000Z",
+      "scheduled:2026-01-01T12:02:00.000Z",
+    ]);
+    const [afterRetry] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    expect(afterRetry?.nextRunAt).toEqual(new Date("2026-01-01T12:03:00.000Z"));
+  });
+
+  it("claims a scheduled occurrence once across concurrent scheduler ticks", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger } = await svc.createTrigger(routine.id, {
+      kind: "schedule",
+      cronExpression: "* * * * *",
+      timezone: "UTC",
+    }, {});
+    const occurrenceAt = new Date("2026-01-01T12:00:00.000Z");
+    const now = new Date("2026-01-01T12:00:30.000Z");
+    await db.update(routineTriggers).set({ nextRunAt: occurrenceAt }).where(eq(routineTriggers.id, trigger.id));
+
+    const results = await Promise.all([
+      svc.tickScheduledTriggers(now),
+      svc.tickScheduledTriggers(now),
+    ]);
+
+    expect(results.reduce((sum, result) => sum + result.triggered, 0)).toBe(1);
+    const runs = await db.select().from(routineRuns).where(eq(routineRuns.triggerId, trigger.id));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.idempotencyKey).toBe(`scheduled:${occurrenceAt.toISOString()}`);
+    const [storedTrigger] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    expect(storedTrigger?.nextRunAt).toEqual(new Date("2026-01-01T12:01:00.000Z"));
   });
 
   it("accepts standard second-precision webhook timestamps for HMAC triggers", async () => {

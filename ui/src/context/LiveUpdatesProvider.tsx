@@ -273,8 +273,10 @@ function invalidateVisibleIssueRunQueries(
 
   const runId = readString(payload.runId);
   const agentId = readString(payload.agentId);
+  const issueId = readString(payload.issueId);
   const matchesVisibleIssue =
     (runId !== null && context.runIds.has(runId)) ||
+    (issueId !== null && context.issueRefs.has(issueId)) ||
     (!!agentId && !!context.assigneeAgentId && agentId === context.assigneeAgentId);
   if (!matchesVisibleIssue) return false;
 
@@ -803,7 +805,11 @@ function handleLiveEvent(
     return;
   }
 
-  if (event.type === "heartbeat.run.queued" || event.type === "heartbeat.run.status") {
+  if (
+    event.type === "heartbeat.run.queued" ||
+    event.type === "heartbeat.run.status" ||
+    event.type === "heartbeat.run.updated"
+  ) {
     invalidateHeartbeatQueries(queryClient, expectedCompanyId, payload);
     invalidateVisibleIssueRunQueries(queryClient, pathname, payload);
     if (event.type === "heartbeat.run.status") {

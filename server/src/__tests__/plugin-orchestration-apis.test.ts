@@ -9,6 +9,9 @@ import {
   costEvents,
   createDb,
   heartbeatRuns,
+  heartbeatRunEvents,
+  issueComments,
+  issueExecutionDecisions,
   issueRelations,
   issues,
 } from "@paperclipai/db";
@@ -54,8 +57,11 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
   afterEach(async () => {
     await db.delete(activityLog);
     await db.delete(costEvents);
+    await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
+    await db.delete(issueExecutionDecisions);
+    await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issues);
     await db.delete(agents);
@@ -158,6 +164,314 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
         }),
       ]),
     );
+  });
+
+  it("routes plugin completion through the assigned agent's automatic reviewer", async () => {
+    const { companyId, agentId: workerId } = await seedCompanyAndAgent();
+    const reviewerId = randomUUID();
+    await db.insert(agents).values({
+      id: reviewerId,
+      companyId,
+      name: "Reviewer",
+      role: "engineer",
+      status: "paused",
+      adapterType: "process",
+      adapterConfig: { command: "true" },
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.update(agents)
+      .set({ defaultReviewerAgentId: reviewerId })
+      .where(eq(agents.id, workerId));
+
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const issue = await services.issues.create({
+      companyId,
+      title: "Plugin reviewed issue",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      actorAgentId: workerId,
+    });
+
+    const updated = await services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: { status: "done", actorAgentId: workerId },
+    });
+
+    expect(updated.status).toBe("in_review");
+    expect(updated.assigneeAgentId).toBe(reviewerId);
+    expect(updated.executionState).toMatchObject({
+      status: "pending",
+      currentParticipant: { type: "agent", agentId: reviewerId },
+      returnAssignee: { type: "agent", agentId: workerId },
+    });
+  });
+
+  it("keeps the worker's policy when plugin completion names its configured reviewer", async () => {
+    const { companyId, agentId: workerId } = await seedCompanyAndAgent();
+    const reviewerId = randomUUID();
+    await db.insert(agents).values({
+      id: reviewerId,
+      companyId,
+      name: "Reviewer",
+      role: "engineer",
+      status: "paused",
+      adapterType: "process",
+      adapterConfig: { command: "true" },
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.update(agents)
+      .set({ defaultReviewerAgentId: reviewerId })
+      .where(eq(agents.id, workerId));
+
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const issue = await services.issues.create({
+      companyId,
+      title: "Plugin explicit reviewer handoff",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      actorAgentId: workerId,
+    });
+
+    const updated = await services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: { status: "done", assigneeAgentId: reviewerId },
+    });
+
+    expect(updated.status).toBe("in_review");
+    expect(updated.assigneeAgentId).toBe(reviewerId);
+    expect(updated.executionPolicy).toEqual(issue.executionPolicy);
+    expect(updated.executionState).toMatchObject({
+      status: "pending",
+      currentParticipant: { type: "agent", agentId: reviewerId },
+      returnAssignee: { type: "agent", agentId: workerId },
+    });
+  });
+
+  it("stores the same normalized policy IDs used by plugin review state", async () => {
+    const { companyId, agentId: workerId } = await seedCompanyAndAgent();
+    const reviewerId = randomUUID();
+    await db.insert(agents).values({
+      id: reviewerId,
+      companyId,
+      name: "Reviewer",
+      role: "engineer",
+      status: "paused",
+      adapterType: "process",
+      adapterConfig: { command: "true" },
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const issue = await services.issues.create({
+      companyId,
+      title: "Plugin explicit policy",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      actorAgentId: workerId,
+    });
+
+    const updated = await services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: {
+        status: "done",
+        executionPolicy: {
+          stages: [{ type: "review", participants: [{ type: "agent", agentId: reviewerId }] }],
+        },
+      },
+    });
+
+    expect(updated.status).toBe("in_review");
+    expect(updated.executionState).toMatchObject({
+      currentStageId: updated.executionPolicy?.stages[0]?.id,
+      currentParticipant: { type: "agent", agentId: reviewerId },
+    });
+  });
+
+  it("records a plugin review decision and its required comment atomically", async () => {
+    const { companyId, agentId: workerId } = await seedCompanyAndAgent();
+    const reviewerId = randomUUID();
+    await db.insert(agents).values({
+      id: reviewerId,
+      companyId,
+      name: "Reviewer",
+      role: "engineer",
+      status: "paused",
+      adapterType: "process",
+      adapterConfig: { command: "true" },
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const issue = await services.issues.create({
+      companyId,
+      title: "Plugin review decision",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      actorAgentId: workerId,
+    });
+    const inReview = await services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: {
+        status: "done",
+        executionPolicy: {
+          stages: [{ type: "review", participants: [{ type: "agent", agentId: reviewerId }] }],
+        },
+        actorAgentId: workerId,
+      },
+    });
+
+    const approved = await services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: {
+        status: "done",
+        comment: "Approved after checking the acceptance criteria.",
+        actorAgentId: reviewerId,
+      },
+    });
+
+    expect(inReview.status).toBe("in_review");
+    expect(approved.status).toBe("done");
+    const [decisionRows, commentRows] = await Promise.all([
+      db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, issue.id)),
+      db.select().from(issueComments).where(eq(issueComments.issueId, issue.id)),
+    ]);
+    expect(decisionRows).toHaveLength(1);
+    expect(decisionRows[0]).toMatchObject({
+      actorAgentId: reviewerId,
+      outcome: "approved",
+      body: "Approved after checking the acceptance criteria.",
+    });
+    expect(commentRows).toHaveLength(1);
+    expect(commentRows[0]).toMatchObject({
+      authorAgentId: reviewerId,
+      body: "Approved after checking the acceptance criteria.",
+    });
+  });
+
+  it("rejects an unavailable requested worker before a plugin reviewer handoff", async () => {
+    const { companyId, agentId: workerId } = await seedCompanyAndAgent();
+    const reviewerId = randomUUID();
+    const terminatedWorkerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: reviewerId,
+        companyId,
+        name: "Reviewer",
+        role: "engineer",
+        status: "paused",
+        adapterType: "process",
+        adapterConfig: { command: "true" },
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: terminatedWorkerId,
+        companyId,
+        name: "Terminated worker",
+        role: "engineer",
+        status: "terminated",
+        adapterType: "process",
+        adapterConfig: { command: "true" },
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const issue = await services.issues.create({
+      companyId,
+      title: "Reject plugin return worker",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      actorAgentId: workerId,
+    });
+
+    await expect(services.issues.update({
+      issueId: issue.id,
+      companyId,
+      patch: {
+        status: "done",
+        assigneeAgentId: terminatedWorkerId,
+        executionPolicy: {
+          stages: [{ type: "review", participants: [{ type: "agent", agentId: reviewerId }] }],
+        },
+        actorAgentId: workerId,
+      },
+    })).rejects.toThrow("Cannot assign work to terminated agents");
+  });
+
+  it("clears a stale review handoff when a plugin reassigns work", async () => {
+    const { companyId, agentId: firstWorkerId } = await seedCompanyAndAgent();
+    const firstReviewerId = randomUUID();
+    const nextWorkerId = randomUUID();
+    const nextReviewerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: firstReviewerId,
+        companyId,
+        name: "First Reviewer",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        adapterConfig: { command: "true" },
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: nextReviewerId,
+        companyId,
+        name: "Next Reviewer",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        adapterConfig: { command: "true" },
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: nextWorkerId,
+        companyId,
+        name: "Next Worker",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        adapterConfig: { command: "true" },
+        runtimeConfig: {},
+        permissions: {},
+        defaultReviewerAgentId: nextReviewerId,
+      },
+    ]);
+    await db.update(agents)
+      .set({ defaultReviewerAgentId: firstReviewerId })
+      .where(eq(agents.id, firstWorkerId));
+    const services = buildHostServices(db, "plugin-record-id", "paperclip.missions", createEventBusStub());
+    const inReview = await services.issues.create({
+      companyId,
+      title: "Plugin reassignment",
+      status: "done",
+      assigneeAgentId: firstWorkerId,
+      actorAgentId: firstWorkerId,
+    });
+    expect(inReview.status).toBe("in_review");
+
+    const reassigned = await services.issues.update({
+      issueId: inReview.id,
+      companyId,
+      patch: { assigneeAgentId: nextWorkerId },
+    });
+
+    expect(reassigned.status).toBe("in_progress");
+    expect(reassigned.assigneeAgentId).toBe(nextWorkerId);
+    expect(reassigned.executionState).toBeNull();
+    expect(reassigned.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: nextReviewerId }] }],
+    });
   });
 
   it("enforces plugin origin namespaces", async () => {

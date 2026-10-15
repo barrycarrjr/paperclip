@@ -19,6 +19,18 @@ import {
 } from "./optimistic-issue-comments";
 
 describe("optimistic issue comments", () => {
+  it("keeps correction intent while the comment is being saved", () => {
+    const comment = createOptimisticIssueComment({
+      companyId: "company-1",
+      issueId: "issue-1",
+      body: "Always verify the source.",
+      authorUserId: "user-1",
+      intent: "correction",
+    });
+
+    expect(comment.intent).toBe("correction");
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

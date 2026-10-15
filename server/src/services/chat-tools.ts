@@ -9,6 +9,7 @@ import {
   companies,
   companyMemberships,
   issueComments,
+  issueExecutionDecisions,
   issues,
 } from "@paperclipai/db";
 import {
@@ -28,6 +29,12 @@ import { describeOperationFailure } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { calendarService } from "./calendar.js";
+import {
+  applyIssueExecutionPolicyTransition,
+  normalizeIssueExecutionPolicy,
+} from "./issue-execution-policy.js";
+import { heartbeatService } from "./heartbeat.js";
+import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 import { issueService } from "./issues.js";
 import { memoryService } from "./memories.js";
 import { scheduleMemoryFolderExport } from "./memory-folder-auto-export.js";
@@ -518,18 +525,85 @@ const updateIssueTool: ChatToolDefinition<{
     const existing = await resolveAccessibleIssue(ctx, issueId, "write");
 
     const attribution = attributionFor(ctx);
+    const executionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
+    const transition = status && executionPolicy
+      ? applyIssueExecutionPolicyTransition({
+        issue: existing,
+        policy: executionPolicy,
+        requestedStatus: status,
+        requestedAssigneePatch: {},
+        actor: {
+          agentId: attribution.actorAgentId ?? null,
+          userId: attribution.actorUserId ?? null,
+        },
+        commentBody: comment ?? null,
+      })
+      : { patch: {} as Record<string, unknown> };
+    const decisionId = transition.decision ? randomUUID() : null;
+    if (decisionId) {
+      const executionState = transition.patch.executionState;
+      if (!executionState || typeof executionState !== "object") {
+        throw new Error("Execution policy decision patch is missing executionState");
+      }
+      transition.patch.executionState = { ...executionState, lastDecisionId: decisionId };
+    }
+    const issuePatch = {
+      ...(status !== undefined ? { status } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...transition.patch,
+      ...attribution,
+      preserveExecutionPolicy:
+        transition.preserveExecutionPolicy === true || transition.workflowControlledAssignment === true,
+      ...(status === "done"
+        || status === "in_review"
+        || transition.patch.executionState !== undefined
+        || transition.workflowControlledAssignment
+        ? {
+            expectedExecutionPolicy: existing.executionPolicy ?? null,
+            expectedExecutionState: existing.executionState ?? null,
+          }
+        : {}),
+    };
+    const svc = issueService(ctx.db);
     // Through the service rather than straight at the table: closing an issue
     // has consequences (parents, blockers, execution state) that a bare
     // UPDATE would skip, and skipping them is how a "done" issue keeps
     // behaving like an open one.
-    const updated = await issueService(ctx.db).update(existing.id, {
-      ...(status !== undefined ? { status } : {}),
-      ...(priority !== undefined ? { priority } : {}),
-      ...attribution,
-    });
+    let updated;
+    if (transition.decision && decisionId) {
+      updated = await ctx.db.transaction(async (tx) => {
+        const next = await svc.update(existing.id, issuePatch, tx);
+        if (!next) return null;
+        await tx.insert(issueExecutionDecisions).values({
+          id: decisionId,
+          companyId: next.companyId,
+          issueId: next.id,
+          stageId: transition.decision!.stageId,
+          stageType: transition.decision!.stageType,
+          actorAgentId: attribution.actorAgentId ?? null,
+          actorUserId: attribution.actorUserId ?? null,
+          outcome: transition.decision!.outcome,
+          body: transition.decision!.body,
+          createdByRunId: null,
+        });
+        if (comment) {
+          await tx.insert(issueComments).values({
+            companyId: existing.companyId,
+            issueId: existing.id,
+            body: comment,
+            ...(attribution.actorAgentId
+              ? { authorAgentId: attribution.actorAgentId }
+              : { authorUserId: ctx.actor.userId }),
+          });
+        }
+        return next;
+      });
+    } else {
+      updated = await svc.update(existing.id, issuePatch);
+    }
     if (!updated) throw notFound(`Issue ${issueId} not found`);
 
-    if (comment) {
+    if (comment && !transition.decision) {
       await ctx.db.insert(issueComments).values({
         companyId: existing.companyId,
         issueId: existing.id,
@@ -539,6 +613,18 @@ const updateIssueTool: ChatToolDefinition<{
           : { authorUserId: ctx.actor.userId }),
       });
     }
+
+    await queueIssueAssignmentWakeup({
+      heartbeat: heartbeatService(ctx.db),
+      issue: updated,
+      previousExecutionState: existing.executionState,
+      reason: "issue_assigned",
+      mutation: "update",
+      contextSource: "issue.execution_stage",
+      executionStageOnly: true,
+      requestedByActorType: attribution.actorAgentId ? "agent" : "user",
+      requestedByActorId: attribution.actorAgentId ?? attribution.actorUserId ?? ctx.actor.userId,
+    });
 
     return { issue: summarizeIssue(updated) };
   },

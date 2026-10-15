@@ -145,6 +145,7 @@ describe.sequential("activity routes", () => {
       {
         runId: "run-1",
         adapterType: "codex_local",
+        resultJson: { runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 } },
       },
     ]);
 
@@ -155,7 +156,7 @@ describe.sequential("activity routes", () => {
     expect(mockIssueService.getByIdentifier).toHaveBeenCalledWith("PAP-475");
     expect(mockIssueService.getById).not.toHaveBeenCalled();
     expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1");
-    expect(res.body).toEqual([{ runId: "run-1", adapterType: "codex_local" }]);
+    expect(res.body).toEqual([{ runId: "run-1", adapterType: "codex_local", resultJson: { runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 } } }]);
   });
 
   it("requires company access before creating activity events", async () => {
@@ -242,6 +243,92 @@ describe.sequential("activity routes", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(mockActivityService.forIssue).toHaveBeenCalledWith(issueId, "company-1");
+  });
+
+  it("lets a portfolio-root agent read another company's issue activity and run ledger", async () => {
+    const issueId = "55555555-5555-4555-8555-555555555555";
+    mockIssueService.getById.mockResolvedValue({ id: issueId, companyId: "company-2" });
+    mockActivityService.forIssue.mockResolvedValue([]);
+    mockActivityService.runsForIssue.mockResolvedValue([]);
+
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-hq",
+      companyId: "company-hq",
+      isPortfolioRootAgent: true,
+      source: "agent_key",
+    });
+    const activity = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/activity`));
+    const runs = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/runs`));
+
+    expect(activity.status, JSON.stringify(activity.body)).toBe(200);
+    expect(runs.status, JSON.stringify(runs.body)).toBe(200);
+    expect(mockActivityService.forIssue).toHaveBeenCalledWith(issueId, "company-2");
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-2", issueId);
+  });
+
+  it("keeps an ordinary agent out of another company's issue activity and run ledger", async () => {
+    const issueId = "66666666-6666-4666-8666-666666666666";
+    mockIssueService.getById.mockResolvedValue({ id: issueId, companyId: "company-2" });
+
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+    });
+    const activity = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/activity`));
+    const runs = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/runs`));
+
+    expect(activity.status).toBe(403);
+    expect(runs.status).toBe(403);
+    expect(mockActivityService.forIssue).not.toHaveBeenCalled();
+    expect(mockActivityService.runsForIssue).not.toHaveBeenCalled();
+  });
+
+  it("keeps a portfolio-root tool session bound to its own company for issue activity and run ledgers", async () => {
+    const issueId = "77777777-7777-4777-8777-777777777777";
+    mockIssueService.getById.mockResolvedValue({ id: issueId, companyId: "company-2" });
+
+    const app = await createApp({
+      type: "tool_session",
+      userId: "hq-owner",
+      companyId: "company-hq",
+      toolSessionId: "clippy-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      isPortfolioRootAgent: true,
+      source: "tool_session_jwt",
+    });
+    const activity = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/activity`));
+    const runs = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/runs`));
+
+    expect(activity.status).toBe(403);
+    expect(runs.status).toBe(403);
+    expect(mockActivityService.forIssue).not.toHaveBeenCalled();
+    expect(mockActivityService.runsForIssue).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Personal company's issue activity and run ledger private from portfolio-root agents", async () => {
+    const issueId = "88888888-8888-4888-8888-888888888888";
+    const personalCompanyId = "99999999-9999-4999-8999-999999999999";
+    mockIssueService.getById.mockResolvedValue({ id: issueId, companyId: personalCompanyId });
+
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-hq",
+      companyId: "company-hq",
+      isPortfolioRootAgent: true,
+      source: "agent_key",
+    });
+    const { rememberPersonalCompany } = await import("../services/personal-companies.js");
+    rememberPersonalCompany(personalCompanyId, "personal-owner");
+
+    const activity = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/activity`));
+    const runs = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/issues/${issueId}/runs`));
+
+    expect(activity.status).toBe(403);
+    expect(runs.status).toBe(403);
+    expect(mockActivityService.forIssue).not.toHaveBeenCalled();
+    expect(mockActivityService.runsForIssue).not.toHaveBeenCalled();
   });
 
   it("requires company access before listing issues for another company's run", async () => {

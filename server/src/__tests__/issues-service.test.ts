@@ -23,7 +23,13 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { agentService } from "../services/agents.ts";
 import { clampIssueListLimit, ISSUE_LIST_MAX_LIMIT, issueService } from "../services/issues.ts";
+import {
+  applyIssueExecutionPolicyTransition,
+  normalizeIssueExecutionPolicy,
+  parseIssueExecutionState,
+} from "../services/issue-execution-policy.ts";
 import { buildProjectMentionHref } from "@paperclipai/shared";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -1074,6 +1080,643 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
     expect(result?.description).toHaveLength(1200);
     expect(result?.description?.endsWith("—")).toBe(true);
+  });
+});
+
+describeEmbeddedPostgres("issueService automatic reviewer defaults", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-automatic-reviewer-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+  }, 90_000);
+
+  afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(agents);
+    await db.delete(instanceSettings);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function seedReviewedAgent() {
+    const companyId = randomUUID();
+    const reviewerId = randomUUID();
+    const workerId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Automatic Review Company",
+      issuePrefix: `R${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      {
+        id: reviewerId,
+        companyId,
+        name: "Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: workerId,
+        companyId,
+        name: "Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: reviewerId,
+      },
+    ]);
+    return { companyId, reviewerId, workerId };
+  }
+
+  it("adds a review stage when the assigned agent has an automatic reviewer", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+
+    const issue = await svc.create(companyId, {
+      title: "Review this automatically",
+      assigneeAgentId: workerId,
+    });
+
+    expect(issue.executionPolicy).toMatchObject({
+      mode: "normal",
+      commentRequired: true,
+      stages: [
+        {
+          type: "review",
+          approvalsNeeded: 1,
+          participants: [{ type: "agent", agentId: reviewerId, userId: null }],
+        },
+      ],
+    });
+  });
+
+  it("starts review when a task is created as done for an agent with an automatic reviewer", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+
+    const issue = await svc.create(companyId, {
+      title: "Create directly into review",
+      status: "done",
+      assigneeAgentId: workerId,
+    });
+
+    expect(issue.status).toBe("in_review");
+    expect(issue.assigneeAgentId).toBe(reviewerId);
+    expect(issue.completedAt).toBeNull();
+    expect(issue.executionState).toMatchObject({
+      status: "pending",
+      currentParticipant: { type: "agent", agentId: reviewerId },
+      returnAssignee: { type: "agent", agentId: workerId },
+    });
+  });
+
+  it("preserves the automatic policy while review hands the task between agents", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const issue = await svc.create(companyId, {
+      title: "Keep policy during review",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+    });
+    const policy = normalizeIssueExecutionPolicy(issue.executionPolicy)!;
+
+    const submission = applyIssueExecutionPolicyTransition({
+      issue,
+      policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: workerId },
+    });
+    const inReview = await svc.update(issue.id, {
+      ...submission.patch,
+      preserveExecutionPolicy: submission.workflowControlledAssignment === true,
+    });
+
+    expect(inReview).toMatchObject({
+      status: "in_review",
+      assigneeAgentId: reviewerId,
+      executionPolicy: policy,
+      executionPolicyExplicit: false,
+    });
+
+    const changesRequested = applyIssueExecutionPolicyTransition({
+      issue: inReview!,
+      policy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: reviewerId },
+      commentBody: "Please revise this work.",
+    });
+    const returned = await svc.update(issue.id, {
+      ...changesRequested.patch,
+      preserveExecutionPolicy: changesRequested.workflowControlledAssignment === true,
+    });
+
+    expect(returned).toMatchObject({
+      status: "in_progress",
+      assigneeAgentId: workerId,
+      executionPolicy: policy,
+      executionPolicyExplicit: false,
+    });
+    expect(returned?.executionState).toMatchObject({
+      status: "changes_requested",
+      currentParticipant: { type: "agent", agentId: reviewerId },
+      returnAssignee: { type: "agent", agentId: workerId },
+    });
+  });
+
+  it("keeps an explicit null policy as an opt-out", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+
+    const issue = await svc.create(companyId, {
+      title: "No review for this task",
+      assigneeAgentId: workerId,
+      executionPolicy: null,
+    });
+
+    expect(issue.executionPolicy).toBeNull();
+  });
+
+  it("adds the review stage when an unassigned task is assigned later", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const unassigned = await svc.create(companyId, { title: "Assign later" });
+
+    const assigned = await svc.update(unassigned.id, { assigneeAgentId: workerId });
+
+    expect(assigned?.executionPolicy).toMatchObject({
+      stages: [
+        {
+          type: "review",
+          participants: [{ type: "agent", agentId: reviewerId }],
+        },
+      ],
+    });
+  });
+
+  it("preserves an explicit null policy when an unassigned task is assigned later", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const unassigned = await svc.create(companyId, {
+      title: "Keep assignment opt-out",
+      executionPolicy: null,
+    });
+
+    const assigned = await svc.update(unassigned.id, { assigneeAgentId: workerId });
+
+    expect(assigned?.executionPolicy).toBeNull();
+    expect(assigned?.executionPolicyExplicit).toBe(true);
+  });
+
+  it("rejects a stale automatic-policy assignment after an explicit opt-out", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const unassigned = await svc.create(companyId, {
+      title: "Reject stale automatic policy",
+      executionPolicy: null,
+    });
+    const staleAutomaticPolicy = await svc.defaultExecutionPolicyForAssignee(companyId, workerId);
+
+    await expect(svc.update(unassigned.id, {
+      assigneeAgentId: workerId,
+      executionPolicy: staleAutomaticPolicy,
+      executionPolicyExplicit: false,
+    })).rejects.toMatchObject({
+      status: 409,
+      message: "Issue review policy changed during assignment. Retry the update.",
+    });
+    const preserved = await svc.getById(unassigned.id);
+    expect(preserved?.assigneeAgentId).toBeNull();
+    expect(preserved?.executionPolicy).toBeNull();
+    expect(preserved?.executionPolicyExplicit).toBe(true);
+  });
+
+  it("rejects a stale reviewer decision after concurrent reassignment", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const inReview = await svc.create(companyId, {
+      title: "Reject delayed approval",
+      status: "done",
+      assigneeAgentId: workerId,
+    });
+    const stalePolicy = normalizeIssueExecutionPolicy(inReview.executionPolicy)!;
+    const staleState = parseIssueExecutionState(inReview.executionState)!;
+    const approval = applyIssueExecutionPolicyTransition({
+      issue: inReview,
+      policy: stalePolicy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: reviewerId },
+      commentBody: "Approved before reassignment",
+    });
+
+    const nextReviewerId = randomUUID();
+    const nextWorkerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: nextReviewerId,
+        companyId,
+        name: "Next Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: nextWorkerId,
+        companyId,
+        name: "Next Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: nextReviewerId,
+      },
+    ]);
+    const nextPolicy = await svc.defaultExecutionPolicyForAssignee(companyId, nextWorkerId);
+    await db.update(issues)
+      .set({
+        status: "in_progress",
+        assigneeAgentId: nextWorkerId,
+        executionPolicy: nextPolicy,
+        executionState: null,
+      })
+      .where(eq(issues.id, inReview.id));
+
+    await expect(svc.update(inReview.id, {
+      status: "done",
+      ...approval.patch,
+      preserveExecutionPolicy: true,
+      expectedExecutionPolicy: stalePolicy,
+      expectedExecutionState: staleState,
+    })).rejects.toMatchObject({
+      status: 409,
+      message: "Issue review state changed. Retry the update.",
+    });
+    const preserved = await svc.getById(inReview.id);
+    expect(preserved?.status).toBe("in_progress");
+    expect(preserved?.assigneeAgentId).toBe(nextWorkerId);
+    expect(preserved?.executionPolicy).toEqual(nextPolicy);
+    expect(preserved?.executionState).toBeNull();
+  });
+
+  it("adds the review stage when checkout assigns an unassigned task", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const unassigned = await svc.create(companyId, { title: "Checkout later" });
+
+    const checkedOut = await svc.checkout(unassigned.id, workerId, ["backlog"], null);
+
+    expect(checkedOut.executionPolicy).toMatchObject({
+      stages: [
+        {
+          type: "review",
+          participants: [{ type: "agent", agentId: reviewerId }],
+        },
+      ],
+    });
+    expect(checkedOut.executionPolicyExplicit).toBe(false);
+  });
+
+  it("replaces an inherited automatic policy when a different agent checks out", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const nextReviewerId = randomUUID();
+    const nextWorkerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: nextReviewerId,
+        companyId,
+        name: "Next Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: nextWorkerId,
+        companyId,
+        name: "Next Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: nextReviewerId,
+      },
+    ]);
+    const assigned = await svc.create(companyId, {
+      title: "Reassign automatic reviewer on checkout",
+      status: "in_progress",
+      assigneeAgentId: workerId,
+    });
+    await svc.release(assigned.id, workerId, null);
+
+    const checkedOut = await svc.checkout(assigned.id, nextWorkerId, ["todo"], null);
+
+    expect(checkedOut.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: nextReviewerId }] }],
+    });
+    expect(checkedOut.executionPolicyExplicit).toBe(false);
+    const policy = normalizeIssueExecutionPolicy(checkedOut.executionPolicy)!;
+    const completion = applyIssueExecutionPolicyTransition({
+      issue: checkedOut,
+      policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: nextWorkerId },
+    });
+    expect(completion.patch).toMatchObject({
+      status: "in_review",
+      assigneeAgentId: nextReviewerId,
+      executionState: {
+        status: "pending",
+        returnAssignee: { type: "agent", agentId: nextWorkerId },
+      },
+    });
+  });
+
+  it("starts a fresh automatic review after completed work is released and reassigned", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const nextReviewerId = randomUUID();
+    const nextWorkerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: nextReviewerId,
+        companyId,
+        name: "Fresh Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: nextWorkerId,
+        companyId,
+        name: "Fresh Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: nextReviewerId,
+      },
+    ]);
+    const inReview = await svc.create(companyId, {
+      title: "Review reassigned completed work",
+      status: "done",
+      assigneeAgentId: workerId,
+    });
+    const firstPolicy = normalizeIssueExecutionPolicy(inReview.executionPolicy)!;
+    const approval = applyIssueExecutionPolicyTransition({
+      issue: inReview,
+      policy: firstPolicy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: reviewerId },
+      commentBody: "Approved.",
+    });
+    const completed = await svc.update(inReview.id, {
+      status: "done",
+      ...approval.patch,
+      preserveExecutionPolicy: approval.workflowControlledAssignment === true,
+    });
+    expect(completed?.executionState).toMatchObject({ status: "completed" });
+    await svc.release(inReview.id, reviewerId, null);
+
+    const checkedOut = await svc.checkout(inReview.id, nextWorkerId, ["todo"], null);
+
+    expect(checkedOut.executionState).toBeNull();
+    expect(checkedOut.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: nextReviewerId }] }],
+    });
+    const nextPolicy = normalizeIssueExecutionPolicy(checkedOut.executionPolicy)!;
+    const completion = applyIssueExecutionPolicyTransition({
+      issue: checkedOut,
+      policy: nextPolicy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: nextWorkerId },
+    });
+    expect(completion.patch).toMatchObject({
+      status: "in_review",
+      assigneeAgentId: nextReviewerId,
+      executionState: { status: "pending" },
+    });
+  });
+
+  it("starts a fresh automatic review when changes-requested work moves to a new worker", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const nextReviewerId = randomUUID();
+    const nextWorkerId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: nextReviewerId,
+        companyId,
+        name: "Changes Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: nextWorkerId,
+        companyId,
+        name: "Changes Worker",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        defaultReviewerAgentId: nextReviewerId,
+      },
+    ]);
+    const inReview = await svc.create(companyId, {
+      title: "Move requested changes to new worker",
+      status: "done",
+      assigneeAgentId: workerId,
+    });
+    const firstPolicy = normalizeIssueExecutionPolicy(inReview.executionPolicy)!;
+    const rejection = applyIssueExecutionPolicyTransition({
+      issue: inReview,
+      policy: firstPolicy,
+      requestedStatus: "in_progress",
+      requestedAssigneePatch: {},
+      actor: { agentId: reviewerId },
+      commentBody: "Please revise.",
+    });
+    const changesRequested = await svc.update(inReview.id, {
+      ...rejection.patch,
+      preserveExecutionPolicy: rejection.workflowControlledAssignment === true,
+    });
+    expect(changesRequested?.executionState).toMatchObject({ status: "changes_requested" });
+    await svc.release(inReview.id, workerId, null);
+
+    const checkedOut = await svc.checkout(inReview.id, nextWorkerId, ["todo"], null);
+
+    expect(checkedOut.executionState).toBeNull();
+    expect(checkedOut.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: nextReviewerId }] }],
+    });
+    const nextPolicy = normalizeIssueExecutionPolicy(checkedOut.executionPolicy)!;
+    const completion = applyIssueExecutionPolicyTransition({
+      issue: checkedOut,
+      policy: nextPolicy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: nextWorkerId },
+    });
+    expect(completion.patch).toMatchObject({
+      status: "in_review",
+      assigneeAgentId: nextReviewerId,
+      executionState: {
+        status: "pending",
+        returnAssignee: { type: "agent", agentId: nextWorkerId },
+      },
+    });
+  });
+
+  it("backfills the automatic policy when checkout finds a direct assignment", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    const issue = await svc.create(companyId, { title: "Direct assignment without policy" });
+    await db.update(issues).set({ assigneeAgentId: workerId }).where(eq(issues.id, issue.id));
+
+    const checkedOut = await svc.checkout(issue.id, workerId, ["backlog"], null);
+
+    expect(checkedOut.executionPolicy).toMatchObject({
+      stages: [{ participants: [{ type: "agent", agentId: reviewerId }] }],
+    });
+    expect(checkedOut.executionPolicyExplicit).toBe(false);
+  });
+
+  it("does not check out work assigned to another agent", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const nextWorkerId = randomUUID();
+    await db.insert(agents).values({
+      id: nextWorkerId,
+      companyId,
+      name: "Waiting Worker",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+    });
+    const assigned = await svc.create(companyId, {
+      title: "Do not take a stale assignment",
+      assigneeAgentId: workerId,
+    });
+
+    await expect(svc.checkout(assigned.id, nextWorkerId, ["backlog"], null))
+      .rejects.toMatchObject({ status: 409, message: "Issue checkout conflict" });
+  });
+
+  it("preserves an explicit null policy when checkout assigns an unassigned task", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const unassigned = await svc.create(companyId, {
+      title: "Explicit checkout opt-out",
+      executionPolicy: null,
+    });
+
+    const checkedOut = await svc.checkout(unassigned.id, workerId, ["backlog"], null);
+
+    expect(checkedOut.executionPolicy).toBeNull();
+    expect(checkedOut.executionPolicyExplicit).toBe(true);
+  });
+
+  it("preserves an explicit null policy when the assigned agent checks out", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const assigned = await svc.create(companyId, {
+      title: "Assigned checkout opt-out",
+      assigneeAgentId: workerId,
+    });
+    await svc.update(assigned.id, { executionPolicy: null });
+
+    const checkedOut = await svc.checkout(assigned.id, workerId, ["backlog"], null);
+
+    expect(checkedOut.executionPolicy).toBeNull();
+    expect(checkedOut.executionPolicyExplicit).toBe(true);
+  });
+
+  it("stops task creation when the configured reviewer is unavailable", async () => {
+    const { companyId, reviewerId, workerId } = await seedReviewedAgent();
+    await db.update(agents).set({ status: "terminated" }).where(eq(agents.id, reviewerId));
+
+    await expect(svc.create(companyId, {
+      title: "Cannot skip review",
+      assigneeAgentId: workerId,
+    })).rejects.toMatchObject({
+      status: 409,
+      message: "The assigned agent's automatic reviewer is unavailable. Choose another reviewer or remove the automatic reviewer setting.",
+    });
+  });
+
+  it("rejects explicit reviewers outside the company or unavailable for work", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const otherCompanyId = randomUUID();
+    const foreignReviewerId = randomUUID();
+    const pendingReviewerId = randomUUID();
+    await db.insert(companies).values({
+      id: otherCompanyId,
+      name: "Foreign Review Company",
+      issuePrefix: `F${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      {
+        id: foreignReviewerId,
+        companyId: otherCompanyId,
+        name: "Foreign Reviewer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+      },
+      {
+        id: pendingReviewerId,
+        companyId,
+        name: "Pending Reviewer",
+        role: "engineer",
+        status: "pending_approval",
+        adapterType: "codex_local",
+      },
+    ]);
+
+    await expect(svc.create(companyId, {
+      title: "Foreign reviewer policy",
+      status: "done",
+      assigneeAgentId: workerId,
+      executionPolicy: {
+        stages: [{ type: "review", participants: [{ type: "agent", agentId: foreignReviewerId }] }],
+      },
+    })).rejects.toMatchObject({ status: 422, message: "Assignee must belong to same company" });
+
+    await expect(svc.create(companyId, {
+      title: "Pending reviewer policy",
+      assigneeAgentId: workerId,
+      executionPolicy: {
+        stages: [{ type: "review", participants: [{ type: "agent", agentId: pendingReviewerId }] }],
+      },
+    })).rejects.toMatchObject({ status: 409, message: "Cannot assign work to pending approval agents" });
+  });
+
+  it("rejects self-review and reviewers from another company", async () => {
+    const { companyId, workerId } = await seedReviewedAgent();
+    const otherCompanyId = randomUUID();
+    const otherReviewerId = randomUUID();
+    await db.insert(companies).values({
+      id: otherCompanyId,
+      name: "Other Company",
+      issuePrefix: `O${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: otherReviewerId,
+      companyId: otherCompanyId,
+      name: "Other Reviewer",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+    });
+
+    await expect(agentService(db).update(workerId, { defaultReviewerAgentId: workerId }))
+      .rejects.toMatchObject({ status: 422, message: "An agent cannot review its own work" });
+    await expect(agentService(db).create(companyId, {
+      id: workerId,
+      name: "Self reviewer",
+      adapterType: "codex_local",
+      defaultReviewerAgentId: workerId,
+    })).rejects.toMatchObject({ status: 422, message: "An agent cannot review its own work" });
+    await expect(agentService(db).update(workerId, { defaultReviewerAgentId: otherReviewerId }))
+      .rejects.toMatchObject({ status: 422, message: "Default reviewer must belong to the same company" });
   });
 });
 

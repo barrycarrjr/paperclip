@@ -55,7 +55,7 @@ export interface CalendarEvent {
 export interface CalendarEventDelivery {
   id: string;
   companyId: string;
-  eventId: string;
+  eventId: string | null;
   userId: string;
   channel: string;
   status: string;

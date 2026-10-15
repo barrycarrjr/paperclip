@@ -38,6 +38,7 @@ import {
   removeMaintainerOnlySkillSymlinks,
   parseObject,
   renderTemplate,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -410,12 +411,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
   const taskContextNote = asString(context.paperclipTaskMarkdown, "").trim();
   const memoriesNote = shouldUseResumeDeltaPrompt ? "" : asString(context.paperclipMemoriesMarkdown, "").trim();
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const apiAccessNote = renderApiAccessNote(env);
+  // Gemini has no launch-scoped system-prompt append channel. GEMINI_SYSTEM_MD
+  // replaces the CLI's complete built-in prompt, including its tool and safety
+  // instructions, while GEMINI.md is persistent workspace state. Keep the
+  // bounded approved rules first in the per-run prompt until Gemini provides a
+  // safe append channel.
   const prompt = appendSourceEvidenceInstructions(joinPromptSections([
     instructionsPrefix,
+    approvedRulesNote,
     renderedBootstrapPrompt,
     memoriesNote,
     wakePrompt,

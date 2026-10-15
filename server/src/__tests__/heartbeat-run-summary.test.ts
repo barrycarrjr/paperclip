@@ -6,6 +6,10 @@ import {
 } from "../services/heartbeat-run-summary.js";
 
 describe("summarizeHeartbeatRunResultJson", () => {
+  it("keeps numeric counts separate from reporting metadata in bounded run summaries", () => {
+    expect(summarizeHeartbeatRunResultJson({ runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0, extra: "not a count" }, runCountsReporting: { status: "reported", source: "issue_comment" }, stdout: "ignored" })).toEqual({ runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 }, runCountsReporting: { status: "reported", source: "issue_comment" } });
+    expect(summarizeHeartbeatRunResultJson({ runCounts: { itemsRead: -1, entriesAdded: 0, changesProposed: 0 } })).toBeNull();
+  });
   it("truncates text fields and preserves cost aliases", () => {
     const summary = summarizeHeartbeatRunResultJson({
       summary: "a".repeat(600),

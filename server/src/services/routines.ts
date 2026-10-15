@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  activityLog,
   agents,
+  calendarEventDeliveries,
+  companies,
   companySecrets,
   executionWorkspaces,
   goals,
@@ -44,6 +47,7 @@ import { issueTreeControlService } from "./issue-tree-control.js";
 import { secretService } from "./secrets.js";
 import { assertTimeZone, nextCronTickInTimeZone, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
+import { calendarService } from "./calendar.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
@@ -281,6 +285,7 @@ export function routineService(
   deps: {
     heartbeat?: IssueAssignmentWakeupDeps;
     pluginWorkerManager?: PluginWorkerManager;
+    desktopNotifications?: Pick<ReturnType<typeof calendarService>, "enqueueDesktopNotification">;
   } = {},
 ) {
   const issueSvc = issueService(db);
@@ -288,9 +293,8 @@ export function routineService(
   const heartbeat = deps.heartbeat ?? heartbeatService(db, {
     pluginWorkerManager: deps.pluginWorkerManager,
   });
-
-  async function getRoutineById(id: string) {
-    return db
+  async function getRoutineById(id: string, executor: Db = db) {
+    return executor
       .select()
       .from(routines)
       .where(eq(routines.id, id))
@@ -354,6 +358,119 @@ export function routineService(
       .then((rows) => rows[0] ?? null);
     if (!parentIssue) throw notFound("Parent issue not found");
     if (parentIssue.companyId !== companyId) throw unprocessable("Parent issue must belong to same company");
+  }
+
+  async function resolveRoutineResponsibleUserId(
+    companyId: string,
+    actorUserId: string | null | undefined,
+    parentIssueId: string | null | undefined,
+    executor: Db = db,
+  ) {
+    if (actorUserId) return actorUserId;
+    if (parentIssueId) {
+      const parent = await executor
+        .select({
+          responsibleUserId: issues.responsibleUserId,
+          createdByUserId: issues.createdByUserId,
+        })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.id, parentIssueId)))
+        .then((rows) => rows[0] ?? null);
+      if (parent?.responsibleUserId) return parent.responsibleUserId;
+      if (parent?.createdByUserId) return parent.createdByUserId;
+    }
+    return executor
+      .select({ responsibleUserId: companies.defaultResponsibleUserId })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .then((rows) => rows[0]?.responsibleUserId ?? null);
+  }
+
+  async function enqueueTerminalRunNotification(
+    run: typeof routineRuns.$inferSelect,
+    executor: Db = db,
+  ) {
+    if (!run.completionNotificationEligible || (run.status !== "completed" && run.status !== "failed")) return null;
+    const routine = await getRoutineById(run.routineId, executor);
+    if (!routine || routine.companyId !== run.companyId) return null;
+    const company = await executor
+      .select({ issuePrefix: companies.issuePrefix })
+      .from(companies)
+      .where(eq(companies.id, run.companyId))
+      .then((rows) => rows[0] ?? null);
+    if (!company) return null;
+    const responsibleUserId = run.responsibleUserId
+      ?? routine.responsibleUserId
+      ?? routine.createdByUserId
+      ?? await resolveRoutineResponsibleUserId(run.companyId, null, routine.parentIssueId, executor);
+    const completionActions = [
+      "routine.completion_notification_enqueued",
+      "routine.completion_notification_skipped",
+    ];
+    const existingActivity = await executor
+      .select({ id: activityLog.id })
+      .from(activityLog)
+      .where(
+        and(
+          eq(activityLog.companyId, run.companyId),
+          eq(activityLog.entityType, "routine_run"),
+          eq(activityLog.entityId, run.id),
+          inArray(activityLog.action, completionActions),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (!responsibleUserId) {
+      if (!existingActivity) {
+        await logActivity(executor, {
+          companyId: run.companyId,
+          actorType: "system",
+          actorId: "routine-notifier",
+          action: "routine.completion_notification_skipped",
+          entityType: "routine_run",
+          entityId: run.id,
+          details: { routineId: routine.id, status: run.status, reason: "no_responsible_user" },
+        });
+      }
+      return null;
+    }
+    const completed = run.status === "completed";
+    const dedupeKey = `routine-run:${run.id}:terminal:desktop`;
+    const notifier = deps.desktopNotifications ?? calendarService(executor);
+    const insertedDelivery = await notifier.enqueueDesktopNotification({
+      companyId: run.companyId,
+      userId: responsibleUserId,
+      title: `Routine ${completed ? "completed" : "failed"}: ${routine.title}`,
+      body: completed
+        ? "The routine finished successfully."
+        : "The routine did not finish successfully. Open the routine to review the failure.",
+      url: `/${company.issuePrefix}/routines/${routine.id}`,
+      dedupeKey,
+      scheduledFor: run.completedAt ?? new Date(),
+    });
+    const delivery = insertedDelivery ?? await executor
+      .select()
+      .from(calendarEventDeliveries)
+      .where(and(eq(calendarEventDeliveries.companyId, run.companyId), eq(calendarEventDeliveries.dedupeKey, dedupeKey)))
+      .then((rows) => rows[0] ?? null);
+    if (!delivery) return null;
+    if (!existingActivity) {
+      await logActivity(executor, {
+        companyId: run.companyId,
+        actorType: "system",
+        actorId: "routine-notifier",
+        action: "routine.completion_notification_enqueued",
+        entityType: "routine_run",
+        entityId: run.id,
+        responsibleUserId,
+        details: {
+          routineId: routine.id,
+          status: run.status,
+          deliveryId: delivery.id,
+        },
+      });
+    }
+    return delivery;
   }
 
   async function listTriggersForRoutineIds(companyId: string, routineIds: string[]) {
@@ -583,6 +700,39 @@ export function routineService(
     dispatchFingerprint?: string | null,
   ) {
     const fingerprintCondition = routineExecutionFingerprintCondition(dispatchFingerprint);
+    const pendingDispatchIssue = await executor
+      .select()
+      .from(issues)
+      .innerJoin(
+        routineRuns,
+        and(
+          sql`cast(${routineRuns.id} as text) = ${issues.originRunId}`,
+          eq(routineRuns.companyId, issues.companyId),
+          eq(routineRuns.status, "issue_created"),
+        ),
+      )
+      .where(
+        and(
+          eq(issues.companyId, routine.companyId),
+          eq(issues.originKind, "routine_execution"),
+          eq(issues.originId, routine.id),
+          inArray(issues.status, OPEN_ISSUE_STATUSES),
+          isNull(issues.hiddenAt),
+          isNull(issues.executionRunId),
+          isNull(routineRuns.completedAt),
+          sql`not exists (
+            select 1 from ${heartbeatRuns}
+            where ${heartbeatRuns.companyId} = ${issues.companyId}
+              and ${heartbeatRuns.contextSnapshot} ->> 'issueId' = cast(${issues.id} as text)
+          )`,
+          ...(fingerprintCondition ? [fingerprintCondition] : []),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt), desc(issues.createdAt))
+      .limit(1)
+      .then((rows) => rows[0]?.issues ?? null);
+    if (pendingDispatchIssue) return pendingDispatchIssue;
+
     const executionBoundIssue = await executor
       .select()
       .from(issues)
@@ -834,7 +984,12 @@ export function routineService(
       );
   }
 
-  async function dispatchRoutineRun(input: {
+  type ScheduledOccurrenceClaim = {
+    occurrenceAt: Date;
+    nextRunAt: Date | null;
+  };
+
+  type DispatchRoutineRunInput = {
     routine: typeof routines.$inferSelect;
     trigger: typeof routineTriggers.$inferSelect | null;
     source: "schedule" | "manual" | "api" | "webhook";
@@ -849,7 +1004,18 @@ export function routineService(
     executionWorkspaceSettings?: Record<string, unknown> | null;
     descriptionAppendix?: string | null;
     actor?: Actor;
-  }) {
+    scheduledOccurrence?: ScheduledOccurrenceClaim;
+  };
+
+  async function dispatchRoutineRun(
+    input: DispatchRoutineRunInput & { scheduledOccurrence: ScheduledOccurrenceClaim },
+  ): Promise<typeof routineRuns.$inferSelect | null>;
+  async function dispatchRoutineRun(
+    input: DispatchRoutineRunInput & { scheduledOccurrence?: never },
+  ): Promise<typeof routineRuns.$inferSelect>;
+  async function dispatchRoutineRun(
+    input: DispatchRoutineRunInput,
+  ): Promise<typeof routineRuns.$inferSelect | null> {
     const projectId = input.projectId ?? input.routine.projectId ?? null;
     const projectWorkspaceId = input.projectWorkspaceId ?? null;
     const assigneeAgentId = input.assigneeAgentId ?? input.routine.assigneeAgentId ?? null;
@@ -897,11 +1063,42 @@ export function routineService(
       title,
       description,
     });
+    let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
+    let createdRoutineRun = false;
     const run = await db.transaction(async (tx) => {
       const txDb = tx as unknown as Db;
+      const txIssueSvc = issueService(txDb);
       await tx.execute(
         sql`select id from ${routines} where ${routines.id} = ${input.routine.id} and ${routines.companyId} = ${input.routine.companyId} for update`,
       );
+
+      if (input.scheduledOccurrence) {
+        if (!input.trigger || input.trigger.kind !== "schedule") return null;
+        await tx.execute(
+          sql`select id from ${routineTriggers} where ${routineTriggers.id} = ${input.trigger.id} for update`,
+        );
+        const currentTrigger = await txDb
+          .select({
+            companyId: routineTriggers.companyId,
+            routineId: routineTriggers.routineId,
+            kind: routineTriggers.kind,
+            enabled: routineTriggers.enabled,
+            nextRunAt: routineTriggers.nextRunAt,
+          })
+          .from(routineTriggers)
+          .where(eq(routineTriggers.id, input.trigger.id))
+          .then((rows) => rows[0] ?? null);
+        if (
+          !currentTrigger ||
+          currentTrigger.companyId !== input.routine.companyId ||
+          currentTrigger.routineId !== input.routine.id ||
+          currentTrigger.kind !== "schedule" ||
+          !currentTrigger.enabled ||
+          currentTrigger.nextRunAt?.getTime() !== input.scheduledOccurrence.occurrenceAt.getTime()
+        ) {
+          return null;
+        }
+      }
 
       if (input.idempotencyKey) {
         const existing = await txDb
@@ -919,11 +1116,27 @@ export function routineService(
           .orderBy(desc(routineRuns.createdAt))
           .limit(1)
           .then((rows) => rows[0] ?? null);
-        if (existing) return existing;
+        if (existing) {
+          if (input.scheduledOccurrence) {
+            await updateRoutineTouchedState({
+              routineId: input.routine.id,
+              triggerId: input.trigger?.id ?? null,
+              triggeredAt: existing.triggeredAt,
+              status: existing.status,
+              issueId: existing.linkedIssueId,
+              nextRunAt: input.scheduledOccurrence.nextRunAt,
+            }, txDb);
+          }
+          return existing;
+        }
       }
 
       const triggeredAt = new Date();
       const manualRunnerUserId = input.source === "manual" ? input.actor?.userId ?? null : null;
+      const responsibleUserId = input.actor?.userId
+        ?? input.routine.responsibleUserId
+        ?? input.routine.createdByUserId
+        ?? null;
       const [createdRun] = await txDb
         .insert(routineRuns)
         .values({
@@ -933,21 +1146,24 @@ export function routineService(
           source: input.source,
           status: "received",
           triggeredAt,
+          responsibleUserId,
           idempotencyKey: input.idempotencyKey ?? null,
           triggerPayload,
           dispatchFingerprint,
+          completionNotificationEligible: true,
           // As upstream: the task this run creates keeps the env of the
           // revision current now, whatever is saved later (see the heartbeat's
           // getRoutineEnvForExecutionIssue).
           routineRevisionId: input.routine.latestRevisionId,
         })
         .returning();
+      createdRoutineRun = true;
 
-      const nextRunAt = input.trigger?.kind === "schedule" && input.trigger.cronExpression && input.trigger.timezone
-        ? nextCronTickInTimeZone(input.trigger.cronExpression, input.trigger.timezone, triggeredAt)
-        : undefined;
+      const nextRunAt = input.scheduledOccurrence?.nextRunAt
+        ?? (input.trigger?.kind === "schedule" && input.trigger.cronExpression && input.trigger.timezone
+          ? nextCronTickInTimeZone(input.trigger.cronExpression, input.trigger.timezone, triggeredAt)
+          : undefined);
 
-      let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
         const activeIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint);
         if (activeIssue && input.routine.concurrencyPolicy !== "always_enqueue") {
@@ -978,7 +1194,7 @@ export function routineService(
         }
 
         try {
-          createdIssue = await issueSvc.create(input.routine.companyId, {
+          createdIssue = await txIssueSvc.create(input.routine.companyId, {
             projectId,
             projectWorkspaceId,
             goalId: input.routine.goalId,
@@ -1038,16 +1254,6 @@ export function routineService(
           return updated ?? createdRun;
         }
 
-        // Keep the dispatch lock until the issue is linked to a queued heartbeat run.
-        await queueIssueAssignmentWakeup({
-          heartbeat,
-          issue: createdIssue,
-          reason: "issue_assigned",
-          mutation: "create",
-          contextSource: "routine.dispatch",
-          requestedByActorType: input.source === "schedule" ? "system" : undefined,
-          rethrowOnError: true,
-        });
         const updated = await finalizeRun(createdRun.id, {
           status: "issue_created",
           linkedIssueId: createdIssue.id,
@@ -1078,13 +1284,45 @@ export function routineService(
           status: "failed",
           nextRunAt,
         }, txDb);
+        if (failed) await enqueueTerminalRunNotification(failed, txDb);
         return failed ?? createdRun;
       }
     });
 
+    if (!run) return null;
+
+    let assignmentWakeQueued = run.status !== "issue_created";
+    if (createdRoutineRun && run.status === "issue_created" && run.linkedIssueId) {
+      const issue = createdIssue ?? await db
+        .select()
+        .from(issues)
+        .where(and(
+          eq(issues.id, run.linkedIssueId),
+          eq(issues.companyId, input.routine.companyId),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (issue) {
+        try {
+          await queueIssueAssignmentWakeup({
+            heartbeat,
+            issue,
+            reason: "issue_assigned",
+            mutation: "create",
+            contextSource: "routine.dispatch",
+            requestedByActorType: input.source === "schedule" ? "system" : undefined,
+            rethrowOnError: true,
+          });
+          assignmentWakeQueued = true;
+        } catch {
+          // The committed assigned issue is durable. Startup and periodic
+          // recovery will queue it without repeating this routine occurrence.
+        }
+      }
+    }
+
     // Only after a dispatch that actually produced an issue, and never allowed
     // to affect the dispatch's own outcome.
-    if (run.status === "issue_created" && run.linkedIssueId) {
+    if (run.status === "issue_created" && run.linkedIssueId && assignmentWakeQueued) {
       try {
         const retired = await retireDeadExecutionIssues({
           routine: input.routine,
@@ -1133,6 +1371,106 @@ export function routineService(
     }
 
     return run;
+  }
+
+  async function syncRunStatusForIssue(issueId: string) {
+    return db.transaction(async (tx) => {
+      const txDb = tx as unknown as Db;
+      const issue = await txDb
+        .select({
+          id: issues.id,
+          companyId: issues.companyId,
+          status: issues.status,
+          originKind: issues.originKind,
+          originRunId: issues.originRunId,
+        })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      if (!issue || issue.originKind !== "routine_execution" || !issue.originRunId) return null;
+      if (issue.status !== "done" && issue.status !== "blocked" && issue.status !== "cancelled") return null;
+
+      await tx.execute(sql`select id from ${routineRuns} where ${routineRuns.id} = ${issue.originRunId} and ${routineRuns.companyId} = ${issue.companyId} for update`);
+      const current = await txDb
+        .select()
+        .from(routineRuns)
+        .where(and(eq(routineRuns.id, issue.originRunId), eq(routineRuns.companyId, issue.companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!current || current.companyId !== issue.companyId) return null;
+
+      const desiredStatus = issue.status === "done" ? "completed" : "failed";
+      const run = current.status === desiredStatus
+        ? current
+        : await finalizeRun(issue.originRunId, {
+            status: desiredStatus,
+            ...(desiredStatus === "failed" ? { failureReason: `Execution issue moved to ${issue.status}` } : {}),
+            completedAt: current.completedAt ?? new Date(),
+          }, txDb);
+      if (!run) return null;
+      await enqueueTerminalRunNotification(run, txDb);
+      return run;
+    });
+  }
+
+  async function reconcileTerminalRoutineRuns() {
+    const terminalIssues = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .innerJoin(routineRuns, sql`${issues.originRunId} = cast(${routineRuns.id} as text)`)
+      .where(
+        and(
+          eq(issues.companyId, routineRuns.companyId),
+          eq(issues.originKind, "routine_execution"),
+          eq(routineRuns.completionNotificationEligible, true),
+          or(
+            and(eq(issues.status, "done"), ne(routineRuns.status, "completed")),
+            and(inArray(issues.status, ["blocked", "cancelled"]), ne(routineRuns.status, "failed")),
+          ),
+        ),
+      )
+      .limit(100);
+    for (const issue of terminalIssues) {
+      try {
+        await syncRunStatusForIssue(issue.id);
+      } catch (err) {
+        logger.warn({ err, issueId: issue.id }, "failed to reconcile terminal routine issue");
+      }
+    }
+
+    const completionActions = [
+      "routine.completion_notification_enqueued",
+      "routine.completion_notification_skipped",
+    ];
+    const unreportedRuns = await db
+      .select({ id: routineRuns.id, companyId: routineRuns.companyId })
+      .from(routineRuns)
+      .leftJoin(
+        activityLog,
+        and(
+          eq(activityLog.companyId, routineRuns.companyId),
+          eq(activityLog.entityType, "routine_run"),
+          sql`${activityLog.entityId} = cast(${routineRuns.id} as text)`,
+          inArray(activityLog.action, completionActions),
+        ),
+      )
+      .where(and(eq(routineRuns.completionNotificationEligible, true), inArray(routineRuns.status, ["completed", "failed"]), isNull(activityLog.id)))
+      .limit(100);
+    for (const candidate of unreportedRuns) {
+      try {
+        await db.transaction(async (tx) => {
+          const txDb = tx as unknown as Db;
+          await tx.execute(sql`select id from ${routineRuns} where ${routineRuns.id} = ${candidate.id} and ${routineRuns.companyId} = ${candidate.companyId} for update`);
+          const run = await txDb
+            .select()
+            .from(routineRuns)
+            .where(and(eq(routineRuns.id, candidate.id), eq(routineRuns.companyId, candidate.companyId)))
+            .then((rows) => rows[0] ?? null);
+          if (run) await enqueueTerminalRunNotification(run, txDb);
+        });
+      } catch (err) {
+        logger.warn({ err, runId: candidate.id }, "failed to reconcile routine completion notification");
+      }
+    }
   }
 
   return {
@@ -1275,6 +1613,11 @@ export function routineService(
       );
       assertRoutineVariableDefinitions(variables);
       const status = normalizeDraftRoutineStatus(input.status, input.assigneeAgentId);
+      const responsibleUserId = await resolveRoutineResponsibleUserId(
+        companyId,
+        actor.userId,
+        input.parentIssueId,
+      );
       const [created] = await db
         .insert(routines)
         .values({
@@ -1290,6 +1633,7 @@ export function routineService(
           concurrencyPolicy: input.concurrencyPolicy,
           catchUpPolicy: input.catchUpPolicy,
           variables,
+          responsibleUserId,
           createdByAgentId: actor.agentId ?? null,
           createdByUserId: actor.userId ?? null,
           updatedByAgentId: actor.agentId ?? null,
@@ -1719,6 +2063,7 @@ export function routineService(
     },
 
     tickScheduledTriggers: async (now: Date = new Date()) => {
+      await reconcileTerminalRoutineRuns();
       const due = await db
         .select({
           trigger: routineTriggers,
@@ -1741,75 +2086,28 @@ export function routineService(
       for (const row of due) {
         if (!row.trigger.nextRunAt || !row.trigger.cronExpression || !row.trigger.timezone) continue;
 
-        let runCount = 1;
-        let claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
-
-        if (row.routine.catchUpPolicy === "enqueue_missed_with_cap") {
-          let cursor: Date | null = row.trigger.nextRunAt;
-          runCount = 0;
-          while (cursor && cursor <= now && runCount < MAX_CATCH_UP_RUNS) {
-            runCount += 1;
-            claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, cursor);
-            cursor = claimedNextRunAt;
-          }
-        }
-
-        const claimed = await db
-          .update(routineTriggers)
-          .set({
-            nextRunAt: claimedNextRunAt,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(routineTriggers.id, row.trigger.id),
-              eq(routineTriggers.enabled, true),
-              eq(routineTriggers.nextRunAt, row.trigger.nextRunAt),
-            ),
-          )
-          .returning({ id: routineTriggers.id })
-          .then((rows) => rows[0] ?? null);
-        if (!claimed) continue;
-
-        for (let i = 0; i < runCount; i += 1) {
-          await dispatchRoutineRun({
+        let occurrenceAt: Date | null = row.trigger.nextRunAt;
+        const runLimit = row.routine.catchUpPolicy === "enqueue_missed_with_cap" ? MAX_CATCH_UP_RUNS : 1;
+        for (let i = 0; i < runLimit && occurrenceAt && occurrenceAt <= now; i += 1) {
+          const nextRunAt: Date | null = row.routine.catchUpPolicy === "enqueue_missed_with_cap"
+            ? nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, occurrenceAt)
+            : nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
+          const run = await dispatchRoutineRun({
             routine: row.routine,
             trigger: row.trigger,
             source: "schedule",
+            idempotencyKey: `scheduled:${occurrenceAt.toISOString()}`,
+            scheduledOccurrence: { occurrenceAt, nextRunAt },
           });
+          if (!run) break;
           triggered += 1;
+          occurrenceAt = nextRunAt;
         }
       }
 
       return { triggered };
     },
 
-    syncRunStatusForIssue: async (issueId: string) => {
-      const issue = await db
-        .select({
-          id: issues.id,
-          status: issues.status,
-          originKind: issues.originKind,
-          originRunId: issues.originRunId,
-        })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .then((rows) => rows[0] ?? null);
-      if (!issue || issue.originKind !== "routine_execution" || !issue.originRunId) return null;
-      if (issue.status === "done") {
-        return finalizeRun(issue.originRunId, {
-          status: "completed",
-          completedAt: new Date(),
-        });
-      }
-      if (issue.status === "blocked" || issue.status === "cancelled") {
-        return finalizeRun(issue.originRunId, {
-          status: "failed",
-          failureReason: `Execution issue moved to ${issue.status}`,
-          completedAt: new Date(),
-        });
-      }
-      return null;
-    },
+    syncRunStatusForIssue,
   };
 }

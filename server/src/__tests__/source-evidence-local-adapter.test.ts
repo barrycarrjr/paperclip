@@ -64,9 +64,15 @@ describe("delivered source guidance across native instruction and task channels"
         prompt = args.at(-1)!;
       } else {
         prompt = args[args.indexOf("--single") + 1];
-        const index = args.indexOf("--rules");
-        const nativePath = index >= 0 ? args[index + 1].slice(1) : path.join(options.cwd, "Agents.md");
-        instructions = await fs.readFile(nativePath, "utf8").catch(() => "");
+        const index = args.lastIndexOf("--rules");
+        const rulesValue = index >= 0 ? args[index + 1] : null;
+        if (rulesValue?.startsWith("@")) {
+          instructions = await fs.readFile(rulesValue.slice(1), "utf8").catch(() => "");
+        } else if (rulesValue) {
+          instructions = rulesValue;
+        } else {
+          instructions = await fs.readFile(path.join(options.cwd, "Agents.md"), "utf8").catch(() => "");
+        }
       }
       captures.push({ args, prompt, instructions });
       if (command === "claude" && failResume && args.includes("--resume")) {

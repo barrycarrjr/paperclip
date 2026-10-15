@@ -146,6 +146,15 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function runCountsForRun(run: RunForIssue) {
+  const counts = asRecord(asRecord(run.resultJson)?.runCounts);
+  if (!counts) return null;
+  const { itemsRead, entriesAdded, changesProposed } = counts;
+  const validCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  if (!validCount(itemsRead) || !validCount(entriesAdded) || !validCount(changesProposed)) return null;
+  return { itemsRead, entriesAdded, changesProposed };
+}
+
 function formatDuration(start: string | Date | null | undefined, end: string | Date | null | undefined) {
   if (!start) return null;
   const startMs = new Date(start).getTime();
@@ -578,6 +587,7 @@ export function IssueRunLedgerContent({
             const exhausted = hasExhaustedContinuation(run);
             const continuation = continuationLabel(run);
             const retryState = describeRunRetryState(run);
+            const runCounts = runCountsForRun(run);
             return (
               <article key={run.runId} className="space-y-2 px-3 py-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -674,6 +684,11 @@ export function IssueRunLedgerContent({
                   </p>
                 ) : null}
 
+                {runCounts ? (
+                  <div className="text-xs text-muted-foreground">
+                    Run counts: {runCounts.itemsRead} items read, {runCounts.entriesAdded} entries added, {runCounts.changesProposed} changes proposed
+                  </div>
+                ) : null}
                 {run.nextAction ? (
                   <div className="min-w-0 rounded-md bg-accent/40 px-2 py-1.5 text-xs leading-5">
                     <span className="font-medium text-foreground">Next action: </span>

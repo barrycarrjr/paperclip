@@ -9,6 +9,7 @@ import {
   asString,
   parseObject,
   readPaperclipIssueWorkModeFromContext,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -294,13 +295,20 @@ function buildInput(ctx: AdapterExecutionContext, paperclipApiUrl: string | null
 function buildRunBody(ctx: AdapterExecutionContext, sessionKey: string | null, procedureContext: string): Record<string, unknown> {
   const paperclipApiUrl = nonEmpty(ctx.config.paperclipApiUrl);
   const payloadTemplate = parseObject(ctx.config.payloadTemplate);
+  const customInput = nonEmpty(payloadTemplate.input);
+  const trustedInput = customInput
+    ? [renderPaperclipWakePrompt(ctx.context.paperclipWake), customInput].filter(Boolean).join("\n\n")
+    : buildInput(ctx, paperclipApiUrl);
   const input = appendSourceEvidenceInstructions([
-    nonEmpty(payloadTemplate.input) ?? buildInput(ctx, paperclipApiUrl), procedureContext,
+    trustedInput, procedureContext,
   ].filter(Boolean).join("\n\n"));
-  const instructions =
+  const configuredInstructions =
     nonEmpty(ctx.config.instructions) ??
     nonEmpty(payloadTemplate.instructions) ??
     "Follow the Paperclip wake instructions exactly. Do not expose secrets in logs, comments, or final output.";
+  const instructions = [configuredInstructions, renderPaperclipApprovedRules(ctx.context)]
+    .filter(Boolean)
+    .join("\n\n");
   return {
     ...payloadTemplate,
     input,

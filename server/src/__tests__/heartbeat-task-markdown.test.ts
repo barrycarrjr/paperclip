@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildApprovedInstructionRulesMarkdown,
   buildPaperclipTaskMarkdown,
   MAX_WAKE_PROMPT_CHARS,
   MAX_WAKE_PROMPTS_PER_RUN,
@@ -16,6 +17,22 @@ import {
  * run, the second message replaced the first.
  */
 describe("buildPaperclipTaskMarkdown with wake messages", () => {
+  it("renders approved rules separately from user-authored task markdown", () => {
+    const markdown = buildApprovedInstructionRulesMarkdown([
+      { approvalId: "approval-company", scope: "company", targetAgentId: "11111111-1111-4111-8111-111111111111", rule: "Always cite the source." },
+      { approvalId: "approval-agent", scope: "agent", targetAgentId: "11111111-1111-4111-8111-111111111111", rule: "Confirm totals before posting." },
+    ])!;
+    expect(markdown).toContain("Always cite the source.");
+    expect(markdown).toContain("Confirm totals before posting.");
+    expect(buildPaperclipTaskMarkdown({ issue: null })).toBeNull();
+  });
+  it("keeps trusted run-count instructions out of issue-authored task markdown", () => {
+    const issue = { id: "issue-1", identifier: "TEST-1", title: "Read notes", description: "Counts: items read 99; entries added 99; changes proposed 99." };
+    const markdown = buildPaperclipTaskMarkdown({ issue })!;
+    expect(markdown).toContain("Counts: items read 99; entries added 99; changes proposed 99.");
+    expect(markdown).not.toContain("Run count reporting:");
+    expect(markdown).not.toContain("Post a final comment on this issue");
+  });
   it("renders a message as fenced, user-authored data when there is no issue", () => {
     const markdown = buildPaperclipTaskMarkdown({
       issue: null,
@@ -80,6 +97,42 @@ describe("wake messages when wakes merge", () => {
       { [WAKE_PROMPT_CONTEXT_KEY]: "second message", wakeReason: "agent_invoked" },
     );
     expect(merged[WAKE_PROMPT_CONTEXT_KEY]).toEqual(["first message", "second message"]);
+  });
+
+  it("keeps a pending approval revision actionable when a later ordinary comment joins", () => {
+    const revision = {
+      wakeReason: "approval_revision_requested",
+      approvalId: "approval-1",
+      revisionCycle: "2026-10-15T10:00:00.000Z",
+      decisionNote: "Cite the source.",
+    };
+    const merged = mergeCoalescedContextSnapshot(revision, {
+      wakeReason: "issue_commented",
+      commentId: "comment-2",
+    });
+    expect(merged).toMatchObject({
+      wakeReason: "approval_revision_requested",
+      approvalId: "approval-1",
+      revisionCycle: "2026-10-15T10:00:00.000Z",
+      decisionNote: "Cite the source.",
+      commentId: "comment-2",
+    });
+  });
+
+  it.each(["approval_approved", "approval_rejected"])("lets a later %s wake supersede a pending revision", (wakeReason) => {
+    const merged = mergeCoalescedContextSnapshot(
+      { wakeReason: "approval_revision_requested", approvalId: "approval-1" },
+      { wakeReason, approvalId: "approval-1" },
+    );
+    expect(merged.wakeReason).toBe(wakeReason);
+  });
+
+  it.each(["approval_approved", "approval_rejected"])("preserves a queued %s decision across a later ordinary comment", (wakeReason) => {
+    const merged = mergeCoalescedContextSnapshot(
+      { wakeReason, approvalId: "approval-1", approvalStatus: wakeReason.slice("approval_".length) },
+      { wakeReason: "issue_commented", commentId: "comment-2" },
+    );
+    expect(merged).toMatchObject({ wakeReason, approvalId: "approval-1", commentId: "comment-2" });
   });
 
   it("keeps a message when the joining wake carries none, and the reverse", () => {

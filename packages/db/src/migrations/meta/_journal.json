@@ -792,6 +792,41 @@
       "when": 1792014361995,
       "tag": "0113_outstanding_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1792017409644,
+      "tag": "0114_first_glorian",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1792021641412,
+      "tag": "0115_motionless_ricochet",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1792034874153,
+      "tag": "0116_closed_miss_america",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1792059194478,
+      "tag": "0117_secret_blue_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1792065122718,
+      "tag": "0118_mighty_jack_murdock",
+      "breakpoints": true
     }
   ]
 }

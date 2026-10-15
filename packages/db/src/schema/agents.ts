@@ -22,6 +22,10 @@ export const agents = pgTable(
     icon: text("icon"),
     status: text("status").notNull().default("idle"),
     reportsTo: uuid("reports_to").references((): AnyPgColumn => agents.id),
+    defaultReviewerAgentId: uuid("default_reviewer_agent_id").references(
+      (): AnyPgColumn => agents.id,
+      { onDelete: "set null" },
+    ),
     capabilities: text("capabilities"),
     adapterType: text("adapter_type").notNull().default("process"),
     adapterConfig: jsonb("adapter_config").$type<Record<string, unknown>>().notNull().default({}),
@@ -41,6 +45,10 @@ export const agents = pgTable(
   (table) => ({
     companyStatusIdx: index("agents_company_status_idx").on(table.companyId, table.status),
     companyReportsToIdx: index("agents_company_reports_to_idx").on(table.companyId, table.reportsTo),
+    companyDefaultReviewerIdx: index("agents_company_default_reviewer_idx").on(
+      table.companyId,
+      table.defaultReviewerAgentId,
+    ),
     companyDefaultEnvironmentIdx: index("agents_company_default_environment_idx").on(table.companyId, table.defaultEnvironmentId),
   }),
 );

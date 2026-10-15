@@ -126,6 +126,8 @@ describe("company portability", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    agentSvc.create.mockReset();
+    agentSvc.update.mockReset();
     secretSvc.normalizeAdapterConfigForPersistence.mockImplementation(async (_companyId, config) => config);
     secretSvc.resolveAdapterConfigForRuntime.mockImplementation(async (_companyId, config) => ({
       config,
@@ -459,6 +461,96 @@ describe("company portability", () => {
     expect(extension).not.toContain("budgetMonthlyCents: 0");
     expect(exported.warnings).toContain("Agent claudecoder command /Users/dotta/.local/bin/claude was omitted from export because it is system-dependent.");
     expect(exported.warnings).toContain("Agent claudecoder PATH override was omitted from export because it is system-dependent.");
+  });
+
+  it("preserves automatic reviewer links through export and import", async () => {
+    const portability = companyPortabilityService({} as any);
+    const sourceAgents = await agentSvc.list();
+    agentSvc.list.mockResolvedValue(sourceAgents.map((agent: Record<string, unknown>) => (
+      agent.id === "agent-1"
+        ? { ...agent, defaultReviewerAgentId: "agent-2" }
+        : agent
+    )));
+
+    const exported = await portability.exportBundle("company-1", {
+      include: { company: true, agents: true, projects: false, issues: false },
+      agents: ["claudecoder"],
+    });
+
+    expect(asTextFile(exported.files["agents/claudecoder/AGENTS.md"]))
+      .toContain('defaultReviewer: "cmo"');
+    expect(exported.files["agents/cmo/AGENTS.md"]).toBeDefined();
+    expect(exported.warnings).toContain("Included automatic reviewer CMO because it is required by ClaudeCoder.");
+
+    agentSvc.list.mockResolvedValue([]);
+    agentSvc.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
+      ...input,
+      id: input.name === "CMO" ? "imported-reviewer" : "imported-worker",
+      status: "idle",
+    }));
+    agentSvc.update.mockImplementation(async (id: string, input: Record<string, unknown>) => ({
+      ...input,
+      id,
+      name: id === "imported-reviewer" ? "CMO" : "ClaudeCoder",
+      status: "idle",
+      adapterConfig: input.adapterConfig ?? {},
+    }));
+
+    await portability.importBundle({
+      source: { type: "inline", rootPath: exported.rootPath, files: exported.files },
+      include: { company: false, agents: true, projects: false, issues: false },
+      target: { mode: "existing_company", companyId: "company-1" },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, "user-1");
+
+    expect(agentSvc.update).toHaveBeenCalledWith(
+      "imported-worker",
+      { defaultReviewerAgentId: "imported-reviewer" },
+    );
+  });
+
+  it("warns and preserves an existing reviewer when a selective import omits the dependency", async () => {
+    const portability = companyPortabilityService({} as any);
+    const sourceAgents = await agentSvc.list();
+    agentSvc.list.mockResolvedValue(sourceAgents.map((agent: Record<string, unknown>) => (
+      agent.id === "agent-1"
+        ? { ...agent, defaultReviewerAgentId: "agent-2" }
+        : agent
+    )));
+    const exported = await portability.exportBundle("company-1", {
+      include: { company: true, agents: true, projects: false, issues: false },
+    });
+
+    agentSvc.list.mockResolvedValue([{
+      ...sourceAgents[0],
+      id: "target-worker",
+      defaultReviewerAgentId: "target-reviewer",
+    }]);
+    agentSvc.update.mockImplementation(async (id: string, input: Record<string, unknown>) => ({
+      ...sourceAgents[0],
+      ...input,
+      id,
+      status: "idle",
+      adapterConfig: input.adapterConfig ?? {},
+    }));
+
+    const imported = await portability.importBundle({
+      source: { type: "inline", rootPath: exported.rootPath, files: exported.files },
+      include: { company: false, agents: true, projects: false, issues: false },
+      target: { mode: "existing_company", companyId: "company-1" },
+      agents: ["claudecoder"],
+      collisionStrategy: "replace",
+    }, "user-1");
+
+    expect(imported.warnings).toContain(
+      "Automatic reviewer cmo for imported agent claudecoder was not imported and does not exist in the target company.",
+    );
+    const workerPatches = agentSvc.update.mock.calls
+      .filter(([id]) => id === "target-worker")
+      .map(([, input]) => input as Record<string, unknown>);
+    expect(workerPatches.some((input) => Object.prototype.hasOwnProperty.call(input, "defaultReviewerAgentId")))
+      .toBe(false);
   });
 
   it("exports hire approval policy only when approval is required", async () => {

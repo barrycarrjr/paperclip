@@ -54,6 +54,7 @@ import { restoreHostClaudeTokenAtStartup } from "./adapters/registry.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { conflict } from "./errors.js";
+import { starterCatalogService } from "./services/starter-catalog.js";
 import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
@@ -971,6 +972,17 @@ export async function startServer(): Promise<StartedServer> {
     .catch((err) => {
       logger.error({ err }, "startup reconciliation of persisted runtime services failed");
     });
+
+  void starterCatalogService(db as any)
+    .reconcileRoutineInstructions()
+    .then((result) => {
+      if (result.updated > 0) {
+        logger.info({ updated: result.updated }, "updated untouched starter routine instructions");
+      }
+    })
+    .catch((err) => {
+      logger.error({ err }, "starter routine instruction reconciliation failed");
+    });
   
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any, { pluginWorkerManager });
@@ -986,6 +998,7 @@ export async function startServer(): Promise<StartedServer> {
     // then resume any persisted queued runs that were waiting on the previous process.
     void heartbeat
       .reapOrphanedRuns()
+      .then(() => heartbeat.reconcileTerminalRunCountReports())
       .then(() => heartbeat.promoteDueScheduledRetries())
       .then(async (promotion) => {
         await heartbeat.resumeQueuedRuns();
@@ -1102,6 +1115,7 @@ export async function startServer(): Promise<StartedServer> {
       // persisted queued work is still being driven forward.
       void heartbeat
         .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
+        .then(() => heartbeat.reconcileTerminalRunCountReports())
         .then(() => heartbeat.promoteDueScheduledRetries())
         .then(async (promotion) => {
           await heartbeat.resumeQueuedRuns();

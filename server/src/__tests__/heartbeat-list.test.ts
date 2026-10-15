@@ -305,6 +305,8 @@ describeEmbeddedPostgres("heartbeat list", () => {
       status: "succeeded",
       resultJson: {
         summary: "completed",
+        runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 },
+        runCountsReporting: { status: "reported", source: "issue_comment" },
         stdout: oversizedStdout,
         nestedHuge: { payload: oversizedNestedPayload },
       },
@@ -315,6 +317,8 @@ describeEmbeddedPostgres("heartbeat list", () => {
 
     expect(result).toMatchObject({
       summary: "completed",
+      runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 },
+      runCountsReporting: { status: "reported", source: "issue_comment" },
       truncated: true,
       truncationReason: "oversized_result_json",
       stdoutTruncated: true,

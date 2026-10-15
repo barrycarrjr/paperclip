@@ -102,6 +102,8 @@ export function activityService(db: Db) {
           ${heartbeatRuns.resultJson} -> 'costUsd'
         ),
         'stopReason', ${heartbeatRuns.resultJson} -> 'stopReason',
+        'runCounts', ${heartbeatRuns.resultJson} -> 'runCounts',
+        'runCountsReporting', ${heartbeatRuns.resultJson} -> 'runCountsReporting',
         'effectiveTimeoutSec', ${heartbeatRuns.resultJson} -> 'effectiveTimeoutSec',
         'effectiveTimeoutMs', ${heartbeatRuns.resultJson} -> 'effectiveTimeoutMs',
         'timeoutConfigured', ${heartbeatRuns.resultJson} -> 'timeoutConfigured',

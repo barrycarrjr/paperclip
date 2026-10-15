@@ -19,6 +19,7 @@ import {
   joinPromptSections,
   parseObject,
   readPaperclipIssueWorkModeFromContext,
+  renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
   renderTemplate,
   stringifyPaperclipWakePayload,
@@ -391,6 +392,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     context,
   };
   const instructions = await buildInstructionsPrefix(config, onLog);
+  const approvedRulesNote = renderPaperclipApprovedRules(context);
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: canReuseSession });
   const renderedBootstrapPrompt =
     !canReuseSession && bootstrapPromptTemplate.trim().length > 0
@@ -401,8 +403,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? ""
       : renderTemplate(promptTemplate, templateData).trim();
   const paperclipEnvNote = renderPaperclipEnvNote(remoteEnv);
+  // The Cursor cloud SDK exposes only the task prompt for agent creation and
+  // follow-ups, so the bounded approved-rule block is the trusted fallback.
   const prompt = joinPromptSections([
     instructions.prefix,
+    approvedRulesNote,
     renderedBootstrapPrompt,
     wakePrompt,
     paperclipEnvNote,

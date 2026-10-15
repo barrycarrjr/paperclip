@@ -151,6 +151,27 @@ function renderLedger(props: Partial<ComponentProps<typeof IssueRunLedgerContent
 }
 
 describe("IssueRunLedger", () => {
+  it("shows persisted run counts, including explicit zero values", () => {
+    renderLedger({ runs: [createRun({ resultJson: { runCounts: { itemsRead: 7, entriesAdded: 0, changesProposed: 2 } } })] });
+    expect(container.textContent).toContain("Run counts: 7 items read, 0 entries added, 2 changes proposed");
+  });
+
+  it("shows an all-zero report without confusing it with absent counts", () => {
+    renderLedger({ runs: [createRun({ resultJson: { runCounts: { itemsRead: 0, entriesAdded: 0, changesProposed: 0 } } })] });
+    expect(container.textContent).toContain("Run counts: 0 items read, 0 entries added, 0 changes proposed");
+  });
+
+  it.each([undefined, null, {}, [], { itemsRead: 1, entriesAdded: 2 },
+    { itemsRead: "1", entriesAdded: 0, changesProposed: 0 },
+    { itemsRead: -1, entriesAdded: 0, changesProposed: 0 },
+    { itemsRead: 1.5, entriesAdded: 0, changesProposed: 0 },
+    { itemsRead: Infinity, entriesAdded: 0, changesProposed: 0 },
+    { itemsRead: Number.MAX_SAFE_INTEGER + 1, entriesAdded: 0, changesProposed: 0 },
+  ])("omits absent or malformed run counts without inventing zero (%j)", runCounts => {
+    renderLedger({ runs: [createRun({ resultJson: { runCounts } })] });
+    expect(container.textContent).not.toContain("Run counts:");
+  });
+
   it("renders every liveness state with exhausted continuation context", () => {
     const states: RunLivenessState[] = [
       "advanced",

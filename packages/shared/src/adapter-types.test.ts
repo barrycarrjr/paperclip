@@ -47,4 +47,11 @@ describe("dynamic adapter type validation schemas", () => {
 
     expect(AGENT_ROLE_LABELS.security).toBe("Security");
   });
+
+  it("accepts a valid automatic reviewer and rejects an invalid reviewer ID", () => {
+    const reviewerId = "8a5367a7-2fb8-4891-85cd-174af1e99651";
+    expect(updateAgentSchema.parse({ defaultReviewerAgentId: reviewerId }).defaultReviewerAgentId)
+      .toBe(reviewerId);
+    expect(() => updateAgentSchema.parse({ defaultReviewerAgentId: "reviewer" })).toThrow();
+  });
 });

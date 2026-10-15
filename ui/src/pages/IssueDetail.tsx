@@ -1619,9 +1619,9 @@ export function IssueDetail() {
   });
 
   const addComment = useMutation({
-    mutationFn: ({ body, reopen, interrupt }: { body: string; reopen?: boolean; interrupt?: boolean }) =>
-      issuesApi.addComment(issueId!, body, reopen, interrupt),
-    onMutate: async ({ body, reopen, interrupt }) => {
+    mutationFn: ({ body, reopen, interrupt, intent }: { body: string; reopen?: boolean; interrupt?: boolean; intent?: "message" | "correction" }) =>
+      issuesApi.addComment(issueId!, body, reopen, interrupt, intent),
+    onMutate: async ({ body, reopen, interrupt, intent }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.comments(issueId!) });
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.detail(issueId!) });
 
@@ -1633,6 +1633,7 @@ export function IssueDetail() {
             issueId: issue.id,
             body,
             authorUserId: currentUserId,
+            intent,
             clientStatus: queuedComment ? "queued" : "pending",
             queueTargetRunId: queuedComment?.id ?? null,
           })
@@ -1808,11 +1809,13 @@ export function IssueDetail() {
       body,
       reopen,
       interrupt,
+      intent,
       reassignment,
     }: {
       body: string;
       reopen?: boolean;
       interrupt?: boolean;
+      intent?: "message" | "correction";
       reassignment: CommentReassignment;
     }) =>
       issuesApi.update(issueId!, {
@@ -1821,8 +1824,9 @@ export function IssueDetail() {
         assigneeUserId: reassignment.assigneeUserId,
         ...(reopen ? { status: "todo" } : {}),
         ...(interrupt ? { interrupt } : {}),
+        ...(intent === "correction" ? { commentIntent: intent } : {}),
       }),
-    onMutate: async ({ body, reopen, reassignment, interrupt }) => {
+    onMutate: async ({ body, reopen, reassignment, interrupt, intent }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.comments(issueId!) });
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.detail(issueId!) });
 
@@ -1834,6 +1838,7 @@ export function IssueDetail() {
             issueId: issue.id,
             body,
             authorUserId: currentUserId,
+            intent,
             clientStatus: queuedComment ? "queued" : "pending",
             queueTargetRunId: queuedComment?.id ?? null,
           })
@@ -2465,12 +2470,12 @@ export function IssueDetail() {
     if (!shouldPrefetchOlderComments) return;
     void fetchOlderComments();
   }, [fetchOlderComments, shouldPrefetchOlderComments]);
-  const handleChatAdd = useCallback(async (body: string, reopen?: boolean, reassignment?: CommentReassignment) => {
+  const handleChatAdd = useCallback(async (body: string, reopen?: boolean, reassignment?: CommentReassignment, intent?: "message" | "correction") => {
     if (reassignment) {
-      await addCommentAndReassign.mutateAsync({ body, reopen, reassignment });
+      await addCommentAndReassign.mutateAsync({ body, reopen, reassignment, intent });
       return;
     }
-    await addComment.mutateAsync({ body, reopen });
+    await addComment.mutateAsync({ body, reopen, intent });
   }, [addComment, addCommentAndReassign]);
   const handleCommentImageUpload = useCallback(async (file: File) => {
     const attachment = await uploadAttachment.mutateAsync(file);

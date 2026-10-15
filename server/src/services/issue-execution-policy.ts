@@ -38,6 +38,7 @@ type TransitionResult = {
   patch: Record<string, unknown>;
   decision?: Pick<IssueExecutionDecision, "stageId" | "stageType" | "outcome" | "body">;
   workflowControlledAssignment?: boolean;
+  preserveExecutionPolicy?: boolean;
 };
 
 const COMPLETED_STATUS: IssueExecutionState["status"] = "completed";
@@ -149,6 +150,22 @@ function selectStageParticipant(
 function stageHasParticipant(stage: IssueExecutionStage, participant: IssueExecutionStagePrincipal | null): boolean {
   if (!participant) return false;
   return stage.participants.some((candidate) => principalsEqual(candidate, participant));
+}
+
+export function issueExecutionPolicyHasParticipant(
+  policy: IssueExecutionPolicy | null,
+  assignee: AssigneeLike,
+): boolean {
+  const participant = assigneePrincipal(assignee);
+  return Boolean(participant && policy?.stages.some((stage) => stageHasParticipant(stage, participant)));
+}
+
+export function issueExecutionStateReturnsToAssignee(
+  state: IssueExecutionState | Record<string, unknown> | null | undefined,
+  assignee: AssigneeLike,
+): boolean {
+  const parsedState = parseIssueExecutionState(state);
+  return principalsEqual(parsedState?.returnAssignee ?? null, assigneePrincipal(assignee));
 }
 
 function patchForPrincipal(principal: IssueExecutionStagePrincipal | null) {
@@ -295,18 +312,15 @@ function canAutoSkipPendingStage(input: {
 
 export function applyIssueExecutionPolicyTransition(input: TransitionInput): TransitionResult {
   const patch: Record<string, unknown> = {};
-  const existingState = parseIssueExecutionState(input.issue.executionState);
+  let existingState = parseIssueExecutionState(input.issue.executionState);
   const currentAssignee = assigneePrincipal(input.issue);
   const actor = actorPrincipal(input.actor);
   const requestedAssigneePatchProvided =
     input.requestedAssigneePatch.assigneeAgentId !== undefined || input.requestedAssigneePatch.assigneeUserId !== undefined;
   const explicitAssignee = assigneePrincipal(input.requestedAssigneePatch);
-  const currentStage = input.policy ? findStageById(input.policy, existingState?.currentStageId) : null;
+  let currentStage = input.policy ? findStageById(input.policy, existingState?.currentStageId) : null;
   const requestedStatus = input.requestedStatus;
-  const activeStage = currentStage && existingState?.status === PENDING_STATUS ? currentStage : null;
-  const effectiveReviewRequest = input.reviewRequest === undefined
-    ? existingState?.reviewRequest ?? null
-    : input.reviewRequest;
+  let staleReturnAssignee: IssueExecutionStagePrincipal | null = null;
 
   if (!input.policy) {
     if (existingState) {
@@ -314,6 +328,9 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
       if (input.issue.status === "in_review" && existingState.returnAssignee) {
         patch.status = "in_progress";
         Object.assign(patch, patchForPrincipal(existingState.returnAssignee));
+      }
+      if (requestedAssigneePatchProvided) {
+        Object.assign(patch, patchForPrincipal(explicitAssignee));
       }
     }
     return { patch };
@@ -329,15 +346,34 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
     return { patch };
   }
 
-  if (existingState?.currentStageId && !currentStage) {
+  const stateReferencesUnknownStage = Boolean(existingState && (
+    (existingState.currentStageId && !currentStage)
+    || existingState.completedStageIds.some(
+      (stageId) => !input.policy?.stages.some((stage) => stage.id === stageId),
+    )
+  ));
+  if (existingState && stateReferencesUnknownStage) {
+    staleReturnAssignee = existingState.returnAssignee ?? null;
     clearExecutionStatePatch({
       patch,
       issueStatus: input.issue.status,
       requestedStatus,
       returnAssignee: existingState.returnAssignee,
     });
-    return { patch };
+    if (requestedAssigneePatchProvided) {
+      Object.assign(patch, patchForPrincipal(explicitAssignee));
+    }
+    if (requestedStatus !== "done" && requestedStatus !== "in_review") {
+      return { patch };
+    }
+    existingState = null;
+    currentStage = null;
   }
+
+  const activeStage = currentStage && existingState?.status === PENDING_STATUS ? currentStage : null;
+  const effectiveReviewRequest = input.reviewRequest === undefined
+    ? existingState?.reviewRequest ?? null
+    : input.reviewRequest;
 
   if (activeStage) {
     const currentParticipant =
@@ -400,6 +436,7 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
               outcome: "approved",
               body: input.commentBody.trim(),
             },
+            preserveExecutionPolicy: true,
           };
         }
 
@@ -500,7 +537,20 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
       : nextPendingStage(input.policy, existingState);
   if (!pendingStage) return { patch };
 
-  const returnAssignee = existingState?.returnAssignee ?? currentAssignee;
+  const returnAssignee =
+    existingState?.returnAssignee
+    ?? (staleReturnAssignee
+      ? (explicitAssignee && !stageHasParticipant(pendingStage, explicitAssignee)
+        ? explicitAssignee
+        : staleReturnAssignee)
+      : (requestedStatus === "done" || !input.actor.agentId)
+        && explicitAssignee
+        && !stageHasParticipant(pendingStage, explicitAssignee)
+        ? explicitAssignee
+        : currentAssignee
+          ?? (explicitAssignee && !stageHasParticipant(pendingStage, explicitAssignee)
+            ? explicitAssignee
+            : null));
   const skippedStageIds = [...(existingState?.completedStageIds ?? [])];
   let participant = selectStageParticipant(pendingStage, {
     preferred:

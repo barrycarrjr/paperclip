@@ -52,7 +52,7 @@ const adapterExecute = vi.hoisted(() =>
       signal: null,
       timedOut: false,
       errorMessage: null,
-      summary: "Released the build.",
+      summary: "Released the build.\nCounts: items read 0; entries added 0; changes proposed 0.",
       provider: "test",
       model: "test-model",
       sessionId: `session-${input.runId}`,
@@ -134,7 +134,7 @@ describeEmbeddedPostgres("a pipeline stage's env in its automation's runs", () =
         issueId,
         authorAgentId: input.agent.id,
         createdByRunId: input.runId,
-        body: "Released the build.",
+        body: "Released the build.\nCounts: items read 0; entries added 0; changes proposed 0.",
       });
     };
   }, 120_000);

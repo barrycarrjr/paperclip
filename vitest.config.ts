@@ -19,6 +19,7 @@ export default defineConfig({
       "packages/adapters/hermes",
       "packages/adapters/kimi-local",
       "packages/adapters/ollama-local",
+      "packages/adapters/openclaw-gateway",
       "packages/adapters/opencode-local",
       "packages/adapters/pi-local",
       "server",

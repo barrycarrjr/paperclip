@@ -15,6 +15,7 @@ export interface PaperclipIssueRuntimeSendOptions {
   body: string;
   reopen?: boolean;
   reassignment?: PaperclipIssueRuntimeReassignment;
+  intent?: "message" | "correction";
 }
 
 interface UsePaperclipIssueRuntimeOptions {
@@ -78,6 +79,7 @@ export function usePaperclipIssueRuntime({
         body,
         reopen: custom?.reopen === true ? true : undefined,
         reassignment,
+        intent: custom?.intent === "correction" ? "correction" : "message",
       });
     },
     ...(onCancel ? {

@@ -245,6 +245,9 @@ export type SummarySlotStatus = (typeof SUMMARY_SLOT_STATUSES)[number];
 export const ISSUE_COMMENT_AUTHOR_TYPES = ["user", "agent", "system"] as const;
 export type IssueCommentAuthorType = (typeof ISSUE_COMMENT_AUTHOR_TYPES)[number];
 
+export const ISSUE_COMMENT_INTENTS = ["message", "correction"] as const;
+export type IssueCommentIntent = (typeof ISSUE_COMMENT_INTENTS)[number];
+
 export const ISSUE_COMMENT_PRESENTATION_KINDS = ["message", "system_notice"] as const;
 export type IssueCommentPresentationKind = (typeof ISSUE_COMMENT_PRESENTATION_KINDS)[number];
 
@@ -714,6 +717,7 @@ export const APPROVAL_TYPES = [
   "budget_override_required",
   "request_board_approval",
   "outbound_tool_draft",
+  "instruction_change",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
@@ -1020,6 +1024,7 @@ export type RunLivenessState = (typeof RUN_LIVENESS_STATES)[number];
 export const LIVE_EVENT_TYPES = [
   "heartbeat.run.queued",
   "heartbeat.run.status",
+  "heartbeat.run.updated",
   "heartbeat.run.progress",
   "heartbeat.run.event",
   "heartbeat.run.log",

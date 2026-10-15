@@ -47,6 +47,7 @@ export function createOptimisticIssueComment(params: {
   issueId: string;
   body: string;
   authorUserId: string | null;
+  intent?: "message" | "correction";
   clientStatus?: OptimisticIssueComment["clientStatus"];
   queueTargetRunId?: string | null;
 }): OptimisticIssueComment {
@@ -59,6 +60,7 @@ export function createOptimisticIssueComment(params: {
     issueId: params.issueId,
     authorAgentId: null,
     authorUserId: params.authorUserId,
+    intent: params.intent ?? "message",
     body: params.body,
     clientStatus: params.clientStatus ?? "pending",
     queueTargetRunId: params.queueTargetRunId ?? null,

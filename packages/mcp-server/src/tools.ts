@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  addIssueCommentSchema,
+  addIssueCommentInputSchema,
   askUserQuestionsPayloadSchema,
   checkoutIssueSchema,
   createApprovalSchema,
@@ -109,7 +109,7 @@ const checkoutIssueToolSchema = z.object({
 
 const addCommentToolSchema = z.object({
   issueId: issueIdSchema,
-}).merge(addIssueCommentSchema);
+}).merge(addIssueCommentInputSchema);
 
 const createSuggestTasksToolSchema = z.object({
   issueId: issueIdSchema,
@@ -149,6 +149,7 @@ const approvalDecisionSchema = z.object({
   action: z.enum(["approve", "reject", "requestRevision", "resubmit"]),
   decisionNote: z.string().optional(),
   payloadJson: z.string().optional(),
+  revisionCycle: z.string().datetime().optional(),
 });
 
 const createApprovalToolSchema = z.object({
@@ -647,7 +648,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       "paperclipApprovalDecision",
       "Approve, reject, request revision, or resubmit an approval",
       approvalDecisionSchema,
-      async ({ approvalId, action, decisionNote, payloadJson }) => {
+      async ({ approvalId, action, decisionNote, payloadJson, revisionCycle }) => {
         const path =
           action === "approve"
             ? `/approvals/${encodeURIComponent(approvalId)}/approve`
@@ -659,7 +660,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
 
         const body =
           action === "resubmit"
-            ? { payload: parseOptionalJson(payloadJson) ?? {} }
+            ? { payload: parseOptionalJson(payloadJson) ?? {}, revisionCycle }
             : { decisionNote };
 
         return client.requestJson("POST", path, { body });

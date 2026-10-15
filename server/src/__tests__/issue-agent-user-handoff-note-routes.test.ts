@@ -26,6 +26,7 @@ const mockIssueService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  getMembership: vi.fn(),
   hasPermission: vi.fn(),
 }));
 
@@ -215,6 +216,7 @@ describe("agent handoff to a person requires a note", () => {
     vi.clearAllMocks();
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(true);
+    mockAccessService.getMembership.mockResolvedValue({ status: "active" });
     mockAgentService.getById.mockResolvedValue(makeAgent(ownerAgentId, { permissions: { canAssignTasks: true } }));
     mockAgentService.list.mockResolvedValue([makeAgent(ownerAgentId)]);
     mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: null });
