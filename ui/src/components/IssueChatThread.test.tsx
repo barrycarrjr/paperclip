@@ -11,6 +11,7 @@ import {
   canStopIssueChatRun,
   resolveAssistantMessageFoldedState,
   resolveIssueChatHumanAuthor,
+  type IssueChatComposerHandle,
 } from "./IssueChatThread";
 import type {
   AskUserQuestionsInteraction,
@@ -1319,6 +1320,7 @@ describe("IssueChatThread", () => {
 
   it("marks a submitted reply as a correction", async () => {
     const root = createRoot(container);
+    const onAdd = vi.fn(async () => {});
     act(() => {
       root.render(
         <MemoryRouter>
@@ -1329,7 +1331,7 @@ describe("IssueChatThread", () => {
             liveRuns={[]}
             issueStatus="in_progress"
             currentAssigneeValue="agent:agent-1"
-            onAdd={async () => {}}
+            onAdd={onAdd}
             enableLiveTranscriptPolling={false}
           />
         </MemoryRouter>,
@@ -1345,9 +1347,46 @@ describe("IssueChatThread", () => {
       correctionButton?.click();
     });
     await act(async () => submitButton?.click());
-    expect(appendMock).toHaveBeenCalledWith(expect.objectContaining({
-      runConfig: { custom: { intent: "correction" } },
-    }));
+    expect(onAdd).toHaveBeenCalledWith("Always verify the source first.", undefined, undefined, "correction");
+    expect(appendMock).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it("keeps correction submission pending until its promise settles and blocks overlapping clicks", async () => {
+    const root = createRoot(container);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const onAdd = vi.fn(() => pending);
+    act(() => root.render(<MemoryRouter><IssueChatThread
+      comments={[]} linkedRuns={[]} liveRuns={[]} currentAssigneeValue="agent:agent-1"
+      onAdd={onAdd} enableLiveTranscriptPolling={false}
+    /></MemoryRouter>));
+    const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement;
+    const correctionButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Correction"))!;
+    const sendButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Send")!;
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "Check the source.");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      correctionButton.click();
+    });
+    act(() => { sendButton.click(); sendButton.click(); });
+    expect(onAdd).toHaveBeenCalledExactlyOnceWith("Check the source.", undefined, undefined, "correction");
+    expect(sendButton.disabled).toBe(true);
+    expect(sendButton.textContent).toBe("Posting...");
+    expect(appendMock).not.toHaveBeenCalled();
+    act(() => {
+      correctionButton.click();
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "An ordinary message.");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(sendButton.disabled).toBe(false);
+    await act(async () => sendButton.click());
+    expect(appendMock).toHaveBeenCalledTimes(1);
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); await pending; });
+    expect(sendButton.textContent).toBe("Send");
     act(() => root.unmount());
   });
 
@@ -1405,6 +1444,82 @@ describe("IssueChatThread", () => {
     expect(correctionButton.getAttribute("aria-pressed")).toBe("false");
     expect(correctionButton.disabled).toBe(true);
 
+    act(() => root.unmount());
+  });
+
+  it("keeps a newer saved draft when a delayed correction finishes", async () => {
+    vi.useFakeTimers();
+    const root = createRoot(container);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const onAdd = vi.fn(() => pending);
+    const draftKey = "issue-chat-draft:delayed-correction";
+    act(() => root.render(<MemoryRouter><IssueChatThread
+      comments={[]} linkedRuns={[]} liveRuns={[]} currentAssigneeValue="agent:agent-1"
+      onAdd={onAdd} draftKey={draftKey} enableLiveTranscriptPolling={false}
+    /></MemoryRouter>));
+    const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement;
+    const correctionButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Correction"))!;
+    const sendButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Send")!;
+    const type = (value: string) => {
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, value);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+
+    act(() => { type("Check the source."); correctionButton.click(); sendButton.click(); });
+    act(() => type("This is my next message."));
+    act(() => vi.advanceTimersByTime(900));
+    expect(localStorage.getItem(draftKey)).toBe("This is my next message.");
+
+    await act(async () => { finish(); await pending; });
+    expect(localStorage.getItem(draftKey)).toBe("This is my next message.");
+    expect(editor.value).toBe("This is my next message.");
+
+    act(() => root.unmount());
+    const remount = createRoot(container);
+    act(() => remount.render(<MemoryRouter><IssueChatThread
+      comments={[]} linkedRuns={[]} liveRuns={[]} currentAssigneeValue="agent:agent-1"
+      onAdd={async () => {}} draftKey={draftKey} enableLiveTranscriptPolling={false}
+    /></MemoryRouter>));
+    expect((container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement).value)
+      .toBe("This is my next message.");
+    act(() => remount.unmount());
+  });
+
+  it("keeps a restored failed correction sendable after refetch unassigns the issue", async () => {
+    const root = createRoot(container);
+    const composerRef = createRef<IssueChatComposerHandle>();
+    const body = "Check the source.";
+    const onAdd = vi.fn(async () => {});
+    const renderThread = (currentAssigneeValue: string) => {
+      root.render(<MemoryRouter><IssueChatThread
+        comments={[]} linkedRuns={[]} liveRuns={[]} issueStatus="in_progress"
+        currentAssigneeValue={currentAssigneeValue} suggestedAssigneeValue={currentAssigneeValue}
+        composerRef={composerRef} onAdd={onAdd} enableLiveTranscriptPolling={false}
+      /></MemoryRouter>);
+    };
+    act(() => renderThread("agent:agent-1"));
+    const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement;
+    const correctionButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Correction"))!;
+    const sendButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Send")!;
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, body);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      correctionButton.click();
+    });
+    await act(async () => sendButton.click());
+    act(() => composerRef.current?.restoreDraft(body, { targetAgentId: "agent-1", reassign: false }));
+    act(() => renderThread(""));
+    expect(editor.value).toBe(body);
+    expect(correctionButton.getAttribute("aria-pressed")).toBe("true");
+    expect(correctionButton.disabled).toBe(false);
+    expect(sendButton.disabled).toBe(false);
+    await act(async () => sendButton.click());
+    expect(onAdd).toHaveBeenCalledTimes(2);
+    expect(onAdd).toHaveBeenLastCalledWith(body, undefined, undefined, "correction");
+    expect(correctionButton.disabled).toBe(true);
     act(() => root.unmount());
   });
 

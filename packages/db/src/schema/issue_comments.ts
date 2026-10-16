@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { agents } from "./agents.js";
@@ -15,6 +15,8 @@ export const issueComments = pgTable(
     authorType: text("author_type"),
     intent: text("intent").notNull().default("message"),
     idempotencyKey: text("idempotency_key"),
+    expectedAssigneeAgentId: uuid("expected_assignee_agent_id"),
+    correctionRecipientAgentIds: jsonb("correction_recipient_agent_ids").$type<string[]>(),
     createdByRunId: uuid("created_by_run_id").references(() => heartbeatRuns.id, { onDelete: "set null" }),
     body: text("body").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

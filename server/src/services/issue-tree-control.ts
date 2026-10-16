@@ -76,11 +76,13 @@ export const ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS: ReadonlySet<string> = 
   "issue_commented",
   "issue_reopened_via_comment",
   "issue_comment_mentioned",
+  "issue_assigned",
 ] as const);
 const ISSUE_TREE_CONTROL_INTERACTION_WAKE_SOURCES: Readonly<Record<string, ReadonlySet<string>>> = {
-  issue_commented: new Set(["issue.comment"]),
-  issue_reopened_via_comment: new Set(["issue.comment.reopen"]),
+  issue_commented: new Set(["issue.comment", "issue.comment.correction"]),
+  issue_reopened_via_comment: new Set(["issue.comment.reopen", "issue.comment.correction"]),
   issue_comment_mentioned: new Set(["comment.mention"]),
+  issue_assigned: new Set(["issue.comment.correction"]),
 };
 
 type VerifiedInteractionActor = {
@@ -114,9 +116,10 @@ function hasVerifiedInteractionSource(wakeReason: string, contextSnapshot: Recor
 
 function actorMatchesComment(
   actor: VerifiedInteractionActor,
-  comment: { authorAgentId: string | null; authorUserId: string | null },
+  comment: { authorAgentId: string | null; authorUserId: string | null; intent?: string },
 ) {
   if (!actor.requestedByActorType) return false;
+  if (comment.intent === "correction" && actor.requestedByActorType !== "user") return false;
   if (actor.requestedByActorType === "system") return true;
   if (!actor.requestedByActorId) return false;
   if (actor.requestedByActorType === "agent") return comment.authorAgentId === actor.requestedByActorId;
@@ -133,7 +136,7 @@ async function hasVerifiedInteractionWakeRequest(
     wakeupRequestId?: string | null;
     issueId: string;
     commentId: string;
-    comment: { authorAgentId: string | null; authorUserId: string | null };
+    comment: { authorAgentId: string | null; authorUserId: string | null; intent?: string };
   },
 ) {
   if (!input.runId && !input.wakeupRequestId) return false;
@@ -194,6 +197,7 @@ export async function isVerifiedIssueTreeControlInteractionWake(
       id: issueComments.id,
       authorAgentId: issueComments.authorAgentId,
       authorUserId: issueComments.authorUserId,
+      intent: issueComments.intent,
     })
     .from(issueComments)
     .where(
@@ -205,6 +209,9 @@ export async function isVerifiedIssueTreeControlInteractionWake(
     )
     .then((rows) => rows[0] ?? null);
   if (!comment) return false;
+  if (readNonEmptyStringFromRecord(contextSnapshot, "source") === "issue.comment.correction" && comment.intent !== "correction") {
+    return false;
+  }
 
   const directActor = {
     requestedByActorType: input.requestedByActorType,

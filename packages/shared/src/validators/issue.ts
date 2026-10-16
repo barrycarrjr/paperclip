@@ -264,7 +264,11 @@ export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 export const updateIssueSchema = createIssueSchema.omit({ origin: true }).partial().extend({
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),
   comment: multilineTextSchema.pipe(z.string().min(1)).optional(),
-  commentIntent: z.enum(["message", "correction"]).optional(),
+  commentIntent: z.literal("message", {
+    errorMap: () => ({
+      message: "Correction comments must be submitted with POST /issues/:id/comments",
+    }),
+  }).optional(),
   reviewRequest: issueReviewRequestSchema.optional().nullable(),
   reopen: z.boolean().optional(),
   resume: z.boolean().optional(),
@@ -286,19 +290,64 @@ export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;
 export const addIssueCommentInputSchema = z.object({
   body: multilineTextSchema.pipe(z.string().min(1)),
   intent: z.enum(["message", "correction"]).optional().default("message"),
+  expectedAssigneeAgentId: z.string().uuid().optional(),
+  allowPriorAssigneeTarget: z.boolean().optional().default(false),
   idempotencyKey: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._:-]+$/).optional(),
   reopen: z.boolean().optional(),
   resume: z.boolean().optional(),
   interrupt: z.boolean().optional(),
+  reassignToAgentId: z.string().uuid().optional(),
 });
 
 export const addIssueCommentSchema = addIssueCommentInputSchema.superRefine((value, ctx) => {
-  if (value.idempotencyKey && (value.reopen || value.resume || value.interrupt)) {
+  if (value.intent === "correction" && !value.idempotencyKey) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["idempotencyKey"],
-      message: "Idempotent comment creation cannot be combined with issue or run state changes",
+      message: "Correction comments require an idempotency key",
     });
+  }
+  if (value.expectedAssigneeAgentId && value.intent !== "correction") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["expectedAssigneeAgentId"],
+      message: "An expected assignee can only be supplied for correction comments",
+    });
+  }
+  if (value.allowPriorAssigneeTarget && (value.intent !== "correction" || !value.expectedAssigneeAgentId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["allowPriorAssigneeTarget"],
+      message: "A prior assignee target requires a correction with an expected assignee",
+    });
+  }
+  if (value.reassignToAgentId && (
+    value.intent !== "correction" ||
+    value.expectedAssigneeAgentId !== value.reassignToAgentId
+  )) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reassignToAgentId"],
+      message: "A correction reassignment must match the expected correction target",
+    });
+  }
+  if (value.reassignToAgentId && (value.resume || value.interrupt)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [value.interrupt ? "interrupt" : "resume"],
+      message: "Atomic correction reassignment does not support run interruption or resume intent",
+    });
+  }
+  if (value.idempotencyKey && (value.reopen || value.resume || value.interrupt)) {
+    const isCorrectionReopen = value.intent === "correction" && value.reopen
+      && !value.resume && !value.interrupt;
+    if (!isCorrectionReopen) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["idempotencyKey"],
+        message: "Idempotent comment creation cannot be combined with issue or run state changes",
+      });
+    }
   }
 });
 

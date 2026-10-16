@@ -170,7 +170,12 @@ remain pending for a later tick. A running assignee receives a followup run afte
 its current run finishes. Company boundaries, pause holds, and invocation budgets
 still apply.
 If a process stops between saving the terminal run and promoting its deferred
-completion wake, startup and scheduler reconciliation retry the promotion.
+completion or board correction wake, startup and scheduler reconciliation retry
+the promotion. Correction recovery verifies the source comment and original target,
+and waits while any execution on that issue is still active.
+Correction comments also store the complete resolved recipient agent set before
+the first wake attempt. Exact retries use that immutable set, so partial delivery
+and later agent renames cannot omit an original recipient or redirect a mention.
 Accepted deferred completion requests also survive temporary agent, subtree,
 and budget pauses and are promoted after those restrictions are released.
 Agent termination and subtree cancellation still discard deferred work.

@@ -48,6 +48,7 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import { conflict, HttpError, notFound } from "../errors.js";
+import { classifyWakeupDelivery, isUndeliveredTerminalReceipt } from "./wakeup-delivery.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getPluginMcpBridge } from "./plugin-mcp-bridge.js";
@@ -5179,8 +5180,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const wakeCommentId = deriveCommentId(context, null);
     const isInteractionWake = allowsIssueInteractionWake(context);
     const resumeIntent = context.resumeIntent === true || context.followUpRequested === true;
+    const isTargetedCorrectionWake = wakeCommentId
+      ? await db
+          .select({ id: issueComments.id })
+          .from(issueComments)
+          .where(and(
+            eq(issueComments.id, wakeCommentId),
+            eq(issueComments.companyId, run.companyId),
+            eq(issueComments.issueId, issueId),
+            eq(issueComments.intent, "correction"),
+            eq(issueComments.expectedAssigneeAgentId, run.agentId),
+          ))
+          .then((rows) => rows.length === 1)
+      : false;
 
-    if (issue.assigneeAgentId !== run.agentId && !isInteractionWake) {
+    if (issue.assigneeAgentId !== run.agentId && !isInteractionWake && !isTargetedCorrectionWake) {
       return {
         stale: true,
         errorCode: "issue_assignee_changed",
@@ -7618,6 +7632,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       if (!issue) return null;
       if (issue.executionRunId && issue.executionRunId !== run.id) return null;
+      const activeIssueRun = await tx.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
+        eq(heartbeatRuns.companyId, issue.companyId),
+        inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+        sql`coalesce(${heartbeatRuns.contextSnapshot} ->> 'issueId', ${heartbeatRuns.contextSnapshot} ->> 'taskId') = ${issue.id}`,
+      )).limit(1);
+      if (activeIssueRun.length > 0) return null;
 
       if (issue.executionRunId === run.id) {
         await tx
@@ -7737,13 +7757,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const deferredWakeReason = readNonEmptyString(deferredContextSeed.wakeReason);
         // Only human/comment-reopen interactions should revive completed issues;
         // system follow-ups such as retry or cleanup wakes must not reopen closed work.
-        const shouldReopenDeferredCommentWake =
+        let shouldReopenDeferredCommentWake =
           deferredCommentIds.length > 0 &&
           (issue.status === "done" || issue.status === "cancelled") &&
           (
             deferred.requestedByActorType === "user" ||
             deferredWakeReason === "issue_reopened_via_comment"
           );
+        if (shouldReopenDeferredCommentWake) {
+          const deferredComments = await tx.select({
+            intent: issueComments.intent,
+            expectedAssigneeAgentId: issueComments.expectedAssigneeAgentId,
+          }).from(issueComments).where(and(
+            eq(issueComments.companyId, issue.companyId),
+            eq(issueComments.issueId, issue.id),
+            inArray(issueComments.id, deferredCommentIds),
+          ));
+          // A correction to an earlier owner remains feedback for that owner after the current run finishes.
+          shouldReopenDeferredCommentWake = deferredComments.some((comment) => comment.intent !== "correction"
+            || (comment.expectedAssigneeAgentId !== null && comment.expectedAssigneeAgentId === issue.assigneeAgentId));
+        }
         let reopenedActivity: LogActivityInput | null = null;
 
         if (shouldReopenDeferredCommentWake) {
@@ -8015,6 +8048,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
+  async function hasExistingWakeupDelivery(tx: Pick<Db, "select" | "update">, companyId: string, agentId: string, idempotencyKey: string): Promise<boolean> {
+    const fields = {
+      id: agentWakeupRequests.id, status: agentWakeupRequests.status, reason: agentWakeupRequests.reason,
+      payload: agentWakeupRequests.payload, runId: agentWakeupRequests.runId,
+      runStatus: heartbeatRuns.status, startedAt: heartbeatRuns.startedAt,
+    };
+    const receipts = await tx.select(fields).from(agentWakeupRequests)
+      .leftJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentWakeupRequests.runId), eq(heartbeatRuns.companyId, companyId)))
+      .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, agentId), eq(agentWakeupRequests.idempotencyKey, idempotencyKey), ne(agentWakeupRequests.status, "skipped")));
+    for (const receipt of receipts) {
+      let undelivered = isUndeliveredTerminalReceipt(receipt);
+      const deferredId = receipt.status === "coalesced" && !receipt.runId
+        ? readNonEmptyString(receipt.payload?.deferredWakeupRequestId) : null;
+      if (deferredId) {
+        const parent = await tx.select(fields).from(agentWakeupRequests)
+          .leftJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentWakeupRequests.runId), eq(heartbeatRuns.companyId, companyId)))
+          .where(and(eq(agentWakeupRequests.id, deferredId), eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, agentId)))
+          .limit(1).then(rows => rows[0] ?? null);
+        undelivered = Boolean(parent && isUndeliveredTerminalReceipt(parent));
+      }
+      if (!undelivered) return true;
+      // Keep the failed attempt as history, while allowing its exact delivery key to retry.
+      await tx.update(agentWakeupRequests).set({
+        status: "skipped", reason: "delivery_undelivered_terminal", updatedAt: new Date(),
+        payload: { ...parseObject(receipt.payload), retiredDeliveryStatus: receipt.status, retiredDeliveryReason: receipt.reason },
+      }).where(and(eq(agentWakeupRequests.id, receipt.id), eq(agentWakeupRequests.status, receipt.status)));
+    }
+    return false;
+  }
+
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
@@ -8113,6 +8176,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (budgetBlock) {
       await writeSkippedRequest("budget.blocked");
       throw conflict(budgetBlock.reason, {
+        code: "invocation_blocked",
         scopeType: budgetBlock.scopeType,
         scopeId: budgetBlock.scopeId,
       });
@@ -8123,7 +8187,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       agent.status === "terminated" ||
       agent.status === "pending_approval"
     ) {
-      throw conflict("Agent is not invokable in its current state", { status: agent.status });
+      await writeSkippedRequest(`agent.${agent.status}`);
+      throw conflict("Agent is not invokable in its current state", { code: "invocation_blocked", status: agent.status });
     }
 
     const policy = parseHeartbeatPolicy(agent);
@@ -8226,12 +8291,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
 
         if (opts.idempotencyKey) {
-          const existingDelivery = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
-            .where(and(
-              eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.agentId, agentId),
-              eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey), ne(agentWakeupRequests.status, "skipped"),
-            )).limit(1);
-          if (existingDelivery.length > 0) return { kind: "duplicate" as const };
+          if (await hasExistingWakeupDelivery(tx, agent.companyId, agentId, opts.idempotencyKey)) return { kind: "duplicate" as const };
         }
         if (opts.issueDependencyFingerprint && opts.idempotencyKey) {
           const currentWake = reason === "issue_children_completed" || reason === "issue_blockers_resolved"
@@ -8544,7 +8604,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             // sources in the same child/blocker set do not enqueue it again.
             if (opts.idempotencyKey) {
               await tx.insert(agentWakeupRequests).values({
-                companyId: agent.companyId, agentId, source, triggerDetail, reason, payload,
+                companyId: agent.companyId, agentId, source, triggerDetail, reason,
+                payload: { ...(payload ?? {}), deferredWakeupRequestId: existingDeferred.id },
                 status: "coalesced", coalescedCount: 1, idempotencyKey: opts.idempotencyKey,
                 requestedByActorType: opts.requestedByActorType ?? null,
                 requestedByActorId: opts.requestedByActorId ?? null,
@@ -8648,14 +8709,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // Lock its requester instead, and commit the receipt with its run.
         await tx.select({ id: agents.id }).from(agents)
           .where(eq(agents.id, agentId)).for("update");
-        const existingDelivery = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
-          .where(and(
-            eq(agentWakeupRequests.companyId, agent.companyId),
-            eq(agentWakeupRequests.agentId, agentId),
-            eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey),
-            ne(agentWakeupRequests.status, "skipped"),
-          )).limit(1);
-        if (existingDelivery.length > 0) return { kind: "duplicate" as const };
+        if (await hasExistingWakeupDelivery(tx, agent.companyId, agentId, opts.idempotencyKey)) return { kind: "duplicate" as const };
       }
       const activeRuns = await tx
         .select()
@@ -8787,9 +8841,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   async function reconcileIssueDependencyWakeups() {
     const result = await issueDependencyWakeupService(db, enqueueWakeup).reconcile();
-    // A process can stop after persisting a terminal run but before releasing
-    // its deferred wake. Blocked parents are absent from ordinary stranded-task
-    // recovery, so retry their existing promotion on every scheduler tick.
+    // Retry committed completion and correction deliveries after a process stops
+    // between saving the blocking run's terminal state and promoting its deferred wake.
     const deferred = await db.select({
       companyId: agentWakeupRequests.companyId, payload: agentWakeupRequests.payload,
       executionRunId: issues.executionRunId,
@@ -8798,7 +8851,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       sql`${issues.id}::text = ${agentWakeupRequests.payload} ->> 'issueId'`,
     )).where(and(
         eq(agentWakeupRequests.status, "deferred_issue_execution"),
-        sql`${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'issueDependencyFingerprint' is not null`,
+        or(
+          sql`${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'issueDependencyFingerprint' is not null`,
+          sql`EXISTS (SELECT 1 FROM ${issueComments} c
+            WHERE c.company_id = ${agentWakeupRequests.companyId}
+              AND c.issue_id = ${issues.id}
+              AND (c.id::text = ${agentWakeupRequests.payload} ->> 'commentId'
+                OR c.id::text IN (SELECT jsonb_array_elements_text(CASE
+                  WHEN jsonb_typeof(${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} -> ${WAKE_COMMENT_IDS_KEY}) = 'array'
+                  THEN ${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} -> ${WAKE_COMMENT_IDS_KEY}
+                  ELSE '[]'::jsonb END)))
+              AND c.intent = 'correction' AND c.author_user_id IS NOT NULL AND c.author_agent_id IS NULL
+              AND (
+                (c.correction_recipient_agent_ids IS NOT NULL
+                  AND c.correction_recipient_agent_ids @> jsonb_build_array(${agentWakeupRequests.agentId}::text))
+                OR (c.correction_recipient_agent_ids IS NULL AND (
+                  c.expected_assignee_agent_id = ${agentWakeupRequests.agentId}
+                  OR (${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'source' = 'comment.mention'
+                    AND ${agentWakeupRequests.payload} -> ${DEFERRED_WAKE_CONTEXT_KEY} ->> 'wakeReason' = 'issue_comment_mentioned'
+                    AND ${agentWakeupRequests.requestedByActorType} = 'user'
+                    AND ${agentWakeupRequests.requestedByActorId} = c.author_user_id)
+                ))
+              ))`,
+        ),
       ));
     const seen = new Set<string>();
     for (const wake of deferred) {
@@ -8821,7 +8896,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         )).orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id)).limit(1).then((rows) => rows[0] ?? null);
         if (terminalRun) await releaseIssueExecutionAndPromote(terminalRun);
       } catch (err) {
-        logger.warn({ err, issueId }, "deferred completion wake promotion will retry on the next scheduler tick");
+        logger.warn({ err, issueId }, "deferred completion or correction wake promotion will retry on the next scheduler tick");
       }
     }
     return result;
@@ -9323,6 +9398,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }),
 
     wakeup: enqueueWakeup,
+    getWakeupDelivery: async (agentId: string, idempotencyKey: string) => {
+      const agent = await getAgent(agentId);
+      if (!agent) throw notFound("Agent not found");
+      const receipt = await db.select({
+        status: agentWakeupRequests.status,
+        reason: agentWakeupRequests.reason,
+        payload: agentWakeupRequests.payload,
+        runStatus: heartbeatRuns.status,
+        startedAt: heartbeatRuns.startedAt,
+      }).from(agentWakeupRequests)
+        .leftJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentWakeupRequests.runId), eq(heartbeatRuns.companyId, agent.companyId)))
+        .where(and(eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.agentId, agentId), eq(agentWakeupRequests.idempotencyKey, idempotencyKey)))
+        .orderBy(
+          sql`CASE WHEN ${agentWakeupRequests.status} <> 'skipped' AND (${heartbeatRuns.startedAt} IS NOT NULL OR ${heartbeatRuns.status} IN ('queued', 'running')) THEN 0 WHEN ${agentWakeupRequests.status} <> 'skipped' THEN 1 ELSE 2 END`,
+          desc(agentWakeupRequests.createdAt),
+        ).limit(1).then(rows => rows[0] ?? null);
+      const deferredId = receipt?.status === "coalesced" && !receipt.runStatus
+        ? readNonEmptyString(receipt.payload?.deferredWakeupRequestId) : null;
+      if (deferredId) {
+        const deferredReceipt = await db.select({
+          status: agentWakeupRequests.status, reason: agentWakeupRequests.reason,
+          runStatus: heartbeatRuns.status, startedAt: heartbeatRuns.startedAt,
+        }).from(agentWakeupRequests)
+          .leftJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentWakeupRequests.runId), eq(heartbeatRuns.companyId, agent.companyId)))
+          .where(and(eq(agentWakeupRequests.id, deferredId), eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.agentId, agentId)))
+          .limit(1).then(rows => rows[0] ?? null);
+        return classifyWakeupDelivery(deferredReceipt);
+      }
+      return classifyWakeupDelivery(receipt);
+    },
     reconcileIssueDependencyWakeups,
 
     reportRunActivity: clearDetachedRunWarning,

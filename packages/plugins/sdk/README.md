@@ -371,10 +371,54 @@ database: {
 Declare `database.namespace.migrate` and `database.namespace.read`; add
 `database.namespace.write` when the worker needs runtime writes. Migrations run
 before worker startup, are checksum-recorded, and may create or alter objects
-only inside the plugin namespace. Runtime `ctx.db.query()` allows `SELECT` from
-`ctx.db.namespace` plus manifest-whitelisted `public` core tables. Runtime
+only inside the plugin namespace.
+
+Migration statements are limited to `CREATE TABLE`, `CREATE INDEX` (including
+`UNIQUE`), column and constraint changes through `ALTER TABLE`, and the scoped
+`COMMENT` forms below. Administrative DDL is rejected. Named identity sequences
+must use the plugin namespace. Explicit tablespaces, table or index access
+methods, sequence ownership overrides, typed tables, and `LIKE` table cloning
+are unsupported.
+
+Runtime `ctx.db.query()` allows `SELECT` from `ctx.db.namespace` plus
+manifest-whitelisted `public` core tables. Runtime
 `ctx.db.execute()` allows `INSERT`, `UPDATE`, and `DELETE` only against the
-plugin namespace.
+plugin namespace. Each runtime call accepts one statement; `SELECT INTO` is
+rejected. PostgreSQL Unicode escape identifiers (`U&"..."`) are unsupported and
+rejected in runtime SQL and migrations. A write may use `WITH`, including
+data-changing CTEs, but its final command must be `INSERT`, `UPDATE`, or `DELETE`,
+and every referenced table must remain inside the plugin namespace.
+
+Declare `agent_wakeup_requests` in `coreReadTables` when a plugin must read
+durable agent delivery receipts. Access remains read-only and queries must keep
+their ordinary company scope.
+
+Runtime namespace reads and writes require ordinary plugin-owned tables without
+inheritance. Views, materialized views, foreign tables, partitioned tables, and
+inheritance parents or children are rejected, including objects left by older
+migrations. Migrations cannot create views, change table inheritance, attach or
+detach partitions, or move objects between schemas. Migration comments may target
+only namespace tables, columns, indexes, sequences, or the namespace schema itself.
+Existing namespace tables referenced by migrations receive the same table checks.
+Tables with user-defined triggers or rewrite rules are rejected. Generated
+columns, check constraints, and index expressions must use only approved
+functions. Column defaults are checked before writes, with a narrow exception
+for `serial` defaults that advance a statically named ordinary sequence in the
+plugin namespace. Runtime `nextval()` calls remain unsupported. Internal
+triggers used for foreign keys remain supported.
+
+Runtime SQL and migrations may call only the host's explicit allowlist of safe
+PostgreSQL built-ins, either unqualified or qualified with `pg_catalog`.
+Native type modifiers such as `numeric(12,2)` and `varchar(255)` are supported
+in column declarations and casts without adding those names to the function allowlist.
+Expression field notation such as `(value).function_name` is unsupported because
+PostgreSQL can interpret it as a function call. Scalar table-function aliases
+may expose only their declared output columns through `alias.column`.
+Unknown functions and functions in other schemas are rejected, including nested
+calls in CTEs, subqueries, defaults, constraints, and index expressions. Namespace
+or core-table permissions do not authorize functions that execute SQL, change
+settings, access files or networks, acquire locks, or delay execution. Bind
+values through the `params` argument rather than interpolating them into SQL.
 
 ### Scoped API Routes
 

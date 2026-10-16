@@ -194,10 +194,11 @@ interface CommentReassignment {
 
 export interface IssueChatComposerHandle {
   focus: () => void;
-  restoreDraft: (submittedBody: string) => void;
+  restoreDraft: (submittedBody: string, correction?: { targetAgentId: string; reassign: boolean }) => void;
 }
 
 interface IssueChatComposerProps {
+  onCorrection: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
   onImageUpload?: (file: File) => Promise<string>;
   onAttachImage?: (file: File) => Promise<IssueAttachment | void>;
   draftKey?: string;
@@ -1783,6 +1784,7 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
 }
 
 const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerProps>(function IssueChatComposer({
+  onCorrection,
   onImageUpload,
   onAttachImage,
   draftKey,
@@ -1798,15 +1800,20 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 }, forwardedRef) {
   const api = useAui();
   const [body, setBody] = useState("");
+  const bodyRef = useRef("");
   const [intent, setIntent] = useState<"message" | "correction">("message");
+  const [retryCorrection, setRetryCorrection] = useState<{ body: string; targetAgentId: string; reassign: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [correctionSubmitting, setCorrectionSubmitting] = useState(false);
+  const correctionSubmittingRef = useRef(false);
   const [attaching, setAttaching] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachmentItem[]>([]);
   const dragDepthRef = useRef(0);
   const effectiveSuggestedAssigneeValue = suggestedAssigneeValue ?? currentAssigneeValue;
   const [reassignTarget, setReassignTarget] = useState(effectiveSuggestedAssigneeValue);
-  const correctionHasAgentTarget = reassignTarget.startsWith("agent:");
+  const matchesRetryCorrection = retryCorrection?.body === body.trim();
+  const correctionHasAgentTarget = reassignTarget.startsWith("agent:") || matchesRetryCorrection;
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1833,7 +1840,9 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 
   useEffect(() => {
     if (!draftKey) return;
-    setBody(loadDraft(draftKey));
+    const restored = loadDraft(draftKey);
+    bodyRef.current = restored;
+    setBody(restored);
   }, [draftKey]);
 
   useEffect(() => {
@@ -1862,23 +1871,35 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 
   useImperativeHandle(forwardedRef, () => ({
     focus: focusComposer,
-    restoreDraft: (submittedBody: string) => {
-      setBody((current) =>
-        restoreSubmittedCommentDraft({
+    restoreDraft: (submittedBody: string, correction?: { targetAgentId: string; reassign: boolean }) => {
+      setBody((current) => {
+        const restored = restoreSubmittedCommentDraft({
           currentBody: current,
           submittedBody,
-        }),
-      );
+        });
+        bodyRef.current = restored;
+        return restored;
+      });
+      if (correction) {
+        setRetryCorrection({ body: submittedBody, ...correction });
+        setIntent("correction");
+      }
       focusComposer();
     },
   }), []);
 
   async function handleSubmit() {
     const trimmed = body.trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || submitting || (intent === "correction" && correctionSubmittingRef.current)) return;
+    if (intent === "correction") {
+      correctionSubmittingRef.current = true;
+      setCorrectionSubmitting(true);
+    }
 
     const hasReassignment = enableReassign && reassignTarget !== currentAssigneeValue;
-    const reassignment = hasReassignment ? parseReassignment(reassignTarget) : undefined;
+    const reassignment = matchesRetryCorrection && intent === "correction"
+      ? retryCorrection.reassign ? { assigneeAgentId: retryCorrection.targetAgentId, assigneeUserId: null } : undefined
+      : hasReassignment ? parseReassignment(reassignTarget) : undefined;
     const reopen = shouldImplicitlyReopenComment(
       issueStatus,
       hasReassignment ? reassignTarget : currentAssigneeValue,
@@ -1886,10 +1907,13 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
     const submittedBody = trimmed;
     const viewportSnapshot = captureComposerViewportSnapshot(composerContainerRef.current);
 
-    setSubmitting(true);
+    if (intent !== "correction") setSubmitting(true);
+    bodyRef.current = "";
     setBody("");
     try {
-      const appendPromise = api.thread().append({
+      if (intent === "correction") {
+        await onCorrection(submittedBody, reopen, reassignment ?? undefined);
+      } else api.thread().append({
         role: "user",
         content: [{ type: "text", text: submittedBody }],
         metadata: { custom: {} },
@@ -1898,25 +1922,33 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
           custom: {
             ...(reopen ? { reopen: true } : {}),
             ...(reassignment ? { reassignment } : {}),
-            ...(intent === "correction" ? { intent } : {}),
           },
         },
       });
       queueViewportRestore(viewportSnapshot);
-      appendPromise;
-      if (draftKey) clearDraft(draftKey);
-      setComposerAttachments([]);
-      setReassignTarget(effectiveSuggestedAssigneeValue);
-      setIntent("message");
+      // A correction waits for the server. Keep anything the user typed or
+      // attached while it was pending instead of clearing their next draft.
+      if (!bodyRef.current.trim()) {
+        if (draftKey) clearDraft(draftKey);
+        setComposerAttachments([]);
+        setReassignTarget(effectiveSuggestedAssigneeValue);
+        setIntent("message");
+        setRetryCorrection(null);
+      }
     } catch {
-      setBody((current) =>
-        restoreSubmittedCommentDraft({
+      setBody((current) => {
+        const restored = restoreSubmittedCommentDraft({
           currentBody: current,
           submittedBody,
-        }),
-      );
+        });
+        bodyRef.current = restored;
+        return restored;
+      });
     } finally {
-      setSubmitting(false);
+      if (intent === "correction") {
+        correctionSubmittingRef.current = false;
+        setCorrectionSubmitting(false);
+      } else setSubmitting(false);
       queueViewportRestore(viewportSnapshot);
     }
   }
@@ -2038,7 +2070,8 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
     void handleDroppedFiles(evt.dataTransfer?.files);
   }
 
-  const canSubmit = !submitting && !!body.trim() && (intent !== "correction" || correctionHasAgentTarget);
+  const canSubmit = !submitting && !!body.trim()
+    && (intent !== "correction" || (!correctionSubmitting && correctionHasAgentTarget));
 
   if (composerDisabledReason) {
     return (
@@ -2094,7 +2127,10 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
         <MarkdownEditor
           ref={editorRef}
           value={body}
-          onChange={setBody}
+          onChange={(value) => {
+            bodyRef.current = value;
+            setBody(value);
+          }}
           placeholder="Reply"
           mentions={mentions}
           onSubmit={handleSubmit}
@@ -2185,7 +2221,10 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
               noneLabel="No assignee"
               searchPlaceholder="Search assignees..."
               emptyMessage="No assignees found."
-              onChange={setReassignTarget}
+              onChange={(value) => {
+                setRetryCorrection(null);
+                setReassignTarget(value);
+              }}
               className="h-8 text-xs"
               renderTriggerValue={(option) => {
                 if (!option) return <span className="text-muted-foreground">Assignee</span>;
@@ -2222,7 +2261,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
             size="sm"
             aria-pressed={intent === "correction"}
             title="Mark this as a correction so the agent proposes a standing rule for approval"
-            disabled={!correctionHasAgentTarget}
+            disabled={!correctionHasAgentTarget || (correctionSubmitting && intent !== "correction")}
             onClick={() => setIntent((current) => current === "correction" ? "message" : "correction")}
           >
             <Brain className="h-3.5 w-3.5" />
@@ -2230,7 +2269,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
           </Button>
 
           <Button size="sm" disabled={!canSubmit} onClick={() => void handleSubmit()}>
-            {submitting ? "Posting..." : "Send"}
+            {submitting || (intent === "correction" && correctionSubmitting) ? "Posting..." : "Send"}
           </Button>
         </div>
       </div>
@@ -2622,6 +2661,10 @@ export function IssueChatThread({
           >
             <IssueChatComposer
               ref={composerRef}
+              onCorrection={(body, reopen, reassignment) => {
+                pendingSubmitScrollRef.current = true;
+                return onAdd(body, reopen, reassignment, "correction");
+              }}
               onImageUpload={imageUploadHandler}
               onAttachImage={onAttachImage}
               draftKey={draftKey}

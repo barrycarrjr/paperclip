@@ -168,6 +168,18 @@ export function issueExecutionStateReturnsToAssignee(
   return principalsEqual(parsedState?.returnAssignee ?? null, assigneePrincipal(assignee));
 }
 
+export function isIssueExecutionPolicyHandoff(input: {
+  issue: IssueLike;
+  policy: IssueExecutionPolicy | null;
+  requestedAssignee: AssigneeLike;
+  requestedStatus?: string;
+}): boolean {
+  return (issueExecutionPolicyHasParticipant(input.policy, input.requestedAssignee) && (
+    input.issue.executionState != null || input.requestedStatus === "done" || input.requestedStatus === "in_review"
+  )) || (input.issue.executionState != null
+    && issueExecutionStateReturnsToAssignee(input.issue.executionState, input.requestedAssignee));
+}
+
 function patchForPrincipal(principal: IssueExecutionStagePrincipal | null) {
   if (!principal) {
     return { assigneeAgentId: null, assigneeUserId: null };

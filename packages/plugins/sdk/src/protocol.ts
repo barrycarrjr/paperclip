@@ -1065,6 +1065,7 @@ export interface WorkerToHostMethods {
   // Activity
   "activity.log": [
     params: {
+      idempotencyKey?: string;
       companyId: string;
       message: string;
       entityType?: string;

@@ -96,7 +96,7 @@ export function instructionRuleService(
             .select({
               intent: issueComments.intent,
               authorUserId: issueComments.authorUserId,
-              assigneeAgentId: issues.assigneeAgentId,
+              correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
             })
             .from(issueComments)
             .innerJoin(issues, eq(issues.id, issueComments.issueId))
@@ -113,9 +113,9 @@ export function instructionRuleService(
           }
           if (
             input.requestedByAgentId !== input.payload.targetAgentId ||
-            source.assigneeAgentId !== input.payload.targetAgentId
+            source.correctionTargetAgentId !== input.payload.targetAgentId
           ) {
-            throw unprocessable("The correction is no longer assigned to the requesting agent");
+            throw unprocessable("The correction was not addressed to the requesting agent");
           }
 
           const approval = await tx
@@ -235,7 +235,7 @@ export function instructionRuleService(
           .select({
             intent: issueComments.intent,
             authorUserId: issueComments.authorUserId,
-            assigneeAgentId: issues.assigneeAgentId,
+            correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
           })
           .from(issueComments)
           .innerJoin(issues, eq(issues.id, issueComments.issueId))
@@ -249,9 +249,9 @@ export function instructionRuleService(
           .then((rows) => rows[0] ?? null);
         if (
           !source || source.intent !== "correction" || !source.authorUserId ||
-          source.assigneeAgentId !== payload.targetAgentId
+          source.correctionTargetAgentId !== payload.targetAgentId
         ) {
-          throw unprocessable("The source correction is no longer assigned to the target agent, so the rule cannot be resubmitted");
+          throw unprocessable("The source correction was not addressed to the target agent, so the rule cannot be resubmitted");
         }
         const now = new Date(Math.max(Date.now(), candidate.approval.updatedAt.getTime() + 1));
         await tx
@@ -323,7 +323,7 @@ export function instructionRuleService(
           .select({
             intent: issueComments.intent,
             authorUserId: issueComments.authorUserId,
-            assigneeAgentId: issues.assigneeAgentId,
+            correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
           })
           .from(issueComments)
           .innerJoin(issues, eq(issues.id, issueComments.issueId))
@@ -337,9 +337,9 @@ export function instructionRuleService(
           .then((rows) => rows[0] ?? null);
         if (
           !source || source.intent !== "correction" || !source.authorUserId ||
-          source.assigneeAgentId !== candidate.proposal.targetAgentId
+          source.correctionTargetAgentId !== candidate.proposal.targetAgentId
         ) {
-          throw unprocessable("The source correction is no longer assigned to the target agent, so revision cannot be requested");
+          throw unprocessable("The source correction was not addressed to the target agent, so revision cannot be requested");
         }
 
         const now = new Date(Math.max(Date.now(), candidate.approval.updatedAt.getTime() + 1));
@@ -405,7 +405,7 @@ export function instructionRuleService(
           .select({
             intent: issueComments.intent,
             authorUserId: issueComments.authorUserId,
-            assigneeAgentId: issues.assigneeAgentId,
+            correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
           })
           .from(issueComments)
           .innerJoin(issues, eq(issues.id, issueComments.issueId))
@@ -421,9 +421,9 @@ export function instructionRuleService(
           !source ||
           source.intent !== "correction" ||
           !source.authorUserId ||
-          source.assigneeAgentId !== candidate.proposal.targetAgentId
+          source.correctionTargetAgentId !== candidate.proposal.targetAgentId
         ) {
-          throw unprocessable("The source correction is no longer assigned to the target agent, so the rule was not approved");
+          throw unprocessable("The source correction was not addressed to the target agent, so the rule was not approved");
         }
 
         const companyAgents = await tx

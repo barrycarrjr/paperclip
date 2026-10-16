@@ -168,7 +168,7 @@ describe("approval routes idempotent retries", () => {
             commentAuthorUserId: "board-user",
             issueId,
             issueCompanyId: "company-1",
-            assigneeAgentId: agentId,
+            correctionTargetAgentId: agentId,
           }],
         }),
       }),
@@ -209,6 +209,54 @@ describe("approval routes idempotent retries", () => {
     expect(mockIssueApprovalService.linkManyForApproval).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
+
+  it.each(["create", "resubmit"] as const)(
+    "explains how to recover a legacy correction without a verified target during instruction %s",
+    async (operation) => {
+      const agentId = "11111111-1111-4111-8111-111111111111";
+      const issueId = "22222222-2222-4222-8222-222222222222";
+      const commentId = "33333333-3333-4333-8333-333333333333";
+      const payload = {
+        version: 1, scope: "agent", targetAgentId: agentId, sourceIssueId: issueId, sourceCommentId: commentId,
+        rule: "Verify totals before posting.",
+      };
+      mockDbSelect.mockReturnValue({
+        from: () => ({
+          innerJoin: () => ({
+            where: async () => [{
+              ...(operation === "create"
+                ? { commentId, commentIntent: "correction", commentAuthorUserId: "board-user", issueId, issueCompanyId: "company-1" }
+                : { intent: "correction", authorUserId: "board-user" }),
+              correctionTargetAgentId: null,
+            }],
+          }),
+        }),
+      });
+      mockApprovalService.getById.mockResolvedValue({
+        id: "approval-legacy-correction", companyId: "company-1", type: "instruction_change",
+        status: "revision_requested", requestedByAgentId: agentId, payload,
+      });
+      const app = await createAgentApp(agentId);
+      const response = operation === "create"
+        ? await request(app).post("/api/companies/company-1/approvals").send({ type: "instruction_change", payload })
+        : await request(app).post("/api/approvals/approval-legacy-correction/resubmit").send({
+          payload: { ...payload, rule: "Verify totals before publishing the final result." },
+          revisionCycle: "2026-10-15T10:00:00.000Z",
+        });
+
+      expect(response.status, JSON.stringify(response.body)).toBe(409);
+      expect(response.body).toEqual({
+        error: "This legacy correction has no verified target. Ask a board user to submit a new correction.",
+      });
+      expect(mockInstructionRuleService.create).not.toHaveBeenCalled();
+      expect(mockInstructionRuleService.resubmit).not.toHaveBeenCalled();
+      expect(mockApprovalService.create).not.toHaveBeenCalled();
+      expect(mockApprovalService.resubmit).not.toHaveBeenCalled();
+      expect(mockIssueApprovalService.linkManyForApproval).not.toHaveBeenCalled();
+      expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    },
+  );
 
   it("wakes the corrected agent after the instruction service atomically approves the rule", async () => {
     const agentId = "11111111-1111-4111-8111-111111111111";

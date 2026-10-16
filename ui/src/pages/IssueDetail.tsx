@@ -59,8 +59,15 @@ import {
   type IssueCommentReassignment,
   type OptimisticIssueComment,
 } from "../lib/optimistic-issue-comments";
+import {
+  correctionRequestForBody,
+  pendingCorrectionAfterError,
+  type PendingCorrectionDelivery,
+  type PendingCorrectionRequest,
+} from "../lib/issue-comment-idempotency";
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
 import { useProjectOrder } from "../hooks/useProjectOrder";
+import { usePendingIssueCorrections } from "../hooks/usePendingIssueCorrections";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { PAGE_STICKY_TOP_CLASS } from "../lib/narrow-layout";
 import { ApprovalCard } from "../components/ApprovalCard";
@@ -534,7 +541,7 @@ type IssueDetailChatTabProps = {
   composerDisabledReason: string | null;
   composerHint: string | null;
   queuedCommentReason: "hold" | "active_run" | "other";
-  onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
+  onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment, intent?: "message" | "correction") => Promise<void>;
   onImageUpload: (file: File) => Promise<string>;
   onAttachImage: (file: File) => Promise<IssueAttachment | void>;
   onInterruptQueued: (runId: string) => Promise<void>;
@@ -1006,6 +1013,8 @@ export function IssueDetail() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
+  const pendingCorrectionRef = useRef<PendingCorrectionRequest | null>(null);
+  const correctionSubmissionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const cancelledQueuedOptimisticCommentIdsRef = useRef(new Set<string>());
   const resolvedIssueDetailState = useMemo(
     () => readIssueDetailLocationState(issueId, location.state, location.search),
@@ -1145,7 +1154,7 @@ export function IssueDetail() {
     enabled: !!resolvedCompanyId,
   });
 
-  const { data: session } = useQuery({
+  const { data: session, isSuccess: sessionReady } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
@@ -1156,6 +1165,12 @@ export function IssueDetail() {
     enabled: !!resolvedCompanyId,
   });
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const pendingCorrections = usePendingIssueCorrections({
+    companyId: issue?.companyId,
+    issueId: issue?.id,
+    userId: currentUserId,
+    sessionReady,
+  });
   const [signOffError, setSignOffError] = useState<string | null>(null);
   const { data: boardAccess } = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
@@ -1619,8 +1634,8 @@ export function IssueDetail() {
   });
 
   const addComment = useMutation({
-    mutationFn: ({ body, reopen, interrupt, intent }: { body: string; reopen?: boolean; interrupt?: boolean; intent?: "message" | "correction" }) =>
-      issuesApi.addComment(issueId!, body, reopen, interrupt, intent),
+    mutationFn: ({ body, reopen, interrupt, intent, idempotencyKey, expectedAssigneeAgentId }: { body: string; reopen?: boolean; interrupt?: boolean; intent?: "message" | "correction"; idempotencyKey?: string; expectedAssigneeAgentId?: string }) =>
+      issuesApi.addComment(issueId!, body, reopen, interrupt, intent, idempotencyKey, expectedAssigneeAgentId),
     onMutate: async ({ body, reopen, interrupt, intent }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.comments(issueId!) });
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.detail(issueId!) });
@@ -1811,20 +1826,23 @@ export function IssueDetail() {
       interrupt,
       intent,
       reassignment,
+      idempotencyKey,
+      expectedAssigneeAgentId,
     }: {
       body: string;
       reopen?: boolean;
       interrupt?: boolean;
       intent?: "message" | "correction";
       reassignment: CommentReassignment;
+      idempotencyKey?: string;
+      expectedAssigneeAgentId?: string;
     }) =>
-      issuesApi.update(issueId!, {
-        comment: body,
-        assigneeAgentId: reassignment.assigneeAgentId,
-        assigneeUserId: reassignment.assigneeUserId,
-        ...(reopen ? { status: "todo" } : {}),
-        ...(interrupt ? { interrupt } : {}),
-        ...(intent === "correction" ? { commentIntent: intent } : {}),
+      issuesApi.addCommentAndReassign(issueId!, body, reassignment, {
+        reopen,
+        interrupt,
+        intent,
+        idempotencyKey,
+        expectedAssigneeAgentId,
       }),
     onMutate: async ({ body, reopen, reassignment, interrupt, intent }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.issues.comments(issueId!) });
@@ -2470,13 +2488,139 @@ export function IssueDetail() {
     if (!shouldPrefetchOlderComments) return;
     void fetchOlderComments();
   }, [fetchOlderComments, shouldPrefetchOlderComments]);
-  const handleChatAdd = useCallback(async (body: string, reopen?: boolean, reassignment?: CommentReassignment, intent?: "message" | "correction") => {
+  const submitChatComment = useCallback(async (body: string, reopen?: boolean, reassignment?: CommentReassignment, intent?: "message" | "correction") => {
     if (reassignment) {
-      await addCommentAndReassign.mutateAsync({ body, reopen, reassignment, intent });
+      let idempotencyKey: string | undefined;
+      let expectedAssigneeAgentId: string | undefined;
+      if (intent === "correction") {
+        if (!reassignment.assigneeAgentId) throw new Error("Correction comments require an assigned agent.");
+        pendingCorrectionRef.current = correctionRequestForBody(
+          pendingCorrectionRef.current,
+          issue?.id ?? issueId!,
+          body,
+          reassignment.assigneeAgentId,
+          undefined,
+          `reassign:${reassignment.assigneeAgentId}`,
+        );
+        idempotencyKey = pendingCorrectionRef.current.idempotencyKey;
+        expectedAssigneeAgentId = pendingCorrectionRef.current.expectedAssigneeAgentId;
+      }
+      const correctionRequest = intent === "correction" ? pendingCorrectionRef.current : null;
+      if (correctionRequest && !pendingCorrections.recordRequest(correctionRequest, reopen)) {
+        throw new Error("The correction retry could not be saved in this browser. Free browser storage, then retry.");
+      }
+      try {
+        const result = await addCommentAndReassign.mutateAsync({
+          body,
+          reopen,
+          reassignment,
+          intent,
+          idempotencyKey,
+          expectedAssigneeAgentId,
+        });
+        if (correctionRequest && result.comment) {
+          const pending = pendingCorrections.recordDelivery(correctionRequest, result.comment, reopen);
+          if (pending) return;
+        }
+      } catch (error) {
+        const pending = intent === "correction" && pendingCorrectionRef.current?.idempotencyKey === idempotencyKey
+          ? pendingCorrectionRef.current : null;
+        const recovered = pendingCorrectionAfterError(pending, error);
+        if (pending && !recovered) {
+          pendingCorrectionRef.current = null;
+          pendingCorrections.discardRequest(pending);
+          await queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) });
+        }
+        if (recovered?.body === body && intent === "correction") {
+          commentComposerRef.current?.restoreDraft(body, {
+            targetAgentId: recovered.expectedAssigneeAgentId,
+            reassign: true,
+          });
+        }
+        throw error;
+      }
+      if (intent === "correction" && pendingCorrectionRef.current?.idempotencyKey === idempotencyKey) pendingCorrectionRef.current = null;
       return;
     }
-    await addComment.mutateAsync({ body, reopen, intent });
-  }, [addComment, addCommentAndReassign]);
+    let idempotencyKey: string | undefined;
+    let expectedAssigneeAgentId: string | undefined;
+    if (intent === "correction") {
+      pendingCorrectionRef.current = correctionRequestForBody(
+        pendingCorrectionRef.current,
+        issue?.id ?? issueId!,
+        body,
+        issue?.assigneeAgentId,
+      );
+      idempotencyKey = pendingCorrectionRef.current.idempotencyKey;
+      expectedAssigneeAgentId = pendingCorrectionRef.current.expectedAssigneeAgentId;
+    }
+    const correctionRequest = intent === "correction" ? pendingCorrectionRef.current : null;
+    if (correctionRequest && !pendingCorrections.recordRequest(correctionRequest, reopen)) {
+      throw new Error("The correction retry could not be saved in this browser. Free browser storage, then retry.");
+    }
+    try {
+      const comment = await addComment.mutateAsync({ body, reopen, intent, idempotencyKey, expectedAssigneeAgentId });
+      if (correctionRequest) {
+        const pending = pendingCorrections.recordDelivery(correctionRequest, comment, reopen);
+        if (pending) return;
+      }
+    } catch (error) {
+      const pending = intent === "correction" && pendingCorrectionRef.current?.idempotencyKey === idempotencyKey
+        ? pendingCorrectionRef.current : null;
+      const recovered = pendingCorrectionAfterError(pending, error);
+      if (pending && !recovered) {
+        pendingCorrectionRef.current = null;
+        pendingCorrections.discardRequest(pending);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) });
+      }
+      if (recovered?.body === body && intent === "correction") {
+        commentComposerRef.current?.restoreDraft(body, {
+          targetAgentId: recovered.expectedAssigneeAgentId,
+          reassign: false,
+        });
+      }
+      throw error;
+    }
+    if (intent === "correction" && pendingCorrectionRef.current?.idempotencyKey === idempotencyKey) pendingCorrectionRef.current = null;
+  }, [addComment, addCommentAndReassign, issue?.assigneeAgentId, issue?.id, issueId, queryClient,
+    pendingCorrections.discardRequest, pendingCorrections.recordDelivery, pendingCorrections.recordRequest]);
+  const handleChatAdd = useCallback((body: string, reopen?: boolean, reassignment?: CommentReassignment, intent?: "message" | "correction") => {
+    if (intent !== "correction") return submitChatComment(body, reopen, reassignment, intent);
+    const submission = correctionSubmissionQueueRef.current.then(() => submitChatComment(body, reopen, reassignment, intent));
+    correctionSubmissionQueueRef.current = submission.then(() => undefined, () => undefined);
+    return submission;
+  }, [submitChatComment]);
+  const retryCorrectionDelivery = useMutation({
+    mutationFn: async (delivery: PendingCorrectionDelivery) => {
+      const request = delivery.request;
+      if (!pendingCorrections.recordRequest(request, delivery.reopen)) {
+        throw new Error("The correction retry could not be saved in this browser. Free browser storage, then retry.");
+      }
+      if (request.targetSelectionKey.startsWith("reassign:")) {
+        const result = await issuesApi.addCommentAndReassign(request.issueId, request.body, {
+          assigneeAgentId: request.expectedAssigneeAgentId,
+          assigneeUserId: null,
+        }, {
+          intent: "correction",
+          idempotencyKey: request.idempotencyKey,
+          expectedAssigneeAgentId: request.expectedAssigneeAgentId,
+          reopen: delivery.reopen,
+        });
+        if (!result.comment) throw new Error("The server did not confirm the correction delivery. Retry the saved correction.");
+        return result.comment;
+      }
+      return issuesApi.addComment(request.issueId, request.body, delivery.reopen, undefined, "correction",
+        request.idempotencyKey, request.expectedAssigneeAgentId);
+    },
+    onSuccess: (comment, delivery) => {
+      const pending = pendingCorrections.recordDelivery(delivery.request, comment, delivery.reopen);
+      if (!pending && pendingCorrectionRef.current?.idempotencyKey === delivery.request.idempotencyKey) {
+        pendingCorrectionRef.current = null;
+      }
+      invalidateIssueThreadLazily();
+      invalidateIssueRunState();
+    },
+  });
   const handleCommentImageUpload = useCallback(async (file: File) => {
     const attachment = await uploadAttachment.mutateAsync(file);
     return attachment.contentPath;
@@ -3291,6 +3435,36 @@ export function IssueDetail() {
         project={resolvedProject}
         onUpdate={(data) => updateIssue.mutate(data)}
       />
+
+      {pendingCorrections.deliveries.length > 0 || pendingCorrections.storageError ? (
+        <section aria-label="Corrections awaiting delivery" className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+          {pendingCorrections.deliveries.length > 0 ? (
+            <p role="status">{pendingCorrections.deliveries.some((delivery) => !delivery.commentId)
+              ? "Correction response not confirmed. Retry to reconcile the saved request safely."
+              : "Correction saved, delivery pending. Resolve the reason below, then retry delivery."}</p>
+          ) : null}
+          {pendingCorrections.storageError ? <p role="alert">{pendingCorrections.storageError}</p> : null}
+          {pendingCorrections.deliveries.map((delivery) => (
+            <div key={delivery.request.idempotencyKey} className="space-y-2 border-t border-amber-500/30 pt-3">
+              <p className="line-clamp-2 whitespace-pre-wrap break-words">{delivery.request.body}</p>
+              {delivery.pending.map((recipient) => (
+                <p key={recipient.agentId} className="break-words text-muted-foreground">
+                  {agentMap.get(recipient.agentId)?.name ?? recipient.agentId}: {recipient.reason}
+                </p>
+              ))}
+              {retryCorrectionDelivery.isError && retryCorrectionDelivery.variables?.request.idempotencyKey === delivery.request.idempotencyKey ? (
+                <p role="alert" className="text-destructive">{retryCorrectionDelivery.error instanceof Error
+                  ? retryCorrectionDelivery.error.message : "Delivery failed. The saved correction is still available to retry."}</p>
+              ) : null}
+              <Button variant="outline" size="sm" disabled={retryCorrectionDelivery.isPending}
+                onClick={() => retryCorrectionDelivery.mutate(delivery)}>
+                {retryCorrectionDelivery.isPending && retryCorrectionDelivery.variables?.request.idempotencyKey === delivery.request.idempotencyKey
+                  ? "Retrying delivery..." : "Retry correction delivery"}
+              </Button>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       <PageSection flush>
       {/* The tab strip is full-bleed so its underline reads as the section's

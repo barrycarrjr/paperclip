@@ -427,6 +427,7 @@ export type {
   IssueExecutionStagePrincipal,
   IssueExecutionDecision,
   IssueComment,
+  IssueCorrectionDelivery,
   IssueThreadInteractionActorFields,
   SuggestedTaskDraft,
   SuggestTasksPayload,

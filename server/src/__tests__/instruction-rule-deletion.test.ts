@@ -52,7 +52,8 @@ describePostgres("instruction rule deletion", () => {
     async function propose(scope: "company" | "agent" = "agent") {
       const [comment] = await db.insert(issueComments).values({
         companyId: company!.id, issueId: issue!.id, authorType: "user",
-        authorUserId: "board-user", intent: "correction", body: "Check totals.",
+        authorUserId: "board-user", intent: "correction", expectedAssigneeAgentId: target!.id,
+        body: "Check totals.",
       }).returning();
       const result = await service.create({
         companyId: company!.id,
@@ -129,6 +130,15 @@ describePostgres("instruction rule deletion", () => {
     ]);
     expect(await db.select().from(instructionRuleProposals)).toHaveLength(3);
     expect((await db.select().from(approvals)).every((row) => row.requestedByAgentId === null)).toBe(true);
+    const retainedCorrectionTargets = await db
+      .select({ expectedAssigneeAgentId: issueComments.expectedAssigneeAgentId })
+      .from(issueComments)
+      .where(eq(issueComments.intent, "correction"));
+    expect(retainedCorrectionTargets).toEqual([
+      { expectedAssigneeAgentId: seeded.target.id },
+      { expectedAssigneeAgentId: seeded.target.id },
+      { expectedAssigneeAgentId: seeded.target.id },
+    ]);
     await expect(seeded.service.approve(pending.approval.id, "board-user")).rejects.toThrow("no longer exists");
   });
 });

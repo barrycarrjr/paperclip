@@ -11,8 +11,50 @@ import {
 describe("issue validators", () => {
   it("accepts correction intent and defaults ordinary comments to message", () => {
     expect(addIssueCommentSchema.parse({ body: "Please do this differently" }).intent).toBe("message");
-    expect(addIssueCommentSchema.parse({ body: "Please do this differently", intent: "correction" }).intent)
+    expect(addIssueCommentSchema.parse({
+      body: "Please do this differently",
+      intent: "correction",
+      idempotencyKey: "board.correction:v1_test",
+    }).intent)
       .toBe("correction");
+    expect(() => addIssueCommentSchema.parse({
+      body: "Please do this differently",
+      intent: "correction",
+    })).toThrow("Correction comments require an idempotency key");
+  });
+  it("accepts an expected assignee only for correction comments", () => {
+    const expectedAssigneeAgentId = "22222222-2222-4222-8222-222222222222";
+    expect(addIssueCommentSchema.parse({
+      body: "Please do this differently",
+      intent: "correction",
+      expectedAssigneeAgentId,
+      idempotencyKey: "board.correction:v1_expected-agent",
+    }).expectedAssigneeAgentId).toBe(expectedAssigneeAgentId);
+    expect(() => addIssueCommentSchema.parse({
+      body: "Ordinary comment",
+      expectedAssigneeAgentId,
+    })).toThrow("An expected assignee can only be supplied for correction comments");
+    expect(() => addIssueCommentSchema.parse({
+      body: "Correction",
+      intent: "correction",
+      expectedAssigneeAgentId: "not-an-agent-id",
+      idempotencyKey: "board.correction:v1_invalid-agent",
+    })).toThrow();
+  });
+  it("accepts prior assignee targeting only for an explicit correction target", () => {
+    expect(addIssueCommentSchema.parse({
+      body: "Revise the earlier run.",
+      intent: "correction",
+      expectedAssigneeAgentId: "22222222-2222-4222-8222-222222222222",
+      allowPriorAssigneeTarget: true,
+      idempotencyKey: "handoff.review:v1_prior-agent",
+    }).allowPriorAssigneeTarget).toBe(true);
+    expect(() => addIssueCommentSchema.parse({
+      body: "Revise the earlier run.",
+      intent: "correction",
+      allowPriorAssigneeTarget: true,
+      idempotencyKey: "handoff.review:v1_missing-agent",
+    })).toThrow("A prior assignee target requires a correction with an expected assignee");
   });
   it("accepts bounded portable issue-comment idempotency keys", () => {
     expect(addIssueCommentSchema.parse({ body: "Reply", idempotencyKey: "ollama.mixed:v1_key-123" }).idempotencyKey)
@@ -28,6 +70,58 @@ describe("issue validators", () => {
         [stateChange]: true,
       })).toThrow("Idempotent comment creation cannot be combined with issue or run state changes");
     }
+  });
+  it.each([undefined, "22222222-2222-4222-8222-222222222222"])(
+    "allows idempotent correction reopening with expected assignee %s without reassignment",
+    (expectedAssigneeAgentId) => {
+      expect(addIssueCommentSchema.parse({
+        body: "Check the source.",
+        intent: "correction",
+        idempotencyKey: "board.correction:v1_reopen",
+        expectedAssigneeAgentId,
+        reopen: true,
+      })).toMatchObject({ intent: "correction", reopen: true });
+    },
+  );
+  it.each(["resume", "interrupt"] as const)(
+    "rejects idempotent correction %s even when reopening",
+    (stateChange) => {
+      for (const reopen of [undefined, true]) {
+        expect(() => addIssueCommentSchema.parse({
+          body: "Check the source.",
+          intent: "correction",
+          idempotencyKey: "board.correction:v1_run-state",
+          reopen,
+          [stateChange]: true,
+        })).toThrow("Idempotent comment creation cannot be combined with issue or run state changes");
+      }
+    },
+  );
+  it("allows reopening with an atomic correction reassignment and validates its target", () => {
+    const targetAgentId = "22222222-2222-4222-8222-222222222222";
+    expect(addIssueCommentSchema.parse({
+      body: "Check the source.",
+      intent: "correction",
+      idempotencyKey: "board.correction:v1_reassign",
+      expectedAssigneeAgentId: targetAgentId,
+      reassignToAgentId: targetAgentId,
+      reopen: true,
+    })).toMatchObject({ reassignToAgentId: targetAgentId, reopen: true });
+    expect(() => addIssueCommentSchema.parse({
+      body: "Check the source.",
+      intent: "correction",
+      idempotencyKey: "board.correction:v1_wrong-target",
+      expectedAssigneeAgentId: targetAgentId,
+      reassignToAgentId: "33333333-3333-4333-8333-333333333333",
+    })).toThrow("A correction reassignment must match the expected correction target");
+    expect(() => addIssueCommentSchema.parse({
+      body: "Check the source.",
+      intent: "correction",
+      idempotencyKey: "board.correction:v1_interrupt",
+      expectedAssigneeAgentId: targetAgentId,
+      reassignToAgentId: targetAgentId,
+      interrupt: true,
+    })).toThrow("Atomic correction reassignment does not support run interruption or resume intent");
   });
   it("passes real line breaks through unchanged", () => {
     const parsed = createIssueSchema.parse({
@@ -62,6 +156,17 @@ describe("issue validators", () => {
     });
 
     expect(parsed.comment).toBe("Done\n\n- Verified the route");
+  });
+
+  it("rejects correction comments in issue updates", () => {
+    expect(updateIssueSchema.parse({
+      comment: "Ordinary progress update",
+      commentIntent: "message",
+    }).commentIntent).toBe("message");
+    expect(() => updateIssueSchema.parse({
+      comment: "Please correct the earlier run",
+      commentIntent: "correction",
+    })).toThrow("Correction comments must be submitted with POST /issues/:id/comments");
   });
 
   it("normalizes escaped line breaks in issue comment bodies", () => {

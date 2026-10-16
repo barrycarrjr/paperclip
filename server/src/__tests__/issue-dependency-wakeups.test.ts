@@ -367,10 +367,13 @@ describeDatabase("transactional issue dependency wakeups", () => {
     await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.agentId));
     await db.update(issues).set({ status: "cancelled" }).where(eq(issues.id, f.childId));
     expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 0, retried: 1 });
-    expect(await deliveries(f.companyId)).toHaveLength(0);
+    expect(await deliveries(f.companyId)).toMatchObject([{ status: "skipped", reason: "agent.paused" }]);
     await db.update(agents).set({ status: "running" }).where(eq(agents.id, f.agentId));
     expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 1, retried: 0 });
-    expect(await deliveries(f.companyId)).toHaveLength(1);
+    expect(await deliveries(f.companyId)).toMatchObject([
+      { status: "skipped", reason: "agent.paused" },
+      { status: "queued", reason: "issue_children_completed" },
+    ]);
   });
 
   it("does not wake across malformed cross-company parent, relation, or assignee links", async () => {

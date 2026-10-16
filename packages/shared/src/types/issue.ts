@@ -953,7 +953,14 @@ export type IssueCommentDerivedAuthorSource =
   | "run_id"
   | "run_log_comment_post";
 
+export interface IssueCorrectionDelivery {
+  status: "accepted" | "pending";
+  pending: { agentId: string; reason: string }[];
+}
+
 export interface IssueComment {
+  /** Comment POST response only. Saving a correction does not guarantee agent invocation. */
+  correctionDelivery?: IssueCorrectionDelivery;
   clientRequestId?: string | null;
   conversationSessionGeneration?: number | null;
   id: string;
@@ -962,6 +969,9 @@ export interface IssueComment {
   authorType?: IssueCommentAuthorType;
   intent?: IssueCommentIntent;
   idempotencyKey?: string | null;
+  expectedAssigneeAgentId?: string | null;
+  /** Immutable resolved delivery set for correction retries. */
+  correctionRecipientAgentIds?: string[] | null;
   authorAgentId: string | null;
   authorUserId: string | null;
   /** Responsible user attribution. Legacy and plugin-provided comment values may omit it. */

@@ -184,7 +184,7 @@ export function approvalRoutes(
           commentAuthorUserId: issueComments.authorUserId,
           issueId: issues.id,
           issueCompanyId: issues.companyId,
-          assigneeAgentId: issues.assigneeAgentId,
+          correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
         })
         .from(issueComments)
         .innerJoin(issues, eq(issues.id, issueComments.issueId))
@@ -199,8 +199,12 @@ export function approvalRoutes(
         res.status(422).json({ error: "Instruction changes require a board-authored correction comment" });
         return;
       }
-      if (source.assigneeAgentId !== actor.agentId) {
-        res.status(409).json({ error: "The correction is no longer assigned to the requesting agent" });
+      if (!source.correctionTargetAgentId) {
+        res.status(409).json({ error: "This legacy correction has no verified target. Ask a board user to submit a new correction." });
+        return;
+      }
+      if (source.correctionTargetAgentId !== actor.agentId) {
+        res.status(409).json({ error: "The correction was not addressed to the requesting agent" });
         return;
       }
       normalizedPayload = payload;
@@ -387,7 +391,11 @@ export function approvalRoutes(
         return;
       }
       const source = await db
-        .select({ intent: issueComments.intent, authorUserId: issueComments.authorUserId, assigneeAgentId: issues.assigneeAgentId })
+        .select({
+          intent: issueComments.intent,
+          authorUserId: issueComments.authorUserId,
+          correctionTargetAgentId: issueComments.expectedAssigneeAgentId,
+        })
         .from(issueComments)
         .innerJoin(issues, eq(issues.id, issueComments.issueId))
         .where(and(
@@ -397,8 +405,16 @@ export function approvalRoutes(
           eq(issues.companyId, existing.companyId),
         ))
         .then((rows) => rows[0] ?? null);
-      if (!source || source.intent !== "correction" || !source.authorUserId || source.assigneeAgentId !== req.actor.agentId) {
-        res.status(409).json({ error: "The source correction is no longer assigned to this agent" });
+      if (!source || source.intent !== "correction" || !source.authorUserId) {
+        res.status(409).json({ error: "The source correction was not addressed to this agent" });
+        return;
+      }
+      if (!source.correctionTargetAgentId) {
+        res.status(409).json({ error: "This legacy correction has no verified target. Ask a board user to submit a new correction." });
+        return;
+      }
+      if (source.correctionTargetAgentId !== req.actor.agentId) {
+        res.status(409).json({ error: "The source correction was not addressed to this agent" });
         return;
       }
       normalizedPayload = next.data;
