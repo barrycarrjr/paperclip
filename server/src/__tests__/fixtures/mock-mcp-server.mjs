@@ -25,6 +25,7 @@ server.tool(
   "echo",
   "Echo the input string back as text. Read-only.",
   { message: z.string() },
+  { readOnlyHint: true },
   async ({ message }) => ({
     content: [{ type: "text", text: `echo: ${message}` }],
   }),
@@ -34,6 +35,7 @@ server.tool(
   "create_thing",
   "Create a thing. Write-class — the bare name prefix triggers the mutation heuristic.",
   { name: z.string() },
+  { readOnlyHint: false },
   async ({ name }) => ({
     content: [{ type: "text", text: `created: ${name}` }],
   }),
@@ -43,6 +45,7 @@ server.tool(
   "read_secret_env",
   "Returns the value of process.env.SECRET_TOKEN. Used to verify env-var injection.",
   {},
+  { readOnlyHint: true },
   async () => ({
     content: [
       { type: "text", text: `SECRET_TOKEN=${process.env.SECRET_TOKEN ?? "<unset>"}` },

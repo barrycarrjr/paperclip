@@ -1,4 +1,13 @@
 export {
+  patchCompanyActionPolicySchema,
+  patchAgentActionPolicyOverrideSchema,
+  companyActionPolicyPatchSchema,
+  agentActionPolicyOverridePatchSchema,
+  type PatchCompanyActionPolicyInput,
+  type PatchAgentActionPolicyOverrideInput,
+} from "./agent-action-policy.js";
+
+export {
   instanceGeneralSettingsSchema,
   patchInstanceGeneralSettingsSchema,
   type InstanceGeneralSettings,

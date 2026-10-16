@@ -35,6 +35,8 @@ import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-d
 
 const ACTIONABLE_APPROVAL_STATUSES = ["pending", "revision_requested"];
 const FAILED_RUN_STATUSES = ["failed", "timed_out"];
+/** Issue statuses that mean nobody is waiting on the work any more. */
+const CLOSED_ISSUE_STATUSES = ["done", "cancelled"];
 /** How far back to look for still-unaddressed run failures. */
 const RUN_FAILURE_LOOKBACK = 400;
 
@@ -337,9 +339,13 @@ export function attentionQueueService(db: Db) {
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(RUN_FAILURE_LOOKBACK);
 
-    return mergeRunFailuresBySharedCause(groupUnaddressedRunFailures(rows)).map((group) => {
+    const unaddressed = groupUnaddressedRunFailures(rows);
+    const closedIssueIds = await closedIssueIdsAmong(companyId, unaddressed);
+    const stillOpen = dropFailuresOnClosedWork(unaddressed, closedIssueIds);
+    const merged = mergeRunFailuresBySharedCause(stillOpen);
+    return dropRecoveredSingleCauseFailures(merged, rows).map((group) => {
       const row = group.head;
-      const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId;
+      const issueId = runIssueId(row);
       const cause = describeRunFailureCause(row.errorCode);
       const startedMs = group.oldestFailureMs ?? ms(row.finishedAt) ?? ms(row.createdAt);
       return {
@@ -382,6 +388,28 @@ export function attentionQueueService(db: Db) {
         updatedAtMs: ms(row.finishedAt) ?? ms(row.createdAt) ?? 0,
       };
     });
+  }
+
+  /** Which of the issues these failures belong to are already done or cancelled. */
+  async function closedIssueIdsAmong(
+    companyId: string,
+    groups: readonly RunFailureGroup<RunFailureCandidate>[],
+  ): Promise<Set<string>> {
+    const issueIds = [
+      ...new Set(groups.map((group) => runIssueId(group.head)).filter((id): id is string => id !== null)),
+    ];
+    if (issueIds.length === 0) return new Set();
+    const closed = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          inArray(issues.id, issueIds),
+          inArray(issues.status, CLOSED_ISSUE_STATUSES),
+        ),
+      );
+    return new Set(closed.map((issue) => issue.id));
   }
 
   /**
@@ -626,8 +654,7 @@ export function groupUnaddressedRunFailures<T extends RunFailureCandidate>(
     { head: T; failures: number; closed: boolean; oldestFailureMs: number | null; stalledWork: number }
   >();
   for (const row of newestFirst) {
-    const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId ?? null;
-    const groupKey = `${row.agentId}:${typeof issueId === "string" ? issueId : "no-issue"}`;
+    const groupKey = `${row.agentId}:${runIssueId(row) ?? "no-issue"}`;
     const existing = groups.get(groupKey);
     const failed = FAILED_RUN_STATUSES.includes(row.status);
     if (!existing) {
@@ -635,7 +662,7 @@ export function groupUnaddressedRunFailures<T extends RunFailureCandidate>(
         head: row,
         failures: failed ? 1 : 0,
         closed: !failed,
-        oldestFailureMs: failed ? runFailedAtMs(row) : null,
+        oldestFailureMs: failed ? runEndedAtMs(row) : null,
         stalledWork: 1,
       });
       continue;
@@ -644,7 +671,7 @@ export function groupUnaddressedRunFailures<T extends RunFailureCandidate>(
     if (failed) {
       existing.failures += 1;
       // Input is newest-first, so every later match is older than the last.
-      existing.oldestFailureMs = runFailedAtMs(row) ?? existing.oldestFailureMs;
+      existing.oldestFailureMs = runEndedAtMs(row) ?? existing.oldestFailureMs;
     } else existing.closed = true;
   }
 
@@ -689,7 +716,7 @@ export function mergeRunFailuresBySharedCause<T extends RunFailureCandidate>(
     // Groups arrive with the newest run at the head of each, so keep whichever
     // head is newer and stretch the window back to the oldest failure of all.
     const keepExistingHead =
-      (runFailedAtMs(existing.head) ?? 0) >= (runFailedAtMs(group.head) ?? 0);
+      (runEndedAtMs(existing.head) ?? 0) >= (runEndedAtMs(group.head) ?? 0);
     byCause.set(causeKey, {
       head: keepExistingHead ? existing.head : group.head,
       failures: existing.failures + group.failures,
@@ -701,7 +728,60 @@ export function mergeRunFailuresBySharedCause<T extends RunFailureCandidate>(
   return [...merged, ...byCause.values()];
 }
 
-function runFailedAtMs(row: RunFailureCandidate): number | null {
+/**
+ * Drop failures whose work is already done or cancelled.
+ *
+ * Routine work fails, gets cancelled, and the routine makes a fresh copy that
+ * succeeds. Nothing ever runs on the cancelled copy again, so without this its
+ * failures sat in the queue as "work stalled" for work nobody was waiting on.
+ */
+export function dropFailuresOnClosedWork<T extends RunFailureCandidate>(
+  groups: readonly RunFailureGroup<T>[],
+  closedIssueIds: ReadonlySet<string>,
+): Array<RunFailureGroup<T>> {
+  return groups.filter((group) => {
+    const issueId = runIssueId(group.head);
+    return issueId === null || !closedIssueIds.has(issueId);
+  });
+}
+
+/**
+ * Drop single-cause failures the agent has since recovered from.
+ *
+ * A signed-out failure is about the agent, not the work: one later successful
+ * run on any issue proves the sign-in works again, and the row's advice to
+ * "sign in again" would send the operator to redo a fix already made.
+ * Failures with other causes are left alone, because a success elsewhere says
+ * nothing about why one piece of work broke.
+ *
+ * `newestFirst` is the same run list the groups were built from.
+ */
+export function dropRecoveredSingleCauseFailures<T extends RunFailureCandidate>(
+  groups: readonly RunFailureGroup<T>[],
+  newestFirst: readonly RunFailureCandidate[],
+): Array<RunFailureGroup<T>> {
+  const lastSuccessMsByAgent = new Map<string, number>();
+  for (const row of newestFirst) {
+    if (row.status !== "succeeded" || lastSuccessMsByAgent.has(row.agentId)) continue;
+    const succeededAtMs = runEndedAtMs(row);
+    if (succeededAtMs !== null) lastSuccessMsByAgent.set(row.agentId, succeededAtMs);
+  }
+
+  return groups.filter((group) => {
+    if (!isSingleCauseFailure(group.head.errorCode)) return true;
+    const lastSuccessMs = lastSuccessMsByAgent.get(group.head.agentId);
+    const failedAtMs = runEndedAtMs(group.head);
+    return lastSuccessMs === undefined || failedAtMs === null || lastSuccessMs <= failedAtMs;
+  });
+}
+
+function runIssueId(row: RunFailureCandidate): string | null {
+  const issueId = (row.contextSnapshot as Record<string, unknown> | null)?.issueId;
+  return typeof issueId === "string" ? issueId : null;
+}
+
+/** When a run ended: for a failed run, when it failed. */
+function runEndedAtMs(row: RunFailureCandidate): number | null {
   return ms(row.finishedAt) ?? ms(row.createdAt);
 }
 

@@ -18,7 +18,12 @@ import {
   issues,
   issueComments,
 } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import {
+  AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  isUuidLike,
+  normalizeAgentUrlKey,
+  type UpdateAgentPermissions,
+} from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
@@ -544,6 +549,19 @@ export function agentService(db: Db) {
           .where(or(eq(issues.assigneeAgentId, id), eq(issues.createdByAgentId, id)));
         await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id));
         await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id));
+        const activityLinkedToAgent = or(
+          eq(activityLog.agentId, id),
+          sql`${activityLog.runId} in (select ${heartbeatRuns.id} from ${heartbeatRuns} where ${heartbeatRuns.agentId} = ${id})`,
+        );
+        await tx
+          .update(activityLog)
+          .set({ agentId: null, runId: null })
+          .where(
+            and(
+              sql`${activityLog.action} like 'agent_action.%'`,
+              activityLinkedToAgent,
+            ),
+          );
         await tx.delete(activityLog).where(
           or(
             eq(activityLog.agentId, id),
@@ -582,14 +600,17 @@ export function agentService(db: Db) {
       return existing ? { agent: existing, activated: false } : null;
     },
 
-    updatePermissions: async (id: string, permissions: { canCreateAgents: boolean }) => {
+    updatePermissions: async (
+      id: string,
+      permissions: Omit<UpdateAgentPermissions, "canCreateBoardReminders">,
+    ) => {
       const existing = await getById(id);
       if (!existing) return null;
 
       const updated = await db
         .update(agents)
         .set({
-          permissions: normalizeAgentPermissions(permissions, existing.role),
+          permissions: sql`coalesce(${agents.permissions}, '{}'::jsonb) || ${JSON.stringify(permissions)}::jsonb`,
           updatedAt: new Date(),
         })
         .where(eq(agents.id, id))

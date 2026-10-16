@@ -27,6 +27,7 @@ import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
 import { approvalDecisionService } from "../services/approval-decisions.js";
+import type { ApprovalDecisionDeps } from "../services/approval-decisions.js";
 import { instructionRuleService } from "../services/instruction-rules.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
@@ -46,6 +47,7 @@ export function approvalRoutes(
      * because the dispatcher is constructed after this route is mounted.
      */
     getToolDispatcher?: () => PluginToolDispatcher | null;
+    findActionAudit?: ApprovalDecisionDeps["findActionAudit"];
   } = {},
 ) {
   const router = Router();
@@ -56,6 +58,7 @@ export function approvalRoutes(
   const decisions = approvalDecisionService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     getToolDispatcher: options.getToolDispatcher,
+    findActionAudit: options.findActionAudit,
   });
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -141,6 +144,10 @@ export function approvalRoutes(
       : [];
     let uniqueIssueIds = Array.from(new Set(issueIds));
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    if (approvalInput.type === "outbound_tool_draft") {
+      res.status(400).json({ error: "Outbound tool drafts can only be created by the action checkpoint" });
+      return;
+    }
     let normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
@@ -306,6 +313,10 @@ export function approvalRoutes(
         res.status(404).json({ error: "Approval not found" });
         return;
       }
+      if (existing.type === "outbound_tool_draft") {
+        res.status(422).json({ error: "Outbound tool drafts cannot be revised or resubmitted" });
+        return;
+      }
       if (
         existing.type === "instruction_change" &&
         (typeof req.body.decisionNote !== "string" || !req.body.decisionNote.trim())
@@ -332,6 +343,11 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+
+    if (existing.type === "outbound_tool_draft") {
+      res.status(422).json({ error: "Outbound tool drafts cannot be revised or resubmitted" });
+      return;
+    }
 
     if (req.actor.type === "agent" && req.actor.agentId !== existing.requestedByAgentId) {
       res.status(403).json({ error: "Only requesting agent can resubmit this approval" });

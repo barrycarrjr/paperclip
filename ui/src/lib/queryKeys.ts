@@ -22,6 +22,8 @@ export const queryKeys = {
       ["companies", companyId, "export-fidelity"] as const,
     agentDefaults: (companyId: string) =>
       ["companies", companyId, "agent-defaults"] as const,
+    actionPolicies: (companyId: string) =>
+      ["companies", companyId, "action-policies"] as const,
   },
   apps: {
     gallery: (companyId: string) => ["apps", companyId, "gallery"] as const,
@@ -220,6 +222,8 @@ export const queryKeys = {
       ["agents", "instructions-bundle", id, "file", relativePath] as const,
     keys: (agentId: string) => ["agents", "keys", agentId] as const,
     configRevisions: (agentId: string) => ["agents", "config-revisions", agentId] as const,
+    actionPolicies: (agentId: string, companyId?: string) =>
+      ["agents", "action-policies", companyId ?? "__all", agentId] as const,
     adapterModels: (companyId: string, adapterType: string, environmentId?: string | null, provider?: string) =>
       ["agents", companyId, "adapter-models", adapterType, environmentId ?? null, provider ?? null] as const,
     detectModel: (companyId: string, adapterType: string) =>

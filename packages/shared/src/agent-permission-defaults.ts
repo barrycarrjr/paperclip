@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  AGENT_ACTION_MODES,
+  AGENT_ACTION_TYPES,
+  type AgentActionMode,
+  type AgentActionType,
+} from "./constants.js";
 
 /**
  * Run-permission defaults ("skip permission prompts") for local adapters.
@@ -41,6 +47,7 @@ export const AGENT_PERMISSION_CODE_DEFAULT: Record<AgentPermissionDefaultAdapter
 export type AgentPermissionSource = "agent" | "company" | "instance" | "code";
 
 export type SkipPermissionsByAdapterType = Partial<Record<AgentPermissionDefaultAdapterType, boolean>>;
+export type ActionApprovalModes = Partial<Record<AgentActionType, AgentActionMode>>;
 
 export const agentPermissionDefaultAdapterTypeSchema = z.enum(AGENT_PERMISSION_DEFAULT_ADAPTER_TYPES);
 
@@ -61,20 +68,44 @@ export const patchSkipPermissionsByAdapterTypeSchema = z
   })
   .strict();
 
+export const actionApprovalModesSchema = z
+  .object({
+    send_message: z.enum(AGENT_ACTION_MODES).optional(),
+    move_money: z.enum(AGENT_ACTION_MODES).optional(),
+    change_files: z.enum(AGENT_ACTION_MODES).optional(),
+    post_publicly: z.enum(AGENT_ACTION_MODES).optional(),
+    change_knowledge_base: z.enum(AGENT_ACTION_MODES).optional(),
+  })
+  .strict();
+
+/** In a patch, `null` clears the default for that action type. */
+export const patchActionApprovalModesSchema = z
+  .object({
+    send_message: z.enum(AGENT_ACTION_MODES).nullable().optional(),
+    move_money: z.enum(AGENT_ACTION_MODES).nullable().optional(),
+    change_files: z.enum(AGENT_ACTION_MODES).nullable().optional(),
+    post_publicly: z.enum(AGENT_ACTION_MODES).nullable().optional(),
+    change_knowledge_base: z.enum(AGENT_ACTION_MODES).nullable().optional(),
+  })
+  .strict();
+
 export const companyAgentDefaultsSchema = z
   .object({
     skipPermissionsByAdapterType: skipPermissionsByAdapterTypeSchema.default({}),
+    actionApprovalModes: actionApprovalModesSchema.default({}),
   })
   .strict();
 
 export const patchCompanyAgentDefaultsSchema = z
   .object({
     skipPermissionsByAdapterType: patchSkipPermissionsByAdapterTypeSchema.optional(),
+    actionApprovalModes: patchActionApprovalModesSchema.optional(),
   })
   .strict();
 
 export interface CompanyAgentDefaults {
   skipPermissionsByAdapterType: SkipPermissionsByAdapterType;
+  actionApprovalModes: ActionApprovalModes;
 }
 
 export type PatchCompanyAgentDefaults = z.infer<typeof patchCompanyAgentDefaultsSchema>;
@@ -148,6 +179,21 @@ export function mergeSkipPermissionsByAdapterType(
     const value = patch[adapterType];
     if (typeof value === "boolean") next[adapterType] = value;
     else delete next[adapterType];
+  }
+  return next;
+}
+
+/** Apply a patch where `null` clears an action type's value. */
+export function mergeActionApprovalModes(
+  current: ActionApprovalModes,
+  patch: Partial<Record<AgentActionType, AgentActionMode | null | undefined>> | undefined,
+): ActionApprovalModes {
+  const next: ActionApprovalModes = { ...current };
+  for (const actionType of AGENT_ACTION_TYPES) {
+    if (!patch || !Object.prototype.hasOwnProperty.call(patch, actionType)) continue;
+    const value = patch[actionType];
+    if (value && (AGENT_ACTION_MODES as readonly string[]).includes(value)) next[actionType] = value;
+    else delete next[actionType];
   }
   return next;
 }

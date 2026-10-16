@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agents,
@@ -11,6 +11,8 @@ import {
   companies,
   companyMemberships,
   createDb,
+  pluginConfig,
+  plugins,
   principalPermissionGrants,
 } from "@paperclipai/db";
 import {
@@ -21,6 +23,7 @@ import { errorHandler } from "../middleware/index.js";
 import { calendarRoutes } from "../routes/calendar.js";
 import { internalNotificationRoutes } from "../routes/internal-notifications.js";
 import { rememberPersonalCompany } from "../services/personal-companies.js";
+import type { CalendarSourceOptions } from "../services/calendar-sources.js";
 
 /**
  * HTTP-level (supertest) runtime verification of the calendar/event routes.
@@ -78,6 +81,8 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(agents);
+    await db.delete(pluginConfig);
+    await db.delete(plugins);
     await db.delete(companies);
   });
 
@@ -96,6 +101,36 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
       isPortfolioRoot: opts.isPortfolioRoot ?? false,
     });
     return companyId;
+  }
+
+  async function seedGoogleCalendarPlugin(companyId: string) {
+    const pluginId = randomUUID();
+    await db.insert(plugins).values({
+      id: pluginId,
+      pluginKey: "google-workspace",
+      packageName: "paperclip-plugin-google-workspace",
+      version: "1.0.0",
+      apiVersion: 1,
+      categories: ["connector"],
+      manifestJson: {
+        id: "google-workspace",
+        apiVersion: 1,
+        version: "1.0.0",
+        displayName: "Google Workspace",
+        description: "Test plugin",
+        author: "Paperclip",
+        categories: ["connector"],
+        capabilities: [],
+        entrypoints: { worker: "./dist/worker.js" },
+      },
+      status: "ready",
+    });
+    await db.insert(pluginConfig).values({
+      pluginId,
+      configJson: {
+        accounts: [{ key: "primary", refreshTokenRef: "google-token", allowedCompanies: [companyId] }],
+      },
+    });
   }
 
   /** A Personal company, registered with the in-memory owner index the access check reads. */
@@ -187,7 +222,10 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
     };
   }
 
-  function createApp(actor: Record<string, unknown>, opts: { remoteAddress?: string } = {}) {
+  function createApp(
+    actor: Record<string, unknown>,
+    opts: { remoteAddress?: string; calendarOptions?: CalendarSourceOptions } = {},
+  ) {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
@@ -202,13 +240,66 @@ describeEmbeddedPostgres("calendar + event routes (HTTP)", () => {
       }
       next();
     });
-    app.use("/api", calendarRoutes(db));
+    app.use("/api", calendarRoutes(db, opts.calendarOptions));
     app.use("/api", internalNotificationRoutes(db));
     app.use(errorHandler);
     return app;
   }
 
   // --- 1. Create + read (happy path) ------------------------------------------
+
+  it("sends agent Google Calendar writes through the approval checkpoint", async () => {
+    const companyId = await seedCompany();
+    await seedGoogleCalendarPlugin(companyId);
+    const actor = agentActor(companyId);
+    const executeTool = vi.fn().mockResolvedValue({
+      result: {
+        content: "Approval requested",
+        data: { drafted: true, approvalId: "approval-1", status: "pending" },
+      },
+    });
+    const app = createApp(actor, {
+      calendarOptions: { getToolDispatcher: () => ({ executeTool }) as never },
+    });
+
+    const createRes = await request(app)
+      .post(`/api/companies/${companyId}/calendar/google-events`)
+      .send({
+        summary: "File return",
+        start: { dateTime: "2026-10-20T09:00:00-04:00" },
+        end: { dateTime: "2026-10-20T09:30:00-04:00" },
+      });
+    expect(createRes.status, JSON.stringify(createRes.body)).toBe(202);
+    expect(createRes.body.draft).toMatchObject({ drafted: true, approvalId: "approval-1" });
+    expect(executeTool).toHaveBeenLastCalledWith(
+      "google-workspace:gcal_create_event",
+      expect.objectContaining({ summary: "File return" }),
+      expect.objectContaining({
+        companyId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        userId: null,
+      }),
+      expect.objectContaining({ bypassDraftGate: false, localTrustedUser: false }),
+    );
+
+    const deleteRes = await request(app)
+      .delete(`/api/companies/${companyId}/calendar/google-events/external-event`);
+    expect(deleteRes.status, JSON.stringify(deleteRes.body)).toBe(202);
+    expect(deleteRes.body.draft).toMatchObject({ drafted: true, approvalId: "approval-1" });
+    expect(executeTool).toHaveBeenLastCalledWith(
+      "google-workspace:gcal_delete_event",
+      expect.objectContaining({ eventId: "external-event" }),
+      expect.objectContaining({ companyId, agentId: actor.agentId, runId: actor.runId }),
+      expect.objectContaining({ bypassDraftGate: false, localTrustedUser: false }),
+    );
+
+    const routeLogs = await db
+      .select({ action: activityLog.action })
+      .from(activityLog)
+      .then((rows) => rows.filter((row) => row.action.startsWith("calendar_google_event.")));
+    expect(routeLogs).toEqual([]);
+  });
 
   it("creates an interval reminder (201, nextRunAt + owner set) and reads it back", async () => {
     const companyId = await seedCompany();

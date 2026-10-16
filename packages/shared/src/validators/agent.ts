@@ -13,6 +13,7 @@ import { envConfigSchema } from "./secret.js";
 import { trustAuthorizationPolicySchema, trustPresetSchema } from "./trust-policy.js";
 import { agentDesiredSkillSelectionSchema } from "./adapter-skills.js";
 import { objectWithoutDefaults } from "./partial.js";
+import { actionApprovalModesSchema } from "../agent-permission-defaults.js";
 
 export const agentPermissionsSchema = z.object({
   // No schema default: the server derives the default (enabled unless the
@@ -21,7 +22,18 @@ export const agentPermissionsSchema = z.object({
   canCreateSkills: z.boolean().optional().default(true),
   trustPreset: trustPresetSchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
+  actionApprovalModes: actionApprovalModesSchema.optional(),
 }).catchall(z.unknown());
+
+const createAgentPermissionsSchema = agentPermissionsSchema.superRefine((permissions, ctx) => {
+  if (Object.prototype.hasOwnProperty.call(permissions, "actionApprovalModes")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["actionApprovalModes"],
+      message: "Set action approval modes after creation through the action policies endpoint",
+    });
+  }
+});
 
 export const agentInstructionsBundleModeSchema = z.enum(["managed", "external"]);
 
@@ -102,7 +114,7 @@ export const createAgentSchema = z.object({
   runtimeConfig: agentRuntimeConfigSchema.optional().default({}),
   defaultEnvironmentId: z.string().uuid().optional().nullable(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
-  permissions: agentPermissionsSchema.optional(),
+  permissions: createAgentPermissionsSchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   // The optional stored-session claim from a completed Claude login session. It
   // is the non-secret `storedSessionId`; it carries no token. The agent-create

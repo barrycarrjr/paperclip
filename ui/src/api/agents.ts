@@ -17,6 +17,8 @@ import type {
   Approval,
   AgentConfigRevision,
   ModelLifecycleFields,
+  AgentActionPolicyResponse,
+  PatchAgentActionPolicyOverride,
 } from "@paperclipai/shared";
 import type { Company } from "@paperclipai/shared";
 import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
@@ -157,6 +159,13 @@ export const agentsApi = {
     api.patch<Agent>(agentPath(id, companyId), data),
   updatePermissions: (id: string, data: AgentPermissionUpdate, companyId?: string) =>
     api.patch<AgentDetail>(agentPath(id, companyId, "/permissions"), data),
+  getActionPolicies: (id: string, companyId?: string) =>
+    api.get<AgentActionPolicyResponse>(agentPath(id, companyId, "/action-policies")),
+  updateActionPolicy: (
+    id: string,
+    patch: PatchAgentActionPolicyOverride,
+    companyId?: string,
+  ) => api.patch<AgentActionPolicyResponse>(agentPath(id, companyId, "/action-policies"), patch),
   instructionsBundle: (id: string, companyId?: string) =>
     api.get<AgentInstructionsBundle>(agentPath(id, companyId, "/instructions-bundle")),
   updateInstructionsBundle: (

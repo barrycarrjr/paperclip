@@ -22,8 +22,10 @@
  * @see PLUGIN_SPEC.md §13.10 — `executeTool`
  */
 
+import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import type {
+  AgentActionMode,
   PaperclipPluginManifestV1,
   PluginOperationPolicy,
   PluginRecord,
@@ -41,15 +43,29 @@ import {
 import { pluginRegistryService } from "./plugin-registry.js";
 import type { ExternalMcpToolSource } from "./external-mcp-tool-source.js";
 import type { ExternalMcpServerManager } from "./external-mcp-server-manager.js";
-import type { DraftGate } from "./tool-draft-gate.js";
+import {
+  classifyBrokeredAgentAction,
+  inferAgentActionTypeForTool,
+  isAgentActionRefusalReason,
+  legacyAgentActionTypeForTool,
+  type DraftGate,
+  type ResolvedDraftActionPolicy,
+} from "./tool-draft-gate.js";
 import {
   deriveIdempotencyKey,
   type OperationCallKey,
   type PluginOperationIdempotencyStore,
 } from "./plugin-operation-idempotency.js";
-import { EXTERNAL_MCP_TOOL_NAMESPACE, isCompanyAllowed } from "@paperclipai/shared";
+import {
+  EXTERNAL_MCP_TOOL_NAMESPACE,
+  isCompanyAllowed,
+  isLikelyMutationToolName,
+} from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { requirePluginUserPermission } from "./plugin-user-permission.js";
+import { deterministicActivityId, logActivity } from "./activity-log.js";
+
+const DIRECT_ACTION_EXECUTION_LEASE_MS = 10 * 60_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -132,17 +148,24 @@ export interface ExecuteToolOptions {
    */
   bypassDraftGate?: boolean;
   /**
+   * Treat the operator's approval of a drafted action as the inline
+   * confirmation required by the plugin tool. This is honored only during an
+   * approved draft replay, and the original user's permission is still
+   * checked again before dispatch.
+   */
+  approvedDraftConfirmation?: boolean;
+  /**
    * When true, the tool is drafted for approval even if the instance-wide
    * outbound hold is off (and even if every recipient looks like the
    * operator). The mirror image of `bypassDraftGate`, for a caller whose own
-   * policy is stricter than the instance default — today that is a reply
-   * closing an email handoff, where the operator can ask for these
-   * specifically to always wait. See `emailHandoffReplyNeedsApproval`.
+   * policy is stricter than the instance default.
    *
    * Ignored when `bypassDraftGate` is also set: an already-approved draft
    * being replayed must never be re-queued, or approving it would loop.
    */
   forceDraftGate?: boolean;
+  /** Apply an older call-specific setting without overriding agent or company policy. */
+  legacyActionMode?: AgentActionMode;
 }
 
 /**
@@ -336,6 +359,125 @@ export function createPluginToolDispatcher(
   } = options;
   const log = logger.child({ service: "plugin-tool-dispatcher" });
 
+  async function logAgentAction(
+    action: "agent_action.allowed" | "agent_action.refused" | "agent_action.failed",
+    namespacedName: string,
+    runContext: ToolRunContext,
+    policy: ResolvedDraftActionPolicy | null,
+    error?: string | null,
+    executionAttemptId?: string | null,
+  ): Promise<void> {
+    if (!db || !policy || !runContext.companyId || !runContext.agentId || runContext.agentId.startsWith("clippy:")) {
+      return;
+    }
+    try {
+      await logActivity(db, {
+        ...(executionAttemptId
+          ? { id: deterministicActivityId("agent-action-execution-outcome", executionAttemptId) }
+          : {}),
+        companyId: runContext.companyId,
+        actorType: "agent",
+        actorId: runContext.agentId,
+        action,
+        entityType: "tool",
+        entityId: namespacedName,
+        agentId: runContext.agentId,
+        runId: runContext.runId || null,
+        details: {
+          actionType: policy.actionType,
+          tool: namespacedName,
+          policySource: policy.source,
+          ...(executionAttemptId ? { executionAttemptId } : {}),
+          ...(error ? { error } : {}),
+        },
+      });
+    } catch (auditError) {
+      log.error(
+        { err: auditError, tool: namespacedName, action, agentId: runContext.agentId },
+        "failed to record agent action outcome",
+      );
+      throw new Error(
+        `The action outcome for "${namespacedName}" could not be recorded. The action may have completed; do not retry it automatically.`,
+        { cause: auditError },
+      );
+    }
+  }
+
+  async function beginDirectAgentAction(
+    namespacedName: string,
+    runContext: ToolRunContext,
+    policy: ResolvedDraftActionPolicy | null,
+  ): Promise<string | null> {
+    if (
+      !db ||
+      !policy ||
+      !runContext.companyId ||
+      !runContext.agentId ||
+      runContext.agentId.startsWith("clippy:")
+    ) {
+      return null;
+    }
+    const executionAttemptId = randomUUID();
+    try {
+      await logActivity(db, {
+        id: executionAttemptId,
+        companyId: runContext.companyId,
+        actorType: "agent",
+        actorId: runContext.agentId,
+        action: "agent_action.execution_started",
+        entityType: "tool",
+        entityId: namespacedName,
+        agentId: runContext.agentId,
+        runId: runContext.runId || null,
+        details: {
+          actionType: policy.actionType,
+          tool: namespacedName,
+          policySource: policy.source,
+          executionAttemptId,
+          leaseExpiresAt: new Date(Date.now() + DIRECT_ACTION_EXECUTION_LEASE_MS).toISOString(),
+        },
+      });
+      return executionAttemptId;
+    } catch (auditError) {
+      log.error(
+        { err: auditError, tool: namespacedName, agentId: runContext.agentId },
+        "failed to record agent action execution start",
+      );
+      throw new Error(
+        `The action execution for "${namespacedName}" could not be recorded, so the action was not run.`,
+        { cause: auditError },
+      );
+    }
+  }
+
+  function fallbackAuditPolicy(
+    namespacedName: string,
+    declaredTool: RegisteredTool | null,
+  ): ResolvedDraftActionPolicy | null {
+    const classification = classifyBrokeredAgentAction(namespacedName, {
+      actionType: declaredTool?.actionType,
+      writes: declaredTool?.writes,
+      requiresApproval: declaredTool?.requiresApproval,
+      externalDeclaredWrite: isExternalMcpName(namespacedName),
+    });
+    if (!classification && !legacyAgentActionTypeForTool(namespacedName)) return null;
+    return {
+      actionType: classification?.actionType ?? legacyAgentActionTypeForTool(namespacedName),
+      mode: "ask_first",
+      source: declaredTool?.requiresApproval === true ? "operation" : "unclassified",
+    };
+  }
+
+  function externalMutationRefusalPolicy(
+    namespacedName: string,
+  ): ResolvedDraftActionPolicy {
+    return {
+      actionType: inferAgentActionTypeForTool(namespacedName),
+      mode: "ask_first",
+      source: "unclassified",
+    };
+  }
+
   if (externalMcpToolSource && !externalMcpServerManager) {
     throw new Error(
       "createPluginToolDispatcher: externalMcpServerManager is required when externalMcpToolSource is provided",
@@ -344,6 +486,7 @@ export function createPluginToolDispatcher(
 
   // Create the underlying tool registry, backed by the worker manager
   const registry = createPluginToolRegistry(workerManager);
+  const refusedExecutions = new WeakSet<object>();
 
   const externalMcpPrefix = `${EXTERNAL_MCP_TOOL_NAMESPACE}:`;
 
@@ -406,7 +549,7 @@ export function createPluginToolDispatcher(
       const message =
         `The same call to "${namespacedName}" is already running (started `
         + `${claim.startedAt.toISOString()}). It was not run again.`;
-      return {
+      const refusedResult: ToolExecutionResult = {
         pluginId: tool.pluginId,
         toolName: tool.name,
         result: {
@@ -414,6 +557,8 @@ export function createPluginToolDispatcher(
           failure: { code: "unavailable", message, retryAfterMs: 5_000 },
         },
       };
+      refusedExecutions.add(refusedResult);
+      return refusedResult;
     }
 
     // We own the key. Every path out of here must settle or release it, or the
@@ -665,17 +810,154 @@ export function createPluginToolDispatcher(
       parameters = withoutHostScope(structuredClone(parameters));
       runContext = { ...runContext, userConfirmed: false, userPermission: undefined };
       const declaredTool = registry.getTool(namespacedName);
+      let actionPolicy: ResolvedDraftActionPolicy | null = null;
+      if (draftGate && !options?.bypassDraftGate) {
+        try {
+          actionPolicy = await draftGate.resolveActionPolicy(namespacedName, runContext);
+        } catch (err) {
+          await logAgentAction(
+            "agent_action.failed",
+            namespacedName,
+            runContext,
+            fallbackAuditPolicy(namespacedName, declaredTool),
+            err instanceof Error ? err.message : String(err),
+          );
+          throw err;
+        }
+      }
+      const prepareExternalCall = async () => {
+        if (!isExternalMcpName(namespacedName)) return null;
+        if (!externalMcpToolSource || !externalMcpServerManager) {
+          throw new Error(
+            `Cannot execute MCP tool "${namespacedName}", external MCP support is not configured on this dispatcher.`,
+          );
+        }
+        const parsed = externalMcpToolSource.parseNamespacedName(namespacedName);
+        if (!parsed) {
+          throw new Error(
+            `Invalid MCP tool name "${namespacedName}". Expected format: "${EXTERNAL_MCP_TOOL_NAMESPACE}:<serverKey>:<toolName>"`,
+          );
+        }
+        const server = await externalMcpServerManager.getServerByKey(parsed.serverKey);
+        if (!server) throw new Error(`MCP server "${parsed.serverKey}" not found`);
+        if (!runContext.companyId) {
+          throw new Error(`Cannot execute MCP tool "${namespacedName}", runContext.companyId is required`);
+        }
+        if (!isCompanyAllowed(server.allowedCompanies, runContext.companyId)) {
+          throw new Error(
+            `[ECOMPANY_NOT_ALLOWED] Company ${runContext.companyId} cannot call MCP server "${server.key}"`,
+          );
+        }
+        if (server.toolDenyList.includes(parsed.toolName)) {
+          throw new Error(`[ETOOL_BLOCKED] Tool "${parsed.toolName}" is in the server deny list`);
+        }
+        if (server.toolAllowList.length > 0 && !server.toolAllowList.includes(parsed.toolName)) {
+          throw new Error(`[ETOOL_BLOCKED] Tool "${parsed.toolName}" is not in the server allow list`);
+        }
+        const discoveredTool = typeof externalMcpToolSource.listToolsForCompany === "function"
+          ? (await externalMcpToolSource.listToolsForCompany(runContext.companyId))
+              .find((tool) => tool.namespacedName === namespacedName) ?? null
+          : null;
+        if (
+          !server.allowMutations &&
+          (isLikelyMutationToolName(parsed.toolName) || discoveredTool?.mutationHint === true) &&
+          !server.writeAllowList.includes(parsed.toolName)
+        ) {
+          throw new Error(
+            `[EDISABLED] Mutation tool "${parsed.toolName}" is disabled on server "${server.key}"`,
+          );
+        }
+        return {
+          companyId: runContext.companyId,
+          manager: externalMcpServerManager,
+          parsed,
+          server,
+          discoveredTool,
+        };
+      };
+      let externalCall: Awaited<ReturnType<typeof prepareExternalCall>>;
+      try {
+        externalCall = await prepareExternalCall();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const refusedByMutationSwitch = message.startsWith("[EDISABLED]");
+        if (!options?.bypassDraftGate) {
+          await logAgentAction(
+            message.startsWith("[ECOMPANY_NOT_ALLOWED]") ||
+              message.startsWith("[ETOOL_BLOCKED]") ||
+              refusedByMutationSwitch
+              ? "agent_action.refused"
+              : "agent_action.failed",
+            namespacedName,
+            runContext,
+            actionPolicy ?? (refusedByMutationSwitch
+              ? externalMutationRefusalPolicy(namespacedName)
+              : null),
+            message,
+          );
+        }
+        throw err;
+      }
+      if (
+        externalCall &&
+        !options?.bypassDraftGate &&
+        !actionPolicy &&
+        (
+          !externalCall.discoveredTool ||
+          externalCall.discoveredTool.mutationHint === true ||
+          externalCall.server.writeAllowList.includes(externalCall.parsed.toolName) ||
+          isLikelyMutationToolName(externalCall.parsed.toolName)
+        )
+      ) {
+        actionPolicy = externalMutationRefusalPolicy(namespacedName);
+      }
       const checkUser = async () => {
         if (declaredTool?.requiredUserPermission) {
-          await requirePluginUserPermission(db, runContext.companyId, runContext.userId,
-            declaredTool.requiredUserPermission, options?.localTrustedUser === true);
+          try {
+            await requirePluginUserPermission(db, runContext.companyId, runContext.userId,
+              declaredTool.requiredUserPermission, options?.localTrustedUser === true);
+          } catch (err) {
+            await logAgentAction(
+              "agent_action.refused",
+              namespacedName,
+              runContext,
+              actionPolicy,
+              err instanceof Error ? err.message : String(err),
+            );
+            throw err;
+          }
         }
       };
       if (declaredTool?.requiredUserPermission) await checkUser();
       runContext = { ...runContext, userPermission: declaredTool?.requiredUserPermission };
       if (declaredTool?.requiresUserConfirmation) {
-        if (!runContext.userId || !runContext.chatSessionId || !options?.requestUserConfirmation ||
-            !(await options.requestUserConfirmation(namespacedName, structuredClone(parameters)))) {
+        let confirmed = options?.bypassDraftGate === true &&
+          options.approvedDraftConfirmation === true;
+        if (runContext.userId && runContext.chatSessionId && options?.requestUserConfirmation) {
+          try {
+            confirmed = await options.requestUserConfirmation(
+              namespacedName,
+              structuredClone(parameters),
+            );
+          } catch (err) {
+            await logAgentAction(
+              "agent_action.failed",
+              namespacedName,
+              runContext,
+              actionPolicy,
+              err instanceof Error ? err.message : String(err),
+            );
+            throw err;
+          }
+        }
+        if (!confirmed) {
+          await logAgentAction(
+            "agent_action.refused",
+            namespacedName,
+            runContext,
+            actionPolicy,
+            "Inline confirmation was not provided",
+          );
           return { pluginId: declaredTool.pluginId, toolName: declaredTool.name,
             result: { error: "This action needs the person's inline confirmation in Clippy. It was not run." } };
         }
@@ -698,9 +980,24 @@ export function createPluginToolDispatcher(
       // the approve route's hook into `executeDraftedApproval()`, which sets
       // `bypassDraftGate` so the gate does not re-intercept the re-dispatch.
       if (draftGate && !options?.bypassDraftGate) {
-        const gateResult = await draftGate.intercept(namespacedName, parameters, runContext, {
-          force: options?.forceDraftGate === true,
-        });
+        let gateResult: Awaited<ReturnType<DraftGate["intercept"]>>;
+        try {
+          gateResult = await draftGate.intercept(namespacedName, parameters, runContext, {
+            force: options?.forceDraftGate === true,
+            legacyActionMode: options?.legacyActionMode,
+            resolvedActionPolicy: actionPolicy,
+          });
+        } catch (err) {
+          await logAgentAction(
+            "agent_action.failed",
+            namespacedName,
+            runContext,
+            actionPolicy,
+            err instanceof Error ? err.message : String(err),
+          );
+          throw err;
+        }
+        actionPolicy = gateResult.actionPolicy ?? null;
         if (gateResult.intercepted && gateResult.result) {
           // Resolve the pluginId so the synthesized result still attributes
           // correctly in audit logs. Read from the registry rather than
@@ -714,37 +1011,57 @@ export function createPluginToolDispatcher(
         }
       }
 
+      const directActionAttemptId = await beginDirectAgentAction(
+        namespacedName,
+        runContext,
+        actionPolicy,
+      );
+
       // Route external MCP tools through the connector manager.
       if (isExternalMcpName(namespacedName)) {
-        if (!externalMcpToolSource || !externalMcpServerManager) {
-          throw new Error(
-            `Cannot execute MCP tool "${namespacedName}" — external MCP support is not configured on this dispatcher.`,
+        if (!externalCall) {
+          const message = `External MCP call "${namespacedName}" was not prepared`;
+          await logAgentAction(
+            "agent_action.failed",
+            namespacedName,
+            runContext,
+            actionPolicy,
+            message,
+            directActionAttemptId,
           );
+          throw new Error(message);
         }
-        const parsed = externalMcpToolSource.parseNamespacedName(namespacedName);
-        if (!parsed) {
-          throw new Error(
-            `Invalid MCP tool name "${namespacedName}". Expected format: "${EXTERNAL_MCP_TOOL_NAMESPACE}:<serverKey>:<toolName>"`,
+        let callResult: Awaited<ReturnType<ExternalMcpServerManager["callTool"]>>;
+        try {
+          callResult = await externalCall.manager.callTool(
+            externalCall.server.id,
+            externalCall.companyId,
+            externalCall.parsed.toolName,
+            parameters,
           );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const refusedByMutationSwitch = message.startsWith("[EDISABLED]");
+          const auditPolicy = actionPolicy ?? (refusedByMutationSwitch
+            ? externalMutationRefusalPolicy(namespacedName)
+            : null);
+          if (!options?.bypassDraftGate) {
+            await logAgentAction(
+              message.startsWith("[ECOMPANY_NOT_ALLOWED]") ||
+                message.startsWith("[ETOOL_BLOCKED]") ||
+                refusedByMutationSwitch
+                ? "agent_action.refused"
+                : "agent_action.failed",
+              namespacedName,
+              runContext,
+              auditPolicy,
+              message,
+              directActionAttemptId,
+            );
+          }
+          throw err;
         }
-        const server = await externalMcpServerManager.getServerByKey(parsed.serverKey);
-        if (!server) {
-          throw new Error(`MCP server "${parsed.serverKey}" not found`);
-        }
-        if (!runContext.companyId) {
-          throw new Error(`Cannot execute MCP tool "${namespacedName}" — runContext.companyId is required`);
-        }
-        if (!isCompanyAllowed(server.allowedCompanies, runContext.companyId)) {
-          throw new Error(
-            `[ECOMPANY_NOT_ALLOWED] Company ${runContext.companyId} cannot call MCP server "${server.key}"`,
-          );
-        }
-        const callResult = await externalMcpServerManager.callTool(
-          server.id,
-          runContext.companyId,
-          parsed.toolName,
-          parameters,
-        );
+        const { parsed, server } = externalCall;
         // MCP tool results carry an array of content blocks; the plugin
         // ToolResult shape carries a single string. Flatten text blocks into
         // `content` and preserve the original blocks under `data` for any
@@ -766,6 +1083,14 @@ export function createPluginToolDispatcher(
           data: callResult.content,
           ...(callResult.isError ? { error: "tool reported isError=true" } : {}),
         };
+        await logAgentAction(
+          result.error ? "agent_action.failed" : "agent_action.allowed",
+          namespacedName,
+          runContext,
+          actionPolicy,
+          result.error,
+          directActionAttemptId,
+        );
         log.debug(
           {
             tool: namespacedName,
@@ -782,7 +1107,35 @@ export function createPluginToolDispatcher(
         };
       }
 
-      const result = await executeWithRepeatProtection(namespacedName, parameters, runContext);
+      let result: ToolExecutionResult;
+      try {
+        result = await executeWithRepeatProtection(namespacedName, parameters, runContext);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await logAgentAction(
+          isAgentActionRefusalReason(reason) ? "agent_action.refused" : "agent_action.failed",
+          namespacedName,
+          runContext,
+          actionPolicy,
+          reason,
+          directActionAttemptId,
+        );
+        throw err;
+      }
+
+      await logAgentAction(
+        refusedExecutions.has(result)
+          || isAgentActionRefusalReason(result.result.error)
+          ? "agent_action.refused"
+          : result.result.error
+            ? "agent_action.failed"
+            : "agent_action.allowed",
+        namespacedName,
+        runContext,
+        actionPolicy,
+        result.result.error,
+        directActionAttemptId,
+      );
 
       log.debug(
         {

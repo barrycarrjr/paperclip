@@ -10,9 +10,12 @@
  * mechanism is introduced: the existing draft gate does the holding, and this
  * only tells it which way to lean for this particular class of message.
  *
- *   setting "never"   -> bypassDraftGate, sends immediately
- *   setting "always"  -> forceDraftGate, waits even if nothing else does
- *   setting "inherit" -> neither flag, the instance-wide hold decides
+ *   setting "never"   -> legacy go-ahead mode
+ *   setting "always"  -> legacy ask-first mode
+ *   setting "inherit" -> the instance-wide hold decides
+ *
+ * An agent or company action policy takes precedence over these older reply
+ * settings, so every agent-triggered reply still passes the same checkpoint.
  *
  * The delegation is marked resolved BEFORE the reply is attempted, on
  * purpose. Resolution is a fact about the work; the reply is a separate
@@ -27,6 +30,7 @@ import { plugins, type Db } from "@paperclipai/db";
 import {
   emailHandoffReplyNeedsApproval,
   parseEmailHandoffOriginId,
+  type AgentActionMode,
   type EmailHandoffSourceRef,
 } from "@paperclipai/shared";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
@@ -151,6 +155,18 @@ export function emailHandoffResolutionService(deps: {
     }
   }
 
+  async function replyLegacyActionMode(): Promise<AgentActionMode | undefined> {
+    try {
+      const general = await settings.getGeneral();
+      if (general.emailHandoffReplyApproval === "always") return "ask_first";
+      if (general.emailHandoffReplyApproval === "never") return "go_ahead";
+      return undefined;
+    } catch (err) {
+      log.warn({ err }, "could not read reply approval setting; holding the reply for approval");
+      return "ask_first";
+    }
+  }
+
   async function resolve(input: ResolveEmailHandoffInput): Promise<{
     delegation: Awaited<ReturnType<typeof delegations.transition>>;
     reply: ResolveReplyOutcome;
@@ -233,7 +249,7 @@ export function emailHandoffResolutionService(deps: {
       return { replyState: "none", reason: "The original message cannot be replied to." };
     }
 
-    const needsApproval = await replyNeedsApproval();
+    const legacyActionMode = await replyLegacyActionMode();
     // Shaped like the one chat-tools builds. An absent agentId is meaningful
     // rather than missing: the draft gate reads it as "no agent behind this"
     // and attributes any approval it raises to the system and to `userId`,
@@ -250,12 +266,12 @@ export function emailHandoffResolutionService(deps: {
     } as unknown as ToolRunContext;
 
     try {
-      const execution = await dispatcher.executeTool(toolName, parameters, runContext, {
-        // Exactly one of these is ever set. "inherit" sets neither and lets
-        // the instance-wide hold decide, which is the default.
-        forceDraftGate: needsApproval,
-        bypassDraftGate: !needsApproval,
-      });
+      const execution = await dispatcher.executeTool(
+        toolName,
+        parameters,
+        runContext,
+        legacyActionMode ? { legacyActionMode } : undefined,
+      );
 
       // The gate returns a synthesized result rather than sending. Detect it
       // by the marker it sets, not by guessing from the text.
@@ -264,17 +280,6 @@ export function emailHandoffResolutionService(deps: {
       );
       if (drafted) return { replyState: "queued" };
 
-      if (needsApproval) {
-        // Both reply tools are in OUTBOUND_TOOL_DRAFT_GATE, so forcing the
-        // gate should always have held this. Reaching here means the tool
-        // left that list, and a message the operator expected to review has
-        // just gone to a customer. Report it as sent, because it was, and say
-        // so loudly rather than recording a comfortable "queued".
-        log.error(
-          { tool: toolName, delegationId: delegation.id },
-          "reply was meant to wait for approval but sent immediately — is this tool still in OUTBOUND_TOOL_DRAFT_GATE?",
-        );
-      }
       return { replyState: "sent" };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

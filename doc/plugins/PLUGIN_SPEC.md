@@ -414,8 +414,17 @@ tools?: Array<{
   displayName: string;
   description: string;
   parametersSchema: JsonSchema;
+  writes?: boolean;
+  actionType?: "send_message" | "move_money" | "change_files" |
+    "post_publicly" | "change_knowledge_base";
 }>;
 ```
+
+Set `writes` when the tool changes external or shared state. Set `actionType`
+when that change belongs to one of the operator-controlled action categories.
+An unclassified write defaults to Ask first for agent calls.
+The host also recognizes common mutation names for compatibility with older
+plugins and external MCP tools, but declarations are the authoritative contract.
 
 Tool names are automatically namespaced by plugin ID at runtime (e.g. `linear:search-issues`), so plugins cannot shadow core tools or each other's tools.
 
@@ -469,6 +478,9 @@ operations?: Array<{
   description: string;         // read by agents — write it for one
   parametersSchema: JsonSchema;
   audience?: "both" | "agents" | "users";   // default "both"
+  writes?: boolean;
+  actionType?: "send_message" | "move_money" | "change_files" |
+    "post_publicly" | "change_knowledge_base";
 }>;
 ```
 
@@ -520,6 +532,10 @@ Read `invokedBy` rather than testing for `agentId`. Every field above is
 host-populated; none is accepted from the caller. On the user lane the company
 comes from `params.hostScope`, which the bridge routes overwrite rather than
 merge, so a browser cannot forge it.
+
+On the agent lane, `actionType` selects the company or agent approval setting.
+The agent setting overrides the company setting. An operation policy that
+requires approval remains stricter than either setting.
 
 `companyId` is the empty string for an instance-admin global UI call that has
 no company to name. Treat that as "no company", not as a company.

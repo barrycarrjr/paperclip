@@ -16,12 +16,14 @@ import type {
 } from "../trust-policy.js";
 import type { AgentOrgChainHealth } from "../agent-eligibility.js";
 import type { AgentApiKeyScope } from "../validators/agent.js";
+import type { ActionApprovalModes } from "../agent-permission-defaults.js";
 
 export interface AgentPermissions extends Record<string, unknown> {
   canCreateAgents: boolean;
   canCreateSkills?: boolean;
   trustPreset?: TrustPreset;
   authorizationPolicy?: TrustAuthorizationPolicy;
+  actionApprovalModes?: ActionApprovalModes;
 }
 
 export type AgentRuntimeConfig = Record<string, unknown> & {

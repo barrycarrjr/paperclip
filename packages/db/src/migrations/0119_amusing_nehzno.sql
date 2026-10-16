@@ -1,0 +1,2 @@
+ALTER TABLE "approvals" ADD COLUMN "dedupe_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "approvals_pending_dedupe_uq" ON "approvals" USING btree ("company_id","type","dedupe_key") WHERE "approvals"."status" = 'pending' AND "approvals"."dedupe_key" IS NOT NULL;

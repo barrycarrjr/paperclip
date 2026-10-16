@@ -64,10 +64,11 @@ describe("the approval card shows what a public post says", () => {
     const created: Array<{ payload: { summary: string } }> = [];
     vi.doMock("../services/approvals.js", () => ({
       approvalService: () => ({
-        create: async (_companyId: string, row: { payload: { summary: string } }) => {
+        createPendingDraft: async (_companyId: string, row: { payload: { summary: string } }) => {
           created.push(row);
-          return { id: "ap-1", ...row };
+          return { created: true, approval: { id: "ap-1", ...row } };
         },
+        list: async () => [],
       }),
     }));
     vi.doMock("../services/activity-log.js", () => ({ logActivity: async () => {} }));

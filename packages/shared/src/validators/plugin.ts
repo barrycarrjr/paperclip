@@ -18,6 +18,7 @@ import {
   PERMISSION_KEYS,
   PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_OPERATION_AUDIENCES,
+  AGENT_ACTION_TYPES,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,7 @@ export const pluginToolDeclarationSchema = z.object({
   description: z.string().min(1),
   parametersSchema: jsonSchemaSchema,
   writes: z.boolean().optional(),
+  actionType: z.enum(AGENT_ACTION_TYPES).optional(),
 });
 
 /**
@@ -133,6 +135,7 @@ export const pluginOperationDeclarationSchema = z.object({
   parametersSchema: jsonSchemaSchema,
   audience: z.enum(PLUGIN_OPERATION_AUDIENCES).optional(),
   writes: z.boolean().optional(),
+  actionType: z.enum(AGENT_ACTION_TYPES).optional(),
 });
 
 export type PluginOperationDeclarationInput = z.infer<typeof pluginOperationDeclarationSchema>;

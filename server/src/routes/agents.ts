@@ -18,6 +18,7 @@ import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  patchAgentActionPolicyOverrideSchema,
   createAgentKeySchema,
   createAgentHireSchema,
   createAgentSchema,
@@ -100,6 +101,7 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { companyAgentDefaultsService } from "../services/company-agent-defaults.js";
+import { agentActionPolicyService } from "../services/agent-action-policy.js";
 import { runClaudeLogin, extractClaudeSetupToken } from "@paperclipai/adapter-claude-local/server";
 import { runCodexLogin } from "@paperclipai/adapter-codex-local/server";
 import { DEFAULT_CODEX_LOCAL_MODEL } from "@paperclipai/adapter-codex-local";
@@ -254,6 +256,7 @@ export function agentRoutes(
 
   const router = Router();
   const svc = agentService(db);
+  const actionPolicies = agentActionPolicyService(db);
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
@@ -2171,6 +2174,67 @@ export function agentRoutes(
 
     res.status(201).json(agent);
   });
+
+  router.get("/agents/:id/action-policies", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId, "read");
+    const policies = await actionPolicies.listAgentPolicies(id);
+    if (!policies) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    res.json(policies);
+  });
+
+  router.patch(
+    "/agents/:id/action-policies",
+    validate(patchAgentActionPolicyOverrideSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const existing = await svc.getById(id);
+      if (!existing) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      assertBoard(req);
+      assertCompanyAccess(req, existing.companyId);
+
+      const { actionType, mode } = req.body;
+      const actor = getActorInfo(req);
+      const result = await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Db;
+        const updated = await agentActionPolicyService(txDb).updateAgentPolicy(id, actionType, mode);
+        if (!updated) return null;
+        await logActivity(txDb, {
+          companyId: existing.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "agent.action_policies_updated",
+          entityType: "agent",
+          entityId: id,
+          details: {
+            actionType,
+            mode,
+            previous: updated.previous,
+            actionPolicies: updated.next,
+          },
+        });
+        return updated;
+      });
+      if (!result) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      res.json(result.next);
+    },
+  );
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
     const id = req.params.id as string;

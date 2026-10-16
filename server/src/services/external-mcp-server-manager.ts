@@ -112,12 +112,30 @@ function isConnectionError(err: unknown): boolean {
   return err.code === ErrorCode.ConnectionClosed || err.code === ErrorCode.RequestTimeout;
 }
 
+function mutationHintFromAnnotations(tool: {
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+}): boolean {
+  return tool.annotations?.destructiveHint === true || tool.annotations?.readOnlyHint !== true;
+}
+
+function rememberToolMutationHints(
+  pooled: PooledClient,
+  tools: Array<{ name: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>,
+): void {
+  pooled.toolMutationHints.clear();
+  for (const tool of tools) {
+    pooled.toolMutationHints.set(tool.name, mutationHintFromAnnotations(tool));
+  }
+}
+
 interface PooledClient {
   client: Client;
   /** Set of redacted env keys / header names — for log scrubbing. */
   secretEnvKeys: Set<string>;
   secretHeaderKeys: Set<string>;
   serverVersion: string;
+  /** Mutation hints learned from the server's latest tools/list response. */
+  toolMutationHints: Map<string, boolean>;
   lastUsedAt: number;
   idleTimer: NodeJS.Timeout | null;
   closing: boolean;
@@ -153,6 +171,12 @@ export interface ExternalMcpToolDescriptor {
   name: string;
   description: string;
   parametersSchema: Record<string, unknown>;
+  /** True only when the server's annotations tighten this tool to a write. */
+  mutationHint?: boolean;
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+  };
 }
 
 export interface ExternalMcpCallResult {
@@ -409,6 +433,7 @@ export function createExternalMcpServerManager(
       secretEnvKeys: resolved.secretEnvKeys,
       secretHeaderKeys: resolved.secretHeaderKeys,
       serverVersion: serverInfo?.version ?? "unknown",
+      toolMutationHints: new Map(),
       lastUsedAt: Date.now(),
       idleTimer: null,
       closing: false,
@@ -554,22 +579,40 @@ export function createExternalMcpServerManager(
     async listTools(serverId, companyId, options) {
       const server = await getServerById(serverId);
       if (!server) throw new Error(`MCP server ${serverId} not found`);
+      if (!isCompanyAllowed(server.allowedCompanies, companyId)) {
+        throw new Error(`[ECOMPANY_NOT_ALLOWED] Company ${companyId} cannot use MCP server "${server.key}"`);
+      }
       const pooled = await getOrCreate(server, companyId, options?.deadlineMs);
       const result = await pooled.client.listTools(undefined, {
         timeout: CALL_TIMEOUT_MS,
       });
+      rememberToolMutationHints(pooled, result.tools);
       return result.tools
         .filter((t) => !isToolBlocked(server, t.name).blocked)
         .map((t) => ({
           name: t.name,
           description: t.description ?? "",
           parametersSchema: (t.inputSchema as Record<string, unknown>) ?? { type: "object" },
+          mutationHint: mutationHintFromAnnotations(t),
+          annotations: t.annotations
+            ? {
+                ...(typeof t.annotations.readOnlyHint === "boolean"
+                  ? { readOnlyHint: t.annotations.readOnlyHint }
+                  : {}),
+                ...(typeof t.annotations.destructiveHint === "boolean"
+                  ? { destructiveHint: t.annotations.destructiveHint }
+                  : {}),
+              }
+            : undefined,
         }));
     },
 
     async callTool(serverId, companyId, toolName, args) {
       const server = await getServerById(serverId);
       if (!server) throw new Error(`MCP server ${serverId} not found`);
+      if (!isCompanyAllowed(server.allowedCompanies, companyId)) {
+        throw new Error(`[ECOMPANY_NOT_ALLOWED] Company ${companyId} cannot use MCP server "${server.key}"`);
+      }
 
       const blocked = isToolBlocked(server, toolName);
       if (blocked.blocked) {
@@ -583,6 +626,17 @@ export function createExternalMcpServerManager(
       }
 
       const pooled = await getOrCreate(server, companyId);
+      if (!server.allowMutations && !server.writeAllowList.includes(toolName)) {
+        if (!pooled.toolMutationHints.has(toolName)) {
+          const listed = await pooled.client.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
+          rememberToolMutationHints(pooled, listed.tools);
+        }
+        if (pooled.toolMutationHints.get(toolName) !== false) {
+          throw new Error(
+            `[EDISABLED] mutation tool "${toolName}" is gated by allowMutations on server "${server.key}"`,
+          );
+        }
+      }
       try {
         const result = await pooled.client.callTool(
           {

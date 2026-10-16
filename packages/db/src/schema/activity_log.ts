@@ -21,6 +21,7 @@ export const activityLog = pgTable(
   },
   (table) => ({
     companyCreatedIdx: index("activity_log_company_created_idx").on(table.companyId, table.createdAt),
+    actionCreatedIdx: index("activity_log_action_created_idx").on(table.action, table.createdAt),
     companyAgentCreatedIdx: index("activity_log_company_agent_created_idx").on(
       table.companyId,
       table.agentId,

@@ -3,7 +3,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
-import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import {
+  EXTERNAL_MCP_TOOL_NAMESPACE,
+  type DeploymentExposure,
+  type DeploymentMode,
+} from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { markBodyReaderErrors } from "./middleware/error-handler.js";
@@ -81,7 +85,11 @@ import { PLUGIN_RUNTIME_ENV, startPluginRuntime } from "./plugin-runtime-startup
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
 import { createPluginOperationIdempotencyStore } from "./services/plugin-operation-idempotency.js";
-import { createDraftGate } from "./services/tool-draft-gate.js";
+import {
+  createDraftGate,
+  classifyBrokeredAgentAction,
+} from "./services/tool-draft-gate.js";
+import { agentActionPolicyService } from "./services/agent-action-policy.js";
 import {
   createPluginMcpBridge,
   setPluginMcpBridge,
@@ -233,6 +241,8 @@ export async function createApp(
 
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = opts.pluginWorkerManager ?? createPluginWorkerManager();
+  const externalMcpManager = opts.externalMcpServerManager ?? createExternalMcpServerManager(db);
+  const externalMcpSource = createExternalMcpToolSource(db, externalMcpManager);
 
   // Trust loop: the draft gate intercepts mutating outbound tool calls
   // (email_send, slack_send_dm, phone_call_make, ...) and queues them as
@@ -242,6 +252,7 @@ export async function createApp(
   const toolDispatcherRef: { current: ReturnType<typeof createPluginToolDispatcher> | null } = {
     current: null,
   };
+  const actionPolicies = agentActionPolicyService(db);
   const draftGate = createDraftGate({
     db,
     // An operator can require approval on an individual plugin operation. The
@@ -250,6 +261,54 @@ export async function createApp(
     // dispatcher does not exist yet, hence the ref.
     isAdditionallyGated: (name) =>
       toolDispatcherRef.current?.getTool(name)?.requiresApproval === true,
+    resolveActionPolicy: async (name, runContext) => {
+      if (!runContext.agentId || runContext.agentId.startsWith("clippy:")) return null;
+      const declaredTool = toolDispatcherRef.current?.getTool(name);
+      const externalParts = name.startsWith(`${EXTERNAL_MCP_TOOL_NAMESPACE}:`)
+        ? name.slice(EXTERNAL_MCP_TOOL_NAMESPACE.length + 1).split(":")
+        : [];
+      const externalServerKey = externalParts.length >= 2 ? externalParts[0] : null;
+      const externalToolName = externalParts.length >= 2 ? externalParts.slice(1).join(":") : null;
+      const externalServer = externalServerKey
+        ? await externalMcpManager.getServerByKey(externalServerKey)
+        : null;
+      const externalTool = externalToolName && runContext.companyId
+        ? (await externalMcpSource.listToolsForCompany(runContext.companyId))
+            .find((tool) => tool.namespacedName === name) ?? null
+        : null;
+      const externalDeclaredWrite = Boolean(
+        externalToolName && (
+          !externalTool ||
+          externalServer?.writeAllowList.includes(externalToolName) ||
+          externalTool?.mutationHint === true
+        ),
+      );
+      const classification = classifyBrokeredAgentAction(name, {
+        actionType: declaredTool?.actionType,
+        writes: declaredTool?.writes,
+        requiresApproval: declaredTool?.requiresApproval,
+        externalDeclaredWrite,
+      });
+      if (!classification) return null;
+      const { actionType } = classification;
+      if (declaredTool?.requiresApproval === true) {
+        return { actionType, mode: "ask_first", source: "operation" };
+      }
+      if (!runContext.companyId) {
+        throw new Error(`Cannot apply the action approval policy for "${name}" without a company`);
+      }
+      if (!actionType) {
+        return { actionType: null, mode: "ask_first", source: "unclassified" };
+      }
+      return {
+        actionType,
+        ...(await actionPolicies.resolveDetailed({
+          companyId: runContext.companyId,
+          agentId: runContext.agentId,
+          actionType,
+        })),
+      };
+    },
   });
   // Same late-binding trick: the plugin lifecycle is built further down, but
   // the starter catalog needs it at request time (to switch a plugin back on
@@ -351,8 +410,6 @@ export async function createApp(
     jobStore,
     workerManager,
   });
-  const externalMcpManager = opts.externalMcpServerManager ?? createExternalMcpServerManager(db);
-  const externalMcpSource = createExternalMcpToolSource(db, externalMcpManager);
   // Stops a retried plugin call that sends an email from sending it twice.
   const operationIdempotency = createPluginOperationIdempotencyStore(db);
   const toolDispatcher = createPluginToolDispatcher({

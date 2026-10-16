@@ -12,8 +12,9 @@
  * plugin host method applies that same check to the user paired to the chat
  * account that pressed the button.
  */
-import type { Db } from "@paperclipai/db";
-import { instructionChangePayloadSchema } from "@paperclipai/shared";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { activityLog, heartbeatRuns, type Db } from "@paperclipai/db";
+import { instructionChangePayloadSchema, isUuidLike } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import {
   approvalService,
@@ -24,8 +25,36 @@ import {
 } from "./index.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
-import { executeDraftedApproval } from "./tool-draft-gate.js";
+import { executeDraftedApproval, isAgentActionRefusalReason } from "./tool-draft-gate.js";
 import { appendApprovedDraftResultToChatSession } from "./chat.js";
+import { serviceUnavailable } from "../errors.js";
+import { deterministicActivityId } from "./activity-log.js";
+
+// Brokered tool RPCs have a five-minute hard limit. A durable lease lets any
+// server process distinguish a live execution from an interrupted one while
+// leaving enough margin for the receipt writes after the tool returns.
+const ACTION_EXECUTION_LEASE_MS = 10 * 60_000;
+
+async function durableRunId(
+  db: Db,
+  value: unknown,
+  companyId: string,
+  agentId: string | null,
+): Promise<string | null> {
+  if (typeof value !== "string" || !isUuidLike(value) || !agentId || !isUuidLike(agentId)) {
+    return null;
+  }
+  const [run] = await db
+    .select({ id: heartbeatRuns.id })
+    .from(heartbeatRuns)
+    .where(and(
+      eq(heartbeatRuns.id, value),
+      eq(heartbeatRuns.companyId, companyId),
+      eq(heartbeatRuns.agentId, agentId),
+    ))
+    .limit(1);
+  return run?.id ?? null;
+}
 
 export interface ApprovalDecisionDeps {
   pluginWorkerManager?: PluginWorkerManager;
@@ -37,12 +66,18 @@ export interface ApprovalDecisionDeps {
    * is constructed after the routes are mounted.
    */
   getToolDispatcher?: () => PluginToolDispatcher | null;
+  /** Test seam for looking up a durable action outcome during an idempotent retry. */
+  findActionAudit?: (
+    companyId: string,
+    approvalId: string,
+  ) => Promise<Array<{ action: string; details: Record<string, unknown> | null }>>;
 }
 
 export interface DraftExecutionOutcome {
   ok: boolean;
   reason: string | null;
   error: string | null;
+  outcome: "allowed" | "refused" | "failed";
 }
 
 export interface ApprovalDecisionInput {
@@ -81,6 +116,172 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
   const heartbeat = deps.heartbeat ?? heartbeatService(db, { pluginWorkerManager: deps.pluginWorkerManager });
   const issueApprovalsSvc = issueApprovalService(db);
   const issuesSvc = issueService(db);
+  const activeActionExecutions = new Set<string>();
+
+  async function findActionAudit(companyId: string, approvalId: string) {
+    if (deps.findActionAudit) return deps.findActionAudit(companyId, approvalId);
+    return db
+      .select({ action: activityLog.action, details: activityLog.details })
+      .from(activityLog)
+      .where(and(
+        eq(activityLog.companyId, companyId),
+        eq(activityLog.entityType, "approval"),
+        eq(activityLog.entityId, approvalId),
+        inArray(activityLog.action, [
+          "agent_action.allowed",
+          "agent_action.failed",
+          "agent_action.refused",
+          "approval.execution_started",
+          "approval.executed",
+          "approval.execute_failed",
+          "approval.rejected",
+        ]),
+      ))
+      .orderBy(desc(activityLog.createdAt))
+      .limit(10);
+  }
+
+  async function repairApprovedActionAudit(approval: DecidedApproval, decidedByUserId: string) {
+    if (approval.type !== "outbound_tool_draft") return;
+    const payload = (approval.payload ?? {}) as Record<string, unknown>;
+    const actionActorId = approval.requestedByAgentId ??
+      (typeof payload.agentId === "string" ? payload.agentId : null);
+    if (!actionActorId) return;
+    const runId = await durableRunId(
+      db,
+      payload.runId,
+      approval.companyId,
+      approval.requestedByAgentId,
+    );
+    const policySource = typeof payload.actionPolicySource === "string" ? payload.actionPolicySource : null;
+    if (!policySource) return;
+    const prior = await findActionAudit(approval.companyId, approval.id);
+    const terminalAction = prior.find((row) =>
+      row.action === "agent_action.allowed" ||
+      row.action === "agent_action.failed" ||
+      row.action === "agent_action.refused"
+    );
+    let execution = prior.find(
+      (row) => row.action === "approval.executed" || row.action === "approval.execute_failed",
+    );
+    if (terminalAction && !execution) {
+      const action = terminalAction.action === "agent_action.allowed"
+        ? "approval.executed"
+        : "approval.execute_failed";
+      const outcome = terminalAction.action === "agent_action.allowed"
+        ? "allowed"
+        : terminalAction.action === "agent_action.refused"
+          ? "refused"
+          : "failed";
+      await logActivity(db, {
+        id: deterministicActivityId("approval-execution-receipt", approval.id),
+        companyId: approval.companyId,
+        actorType: "user",
+        actorId: approval.decidedByUserId ?? decidedByUserId,
+        action,
+        entityType: "approval",
+        entityId: approval.id,
+        details: {
+          type: approval.type,
+          ok: action === "approval.executed",
+          outcome,
+          recoveredOnRetry: true,
+        },
+      });
+      execution = { action, details: { outcome } };
+    }
+    if (terminalAction) return;
+    if (activeActionExecutions.has(approval.id)) return;
+    const executionStart = prior.find((row) => row.action === "approval.execution_started");
+    const decisionTime = new Date(approval.decidedAt ?? approval.updatedAt).getTime();
+    if (
+      !execution &&
+      !executionStart &&
+      Number.isFinite(decisionTime) &&
+      Date.now() - decisionTime < ACTION_EXECUTION_LEASE_MS
+    ) {
+      return;
+    }
+    const leaseExpiresAt = executionStart?.details?.leaseExpiresAt;
+    if (
+      !execution &&
+      typeof leaseExpiresAt === "string" &&
+      new Date(leaseExpiresAt).getTime() > Date.now()
+    ) {
+      return;
+    }
+    const allowed = execution?.action === "approval.executed";
+    const refused = execution?.details?.outcome === "refused";
+    const outcomeUncertain = !execution && Boolean(executionStart);
+    await logActivity(db, {
+      id: deterministicActivityId("agent-action-outcome", approval.id),
+      companyId: approval.companyId,
+      actorType: "agent",
+      actorId: actionActorId,
+      action: allowed
+        ? "agent_action.allowed"
+        : refused
+          ? "agent_action.refused"
+          : "agent_action.failed",
+      entityType: "approval",
+      entityId: approval.id,
+      agentId: approval.requestedByAgentId,
+      runId,
+      details: {
+        actionType: typeof payload.actionType === "string" ? payload.actionType : null,
+        tool: payload.toolName ?? null,
+        policySource,
+        approvalId: approval.id,
+        decidedByUserId: approval.decidedByUserId ?? decidedByUserId,
+        recoveredOnRetry: true,
+        ...(!allowed ? {
+          error: execution
+            ? "The approved action did not complete."
+            : outcomeUncertain
+              ? "Approval processing was interrupted, so the action outcome is unknown and it was not run again."
+              : "Approval processing stopped before the action began, so it was not run.",
+          outcomeUncertain,
+        } : {}),
+      },
+    });
+  }
+
+  async function repairRejectedActionAudit(approval: DecidedApproval, decidedByUserId: string) {
+    if (approval.type !== "outbound_tool_draft") return;
+    const payload = (approval.payload ?? {}) as Record<string, unknown>;
+    const actionActorId = approval.requestedByAgentId ??
+      (typeof payload.agentId === "string" ? payload.agentId : null);
+    if (!actionActorId) return;
+    const runId = await durableRunId(
+      db,
+      payload.runId,
+      approval.companyId,
+      approval.requestedByAgentId,
+    );
+    const policySource = typeof payload.actionPolicySource === "string" ? payload.actionPolicySource : null;
+    if (!policySource) return;
+    const prior = await findActionAudit(approval.companyId, approval.id);
+    if (prior.some((row) => row.action === "agent_action.refused")) return;
+    await logActivity(db, {
+      id: deterministicActivityId("agent-action-outcome", approval.id),
+      companyId: approval.companyId,
+      actorType: "agent",
+      actorId: actionActorId,
+      action: "agent_action.refused",
+      entityType: "approval",
+      entityId: approval.id,
+      agentId: approval.requestedByAgentId,
+      runId,
+      details: {
+        actionType: typeof payload.actionType === "string" ? payload.actionType : null,
+        tool: payload.toolName ?? null,
+        policySource,
+        approvalId: approval.id,
+        decidedByUserId: approval.decidedByUserId ?? decidedByUserId,
+        recoveredOnRetry: true,
+      },
+    });
+  }
 
   async function approve(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult> {
     const decidedByUserId = input.decidedByUserId;
@@ -94,7 +295,10 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
     let draftExecution: DraftExecutionOutcome | null = null;
 
     if (applied || (approval.type === "instruction_change" && approval.status === "approved")) {
-      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
+      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id).catch((err) => {
+        logger.warn({ err, approvalId: approval.id }, "failed to read linked issues after approval");
+        return [];
+      });
       const linkedIssueIds = linkedIssues.map((issue) => issue.id);
       const primaryIssueId = linkedIssueIds[0] ?? null;
 
@@ -112,6 +316,8 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
             linkedIssueIds,
             ...pluginSource,
           },
+        }).catch((err) => {
+          logger.warn({ err, approvalId: approval.id }, "failed to record approval decision activity");
         });
       }
 
@@ -129,94 +335,208 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
       // second Slack draft, telling the operator about a message that had
       // already gone out four minutes earlier.
       if (approval.type === "outbound_tool_draft") {
-        const dispatcher = deps.getToolDispatcher?.() ?? null;
-        if (dispatcher) {
-          const exec = await executeDraftedApproval({
-            approvalId: approval.id,
-            decidedByUserId,
-            executeTool: (toolName, params, runContext) =>
-              dispatcher.executeTool(toolName, params, runContext, {
-                bypassDraftGate: true,
-              }),
+        activeActionExecutions.add(approval.id);
+        try {
+          const leaseExpiresAt = new Date(Date.now() + ACTION_EXECUTION_LEASE_MS).toISOString();
+          const actionPayload = (approval.payload ?? {}) as Record<string, unknown>;
+          const actionActorId = approval.requestedByAgentId ??
+            (typeof actionPayload.agentId === "string" ? actionPayload.agentId : null);
+          const actionRunId = await durableRunId(
             db,
-          });
-          draftExecution = {
-            ok: exec.ok && !exec.toolResult?.error,
-            reason: exec.reason ?? null,
-            error: exec.toolResult?.error ?? null,
-          };
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: decidedByUserId,
-            action: exec.ok ? "approval.executed" : "approval.execute_failed",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              type: approval.type,
-              ok: exec.ok,
-              reason: exec.reason ?? null,
-              hadError: !!exec.toolResult?.error,
-              ...pluginSource,
-            },
-          });
+            actionPayload.runId,
+            approval.companyId,
+            approval.requestedByAgentId,
+          );
+          try {
+            await logActivity(db, {
+              id: deterministicActivityId("approval-execution-start", approval.id),
+              companyId: approval.companyId,
+              actorType: "user",
+              actorId: decidedByUserId,
+              action: "approval.execution_started",
+              entityType: "approval",
+              entityId: approval.id,
+              agentId: approval.requestedByAgentId,
+              runId: actionRunId,
+              details: {
+                type: approval.type,
+                leaseExpiresAt,
+                executionKind: "approval",
+                approvalId: approval.id,
+                requestedByAgentId: approval.requestedByAgentId,
+                actionActorId,
+                actionType: typeof actionPayload.actionType === "string" ? actionPayload.actionType : null,
+                policySource: typeof actionPayload.actionPolicySource === "string"
+                  ? actionPayload.actionPolicySource
+                  : null,
+                tool: actionPayload.toolName ?? null,
+                ...pluginSource,
+              },
+            });
+          } catch (err) {
+            logger.error({ err, approvalId: approval.id }, "failed to record approval execution start");
+            throw serviceUnavailable(
+              `The approved action execution for "${approval.id}" could not be recorded, so the action was not run.`,
+              { approvalId: approval.id, code: "ACTION_AUDIT_FAILED" },
+            );
+          }
 
-          // Chat-session wake: if the draft was queued from a Clippy chat
-          // turn, append a follow-up message into the transcript so the LLM
-          // sees the resolved outcome on the user's next turn. Real agent
-          // runs are woken via the heartbeat branch below; chat sessions
-          // have no heartbeat, so this append is their only resume signal.
-          const payload = (approval.payload ?? {}) as Record<string, unknown>;
-          const chatSessionId =
-            typeof payload.chatSessionId === "string" ? payload.chatSessionId : null;
-          if (chatSessionId) {
-            const toolName =
-              typeof payload.toolName === "string" ? payload.toolName : "tool";
-            const summary =
-              typeof payload.summary === "string" ? payload.summary : toolName;
-            const outcome: Parameters<typeof appendApprovedDraftResultToChatSession>[1]["outcome"] =
-              !exec.ok
-                ? { ok: false, error: exec.reason ?? "execution_failed" }
-                : exec.toolResult?.error
-                  ? { ok: false, error: exec.toolResult.error }
-                  : {
-                      ok: true,
-                      content:
-                        typeof exec.toolResult?.content === "string"
-                          ? exec.toolResult.content
-                          : exec.toolResult?.data !== undefined
-                            ? JSON.stringify(exec.toolResult.data)
-                            : null,
-                    };
-            try {
-              const result = await appendApprovedDraftResultToChatSession(db, {
-                chatSessionId,
-                toolName,
-                summary,
-                outcome,
-              });
-              if ("skipped" in result) {
+          const dispatcher = deps.getToolDispatcher?.() ?? null;
+          if (dispatcher) {
+            const exec = await executeDraftedApproval({
+              approvalId: approval.id,
+              decidedByUserId,
+              executeTool: (toolName, params, runContext) =>
+                dispatcher.executeTool(toolName, params, runContext, {
+                  bypassDraftGate: true,
+                  approvedDraftConfirmation: true,
+                }),
+              db,
+            });
+            draftExecution = {
+              ok: exec.ok && !exec.toolResult?.error,
+              reason: exec.reason ?? null,
+              error: exec.toolResult?.error ?? null,
+              outcome: exec.ok && !exec.toolResult?.error
+                ? "allowed"
+                : exec.outcome ?? (isAgentActionRefusalReason(exec.toolResult?.error) ? "refused" : "failed"),
+            };
+            await logActivity(db, {
+              id: deterministicActivityId("approval-execution-receipt", approval.id),
+              companyId: approval.companyId,
+              actorType: "user",
+              actorId: decidedByUserId,
+              action: draftExecution.ok ? "approval.executed" : "approval.execute_failed",
+              entityType: "approval",
+              entityId: approval.id,
+              details: {
+                type: approval.type,
+                ok: draftExecution.ok,
+                outcome: draftExecution.outcome,
+                reason: exec.reason ?? null,
+                hadError: !!exec.toolResult?.error,
+                ...pluginSource,
+              },
+            }).catch((err) => {
+              logger.warn({ err, approvalId: approval.id }, "failed to record approval execution receipt");
+            });
+            // Chat-session wake: if the draft was queued from a Clippy chat
+            // turn, append a follow-up message into the transcript so the LLM
+            // sees the resolved outcome on the user's next turn. Real agent
+            // runs are woken via the heartbeat branch below; chat sessions
+            // have no heartbeat, so this append is their only resume signal.
+            const payload = (approval.payload ?? {}) as Record<string, unknown>;
+            const chatSessionId =
+              typeof payload.chatSessionId === "string" ? payload.chatSessionId : null;
+            if (chatSessionId) {
+              const toolName =
+                typeof payload.toolName === "string" ? payload.toolName : "tool";
+              const summary =
+                typeof payload.summary === "string" ? payload.summary : toolName;
+              const outcome: Parameters<typeof appendApprovedDraftResultToChatSession>[1]["outcome"] =
+                !exec.ok
+                  ? { ok: false, error: exec.reason ?? "execution_failed" }
+                  : exec.toolResult?.error
+                    ? { ok: false, error: exec.toolResult.error }
+                    : {
+                        ok: true,
+                        content:
+                          typeof exec.toolResult?.content === "string"
+                            ? exec.toolResult.content
+                            : exec.toolResult?.data !== undefined
+                              ? JSON.stringify(exec.toolResult.data)
+                              : null,
+                      };
+              try {
+                const result = await appendApprovedDraftResultToChatSession(db, {
+                  chatSessionId,
+                  toolName,
+                  summary,
+                  outcome,
+                });
+                if ("skipped" in result) {
+                  logger.warn(
+                    { approvalId: approval.id, chatSessionId, reason: result.skipped },
+                    "chat-session wake skipped: chat session no longer exists",
+                  );
+                }
+              } catch (err) {
+                // Don't fail the approve response if the chat append fails;
+                // the underlying tool already ran. Log and move on.
                 logger.warn(
-                  { approvalId: approval.id, chatSessionId, reason: result.skipped },
-                  "chat-session wake skipped: chat session no longer exists",
+                  { err, approvalId: approval.id, chatSessionId },
+                  "chat-session wake append failed (non-fatal)",
                 );
               }
+            }
+          } else {
+            draftExecution = {
+              ok: false,
+              reason: "no_tool_dispatcher",
+              error: "Plugin tools were not available, so the approved call did not run.",
+              outcome: "failed",
+            };
+            await logActivity(db, {
+              id: deterministicActivityId("approval-execution-receipt", approval.id),
+              companyId: approval.companyId,
+              actorType: "user",
+              actorId: decidedByUserId,
+              action: "approval.execute_failed",
+              entityType: "approval",
+              entityId: approval.id,
+              details: {
+                type: approval.type,
+                ok: false,
+                outcome: draftExecution.outcome,
+                reason: draftExecution.reason,
+                hadError: true,
+                ...pluginSource,
+              },
+            });
+            logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
+          }
+
+          const actionType = typeof actionPayload.actionType === "string" ? actionPayload.actionType : null;
+          const actionPolicySource = typeof actionPayload.actionPolicySource === "string"
+            ? actionPayload.actionPolicySource
+            : null;
+          if (draftExecution && actionActorId && actionPolicySource) {
+            try {
+              await logActivity(db, {
+                id: deterministicActivityId("agent-action-outcome", approval.id),
+                companyId: approval.companyId,
+                actorType: "agent",
+                actorId: actionActorId,
+                action: draftExecution.outcome === "allowed"
+                  ? "agent_action.allowed"
+                  : draftExecution.outcome === "refused"
+                    ? "agent_action.refused"
+                    : "agent_action.failed",
+                entityType: "approval",
+                entityId: approval.id,
+                agentId: approval.requestedByAgentId,
+                runId: actionRunId,
+                details: {
+                  actionType,
+                  tool: actionPayload.toolName ?? null,
+                  policySource: actionPolicySource,
+                  approvalId: approval.id,
+                  decidedByUserId,
+                  ...(!draftExecution.ok
+                    ? { error: draftExecution.error ?? draftExecution.reason ?? "execution_failed" }
+                    : {}),
+                },
+              });
             } catch (err) {
-              // Don't fail the approve response if the chat append fails;
-              // the underlying tool already ran. Log and move on.
-              logger.warn(
-                { err, approvalId: approval.id, chatSessionId },
-                "chat-session wake append failed (non-fatal)",
+              logger.error({ err, approvalId: approval.id }, "failed to record approved agent action outcome");
+              throw serviceUnavailable(
+                `The approved action outcome for "${approval.id}" could not be recorded. The action may have completed; do not retry it automatically.`,
+                { approvalId: approval.id, code: "ACTION_AUDIT_FAILED" },
               );
             }
           }
-        } else {
-          draftExecution = {
-            ok: false,
-            reason: "no_tool_dispatcher",
-            error: "Plugin tools were not available, so the approved call did not run.",
-          };
-          logger.warn({ approvalId: approval.id }, "outbound_tool_draft approved but no dispatcher available");
+        } finally {
+          activeActionExecutions.delete(approval.id);
         }
       }
 
@@ -332,6 +652,18 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
       }
     }
 
+    if (!applied && approval.status === "approved") {
+      try {
+        await repairApprovedActionAudit(approval, decidedByUserId);
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "failed to repair approved agent action outcome");
+        throw serviceUnavailable(
+          `The approved action outcome for "${approval.id}" could not be recorded. The action was not run again.`,
+          { approvalId: approval.id, code: "ACTION_AUDIT_FAILED" },
+        );
+      }
+    }
+
     return { approval, applied, draftExecution };
   }
 
@@ -352,8 +684,63 @@ export function approvalDecisionService(db: Db, deps: ApprovalDecisionDeps = {})
         entityType: "approval",
         entityId: approval.id,
         details: { type: approval.type, ...pluginSourceDetails(input) },
+      }).catch((err) => {
+        logger.warn({ err, approvalId: approval.id }, "failed to record rejection decision activity");
       });
+      const actionPayload = (approval.payload ?? {}) as Record<string, unknown>;
+      const actionType = typeof actionPayload.actionType === "string" ? actionPayload.actionType : null;
+      const actionPolicySource = typeof actionPayload.actionPolicySource === "string"
+        ? actionPayload.actionPolicySource
+        : null;
+      const actionActorId = approval.requestedByAgentId ??
+        (typeof actionPayload.agentId === "string" ? actionPayload.agentId : null);
+      if (approval.type === "outbound_tool_draft" && actionActorId && actionPolicySource) {
+        const actionRunId = await durableRunId(
+          db,
+          actionPayload.runId,
+          approval.companyId,
+          approval.requestedByAgentId,
+        );
+        try {
+          await logActivity(db, {
+            id: deterministicActivityId("agent-action-outcome", approval.id),
+            companyId: approval.companyId,
+            actorType: "agent",
+            actorId: actionActorId,
+            action: "agent_action.refused",
+            entityType: "approval",
+            entityId: approval.id,
+            agentId: approval.requestedByAgentId,
+            runId: actionRunId,
+            details: {
+              actionType,
+              tool: actionPayload.toolName ?? null,
+              policySource: actionPolicySource,
+              approvalId: approval.id,
+              decidedByUserId: input.decidedByUserId,
+            },
+          });
+        } catch (err) {
+          logger.error({ err, approvalId: approval.id }, "failed to record refused agent action outcome");
+          throw serviceUnavailable(
+            `The refused action outcome for "${approval.id}" could not be recorded. The approval decision was saved, but its audit record is missing.`,
+            { approvalId: approval.id, code: "ACTION_AUDIT_FAILED" },
+          );
+        }
+      }
     }
+    if (!applied && approval.status === "rejected") {
+      try {
+        await repairRejectedActionAudit(approval, input.decidedByUserId);
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "failed to repair refused agent action outcome");
+        throw serviceUnavailable(
+          `The refused action outcome for "${approval.id}" could not be recorded. The approval decision was already saved.`,
+          { approvalId: approval.id, code: "ACTION_AUDIT_FAILED" },
+        );
+      }
+    }
+
     // Durable instruction rejection effects commit in the approval service.
     // Retry delivery after interruption, keeping one accepted wake request.
     if (approval.type === "instruction_change" && approval.status === "rejected") {

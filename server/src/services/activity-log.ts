@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import { activityLog } from "@paperclipai/db";
 import { PLUGIN_EVENT_TYPES, type PluginEventType } from "@paperclipai/shared";
@@ -51,6 +51,8 @@ export function publishPluginDomainEvent(event: PluginEvent): void {
 }
 
 export interface LogActivityInput {
+  /** Stable UUID for an event that must be safe to retry. */
+  id?: string;
   companyId: string;
   actorType: "agent" | "user" | "system" | "plugin";
   actorId: string;
@@ -64,6 +66,7 @@ export interface LogActivityInput {
 }
 
 export interface PersistedActivityLogInput {
+  id?: string;
   companyId: string;
   actorType: LogActivityInput["actorType"];
   actorId: string;
@@ -108,6 +111,7 @@ export async function persistActivityLog(
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
   const persisted: PersistedActivityLogInput = {
+    ...(input.id ? { id: input.id } : {}),
     companyId: input.companyId,
     actorType: input.actorType,
     actorId: input.actorId,
@@ -164,6 +168,47 @@ export function publishPersistedActivityLog(input: PersistedActivityLogInput) {
 }
 
 export async function logActivity(db: Db, input: LogActivityInput) {
+  if (input.id) {
+    const currentUserRedactionOptions = {
+      enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
+    };
+    const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
+    const persisted: PersistedActivityLogInput = {
+      id: input.id,
+      companyId: input.companyId,
+      actorType: input.actorType,
+      actorId: input.actorId,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      agentId: input.agentId ?? null,
+      runId: input.runId ?? null,
+      responsibleUserId: input.responsibleUserId ?? null,
+      details: sanitizedDetails
+        ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
+        : null,
+    };
+    const inserted = await db
+      .insert(activityLog)
+      .values(persisted)
+      .onConflictDoNothing({ target: activityLog.id })
+      .returning({ id: activityLog.id });
+    if (inserted.length === 0) return false;
+    publishPersistedActivityLog(persisted);
+    return true;
+  }
   const persisted = await persistActivityLog(db, input);
   publishPersistedActivityLog(persisted);
+  return true;
+}
+
+export function deterministicActivityId(...parts: string[]): string {
+  const hex = createHash("sha256").update(parts.join("\u0000")).digest("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `5${hex.slice(13, 16)}`,
+    `${((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join("-");
 }

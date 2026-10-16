@@ -95,23 +95,168 @@ export interface ExternalMcpTestConnectResult {
  * is necessarily conservative.
  */
 export const EXTERNAL_MCP_MUTATION_PREFIXES = [
+  "accept_",
+  "acknowledge_",
+  "activate_",
+  "attach_",
+  "approve_",
+  "apply_",
+  "assign_",
+  "ban_",
+  "cancel_",
+  "capture_",
+  "change_",
+  "charge_",
+  "clear_",
+  "close_",
+  "complete_",
+  "commit_",
+  "confirm_",
+  "connect_",
+  "copy_",
   "create_",
+  "deploy_",
+  "deposit_",
+  "demote_",
+  "destroy_",
+  "detach_",
+  "disable_",
+  "disconnect_",
+  "download_",
+  "dismiss_",
+  "edit_",
+  "enable_",
+  "expire_",
+  "finalize_",
+  "fork_",
+  "grant_",
   "update_",
   "delete_",
+  "hangup_",
+  "install_",
+  "invite_",
+  "launch_",
+  "lock_",
+  "mark_",
+  "merge_",
   "remove_",
   "send_",
   "post_",
   "patch_",
   "put_",
   "execute_",
+  "export_",
   "write_",
   "set_",
   "modify_",
+  "add_",
+  "append_",
+  "archive_",
+  "import_",
+  "link_",
+  "move_",
+  "park_",
+  "pay_",
+  "payout_",
+  "pause_",
+  "pickup_",
+  "provision_",
+  "promote_",
+  "publish_",
+  "purchase_",
+  "push_",
+  "print_",
+  "refund_",
+  "reject_",
+  "replace_",
+  "rename_",
+  "renew_",
+  "reply_",
+  "resolve_",
+  "reboot_",
+  "reset_",
+  "resize_",
+  "restart_",
+  "resume_",
+  "restore_",
+  "revoke_",
+  "rotate_",
+  "save_",
+  "schedule_",
+  "scale_",
+  "share_",
+  "sign_",
+  "start_",
+  "stop_",
+  "submit_",
+  "subscribe_",
+  "suspend_",
+  "sync_",
+  "terminate_",
+  "transfer_",
+  "trigger_",
+  "unarchive_",
+  "uninstall_",
+  "unlock_",
+  "unban_",
+  "unsubscribe_",
+  "upload_",
+  "upsert_",
+  "overwrite_",
+  "withdraw_",
+  "redeem_",
 ] as const;
 
+const EXTERNAL_MCP_KNOWN_READ_TOOLS = new Set([
+  "backup_archive_describe",
+  "support_check_skill_sync",
+  "support_resolve_owner",
+  "unifi_restart_status",
+]);
+
 export function isLikelyMutationToolName(name: string): boolean {
-  const lower = name.toLowerCase();
-  return EXTERNAL_MCP_MUTATION_PREFIXES.some((p) => lower.startsWith(p));
+  const lower = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .toLowerCase();
+  if (EXTERNAL_MCP_KNOWN_READ_TOOLS.has(lower)) return false;
+  const tokens = lower.split("_").filter(Boolean);
+  const mutationTokens = new Set(EXTERNAL_MCP_MUTATION_PREFIXES.map((prefix) => prefix.slice(0, -1)));
+  const mutationIndex = tokens.findIndex((token) => mutationTokens.has(token));
+  const readTokens = new Set([
+    "calculate", "check", "compare", "describe", "estimate", "find", "get", "history",
+    "inspect", "list", "lookup", "predict", "preview", "query", "read", "report",
+    "scan", "search", "status", "summary", "transcript", "validate",
+  ]);
+  const readIndex = tokens.findIndex((token) => readTokens.has(token));
+  const compoundRunIndex = tokens.findIndex((token) => token === "run");
+  const hasCommandShape = tokens.some(
+    (token) => token === "command" || token === "script" || token === "shell",
+  );
+  if (compoundRunIndex >= 0 && hasCommandShape && (readIndex < 0 || compoundRunIndex < readIndex)) {
+    return true;
+  }
+  if (mutationIndex < 0) return false;
+  if (readIndex < 0 || mutationIndex < readIndex) return true;
+  const connectorIndex = tokens.findIndex(
+    (token, index) => index > readIndex && (token === "and" || token === "or" || token === "then"),
+  );
+  if (connectorIndex >= 0 && tokens.slice(connectorIndex + 1).some((token) => mutationTokens.has(token))) {
+    return true;
+  }
+  if (
+    connectorIndex >= 0 &&
+    tokens.slice(connectorIndex + 1).includes("run") &&
+    hasCommandShape
+  ) {
+    return true;
+  }
+  const directMutationAfterRead = new Set([
+    "add", "complete", "create", "delete", "edit", "execute", "modify", "move",
+    "post", "publish", "remove", "send", "set", "submit", "trigger", "update",
+    "upload", "upsert", "write",
+  ]);
+  return tokens.slice(readIndex + 1).some((token) => directMutationAfterRead.has(token));
 }
 
 /** Tool-namespace prefix used for external MCP tools (e.g. `mcp:notion:search`). */

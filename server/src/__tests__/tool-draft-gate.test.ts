@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OUTBOUND_TOOL_DRAFT_GATE } from "@paperclipai/shared";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
+import {
+  classifyBrokeredAgentAction,
+  inferAgentActionTypeForTool,
+  isLikelyBrokeredMutationToolName,
+} from "../services/tool-draft-gate.js";
 
-const mockApprovalService = vi.hoisted(() => ({
-  create: vi.fn(),
-  list: vi.fn(async () => []),
-}));
+const mockApprovalService = vi.hoisted(() => {
+  const create = vi.fn();
+  return {
+    create,
+    createPendingDraft: vi.fn(async (...args: unknown[]) => ({
+      approval: await create(...args),
+      created: true,
+    })),
+    getById: vi.fn(),
+    list: vi.fn(async () => []),
+  };
+});
 
 const mockInstanceSettingsService = vi.hoisted(() => ({
   getGeneral: vi.fn(async () => ({ outboundToolDraftMode: true })),
@@ -16,6 +29,7 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
 // `logActivity(db, input)` shape from services/activity-log.ts loosely; only
 // the fields the tests assert on are needed.
 type LogActivityArgs = {
+  id?: string;
   companyId: string;
   actorType: "agent" | "user" | "system" | "plugin";
   actorId: string;
@@ -40,6 +54,7 @@ vi.mock("../services/instance-settings.js", () => ({
 
 vi.mock("../services/activity-log.js", () => ({
   logActivity: mockLogActivity,
+  deterministicActivityId: (...parts: string[]) => parts.join(":"),
 }));
 
 const mockIssueApprovalService = vi.hoisted(() => ({
@@ -120,17 +135,294 @@ async function loadDraftGateWithOperatorRule(
 
 function ctx(overrides: Partial<ToolRunContext>): ToolRunContext {
   return {
-    agentId: "00000000-0000-0000-0000-000000000000",
-    runId: "00000000-0000-0000-0000-000000000000",
+    agentId: "00000000-0000-4000-8000-000000000000",
+    runId: "00000000-0000-4000-8000-000000000000",
     companyId: "00000000-0000-0000-0000-0000000000aa",
     projectId: "",
     ...overrides,
   };
 }
 
+describe("brokered action name inference", () => {
+  it.each([
+    ["s3-tools:s3_upload", "change_files"],
+    ["s3-tools:s3_delete", "change_files"],
+    ["stripe-tools:stripe_create_coupon", "move_money"],
+    ["review-tools:business_upsert", "change_knowledge_base"],
+    ["mcp:notion:create_page", "change_knowledge_base"],
+    ["mcp:slack:send_message", "send_message"],
+    ["mcp:slack:slack_post_message", "send_message"],
+    ["mcp:slack:slack_upload_file", "send_message"],
+    ["mcp:teams:post_message", "send_message"],
+    ["mcp:facebook:send_message", "send_message"],
+    ["mcp:instagram:send_dm", "send_message"],
+    ["mcp:social:send_message", "send_message"],
+    ["mcp:x:post_comment", "post_publicly"],
+    ["3cx-tools:pbx_pickup_park", "send_message"],
+    ["help-scout:helpscout_assign_conversation", "change_knowledge_base"],
+    ["rollbar-tools:rollbar_resolve_item", "change_knowledge_base"],
+    ["github-tools:github_close_issue", "change_knowledge_base"],
+    ["mcp:github:github_create_issue", "change_knowledge_base"],
+    ["mcp:linear:create_comment", "change_knowledge_base"],
+    ["mcp:jira:post_comment", "change_knowledge_base"],
+    ["mcp:helpscout:helpscout_create_conversation", "send_message"],
+    ["github-tools:github_merge_pull", "change_files"],
+    ["github-tools:github_create_release", "post_publicly"],
+    ["mcp:github:create_release", "post_publicly"],
+    ["mcp:github:delete_release", "post_publicly"],
+    ["mcp:github:post_issue_comment", "post_publicly"],
+    ["mcp:github:github_create_issue_comment", "post_publicly"],
+    ["phone-tools:phone_campaign_pause", "send_message"],
+    ["phone-tools:phone_call_end", "send_message"],
+    ["phone-tools:phone_assistant_update", "change_knowledge_base"],
+    ["phone-tools:phone_dnc_remove", "change_knowledge_base"],
+    ["stripe-tools:refundPayment", "move_money"],
+    ["mcp:stripe:confirm_payment_intent", "move_money"],
+    ["mcp:stripe:capture_payment_intent", "move_money"],
+    ["mcp:bank:send_payment", "move_money"],
+    ["mcp:stripe:send_refund", "move_money"],
+    ["mcp:stripe:post_payment", "move_money"],
+    ["mcp:stripe:post_refund", "move_money"],
+    ["mcp:billing:post_invoice", "move_money"],
+    ["mcp:billing:pay_invoice", "move_money"],
+    ["mcp:bank:withdraw_funds", "move_money"],
+    ["mcp:github:fork_repository", "change_files"],
+    ["mcp:github:push_branch", "change_files"],
+    ["mcp:shell:run_command", "change_files"],
+    ["mcp:social:post_public_message", "post_publicly"],
+    ["mcp:social:publish_public_message", "post_publicly"],
+    ["mcp:youtube:youtube_upload_video", "post_publicly"],
+    ["mcp:social:publish_public_file", "post_publicly"],
+    ["mcp:phone:transfer_call", "send_message"],
+    ["mcp:images:capture_image", "change_files"],
+    ["mcp:desktop:capture_screenshot", "change_files"],
+    ["files:transfer_file", "change_files"],
+    ["rollbar-tools:rollbar_mute_item", "change_knowledge_base"],
+    ["phone-tools:phone_lead_list_append", "change_knowledge_base"],
+    ["phone-tools:phone_lead_list_import_csv", "change_knowledge_base"],
+    ["phone-tools:phone_dnc_federal_refresh", "change_knowledge_base"],
+    ["backup-tools:backup_run_now", "change_files"],
+    ["deal-desk:deal_scenario_run", "change_knowledge_base"],
+    ["image-tools:image_generate", "change_files"],
+    ["image-tools:image_edit", "change_files"],
+    ["image-tools:image_resize", "change_files"],
+    ["deal-desk:deal_period_upsert", "change_knowledge_base"],
+    ["business-records:business_link_issue", "change_knowledge_base"],
+    ["email-tools:email_import_contacts", "change_knowledge_base"],
+    ["email-tools:email_mark_read", "change_knowledge_base"],
+    ["email-tools:email_mark_unread", "change_knowledge_base"],
+    ["email-tools:email_move", "change_knowledge_base"],
+    ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
+    ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
+    ["email-tools:email_save_contact", "change_knowledge_base"],
+    ["mcp:gmail:email_move", "change_knowledge_base"],
+    ["mcp:gmail:mark_message_read", "change_knowledge_base"],
+    ["mcp:gmail:archive_email", "change_knowledge_base"],
+    ["mcp:gmail:delete_message", "change_knowledge_base"],
+    ["review-tools:gbp_sync_location", "change_knowledge_base"],
+    ["google-workspace:gsheet_append", "change_files"],
+    ["google-workspace:gsheet_update", "change_files"],
+    ["google-workspace:gsheet_create", "change_files"],
+    ["google-workspace:gcal_create_event", "change_knowledge_base"],
+    ["google-workspace:gcal_update_event", "change_knowledge_base"],
+    ["google-workspace:gcal_delete_event", "change_knowledge_base"],
+    ["google-workspace:gtasks_create_task", "change_knowledge_base"],
+    ["google-workspace:gtasks_update_task", "change_knowledge_base"],
+    ["google-workspace:gtasks_complete_task", "change_knowledge_base"],
+    ["google-workspace:gtasks_delete_task", "change_knowledge_base"],
+    ["acx-tools:acx_move_project", "change_files"],
+    ["revenuecat-tools:revenuecat_set_subscriber_attribute", "change_knowledge_base"],
+    ["revenuecat-tools:revenuecat_delete_subscriber", "change_knowledge_base"],
+    ["slack-tools:slack_create_channel", "change_knowledge_base"],
+    ["slack-tools:slack_invite_users", "change_knowledge_base"],
+    ["slack-tools:slack_add_reaction", "send_message"],
+    ["slack-tools:slack_remove_reaction", "send_message"],
+    ["slack-tools:slack_update_message", "send_message"],
+    ["slack-tools:slack_delete_message", "send_message"],
+    ["mcp:slack:slack_add_reaction", "send_message"],
+    ["mcp:slack:slack_remove_reaction", "send_message"],
+    ["mcp:slack:update_message", "send_message"],
+    ["mcp:slack:delete_message", "send_message"],
+    ["mcp:slack:slack_create_channel", "change_knowledge_base"],
+    ["mcp:slack:slack_invite_users", "change_knowledge_base"],
+    ["slack-tools:slack_upload_file", "send_message"],
+    ["stripe-tools:stripe_create_promotion_code", "move_money"],
+    ["todo-list:todo_add", "change_knowledge_base"],
+    ["todo-list:todo_complete", "change_knowledge_base"],
+    ["todo-list:todo_remove", "change_knowledge_base"],
+    ["s3-tools:s3_download", "change_files"],
+    ["stripe-tools:stripe_export_charges_csv", "change_files"],
+    ["print-tools:print_text", "change_files"],
+    ["insurance-portals:insurance_fetch_documents", "change_files"],
+    ["insurance-portals:insurance_start_fetch", "change_files"],
+    ["youtube-tools:youtube_mark_posted", "change_files"],
+    ["mcp:youtube:youtube_mark_posted", "change_files"],
+    ["customer-support:support_save_directory", "change_knowledge_base"],
+    ["customer-support:support_report_ticket", "send_message"],
+    ["business-records:business_set_status", "change_knowledge_base"],
+    ["business-records:business_filing_set_status", "change_knowledge_base"],
+    ["deal-desk:deal_adjustment_set_status", "change_knowledge_base"],
+    ["slack-tools:slack_set_user_status", "change_knowledge_base"],
+    ["help-scout:helpscout_change_status", "change_knowledge_base"],
+    ["provider:create_report", null],
+    ["provider:delete_history", null],
+    ["mcp:admin:subscribe_user", null],
+    ["mcp:admin:ban_user", null],
+    ["mcp:admin:unban_user", null],
+    ["mcp:admin:promote_user", null],
+    ["mcp:admin:demote_user", null],
+    ["mcp:billing:renew_subscription", "move_money"],
+    ["mcp:billing:redeem_coupon", "move_money"],
+    ["mcp:auth:expire_token", null],
+    ["mcp:admin:suspend_account", null],
+  ] as const)("classifies %s as %s", (name, expected) => {
+    expect(isLikelyBrokeredMutationToolName(name)).toBe(true);
+    expect(inferAgentActionTypeForTool(name)).toBe(expected);
+  });
+
+  it("leaves an unknown mutation unclassified so it defaults to Ask first", () => {
+    expect(isLikelyBrokeredMutationToolName("acme:execute_workflow")).toBe(true);
+    expect(inferAgentActionTypeForTool("acme:execute_workflow")).toBeNull();
+  });
+
+  it("does not let a leading read verb hide a later mutation verb", () => {
+    expect(isLikelyBrokeredMutationToolName("acme:get_or_create_user")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:find_and_update")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:search-then-delete")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:get_and_refund")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:find_and_approve")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:search_then_archive")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("acme:list_and_cancel")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("mcp:kubernetes:apply_manifest")).toBe(true);
+    expect(isLikelyBrokeredMutationToolName("mcp:supabase:apply_migration")).toBe(true);
+  });
+
+  it("does not let an external server name override decisive action terms", () => {
+    expect(classifyBrokeredAgentAction("mcp:youtube:charge_customer", { externalDeclaredWrite: true })).toEqual({
+      actionType: "move_money",
+    });
+    expect(classifyBrokeredAgentAction("mcp:social:refund_payment", { externalDeclaredWrite: true })).toEqual({
+      actionType: "move_money",
+    });
+    expect(classifyBrokeredAgentAction("mcp:youtube:delete_file", { externalDeclaredWrite: true })).toEqual({
+      actionType: "change_files",
+    });
+    expect(classifyBrokeredAgentAction("mcp:youtube:send_email", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:youtube:delete_message", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:teams:update_message", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:discord:delete_message", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:social:create_issue", { externalDeclaredWrite: true })).toEqual({
+      actionType: "change_knowledge_base",
+    });
+    expect(classifyBrokeredAgentAction("mcp:helpscout:post_note", { externalDeclaredWrite: true })).toEqual({
+      actionType: "change_knowledge_base",
+    });
+    expect(classifyBrokeredAgentAction("mcp:slack:post_channel", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:slack:post_ephemeral", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:teams:post_card", { externalDeclaredWrite: true })).toEqual({
+      actionType: "send_message",
+    });
+    expect(classifyBrokeredAgentAction("mcp:gitlab:create_issue_comment", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:bitbucket:create_issue_comment", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:gitlab:create_issue_note", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:gitlab:create_merge_request_note", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:gitlab:save_note", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:pull_request_review_write", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:submit_pending_pull_request_review", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:create_pull_request_review", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:delete_pending_pull_request_review", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:request_pull_request_reviewers", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:github:resolve_review_thread", { externalDeclaredWrite: true })).toEqual({
+      actionType: "post_publicly",
+    });
+    expect(classifyBrokeredAgentAction("mcp:acme:create_issue_comment", { externalDeclaredWrite: true })).toEqual({
+      actionType: null,
+    });
+    expect(classifyBrokeredAgentAction("mcp:acme:post_record", { externalDeclaredWrite: true })).toEqual({
+      actionType: null,
+    });
+    expect(classifyBrokeredAgentAction("mcp:acme:transfer_user", { externalDeclaredWrite: true })).toEqual({
+      actionType: null,
+    });
+  });
+
+  it("treats an operator-required operation as an unclassified write", () => {
+    expect(classifyBrokeredAgentAction("acme:run", { requiresApproval: true })).toEqual({
+      actionType: null,
+    });
+  });
+
+  it("treats external mutation annotations as an unclassified write", () => {
+    expect(classifyBrokeredAgentAction("mcp:vendor:process", { externalDeclaredWrite: true })).toEqual({
+      actionType: null,
+    });
+  });
+
+  it("does not classify a read-shaped tool without write metadata", () => {
+    expect(classifyBrokeredAgentAction("mcp:notion:search_pages")).toBeNull();
+    expect(classifyBrokeredAgentAction("email-tools:email_search")).toBeNull();
+    expect(classifyBrokeredAgentAction("email-tools:email_fetch")).toBeNull();
+    expect(classifyBrokeredAgentAction("phone-tools:phone_call_status")).toBeNull();
+    expect(classifyBrokeredAgentAction("3cx-tools:pbx_call_history")).toBeNull();
+    expect(classifyBrokeredAgentAction("backup-tools:backup_archive_describe")).toBeNull();
+    expect(classifyBrokeredAgentAction("code-scanner:code_dead_export_scan")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:stripe:get_charge")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:stripe:stripe_get_charge")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:stripe:stripe_get_refund")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:shell:get_run_command_status")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:shell:list_run_scripts")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:github:github_get_issue")).toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:search:delete_search_index")).toEqual({ actionType: null });
+    expect(classifyBrokeredAgentAction("mcp:search:update_search_index")).toEqual({ actionType: null });
+    expect(classifyBrokeredAgentAction("mcp:reports:send_status_report")).toEqual({ actionType: "send_message" });
+    expect(classifyBrokeredAgentAction("mcp:backup:describe_archive")).toBeNull();
+    expect(classifyBrokeredAgentAction("customer-support:support_resolve_owner")).toBeNull();
+    expect(classifyBrokeredAgentAction("customer-support:support_check_skill_sync")).toBeNull();
+    expect(classifyBrokeredAgentAction("phone-tools:phone_audit_export")).toBeNull();
+    expect(classifyBrokeredAgentAction("unifi-tools:unifi_restart_status")).toBeNull();
+  });
+
+  it("honors an explicit read declaration over name heuristics", () => {
+    expect(classifyBrokeredAgentAction("acme:archive_record", { writes: false })).toBeNull();
+  });
+});
+
 describe("tool draft gate — synthetic agent id handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLogActivity.mockResolvedValue(undefined);
     mockApprovalService.create.mockResolvedValue({ id: "approval-1" });
   });
 
@@ -151,6 +443,7 @@ describe("tool draft gate — synthetic agent id handling", () => {
     expect((createArgs.payload as Record<string, unknown>).agentId).toBe(
       "clippy:user-abc-123",
     );
+    expect((createArgs.payload as Record<string, unknown>).runId).toBeNull();
   });
 
   it("nulls activity-log agentId/runId for Clippy invocations", async () => {
@@ -173,8 +466,8 @@ describe("tool draft gate — synthetic agent id handling", () => {
 
   it("preserves real agent ids verbatim", async () => {
     const gate = await loadDraftGate();
-    const realAgentId = "22222222-2222-2222-2222-222222222222";
-    const realRunId = "33333333-3333-3333-3333-333333333333";
+    const realAgentId = "22222222-2222-4222-8222-222222222222";
+    const realRunId = "33333333-3333-4333-8333-333333333333";
     await gate.intercept(
       "3cx-tools:pbx_click_to_call",
       { toNumber: "+15555550199", fromExtension: "200" },
@@ -190,6 +483,23 @@ describe("tool draft gate — synthetic agent id handling", () => {
     expect(logArgs.actorId).toBe(realAgentId);
     expect(logArgs.agentId).toBe(realAgentId);
     expect(logArgs.runId).toBe(realRunId);
+  });
+
+  it("drops a missing run id for a real agent before storing or auditing the draft", async () => {
+    const gate = await loadDraftGate();
+    const realAgentId = "22222222-2222-4222-8222-222222222222";
+    await gate.intercept(
+      "3cx-tools:pbx_click_to_call",
+      { toNumber: "+15555550199", fromExtension: "200" },
+      ctx({ agentId: realAgentId, runId: "" }),
+    );
+
+    const createArgs = mockApprovalService.create.mock.calls[0]![1];
+    expect((createArgs.payload as Record<string, unknown>).runId).toBeNull();
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentId: realAgentId, runId: null }),
+    );
   });
 
   it("persists chatSessionId on the approval payload when present", async () => {
@@ -210,7 +520,7 @@ describe("tool draft gate — synthetic agent id handling", () => {
     await gate.intercept(
       "3cx-tools:pbx_click_to_call",
       { toNumber: "+15555550199", fromExtension: "200" },
-      ctx({ agentId: "22222222-2222-2222-2222-222222222222" }),
+      ctx({ agentId: "22222222-2222-4222-8222-222222222222" }),
     );
 
     const createArgs = mockApprovalService.create.mock.calls[0]![1];
@@ -513,7 +823,7 @@ describe("tool draft gate — the issue a draft belongs to", () => {
     await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "hello" },
-      ctx({ runId: "run-7" }),
+      ctx({ runId: "70000000-0000-4000-8000-000000000007" }),
     );
 
     expect(mockIssueApprovalService.link).toHaveBeenCalledWith(
@@ -528,7 +838,7 @@ describe("tool draft gate — the issue a draft belongs to", () => {
     const result = await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "hello" },
-      ctx({ runId: "run-8" }),
+      ctx({ runId: "80000000-0000-4000-8000-000000000008" }),
     );
 
     expect(result.intercepted).toBe(true);
@@ -541,7 +851,7 @@ describe("tool draft gate — the issue a draft belongs to", () => {
     const result = await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "hello" },
-      ctx({ runId: "run-9" }),
+      ctx({ runId: "90000000-0000-4000-8000-000000000009" }),
     );
 
     expect(result.intercepted).toBe(true);
@@ -556,7 +866,7 @@ describe("tool draft gate — the issue a draft belongs to", () => {
     const result = await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "hello" },
-      ctx({ runId: "run-10" }),
+      ctx({ runId: "10000000-0000-4000-8000-000000000010" }),
     );
 
     const content = String(result.result?.content ?? "");
@@ -580,7 +890,13 @@ describe("tool draft gate — the approve-and-redraft loop", () => {
       id,
       type: "outbound_tool_draft",
       status: "pending",
-      payload: { toolName: "slack-tools:slack_send_dm", parameters: params, ...overrides },
+      payload: {
+        toolName: "slack-tools:slack_send_dm",
+        parameters: params,
+        agentId: "00000000-0000-4000-8000-000000000000",
+        userId: null,
+        ...overrides,
+      },
     };
   }
 
@@ -590,7 +906,15 @@ describe("tool draft gate — the approve-and-redraft loop", () => {
     // approved, which wakes it again. Four identical Slack DMs in three
     // minutes came out of that, each needing its own tap.
     mockApprovalService.list.mockResolvedValue([pendingDraft("approval-waiting")]);
-    const gate = await loadDraftGate(dbReturningRunIssue(null));
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "send_message",
+        mode: "ask_first",
+        source: "company",
+      }),
+    });
 
     const result = await gate.intercept("slack-tools:slack_send_dm", params, ctx({}));
 
@@ -601,6 +925,15 @@ describe("tool draft gate — the approve-and-redraft loop", () => {
     // Told not to reword its way around the check, because that is the obvious
     // next move for a model that wants to report progress.
     expect(String(result.result?.content)).toMatch(/do not rephrase/i);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      stubDb,
+      expect.objectContaining({
+        id: "agent-action-approval-requested:approval-waiting",
+        action: "agent_action.approval_requested",
+        entityId: "approval-waiting",
+        details: expect.objectContaining({ recoveredOnRetry: true }),
+      }),
+    );
   });
 
   it("ignores key order when deciding two calls are the same", async () => {
@@ -613,6 +946,52 @@ describe("tool draft gate — the approve-and-redraft loop", () => {
 
     expect(mockApprovalService.create).not.toHaveBeenCalled();
     expect((result.result?.data as Record<string, unknown>).duplicateOf).toBe("approval-waiting");
+  });
+
+  it("keeps an existing draft pending after the policy changes to go ahead", async () => {
+    mockApprovalService.list.mockResolvedValue([pendingDraft("approval-waiting")]);
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "send_message",
+        mode: "go_ahead",
+        source: "company",
+      }),
+    });
+
+    const result = await gate.intercept("slack-tools:slack_send_dm", params, ctx({}));
+
+    expect(result.intercepted).toBe(true);
+    expect((result.result?.data as Record<string, unknown>).duplicateOf).toBe("approval-waiting");
+  });
+
+  it("keeps an existing draft pending even when the retry is self-addressed", async () => {
+    mockApprovalService.list.mockResolvedValue([pendingDraft("approval-waiting")]);
+    mockInstanceSettingsService.getGeneral.mockResolvedValue(
+      generalSettings({ skipApproval: true, slackUserIds: ["U123"] }),
+    );
+    const gate = await loadDraftGate(dbReturningRunIssue(null));
+
+    const result = await gate.intercept("slack-tools:slack_send_dm", params, ctx({}));
+
+    expect(result.intercepted).toBe(true);
+    expect((result.result?.data as Record<string, unknown>).duplicateOf).toBe("approval-waiting");
+  });
+
+  it("uses the existing draft when another request wins the atomic create race", async () => {
+    const winner = pendingDraft("approval-race-winner");
+    mockApprovalService.createPendingDraft.mockResolvedValueOnce({
+      approval: winner,
+      created: false,
+    });
+    const gate = await loadDraftGate(dbReturningRunIssue(null));
+
+    const result = await gate.intercept("slack-tools:slack_send_dm", params, ctx({}));
+
+    expect(result.intercepted).toBe(true);
+    expect((result.result?.data as Record<string, unknown>).duplicateOf).toBe("approval-race-winner");
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
   });
 
   it("still queues a genuinely different message", async () => {
@@ -636,6 +1015,19 @@ describe("tool draft gate — the approve-and-redraft loop", () => {
       "slack-tools:slack_send_dm",
       { userId: "U999", text: params.text },
       ctx({}),
+    );
+
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues the same request separately for a different agent", async () => {
+    mockApprovalService.list.mockResolvedValue([pendingDraft("approval-waiting")]);
+    const gate = await loadDraftGate(dbReturningRunIssue(null));
+
+    await gate.intercept(
+      "slack-tools:slack_send_dm",
+      params,
+      ctx({ agentId: "11111111-1111-1111-1111-111111111111" }),
     );
 
     expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
@@ -671,7 +1063,7 @@ describe("tool draft gate — carrying the issue across an approval wake", () =>
     await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "status" },
-      ctx({ runId: "run-woken" }),
+      ctx({ runId: "a0000000-0000-4000-8000-000000000000" }),
     );
 
     expect(mockIssueApprovalService.link).toHaveBeenCalledWith(
@@ -687,7 +1079,7 @@ describe("tool draft gate — carrying the issue across an approval wake", () =>
     const result = await gate.intercept(
       "slack-tools:slack_send_dm",
       { userId: "U123", text: "status" },
-      ctx({ runId: "run-woken" }),
+      ctx({ runId: "a0000000-0000-4000-8000-000000000000" }),
     );
 
     expect(result.intercepted).toBe(true);
@@ -772,6 +1164,316 @@ describe("tool draft gate — operator-required approvals", () => {
  * one. It also has to stay short enough for a Slack card, and must never be
  * the reason a draft fails.
  */
+describe("tool draft gate action policies", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLogActivity.mockResolvedValue(undefined);
+    mockApprovalService.create.mockResolvedValue({ id: "approval-policy" });
+    mockApprovalService.list.mockResolvedValue([]);
+    mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: true });
+  });
+
+  it("lets a governed action run when its resolved policy says go ahead", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "send_message",
+        mode: "go_ahead",
+        source: "agent",
+      }),
+    });
+
+    const result = await gate.intercept(
+      "slack-tools:slack_send_dm",
+      { userId: "U123", text: "status" },
+      ctx({}),
+    );
+
+    expect(result).toMatchObject({
+      intercepted: false,
+      actionPolicy: { actionType: "send_message", mode: "go_ahead", source: "agent" },
+    });
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("holds a newly classified action when company policy says ask first", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "move_money",
+        mode: "ask_first",
+        source: "company",
+      }),
+    });
+
+    const result = await gate.intercept(
+      "billing:refund",
+      { amount: 2500, invoiceId: "invoice-1" },
+      ctx({}),
+    );
+
+    expect(result.intercepted).toBe(true);
+    expect(mockApprovalService.create).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          actionType: "move_money",
+          actionPolicySource: "company",
+        }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      stubDb,
+      expect.objectContaining({ action: "agent_action.approval_requested" }),
+    );
+  });
+
+  it("fails explicitly when the approval request audit cannot be recorded", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "move_money",
+        mode: "ask_first",
+        source: "company",
+      }),
+    });
+    mockLogActivity.mockImplementation(async (_db, event) => {
+      if (event.action === "agent_action.approval_requested") {
+        throw new Error("activity store unavailable");
+      }
+    });
+
+    await expect(gate.intercept("billing:refund", { amount: 2500 }, ctx({})))
+      .rejects.toThrow("activity store unavailable");
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a legacy go-ahead setting override company ask first", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "send_message",
+        mode: "ask_first",
+        source: "company",
+      }),
+    });
+
+    const result = await gate.intercept(
+      "email-tools:email_reply",
+      { messageId: "message-1", body: "Done." },
+      ctx({}),
+      { legacyActionMode: "go_ahead" },
+    );
+
+    expect(result.intercepted).toBe(true);
+    expect(result.actionPolicy).toMatchObject({ mode: "ask_first", source: "company" });
+  });
+
+  it("does not let legacy ask first override an agent go-ahead setting", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => ({
+        actionType: "send_message",
+        mode: "go_ahead",
+        source: "agent",
+      }),
+    });
+
+    const result = await gate.intercept(
+      "email-tools:email_reply",
+      { messageId: "message-1", body: "Done." },
+      ctx({}),
+      { legacyActionMode: "ask_first" },
+    );
+
+    expect(result.intercepted).toBe(false);
+    expect(result.actionPolicy).toMatchObject({ mode: "go_ahead", source: "agent" });
+  });
+
+  it("uses a legacy call setting when no agent or company policy applies", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({ db: stubDb });
+
+    const result = await gate.intercept(
+      "email-tools:email_reply",
+      { messageId: "message-1", body: "Done." },
+      ctx({}),
+      { legacyActionMode: "go_ahead" },
+    );
+
+    expect(result.intercepted).toBe(false);
+    expect(result.actionPolicy).toEqual({
+      actionType: "send_message",
+      mode: "go_ahead",
+      source: "legacy",
+    });
+  });
+
+  it("fails closed when action policy lookup fails", async () => {
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      resolveActionPolicy: async () => { throw new Error("policy store unavailable"); },
+    });
+
+    await expect(gate.intercept("billing:refund", {}, ctx({})))
+      .rejects.toThrow("policy store unavailable");
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("approved draft replay", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApprovalService.create.mockResolvedValue({ id: "approval-replay" });
+    mockApprovalService.list.mockResolvedValue([]);
+    mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: true });
+  });
+
+  it("stores project scope and the caller's idempotency key in the draft", async () => {
+    const gate = await loadDraftGateWithOperatorRule(["acme.ops:change-file"]);
+
+    await gate.intercept(
+      "acme.ops:change-file",
+      { path: "notes.txt" },
+      ctx({
+        projectId: "00000000-0000-0000-0000-000000000003",
+        idempotencyKey: "change-file-once",
+      }),
+    );
+
+    expect(mockApprovalService.create.mock.lastCall?.[1].payload).toEqual(
+      expect.objectContaining({
+        projectId: "00000000-0000-0000-0000-000000000003",
+        idempotencyKey: "change-file-once",
+      }),
+    );
+  });
+
+  it("preserves project scope and the caller's idempotency key", async () => {
+    const companyId = "00000000-0000-0000-0000-0000000000aa";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-replay",
+      companyId,
+      type: "outbound_tool_draft",
+      requestedByAgentId: "00000000-0000-0000-0000-000000000001",
+      payload: {
+        toolName: "acme.ops:change-file",
+        parameters: { path: "notes.txt" },
+        agentId: "00000000-0000-0000-0000-000000000001",
+        runId: "00000000-0000-0000-0000-000000000002",
+        projectId: "00000000-0000-0000-0000-000000000003",
+        idempotencyKey: "change-file-once",
+      },
+    });
+    const executeTool = vi.fn(async () => ({ result: { content: "changed" } }));
+    const { executeDraftedApproval } = await import("../services/tool-draft-gate.js");
+    const replayDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ companyId, status: "idle" }],
+          }),
+        }),
+      }),
+    } as never;
+
+    await executeDraftedApproval({
+      approvalId: "approval-replay",
+      decidedByUserId: "user-1",
+      executeTool,
+      db: replayDb,
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      "acme.ops:change-file",
+      { path: "notes.txt" },
+      expect.objectContaining({
+        projectId: "00000000-0000-0000-0000-000000000003",
+        idempotencyKey: "change-file-once",
+      }),
+    );
+  });
+
+  it("refuses replay after the requesting agent is terminated", async () => {
+    const companyId = "00000000-0000-0000-0000-0000000000aa";
+    const agentId = "00000000-0000-4000-8000-000000000001";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-replay",
+      companyId,
+      type: "outbound_tool_draft",
+      requestedByAgentId: agentId,
+      payload: {
+        toolName: "email-tools:email_send",
+        parameters: { to: "customer@example.com" },
+        agentId,
+      },
+    });
+    const executeTool = vi.fn();
+    const terminatedAgentDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ companyId, status: "terminated" }],
+          }),
+        }),
+      }),
+    } as never;
+    const { executeDraftedApproval } = await import("../services/tool-draft-gate.js");
+
+    await expect(executeDraftedApproval({
+      approvalId: "approval-replay",
+      decidedByUserId: "user-1",
+      executeTool,
+      db: terminatedAgentDb,
+    })).resolves.toMatchObject({ ok: false, outcome: "refused" });
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it("records a revoked user permission during replay as a refusal", async () => {
+    const companyId = "00000000-0000-0000-0000-0000000000aa";
+    const agentId = "00000000-0000-4000-8000-000000000001";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-replay",
+      companyId,
+      type: "outbound_tool_draft",
+      requestedByAgentId: agentId,
+      payload: {
+        toolName: "customer-support:support_run_ticket_repair",
+        parameters: { caseId: "case-1" },
+        agentId,
+        userId: "user-1",
+      },
+    });
+    const executeTool = vi.fn(async () => {
+      const { HttpError } = await import("../errors.js");
+      throw new HttpError(403, 'User lacks required permission "support:repair"');
+    });
+    const activeAgentDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ companyId, status: "idle" }],
+          }),
+        }),
+      }),
+    } as never;
+    const { executeDraftedApproval } = await import("../services/tool-draft-gate.js");
+
+    await expect(executeDraftedApproval({
+      approvalId: "approval-replay",
+      decidedByUserId: "user-2",
+      executeTool,
+      db: activeAgentDb,
+    })).resolves.toMatchObject({ ok: false, outcome: "refused" });
+  });
+});
+
 describe("tool draft gate: the summary names who a draft goes to", () => {
   beforeEach(() => {
     vi.clearAllMocks();

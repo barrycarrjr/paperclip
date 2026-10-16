@@ -20,6 +20,14 @@ const MS_PER_MINUTE = 60_000;
 
 type CalendarActor = { userId: string | null; agentId: string | null };
 
+export interface GoogleCalendarExecutionContext {
+  agentId: string | null;
+  runId: string | null;
+  userId: string | null;
+  bypassDraftGate: boolean;
+  localTrustedUser?: boolean;
+}
+
 type EventRow = typeof calendarEvents.$inferSelect;
 
 /** The delivery channels that always fire in addition to the event's channels. */
@@ -515,6 +523,7 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
     createGoogleEvent: async (
       companyId: string,
       input: CreateGoogleCalendarEventInput,
+      execution: GoogleCalendarExecutionContext,
     ) => {
       const [plugin] = await db
         .select()
@@ -560,10 +569,9 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
 
       const runContext = {
         companyId,
-        agentId: "",
-        runId: "",
-        projectId: "",
-        userId: null,
+        agentId: execution.agentId ?? "",
+        runId: execution.runId ?? "",
+        userId: execution.userId,
       };
 
       let result: any;
@@ -573,10 +581,16 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
           "google-workspace:gcal_create_event",
           toolParams,
           runContext as any,
-          { bypassDraftGate: true, localTrustedUser: true },
+          {
+            bypassDraftGate: execution.bypassDraftGate,
+            localTrustedUser: execution.localTrustedUser,
+          },
         );
         result = res.result;
       } else if (options.pluginWorkerManager) {
+        if (execution.agentId) {
+          throw unprocessable("No plugin dispatcher available for agent action policy enforcement");
+        }
         result = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
           toolName: "gcal_create_event",
           parameters: toolParams,
@@ -597,6 +611,7 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
       companyId: string,
       eventId: string,
       calendarId = "primary",
+      execution: GoogleCalendarExecutionContext,
     ) => {
       const [plugin] = await db
         .select()
@@ -638,10 +653,9 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
 
       const runContext = {
         companyId,
-        agentId: "",
-        runId: "",
-        projectId: "",
-        userId: null,
+        agentId: execution.agentId ?? "",
+        runId: execution.runId ?? "",
+        userId: execution.userId,
       };
 
       let result: any;
@@ -651,10 +665,16 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
           "google-workspace:gcal_delete_event",
           toolParams,
           runContext as any,
-          { bypassDraftGate: true, localTrustedUser: true },
+          {
+            bypassDraftGate: execution.bypassDraftGate,
+            localTrustedUser: execution.localTrustedUser,
+          },
         );
         result = res.result;
       } else if (options.pluginWorkerManager) {
+        if (execution.agentId) {
+          throw unprocessable("No plugin dispatcher available for agent action policy enforcement");
+        }
         result = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
           toolName: "gcal_delete_event",
           parameters: toolParams,
@@ -667,6 +687,8 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
       if (result?.error) {
         throw unprocessable(typeof result.error === "string" ? result.error : JSON.stringify(result.error));
       }
+
+      if (result?.data?.drafted === true) return result;
 
       return { success: true, eventId };
     },
