@@ -658,6 +658,8 @@ export interface PluginSecretsClient {
  * @see PLUGIN_SPEC.md §21.4 — Activity Log Changes
  */
 export interface PluginActivityLogEntry {
+  /** Stable caller key for an activity entry that must be safe to retry. */
+  idempotencyKey?: string;
   /** UUID of the company this activity belongs to. Required for auditing. */
   companyId: string;
   /** Human-readable description of the activity. */

@@ -160,6 +160,77 @@ describe("heartbeat comment wake batching", () => {
     await tempDb?.cleanup();
   });
 
+  it.each(["paused", "terminated", "pending_approval"] as const)(
+    "records each exact retry refused for a %s agent as a durable skipped receipt",
+    async (status) => {
+      const companyId = randomUUID();
+      const agentId = randomUUID();
+      const commentId = randomUUID();
+      const idempotencyKey = `issue-comment:${commentId}:assignee:${agentId}`;
+      const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+      const heartbeat = heartbeatService(db);
+
+      await db.insert(companies).values({
+        id: companyId,
+        name: `Receipt ${status}`,
+        issuePrefix,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: `Agent ${status}`,
+        role: "engineer",
+        status,
+        adapterType: "process",
+        adapterConfig: { command: process.execPath, args: ["-e", "process.exit(0)"] },
+        runtimeConfig: {},
+        permissions: {},
+      });
+
+      const wakeup = () => heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_commented",
+        payload: { commentId },
+        requestedByActorType: "user",
+        requestedByActorId: "local-board",
+        idempotencyKey,
+      });
+      await expect(wakeup()).rejects.toMatchObject({
+        status: 409,
+        details: { code: "invocation_blocked", status },
+      });
+      await expect(wakeup()).rejects.toMatchObject({
+        status: 409,
+        details: { code: "invocation_blocked", status },
+      });
+
+      const receipts = await db.select().from(agentWakeupRequests).where(and(
+        eq(agentWakeupRequests.companyId, companyId),
+        eq(agentWakeupRequests.agentId, agentId),
+        eq(agentWakeupRequests.idempotencyKey, idempotencyKey),
+      ));
+      expect(receipts).toHaveLength(2);
+      expect(receipts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: "skipped", reason: `agent.${status}`, idempotencyKey }),
+        expect.objectContaining({ status: "skipped", reason: `agent.${status}`, idempotencyKey }),
+      ]));
+      await expect(heartbeat.getWakeupDelivery(agentId, idempotencyKey)).resolves.toMatchObject({ status: "pending" });
+
+      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agentId));
+      await expect(wakeup()).resolves.not.toBeNull();
+      await waitFor(async () => (await heartbeat.getWakeupDelivery(agentId, idempotencyKey)).status === "accepted");
+      const deliveredReceipts = await db.select().from(agentWakeupRequests).where(and(
+        eq(agentWakeupRequests.companyId, companyId),
+        eq(agentWakeupRequests.agentId, agentId),
+        eq(agentWakeupRequests.idempotencyKey, idempotencyKey),
+      ));
+      expect(deliveredReceipts).toHaveLength(3);
+      expect(deliveredReceipts.filter((receipt) => receipt.status !== "skipped")).toHaveLength(1);
+    },
+  );
+
   it.each([
     {
       label: "approval-approved",

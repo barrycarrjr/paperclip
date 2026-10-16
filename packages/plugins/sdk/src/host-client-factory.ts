@@ -135,6 +135,7 @@ export interface HostServices {
   /** Provides `activity.log`. */
   activity: {
     log(params: {
+      idempotencyKey?: string;
       companyId: string;
       message: string;
       entityType?: string;

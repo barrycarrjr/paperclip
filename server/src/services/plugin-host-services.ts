@@ -51,7 +51,7 @@ import { pluginRegistryService } from "./plugin-registry.js";
 import { pluginStateStore } from "./plugin-state-store.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
-import { logActivity } from "./activity-log.js";
+import { deterministicActivityId, logActivity } from "./activity-log.js";
 import { chatService } from "./chat.js";
 import { chatAttachmentService } from "./chat-attachments.js";
 import { PLUGIN_MAX_IMAGE_BASE64_BYTES, PLUGIN_MAX_IMAGES_BASE64_BYTES } from "./plugin-image-limits.js";
@@ -668,6 +668,10 @@ async function runPluginAiComplete(
  */
 /** Maximum time (ms) to keep a session event subscription alive before forcing cleanup. */
 const SESSION_EVENT_SUBSCRIPTION_TIMEOUT_MS = 30 * 60 * 1_000; // 30 minutes
+
+export function pluginActivityId(pluginKey: string, companyId: string, idempotencyKey: string): string {
+  return deterministicActivityId("plugin-activity", pluginKey, companyId, idempotencyKey);
+}
 
 export function buildHostServices(
   db: Db,
@@ -1294,6 +1298,9 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         await logActivity(db, {
+          id: params.idempotencyKey
+            ? pluginActivityId(pluginKey, companyId, params.idempotencyKey)
+            : undefined,
           companyId,
           actorType: "plugin",
           actorId: pluginId,

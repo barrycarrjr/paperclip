@@ -6,6 +6,9 @@ import { act, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueDetail } from "./IssueDetail";
+import { ApiError } from "../api/client";
+import { queryKeys } from "../lib/queryKeys";
+import { correctionDeliveryStorageKey } from "../lib/issue-comment-idempotency";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -21,6 +24,7 @@ const mockIssuesApi = vi.hoisted(() => ({
   releaseTreeHold: vi.fn(),
   archiveFromInbox: vi.fn(),
   addComment: vi.fn(),
+  addCommentAndReassign: vi.fn(),
   cancelComment: vi.fn(),
   uploadAttachment: vi.fn(),
   deleteAttachment: vi.fn(),
@@ -66,6 +70,8 @@ const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSetMobileToolbar = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
+const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
+const mockIssueRoute = vi.hoisted(() => ({ id: "PAP-1" }));
 
 vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
@@ -108,10 +114,10 @@ vi.mock("../api/instanceSettings", () => ({
 
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
-  useLocation: () => ({ pathname: "/issues/PAP-1", search: "", hash: "", state: null }),
+  useLocation: () => ({ pathname: `/issues/${mockIssueRoute.id}`, search: "", hash: "", state: null }),
   useNavigate: () => mockNavigate,
   useNavigationType: () => "PUSH",
-  useParams: () => ({ issueId: "PAP-1" }),
+  useParams: () => ({ issueId: mockIssueRoute.id }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -185,7 +191,10 @@ vi.mock("../components/InlineEditor", () => ({
 }));
 
 vi.mock("../components/IssueChatThread", () => ({
-  IssueChatThread: () => <div data-testid="issue-chat-thread">Chat thread</div>,
+  IssueChatThread: (props: unknown) => {
+    mockIssueChatThreadRender(props);
+    return <div data-testid="issue-chat-thread">Chat thread</div>;
+  },
 }));
 
 vi.mock("../components/IssueDocumentsSection", () => ({
@@ -317,10 +326,12 @@ vi.mock("@/components/ui/textarea", () => ({
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((innerResolve) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
     resolve = innerResolve;
+    reject = innerReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createIssue(overrides: Partial<Issue> = {}): Issue {
@@ -748,6 +759,8 @@ describe("IssueDetail", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    window.localStorage.clear();
+    mockIssueRoute.id = "PAP-1";
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -786,6 +799,9 @@ describe("IssueDetail", () => {
       keyboardShortcuts: false,
     });
     mockIssuesListRender.mockClear();
+    mockIssueChatThreadRender.mockClear();
+    mockIssuesApi.addComment.mockReset();
+    mockIssuesApi.addCommentAndReassign.mockReset();
   });
 
   afterEach(async () => {
@@ -817,6 +833,328 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries a committed correction after a server failure and unassignment with its original key and target", async () => {
+    const body = "Check the source.";
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addComment
+      .mockRejectedValueOnce(new ApiError("Wake delivery failed", 500))
+      .mockResolvedValueOnce({ id: "comment-saved", companyId: "company-1", issueId: "issue-1", body, intent: "correction" });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await expect(mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, true, undefined, "correction")).rejects.toThrow("Wake delivery failed");
+    });
+    const firstArguments = mockIssuesApi.addComment.mock.calls[0];
+    expect(firstArguments).toEqual([
+      "PAP-1", body, true, undefined, "correction", expect.stringMatching(/^board\.correction:v1_/), "agent-1",
+    ]);
+    const unassigned = createIssue({ assigneeAgentId: null });
+    mockIssuesApi.get.mockResolvedValue(unassigned);
+    await act(async () => {
+      queryClient.setQueryData(queryKeys.issues.detail("PAP-1"), unassigned);
+    });
+    await flushReact();
+    await act(async () => {
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, undefined, undefined, "correction");
+    });
+    expect(mockIssuesApi.addComment).toHaveBeenCalledTimes(2);
+    expect(mockIssuesApi.addComment.mock.calls[1]).toEqual([
+      "PAP-1", body, undefined, undefined, "correction", firstArguments[5], "agent-1",
+    ]);
+  });
+
+  it("keeps an unconfirmed correction request across reload and reconciles it with the original key and target", async () => {
+    const body = "Check the source after the timeout.";
+    const accepted = {
+      id: "comment-saved", companyId: "company-1", issueId: "issue-1", authorUserId: "user-1", body, intent: "correction",
+      correctionDelivery: { status: "accepted", pending: [] },
+    };
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addComment.mockRejectedValueOnce(new ApiError("Connection closed before the response", 0));
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await expect(mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, true, undefined, "correction"))
+        .rejects.toThrow("Connection closed before the response");
+    });
+    const originalCall = mockIssuesApi.addComment.mock.calls[0];
+    const storageKey = correctionDeliveryStorageKey("company-1", "issue-1", "user-1");
+    const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+    expect(stored[0].request.idempotencyKey).toBe(originalCall[5]);
+    expect(stored[0].commentId).toBeUndefined();
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    root = createRoot(container);
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: null }));
+    mockIssuesApi.addComment.mockResolvedValueOnce(accepted);
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(container.textContent).toContain("Correction response not confirmed"));
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry correction delivery")!.click();
+    });
+    await waitForAssertion(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+    expect(mockIssuesApi.addComment.mock.calls[1]).toEqual([
+      "issue-1", body, true, undefined, "correction", originalCall[5], "agent-1",
+    ]);
+  });
+
+  it("keeps an unconfirmed correction reassignment across reload with its original operation", async () => {
+    const body = "Correct this and send it back to the specialist.";
+    const reassignment = { assigneeAgentId: "agent-2", assigneeUserId: null };
+    const acceptedComment = {
+      id: "comment-reassigned", companyId: "company-1", issueId: "issue-1", authorUserId: "user-1", body, intent: "correction",
+      correctionDelivery: { status: "accepted", pending: [] },
+    };
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addCommentAndReassign.mockRejectedValueOnce(new ApiError("Connection closed before the response", 0));
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await expect(mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, true, reassignment, "correction"))
+        .rejects.toThrow("Connection closed before the response");
+    });
+    const originalOptions = mockIssuesApi.addCommentAndReassign.mock.calls[0][3];
+    const storageKey = correctionDeliveryStorageKey("company-1", "issue-1", "user-1");
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    root = createRoot(container);
+    const changedIssue = createIssue({ assigneeAgentId: "agent-3" });
+    mockIssuesApi.get.mockResolvedValue(changedIssue);
+    mockIssuesApi.addCommentAndReassign.mockResolvedValueOnce({ ...changedIssue, comment: acceptedComment });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(container.textContent).toContain("Correction response not confirmed"));
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry correction delivery")!.click();
+    });
+    await waitForAssertion(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+    expect(mockIssuesApi.addCommentAndReassign.mock.calls[1]).toEqual([
+      "issue-1", body, reassignment, {
+        intent: "correction", idempotencyKey: originalOptions.idempotencyKey, expectedAssigneeAgentId: "agent-2", reopen: true,
+      },
+    ]);
+  });
+
+  it("blocks a new correction on an unassigned issue", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: null }));
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await expect(mockIssueChatThreadRender.mock.lastCall![0].onAdd("New correction", undefined, undefined, "correction"))
+      .rejects.toThrow("Correction comments require an assigned agent.");
+    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending delivery visible after reload and retries the saved body, key and target after unassignment", async () => {
+    const body = "Check the original source.";
+    const comment = {
+      id: "comment-pending", companyId: "company-1", issueId: "issue-1", authorUserId: "user-1", body, intent: "correction",
+      correctionDelivery: { status: "pending", pending: [{ agentId: "agent-1", reason: "Agent is paused" }] },
+    };
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addComment.mockResolvedValueOnce(comment);
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => { await mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, true, undefined, "correction"); });
+    expect(container.textContent).toContain("Correction saved, delivery pending");
+    expect(container.textContent).toContain("Agent is paused");
+    const key = mockIssuesApi.addComment.mock.calls[0][5];
+    const storageKey = correctionDeliveryStorageKey("company-1", "issue-1", "user-1");
+    expect(JSON.parse(window.localStorage.getItem(storageKey)!)[0].request.idempotencyKey).toBe(key);
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    root = createRoot(container);
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-2" }, user: { id: "user-2" } });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(container.textContent).toContain("Issue detail smoke"));
+    expect(container.textContent).not.toContain("Agent is paused");
+    expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+    await act(async () => root.unmount());
+    queryClient.clear();
+    root = createRoot(container);
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: null }));
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(container.textContent).toContain("Agent is paused"));
+    const retry = () => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry correction delivery")!;
+    mockIssuesApi.addComment.mockRejectedValueOnce(new ApiError("Queue temporarily unavailable", 503));
+    await act(async () => retry().click());
+    await waitForAssertion(() => expect(container.textContent).toContain("Queue temporarily unavailable"));
+    expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+    mockIssuesApi.addComment.mockResolvedValueOnce({ ...comment, correctionDelivery: {
+      status: "pending", pending: [{ agentId: "agent-1", reason: "Agent budget is exhausted" }],
+    } });
+    await act(async () => retry().click());
+    await waitForAssertion(() => expect(container.textContent).toContain("Agent budget is exhausted"));
+    expect(container.textContent).not.toContain("Queue temporarily unavailable");
+    expect(JSON.parse(window.localStorage.getItem(storageKey)!)[0].pending[0].reason).toBe("Agent budget is exhausted");
+    mockIssuesApi.addComment.mockResolvedValueOnce({ ...comment, correctionDelivery: { status: "accepted", pending: [] } });
+    await act(async () => retry().click());
+    await waitForAssertion(() => expect(container.textContent).not.toContain("Correction saved, delivery pending"));
+    expect(mockIssuesApi.addComment.mock.calls.slice(1)).toEqual([
+      ["issue-1", body, true, undefined, "correction", key, "agent-1"],
+      ["issue-1", body, true, undefined, "correction", key, "agent-1"],
+      ["issue-1", body, true, undefined, "correction", key, "agent-1"],
+    ]);
+    expect(window.localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it("retains every pending correction when another message is posted and scopes warnings to their issue", async () => {
+    mockIssuesApi.get.mockImplementation((id: string) => Promise.resolve(createIssue({
+      id: id === "PAP-2" ? "issue-2" : "issue-1", identifier: id, title: `Issue ${id}`, assigneeAgentId: "agent-1",
+    })));
+    mockIssuesApi.addComment.mockImplementation((_id: string, body: string, _reopen: unknown, _interrupt: unknown, intent: string) => Promise.resolve({
+      id: `comment-${body}`, companyId: "company-1", issueId: "issue-1", body, intent,
+      ...(intent === "correction" ? { correctionDelivery: { status: "pending", pending: [{ agentId: "agent-1", reason: "Invocation is disabled" }] } } : {}),
+    }));
+    const render = () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>);
+    await act(async () => render());
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd("First correction", undefined, undefined, "correction");
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd("Second correction", undefined, undefined, "correction");
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd("An ordinary message");
+    });
+    expect(container.querySelector('[aria-label="Corrections awaiting delivery"]')?.textContent).toContain("First correction");
+    expect(container.querySelector('[aria-label="Corrections awaiting delivery"]')?.textContent).toContain("Second correction");
+    await act(async () => { mockIssueRoute.id = "PAP-2"; render(); });
+    await waitForAssertion(() => expect(container.textContent).toContain("Issue PAP-2"));
+    expect(container.textContent).not.toContain("Correction saved, delivery pending");
+    await act(async () => { mockIssueRoute.id = "PAP-1"; render(); });
+    await waitForAssertion(() => expect(container.querySelector('[aria-label="Corrections awaiting delivery"]')?.textContent).toContain("First correction"));
+    expect(container.querySelector('[aria-label="Corrections awaiting delivery"]')?.textContent).toContain("Second correction");
+  });
+
+  it("blocks a correction until its exact retry can be saved in browser storage", async () => {
+    const body = "Keep this correction available.";
+    const comment = {
+      id: "comment-pending", companyId: "company-1", issueId: "issue-1", body, intent: "correction",
+      correctionDelivery: { status: "pending", pending: [{ agentId: "agent-1", reason: "Agent is paused" }] },
+    };
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addComment.mockResolvedValueOnce(comment);
+    const storageSet = window.localStorage.setItem.bind(window.localStorage);
+    const storage = Object.prototype.hasOwnProperty.call(window.localStorage, "setItem")
+      ? window.localStorage
+      : Storage.prototype;
+    const storageSpy = vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (key.startsWith("paperclip:correction-delivery:")) throw new Error("Browser storage is full");
+      storageSet(key, value);
+    });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await expect(mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, undefined, undefined, "correction"))
+        .rejects.toThrow("The correction retry could not be saved in this browser");
+    });
+    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Correction retries could not be saved in this browser");
+    expect(container.textContent).toContain("Keep this page open until delivery succeeds");
+    const storageKey = correctionDeliveryStorageKey("company-1", "issue-1", "local-board");
+    expect(window.localStorage.getItem(storageKey)).toBeNull();
+    storageSpy.mockRestore();
+    mockIssuesApi.addComment.mockReset();
+    mockIssuesApi.addComment.mockResolvedValueOnce({ ...comment, correctionDelivery: { status: "accepted", pending: [] } });
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry correction delivery")!.click();
+    });
+    await waitForAssertion(() => expect(container.querySelector('[aria-label="Corrections awaiting delivery"]')).toBeNull());
+    expect(mockIssuesApi.addComment).toHaveBeenCalledOnce();
+    expect(mockIssuesApi.addComment.mock.calls[0]).toEqual([
+      "issue-1", body, undefined, undefined, "correction", expect.stringMatching(/^board\.correction:v1_/), "agent-1",
+    ]);
+    expect(window.localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it("retries a pending reassignment with its original operation after the current assignee changes", async () => {
+    const body = "Please correct this result.";
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    const comment = {
+      id: "comment-reassigned", companyId: "company-1", issueId: "issue-1", body, intent: "correction",
+      correctionDelivery: { status: "pending", pending: [{ agentId: "agent-2", reason: "Agent budget is exhausted" }] },
+    };
+    mockIssuesApi.addCommentAndReassign.mockResolvedValueOnce({ ...createIssue({ assigneeAgentId: "agent-2" }), comment });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    await act(async () => {
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd(body, true, { assigneeAgentId: "agent-2", assigneeUserId: null }, "correction");
+    });
+    const originalOptions = mockIssuesApi.addCommentAndReassign.mock.calls[0][3];
+    const changedIssue = createIssue({ assigneeAgentId: "agent-3" });
+    mockIssuesApi.get.mockResolvedValue(changedIssue);
+    await act(async () => queryClient.setQueryData(queryKeys.issues.detail("PAP-1"), changedIssue));
+    mockIssuesApi.addCommentAndReassign.mockResolvedValueOnce({ ...changedIssue, comment: { ...comment, correctionDelivery: { status: "accepted", pending: [] } } });
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry correction delivery")!.click();
+    });
+    await waitForAssertion(() => expect(container.textContent).not.toContain("Correction saved, delivery pending"));
+    expect(mockIssuesApi.addCommentAndReassign.mock.calls[1]).toEqual([
+      "issue-1", body, { assigneeAgentId: "agent-2", assigneeUserId: null }, {
+        intent: "correction", idempotencyKey: originalOptions.idempotencyKey, expectedAssigneeAgentId: "agent-2", reopen: true,
+      },
+    ]);
+    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+  });
+
+  it("serializes corrections, allows ordinary messages, and preserves the second failed request for exact retry", async () => {
+    const firstBody = "Check the source.";
+    const secondBody = "Check the total.";
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
+    const storedComment = (id: string, body: string) => ({ id, companyId: "company-1", issueId: "issue-1", body, intent: "correction" });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
+    mockIssuesApi.addComment.mockImplementation((_id: string, body: string) => {
+      if (body === firstBody) return first.promise;
+      if (body === secondBody) return second.promise;
+      return Promise.resolve({ ...storedComment("comment-ordinary", body), intent: "message" });
+    });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await waitForAssertion(() => expect(mockIssueChatThreadRender).toHaveBeenCalled());
+    const onAdd = mockIssueChatThreadRender.mock.lastCall![0].onAdd;
+    let firstSubmission!: Promise<void>;
+    let secondSubmission!: Promise<void>;
+    act(() => {
+      firstSubmission = onAdd(firstBody, undefined, undefined, "correction");
+      secondSubmission = onAdd(secondBody, undefined, undefined, "correction");
+    });
+    const secondOutcome = secondSubmission.then(() => null, (error: unknown) => error);
+    await waitForAssertion(() => expect(mockIssuesApi.addComment).toHaveBeenCalledTimes(1));
+    const firstKey = mockIssuesApi.addComment.mock.calls[0][5];
+    await act(async () => { await onAdd("An ordinary message.", undefined, undefined, "message"); });
+    expect(mockIssuesApi.addComment).toHaveBeenCalledTimes(2);
+    expect(mockIssuesApi.addComment.mock.calls[1]).toEqual([
+      "PAP-1", "An ordinary message.", undefined, undefined, "message", undefined, undefined,
+    ]);
+    await act(async () => {
+      first.resolve(storedComment("comment-first", firstBody));
+      await firstSubmission;
+    });
+    await waitForAssertion(() => expect(mockIssuesApi.addComment).toHaveBeenCalledTimes(3));
+    const secondArguments = mockIssuesApi.addComment.mock.calls[2];
+    expect(secondArguments).toEqual([
+      "PAP-1", secondBody, undefined, undefined, "correction", expect.stringMatching(/^board\.correction:v1_/), "agent-1",
+    ]);
+    expect(secondArguments[5]).not.toBe(firstKey);
+    await act(async () => {
+      second.reject(new ApiError("Wake delivery failed after saving", 500));
+      expect(await secondOutcome).toBeInstanceOf(ApiError);
+    });
+    const unassigned = createIssue({ assigneeAgentId: null });
+    mockIssuesApi.get.mockResolvedValue(unassigned);
+    await act(async () => { queryClient.setQueryData(queryKeys.issues.detail("PAP-1"), unassigned); });
+    await flushReact();
+    mockIssuesApi.addComment.mockResolvedValueOnce(storedComment("comment-second", secondBody));
+    await act(async () => {
+      await mockIssueChatThreadRender.mock.lastCall![0].onAdd(secondBody, undefined, undefined, "correction");
+    });
+    expect(mockIssuesApi.addComment).toHaveBeenCalledTimes(4);
+    expect(mockIssuesApi.addComment.mock.calls[3]).toEqual(secondArguments);
   });
 
   it("passes blocker attention to the issue detail header status icon", async () => {

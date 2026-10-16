@@ -1598,6 +1598,7 @@ export type PluginDatabaseMigrationStatus = (typeof PLUGIN_DATABASE_MIGRATION_ST
 
 export const PLUGIN_DATABASE_CORE_READ_TABLES = [
   "companies",
+  "company_skills",
   "projects",
   "goals",
   "agents",
@@ -1605,6 +1606,7 @@ export const PLUGIN_DATABASE_CORE_READ_TABLES = [
   "issue_documents",
   "issue_relations",
   "issue_comments",
+  "agent_wakeup_requests",
   "heartbeat_runs",
   "cost_events",
   "approvals",

@@ -327,6 +327,8 @@ export const issuesApi = {
     reopen?: boolean,
     interrupt?: boolean,
     intent: "message" | "correction" = "message",
+    idempotencyKey?: string,
+    expectedAssigneeAgentId?: string,
   ) =>
     api.post<IssueComment>(
       `/issues/${id}/comments`,
@@ -335,8 +337,53 @@ export const issuesApi = {
         ...(reopen === undefined ? {} : { reopen }),
         ...(interrupt === undefined ? {} : { interrupt }),
         ...(intent === "correction" ? { intent } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(expectedAssigneeAgentId ? { expectedAssigneeAgentId } : {}),
       },
     ),
+  addCommentAndReassign: async (
+    id: string,
+    body: string,
+    reassignment: { assigneeAgentId: string | null; assigneeUserId: string | null },
+    options?: {
+      reopen?: boolean;
+      interrupt?: boolean;
+      intent?: "message" | "correction";
+      idempotencyKey?: string;
+      expectedAssigneeAgentId?: string;
+    },
+  ): Promise<IssueUpdateResponse> => {
+    const assignment = {
+      assigneeAgentId: reassignment.assigneeAgentId,
+      assigneeUserId: reassignment.assigneeUserId,
+      ...(options?.reopen ? { status: "todo" } : {}),
+      ...(options?.interrupt ? { interrupt: true } : {}),
+    };
+
+    if (options?.intent !== "correction") {
+      return api.patch<IssueUpdateResponse>(`/issues/${id}`, { comment: body, ...assignment });
+    }
+    if (
+      !options.idempotencyKey ||
+      !options.expectedAssigneeAgentId ||
+      reassignment.assigneeAgentId !== options.expectedAssigneeAgentId ||
+      reassignment.assigneeUserId !== null
+    ) {
+      throw new Error("Reassigned corrections require a stable request key and target agent.");
+    }
+    if (options.interrupt) {
+      throw new Error("Reassigned corrections cannot interrupt a run safely. Stop the run before posting the correction.");
+    }
+
+    return api.post<IssueUpdateResponse>(`/issues/${id}/comments`, {
+      body,
+      intent: "correction",
+      idempotencyKey: options.idempotencyKey,
+      expectedAssigneeAgentId: options.expectedAssigneeAgentId,
+      reassignToAgentId: reassignment.assigneeAgentId,
+      ...(options.reopen ? { reopen: true } : {}),
+    });
+  },
   cancelComment: (id: string, commentId: string) =>
     api.delete<IssueComment>(`/issues/${id}/comments/${commentId}`),
   listDocuments: (id: string, options?: { includeSystem?: boolean }) =>

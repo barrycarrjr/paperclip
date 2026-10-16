@@ -81,6 +81,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
         authorType: "user",
         authorUserId: "board-user",
         intent: "correction",
+        expectedAssigneeAgentId: agent!.id,
         body: "Check totals before posting.",
       })
       .returning()
@@ -241,7 +242,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
     ]);
   });
 
-  it("rechecks correction assignment inside instruction rule creation", async () => {
+  it("uses the correction target when the source issue is reassigned before rule creation", async () => {
     const seeded = await seedCorrection();
     await db.update(issues)
       .set({ assigneeAgentId: seeded.otherAgent.id })
@@ -259,12 +260,12 @@ describeEmbeddedPostgres("instruction rule service", () => {
       },
       requestedByAgentId: seeded.agent.id,
       linkedIssueIds: [seeded.issue.id],
-    })).rejects.toThrow("no longer assigned to the requesting agent");
-    expect(await db.select().from(approvals)).toHaveLength(0);
-    expect(await db.select().from(instructionRuleProposals)).toHaveLength(0);
+    })).resolves.toMatchObject({ created: true });
+    expect(await db.select().from(approvals)).toHaveLength(1);
+    expect(await db.select().from(instructionRuleProposals)).toHaveLength(1);
   });
 
-  it("rejects approval after the source issue is reassigned", async () => {
+  it("allows approval after the source issue is reassigned", async () => {
     const seeded = await seedCorrection();
     const service = instructionRuleService(db);
     const created = await service.create({
@@ -287,12 +288,12 @@ describeEmbeddedPostgres("instruction rule service", () => {
 
     await expect(
       service.approve(created.approval.id, "board-user"),
-    ).rejects.toThrow("no longer assigned to the target agent");
+    ).resolves.toMatchObject({ applied: true, approval: { status: "approved" } });
     const approval = await db.select().from(approvals).then((rows) => rows[0]!);
-    expect(approval.status).toBe("pending");
+    expect(approval.status).toBe("approved");
   });
 
-  it("rejects a revision request after the source issue is reassigned", async () => {
+  it("allows a revision request after the source issue is reassigned", async () => {
     const seeded = await seedCorrection();
     const service = instructionRuleService(db);
     const created = await service.create({
@@ -314,9 +315,9 @@ describeEmbeddedPostgres("instruction rule service", () => {
 
     await expect(
       approvalService(db).requestRevision(created.approval.id, "board-user", "Make the source check explicit."),
-    ).rejects.toThrow("no longer assigned to the target agent");
+    ).resolves.toMatchObject({ applied: true, approval: { status: "revision_requested" } });
     expect(await db.select().from(approvals).where(eq(approvals.id, created.approval.id)))
-      .toEqual([expect.objectContaining({ status: "pending" })]);
+      .toEqual([expect.objectContaining({ status: "revision_requested" })]);
   });
 
   it("rejects a revision request after the source correction is deleted", async () => {
@@ -456,7 +457,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
     ).resolves.toMatchObject({ status: "pending" });
   });
 
-  it("rechecks correction assignment inside instruction rule resubmit", async () => {
+  it("uses the correction target when the source issue is reassigned before resubmit", async () => {
     const seeded = await seedCorrection();
     const service = instructionRuleService(db);
     const payload = {
@@ -484,9 +485,9 @@ describeEmbeddedPostgres("instruction rule service", () => {
         { ...payload, rule: "Check and cite totals before posting." },
         revision.approval.decidedAt!.toISOString(),
       ),
-    ).rejects.toThrow("no longer assigned to the target agent");
+    ).resolves.toMatchObject({ status: "pending" });
     expect(await db.select().from(approvals).where(eq(approvals.id, created.approval.id)))
-      .toEqual([expect.objectContaining({ status: "revision_requested", payload })]);
+      .toEqual([expect.objectContaining({ status: "pending" })]);
   });
 
   it("rejects an approval that would exceed the standing rule capacity", async () => {
@@ -499,6 +500,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
         authorType: "user",
         authorUserId: "board-user",
         intent: "correction",
+        expectedAssigneeAgentId: seeded.agent.id,
         body: "Keep all approved rules available.",
       })
       .returning()
@@ -561,6 +563,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
         authorType: "user",
         authorUserId: "board-user",
         intent: "correction",
+        expectedAssigneeAgentId: seeded.otherAgent.id,
         body: "Keep this agent-specific rule available.",
       })
       .returning()
@@ -605,6 +608,7 @@ describeEmbeddedPostgres("instruction rule service", () => {
         authorType: "user",
         authorUserId: "board-user",
         intent: "correction",
+        expectedAssigneeAgentId: seeded.agent.id,
         body: "Keep paused agents within standing rule capacity.",
       })
       .returning()

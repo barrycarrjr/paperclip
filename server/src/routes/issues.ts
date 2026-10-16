@@ -33,6 +33,7 @@ import {
   resolveEmailDelegationSchema,
   takeOverEmailDelegationSchema,
   type ExecutionWorkspace,
+  type IssueCorrectionDelivery,
 } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
@@ -56,6 +57,7 @@ import {
   routineService,
   workProductService,
 } from "../services/index.js";
+import { deterministicActivityId } from "../services/activity-log.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, validationErrorMessage } from "../errors.js";
 import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
@@ -89,8 +91,7 @@ import { executionWorkspaceService as executionWorkspaceServiceDirect } from "..
 import { environmentService } from "../services/environments.js";
 import {
   applyIssueExecutionPolicyTransition,
-  issueExecutionPolicyHasParticipant,
-  issueExecutionStateReturnsToAssignee,
+  isIssueExecutionPolicyHandoff,
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
@@ -354,10 +355,58 @@ export function issueRoutes(
 ) {
   const router = Router();
   const svc = issueService(db);
+  async function resolveCorrectionRecipients(input: {
+    companyId: string;
+    issueId: string;
+    body: string;
+    comment: {
+      expectedAssigneeAgentId: string | null;
+      correctionRecipientAgentIds?: string[] | null;
+    };
+  }): Promise<string[]> {
+    if (!input.comment.expectedAssigneeAgentId) {
+      throw new HttpError(409, "Correction delivery identity is incomplete");
+    }
+    if (input.comment.correctionRecipientAgentIds) return input.comment.correctionRecipientAgentIds;
+    let mentionedAgentIds: string[];
+    try {
+      mentionedAgentIds = await svc.findMentionedAgents(input.companyId, input.body);
+    } catch (err) {
+      logger.warn({ err, issueId: input.issueId }, "failed to resolve @-mentions");
+      throw err;
+    }
+    return [...new Set([input.comment.expectedAssigneeAgentId, ...mentionedAgentIds])].sort();
+  }
   const access = accessService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
+  async function deliverCorrectionWakeups(wakeups: Map<string, Parameters<typeof heartbeat.wakeup>[1]>): Promise<IssueCorrectionDelivery> {
+    const pending: IssueCorrectionDelivery["pending"] = [];
+    await Promise.all([...wakeups.entries()].map(async ([agentId, wakeup]) => {
+      const idempotencyKey = wakeup?.idempotencyKey;
+      if (idempotencyKey) {
+        const existingDelivery = await heartbeat.getWakeupDelivery(agentId, idempotencyKey);
+        if (existingDelivery.status === "accepted") return;
+      }
+      try {
+        await heartbeat.wakeup(agentId, wakeup);
+        const delivery = idempotencyKey
+          ? await heartbeat.getWakeupDelivery(agentId, idempotencyKey)
+          : { status: "pending", reason: "Correction delivery has no retry key." };
+        if (delivery.status === "pending") pending.push({ agentId, reason: delivery.reason ?? "Agent delivery has not been confirmed." });
+      }
+      catch (err) {
+        if (!(err instanceof HttpError) || err.status !== 409 || !err.details || typeof err.details !== "object" || !("code" in err.details) || err.details.code !== "invocation_blocked") throw err;
+        if (idempotencyKey) {
+          const delivery = await heartbeat.getWakeupDelivery(agentId, idempotencyKey);
+          if (delivery.status === "accepted") return;
+        }
+        pending.push({ agentId, reason: err.message });
+      }
+    }));
+    return { status: pending.length ? "pending" : "accepted", pending };
+  }
   const agentsSvc = agentService(db);
   const projectsSvc = projectService(db);
   const goalsSvc = goalService(db);
@@ -2200,7 +2249,19 @@ export function issueRoutes(
     res.status(201).json(issue);
   });
 
-  router.patch("/issues/:id", validate(updateIssueRouteSchema), async (req, res) => {
+  router.patch(
+    "/issues/:id",
+    (req, res, next) => {
+      if (req.body?.commentIntent === "correction") {
+        res.status(400).json({
+          error: "Correction comments must be submitted with POST /issues/:id/comments",
+        });
+        return;
+      }
+      next();
+    },
+    validate(updateIssueRouteSchema),
+    async (req, res) => {
     const id = req.params.id as string;
     const existing = await svc.getById(id);
     if (!existing) {
@@ -2252,20 +2313,6 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(existing.companyId, updateFields.executionWorkspaceSettings?.environmentId);
     const requestedAssigneeAgentId =
       normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
-    if (commentIntent === "correction") {
-      if (!isUserDrivenActor(req)) {
-        res.status(403).json({ error: "Only board users can mark a comment as a correction" });
-        return;
-      }
-      if (!commentBody) {
-        res.status(400).json({ error: "Correction intent requires a comment" });
-        return;
-      }
-      if (!requestedAssigneeAgentId) {
-        res.status(422).json({ error: "Correction comments require an assigned agent" });
-        return;
-      }
-    }
     const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
     const effectiveMoveToTodoRequested =
       explicitMoveToTodoRequested ||
@@ -2348,28 +2395,21 @@ export function issueRoutes(
       assigneeUserId:
         req.body.assigneeUserId === undefined ? undefined : (req.body.assigneeUserId as string | null),
     };
-    const requestedPolicyParticipantHandoff = issueExecutionPolicyHasParticipant(
-      previousExecutionPolicy,
+    const requestedAssigneeIsPolicyHandoff = isIssueExecutionPolicyHandoff({
+      issue: existing,
+      policy: previousExecutionPolicy,
       requestedAssignee,
-    ) && (
-      existing.executionState != null
-      || updateFields.status === "done"
-      || updateFields.status === "in_review"
-    );
-    const requestedReturnAssigneeHandoff = existing.executionState != null
-      && issueExecutionStateReturnsToAssignee(existing.executionState, requestedAssignee);
+      requestedStatus: typeof updateFields.status === "string" ? updateFields.status : undefined,
+    });
     const requestedAssigneeWillChange =
       (normalizedAssigneeAgentId !== undefined && normalizedAssigneeAgentId !== existing.assigneeAgentId)
       || (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
-    const requestedAssigneeIsPolicyHandoff =
-      requestedPolicyParticipantHandoff || requestedReturnAssigneeHandoff;
     if (req.body.executionPolicy !== undefined) {
       updateFields.executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
       updateFields.executionPolicyExplicit = true;
     } else if (
       !existing.executionPolicyExplicit
-      && !requestedPolicyParticipantHandoff
-      && !requestedReturnAssigneeHandoff
+      && !requestedAssigneeIsPolicyHandoff
       && (
         (normalizedAssigneeAgentId !== undefined && normalizedAssigneeAgentId !== existing.assigneeAgentId)
         || (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId)
@@ -3056,7 +3096,8 @@ export function issueRoutes(
     })();
 
     res.json({ ...issueResponse, comment });
-  });
+    },
+  );
 
   router.delete("/issues/:id", async (req, res) => {
     const id = req.params.id as string;
@@ -3752,22 +3793,173 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    const existingCorrectionComment = req.body.intent === "correction" && req.body.idempotencyKey
+      ? await svc.getCommentByIdempotencyKey(issue.id, req.body.idempotencyKey)
+      : null;
     const closedExecutionWorkspace = await getClosedIssueExecutionWorkspace(issue);
     if (closedExecutionWorkspace) {
-      respondClosedIssueExecutionWorkspace(res, closedExecutionWorkspace);
-      return;
+      const isCorrectionReplay = req.body.intent === "correction" && req.body.idempotencyKey
+        ? await svc.hasCommentIdempotencyKey(issue.id, req.body.idempotencyKey)
+        : false;
+      if (!isCorrectionReplay) {
+        respondClosedIssueExecutionWorkspace(res, closedExecutionWorkspace);
+        return;
+      }
     }
 
     const actor = getActorInfo(req);
+    const correctionTargetAgentId = req.body.intent === "correction"
+      ? req.body.expectedAssigneeAgentId ?? existingCorrectionComment?.expectedAssigneeAgentId ?? issue.assigneeAgentId ?? undefined
+      : undefined;
+    let correctionRecipientAgentIds: string[] | undefined;
     if (req.body.intent === "correction") {
       if (!isUserDrivenActor(req)) {
         res.status(403).json({ error: "Only board users can mark a comment as a correction" });
         return;
       }
-      if (!issue.assigneeAgentId) {
+      const mayBeIdempotentCorrectionReplay = Boolean(req.body.idempotencyKey && correctionTargetAgentId);
+      if (!issue.assigneeAgentId && !mayBeIdempotentCorrectionReplay) {
         res.status(422).json({ error: "Correction comments require an assigned agent" });
         return;
       }
+      correctionRecipientAgentIds = await resolveCorrectionRecipients({
+        companyId: issue.companyId,
+        issueId: issue.id,
+        body: req.body.body,
+        comment: {
+          expectedAssigneeAgentId: correctionTargetAgentId ?? null,
+          correctionRecipientAgentIds: existingCorrectionComment?.correctionRecipientAgentIds,
+        },
+      });
+    }
+
+    // The service evaluates the issue status again while holding the issue row
+    // lock. A correction that races with completion must still reopen the
+    // newly closed issue.
+    const correctionShouldReopen = (req.body.reopen === true || (
+      actor.actorType === "user" && Boolean(issue.assigneeAgentId)
+    )) && (Boolean(req.body.reassignToAgentId) || correctionTargetAgentId === issue.assigneeAgentId);
+    if (req.body.intent === "correction" && (req.body.reassignToAgentId || correctionShouldReopen)) {
+      const reassign = Boolean(req.body.reassignToAgentId);
+      if (reassign && req.body.allowPriorAssigneeTarget) {
+        res.status(400).json({ error: "A correction reassignment cannot target a prior assignee" });
+        return;
+      }
+      if (reassign) {
+        await assertCanAssignTasks(req, issue.companyId);
+      }
+      if (!correctionTargetAgentId) {
+        res.status(422).json({ error: "Correction comments require an assigned agent" });
+        return;
+      }
+      const result = await svc.addCorrectionIdempotent(id, req.body.body, {
+        idempotencyKey: req.body.idempotencyKey,
+        targetAgentId: correctionTargetAgentId,
+        correctionRecipientAgentIds,
+        reassign,
+        reopen: correctionShouldReopen,
+        allowPriorAssigneeTarget: req.body.allowPriorAssigneeTarget,
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        runId: actor.runId,
+      });
+
+      await issueReferencesSvc.syncComment(result.comment.id);
+      const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
+
+      await logActivity(db, {
+        id: deterministicActivityId("issue-comment-added", result.comment.id),
+        companyId: result.issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.comment_added",
+        entityType: "issue",
+        entityId: result.issue.id,
+        details: {
+          commentId: result.comment.id,
+          intent: "correction",
+          bodySnippet: result.comment.body.slice(0, 120),
+          identifier: result.issue.identifier,
+          issueTitle: result.issue.title,
+        },
+      });
+
+      const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
+        result.issue,
+        result.comment,
+        {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+      );
+      await logExpiredRequestConfirmations({
+        issue: result.issue,
+        interactions: expiredInteractions,
+        actor,
+        source: "issue.comment",
+      });
+
+      const persistedCorrectionRecipientAgentIds = result.comment.correctionRecipientAgentIds
+        ?? correctionRecipientAgentIds
+        ?? [];
+      const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
+      const wakeReason = reassign ? "issue_assigned"
+        : result.previousStatus ? "issue_reopened_via_comment" : "issue_commented";
+      wakeups.set(correctionTargetAgentId, {
+        idempotencyKey: `issue-comment:${result.comment.id}:assignee:${correctionTargetAgentId}`,
+        source: reassign ? "assignment" : "automation",
+        triggerDetail: "system",
+        reason: wakeReason,
+        payload: {
+          issueId: result.issue.id,
+          commentId: result.comment.id,
+          mutation: "correction",
+          ...(result.previousStatus ? { reopenedFrom: result.previousStatus } : {}),
+        },
+        requestedByActorType: actor.actorType,
+        requestedByActorId: actor.actorId,
+        contextSnapshot: {
+          issueId: result.issue.id,
+          taskId: result.issue.id,
+          commentId: result.comment.id,
+          wakeCommentId: result.comment.id,
+          source: "issue.comment.correction",
+          wakeReason,
+          ...(result.previousStatus ? { reopenedFrom: result.previousStatus } : {}),
+        },
+      });
+      for (const mentionedAgentId of persistedCorrectionRecipientAgentIds) {
+        if (wakeups.has(mentionedAgentId)) continue;
+        wakeups.set(mentionedAgentId, {
+          idempotencyKey: `issue-comment:${result.comment.id}:mention:${mentionedAgentId}`,
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_comment_mentioned",
+          payload: { issueId: result.issue.id, commentId: result.comment.id },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: result.issue.id,
+            taskId: result.issue.id,
+            commentId: result.comment.id,
+            wakeCommentId: result.comment.id,
+            source: "comment.mention",
+            wakeReason: "issue_comment_mentioned",
+          },
+        });
+      }
+      const correctionDelivery = await deliverCorrectionWakeups(wakeups);
+      const savedComment = { ...result.comment, correctionDelivery };
+
+      res.status(result.created ? 201 : 200).json(reassign ? {
+        ...result.issue,
+        relatedWork: referenceSummary,
+        referencedIssueIdentifiers: referenceSummary.outbound.map((item) => item.issue.identifier ?? item.issue.id),
+        comment: savedComment,
+      } : savedComment);
+      return;
     }
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
@@ -3780,7 +3972,7 @@ export function issueRoutes(
     const isBlocked = issue.status === "blocked";
     const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
     const effectiveMoveToTodoRequested =
-      explicitMoveToTodoRequested ||
+      req.body.intent === "correction" ? correctionShouldReopen : explicitMoveToTodoRequested ||
       shouldImplicitlyMoveCommentedIssueToTodo({
         issueStatus: issue.status,
         assigneeAgentId: issue.assigneeAgentId,
@@ -3796,6 +3988,7 @@ export function issueRoutes(
       return;
     }
     let comment: Awaited<ReturnType<typeof svc.addComment>> | null = null;
+    let idempotentCorrectionReplay = false;
     if (req.body.idempotencyKey) {
       const idempotentResult = await svc.addCommentIdempotent(id, req.body.body, {
         idempotencyKey: req.body.idempotencyKey,
@@ -3803,11 +3996,17 @@ export function issueRoutes(
         userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
         intent: req.body.intent,
+        expectedAssigneeAgentId: correctionTargetAgentId,
+        correctionRecipientAgentIds,
+        allowPriorAssigneeTarget: req.body.allowPriorAssigneeTarget,
       });
       comment = idempotentResult.comment;
       if (!idempotentResult.created) {
-        res.status(200).json(comment);
-        return;
+        if (req.body.intent !== "correction") {
+          res.status(200).json(comment);
+          return;
+        }
+        idempotentCorrectionReplay = true;
       }
     }
     let reopened = false;
@@ -3816,7 +4015,11 @@ export function issueRoutes(
     let currentIssue = issue;
     const commentReferenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
 
-    if (effectiveMoveToTodoRequested && (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers))) {
+    if (
+      !idempotentCorrectionReplay &&
+      effectiveMoveToTodoRequested &&
+      (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers))
+    ) {
       const reopenedIssue = await svc.update(id, { status: "todo" });
       if (!reopenedIssue) {
         res.status(404).json({ error: "Issue not found" });
@@ -3846,7 +4049,7 @@ export function issueRoutes(
       });
     }
 
-    if (interruptRequested) {
+    if (interruptRequested && !idempotentCorrectionReplay) {
       if (req.actor.type !== "board") {
         res.status(403).json({ error: "Only board users can interrupt active runs from issue comments" });
         return;
@@ -3878,6 +4081,9 @@ export function issueRoutes(
         userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
         intent: req.body.intent,
+        expectedAssigneeAgentId: correctionTargetAgentId,
+        correctionRecipientAgentIds,
+        allowPriorAssigneeTarget: req.body.allowPriorAssigneeTarget,
       });
     }
     await issueReferencesSvc.syncComment(comment.id);
@@ -3893,6 +4099,7 @@ export function issueRoutes(
     }
 
     await logActivity(db, {
+      id: deterministicActivityId("issue-comment-added", comment.id),
       companyId: currentIssue.companyId,
       actorType: actor.actorType,
       actorId: actor.actorId,
@@ -3934,15 +4141,19 @@ export function issueRoutes(
     });
 
     // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.
-    void (async () => {
+    let correctionDelivery: IssueCorrectionDelivery | undefined;
+    const deliverCommentWakeups = (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
-      const assigneeId = currentIssue.assigneeAgentId;
+      const assigneeId = req.body.intent === "correction"
+        ? comment.expectedAssigneeAgentId ?? correctionTargetAgentId
+        : currentIssue.assigneeAgentId;
       const actorIsAgent = actor.actorType === "agent";
       const selfComment = actorIsAgent && actor.actorId === assigneeId;
-      const skipWake = selfComment || isClosed;
+      const skipWake = selfComment || (isClosed && req.body.intent !== "correction");
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
           wakeups.set(assigneeId, {
+            idempotencyKey: `issue-comment:${comment.id}:assignee:${assigneeId}`,
             source: "automation",
             triggerDetail: "system",
             reason: "issue_reopened_via_comment",
@@ -3970,6 +4181,7 @@ export function issueRoutes(
           });
         } else {
           wakeups.set(assigneeId, {
+            idempotencyKey: `issue-comment:${comment.id}:assignee:${assigneeId}`,
             source: "automation",
             triggerDetail: "system",
             reason: "issue_commented",
@@ -3997,16 +4209,24 @@ export function issueRoutes(
       }
 
       let mentionedIds: string[] = [];
-      try {
-        mentionedIds = await svc.findMentionedAgents(issue.companyId, req.body.body);
-      } catch (err) {
-        logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
+      if (req.body.intent !== "correction") {
+        try {
+          mentionedIds = await svc.findMentionedAgents(issue.companyId, req.body.body);
+        } catch (err) {
+          logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
+        }
+      } else {
+        const recipientAgentIds = comment.correctionRecipientAgentIds
+          ?? correctionRecipientAgentIds
+          ?? [];
+        mentionedIds = recipientAgentIds.filter((agentId) => agentId !== assigneeId);
       }
 
       for (const mentionedId of mentionedIds) {
         if (wakeups.has(mentionedId)) continue;
         if (actorIsAgent && actor.actorId === mentionedId) continue;
         wakeups.set(mentionedId, {
+          idempotencyKey: `issue-comment:${comment.id}:mention:${mentionedId}`,
           source: "automation",
           triggerDetail: "system",
           reason: "issue_comment_mentioned",
@@ -4024,14 +4244,21 @@ export function issueRoutes(
         });
       }
 
-      for (const [agentId, wakeup] of wakeups.entries()) {
-        heartbeat
-          .wakeup(agentId, wakeup)
-          .catch((err) => logger.warn({ err, issueId: currentIssue.id, agentId }, "failed to wake agent on issue comment"));
+      if (req.body.intent === "correction") {
+        correctionDelivery = await deliverCorrectionWakeups(wakeups);
+        return;
       }
+      await Promise.all([...wakeups.entries()].map(([agentId, wakeup]) => heartbeat
+        .wakeup(agentId, wakeup)
+        .catch((err) => {
+          logger.warn({ err, issueId: currentIssue.id, agentId }, "failed to wake agent on issue comment");
+          if (req.body.intent === "correction") throw err;
+        })));
     })();
+    if (req.body.intent === "correction") await deliverCommentWakeups;
+    else void deliverCommentWakeups;
 
-    res.status(201).json(comment);
+    res.status(idempotentCorrectionReplay ? 200 : 201).json(correctionDelivery ? { ...comment, correctionDelivery } : comment);
   });
 
   router.get("/issues/:id/attachments", async (req, res) => {

@@ -151,6 +151,7 @@ export type {
   IssueReviewRequest,
   IssueExecutionDecision,
   IssueComment,
+  IssueCorrectionDelivery,
   IssueThreadInteractionActorFields,
   SuggestedTaskDraft,
   SuggestTasksPayload,

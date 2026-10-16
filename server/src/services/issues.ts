@@ -39,7 +39,7 @@ import {
   issueExecutionStateSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
-import { logActivity } from "./activity-log.js";
+import { deterministicActivityId, logActivity, persistActivityLog, publishPersistedActivityLog } from "./activity-log.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   gateProjectExecutionWorkspacePolicy,
@@ -58,6 +58,7 @@ import {
 } from "./issue-tree-control.js";
 import {
   applyIssueExecutionPolicyTransition,
+  isIssueExecutionPolicyHandoff,
   normalizeIssueExecutionPolicy,
 } from "./issue-execution-policy.js";
 
@@ -1695,6 +1696,62 @@ export async function defaultExecutionPolicyForAssignee(
 }
 
 export function issueService(db: Db) {
+  async function validateCorrectionRecipientAgentIds(
+    database: Db,
+    companyId: string,
+    expectedAssigneeAgentId: string,
+    recipientAgentIds: string[],
+  ) {
+    const requestedRecipientIds = [...new Set(recipientAgentIds)].sort();
+    if (!requestedRecipientIds.includes(expectedAssigneeAgentId)) {
+      throw unprocessable("Correction recipient set must include the original assignee");
+    }
+    const companyRecipients = await database
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(
+        eq(agents.companyId, companyId),
+        inArray(agents.id, requestedRecipientIds),
+      ));
+    if (companyRecipients.length !== requestedRecipientIds.length) {
+      throw unprocessable("Correction recipients must be agents in the issue company");
+    }
+    return requestedRecipientIds;
+  }
+
+  async function initializeCorrectionRecipientAgentIds(
+    database: Db,
+    comment: typeof issueComments.$inferSelect,
+    recipientAgentIds: string[],
+  ) {
+    if (comment.correctionRecipientAgentIds) return comment;
+    if (!comment.expectedAssigneeAgentId) {
+      throw unprocessable("Correction delivery identity is incomplete");
+    }
+    const validatedRecipientIds = await validateCorrectionRecipientAgentIds(
+      database,
+      comment.companyId,
+      comment.expectedAssigneeAgentId,
+      recipientAgentIds,
+    );
+    const updated = await database
+      .update(issueComments)
+      .set({ correctionRecipientAgentIds: validatedRecipientIds, updatedAt: new Date() })
+      .where(and(
+        eq(issueComments.id, comment.id),
+        isNull(issueComments.correctionRecipientAgentIds),
+      ))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    if (updated) return updated;
+    const current = await database
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.id, comment.id))
+      .then((rows) => rows[0] ?? null);
+    if (current?.correctionRecipientAgentIds) return current;
+    throw conflict("Correction recipient set could not be initialized");
+  }
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
 
@@ -1725,6 +1782,22 @@ export function issueService(db: Db) {
       ...comment,
       body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
     };
+  }
+
+  function correctionBodiesMatch(storedBody: string, requestedBody: string) {
+    // A correction's idempotency identity cannot depend on the current display
+    // redaction setting. Canonicalizing both sides also handles comments that
+    // were stored before or after that setting changed.
+    return redactCurrentUserText(storedBody, { enabled: true }) ===
+      redactCurrentUserText(requestedBody, { enabled: true });
+  }
+
+  async function hasCommentIdempotencyKey(issueId: string, idempotencyKey: string) {
+    return db
+      .select({ id: issueComments.id })
+      .from(issueComments)
+      .where(and(eq(issueComments.issueId, issueId), eq(issueComments.idempotencyKey, idempotencyKey)))
+      .then((rows) => rows.length > 0);
   }
 
   async function assertAssignableAgent(companyId: string, agentId: string, dbOrTx: any = db) {
@@ -3963,6 +4036,49 @@ export function issueService(db: Db) {
       });
     },
 
+    hasCommentIdempotencyKey,
+
+    getCommentByIdempotencyKey: async (issueId: string, idempotencyKey: string) => {
+      const comment = await db.select().from(issueComments).where(and(
+        eq(issueComments.issueId, issueId),
+        eq(issueComments.idempotencyKey, idempotencyKey),
+      )).then((rows) => rows[0] ?? null);
+      if (!comment) return null;
+      const { censorUsernameInLogs } = await instanceSettings.getGeneral();
+      return redactIssueComment(comment, censorUsernameInLogs);
+    },
+
+    persistCorrectionRecipientAgentIds: async (input: {
+      companyId: string;
+      issueId: string;
+      commentId: string;
+      authorUserId: string;
+      recipientAgentIds: string[];
+    }) => {
+      return db.transaction(async (tx) => {
+        const comment = await tx
+          .select()
+          .from(issueComments)
+          .where(and(
+            eq(issueComments.id, input.commentId),
+            eq(issueComments.companyId, input.companyId),
+            eq(issueComments.issueId, input.issueId),
+            eq(issueComments.intent, "correction"),
+            eq(issueComments.authorUserId, input.authorUserId),
+          ))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!comment) throw notFound("Correction comment not found");
+        if (comment.correctionRecipientAgentIds) return comment.correctionRecipientAgentIds;
+        const updated = await initializeCorrectionRecipientAgentIds(
+          tx as unknown as Db,
+          comment,
+          input.recipientAgentIds,
+        );
+        return updated.correctionRecipientAgentIds ?? [];
+      });
+    },
+
     addComment: async (
       issueId: string,
       body: string,
@@ -3972,41 +4088,288 @@ export function issueService(db: Db) {
         runId?: string | null;
         authorType?: "agent" | "user" | "system";
         intent?: "message" | "correction";
+        expectedAssigneeAgentId?: string;
+        correctionRecipientAgentIds?: string[];
+        allowPriorAssigneeTarget?: boolean;
       },
     ) => {
-      const issue = await db
-        .select({ companyId: issues.companyId })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .then((rows) => rows[0] ?? null);
-
-      if (!issue) throw notFound("Issue not found");
-
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
-      const [comment] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          authorType: actor.authorType ?? null,
-          intent: actor.intent ?? "message",
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-        })
-        .returning();
+      return db.transaction(async (tx) => {
+        const issue = await tx
+          .select({ companyId: issues.companyId, assigneeAgentId: issues.assigneeAgentId })
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
 
-      // Update issue's updatedAt so comment activity is reflected in recency sorting
-      await db
-        .update(issues)
-        .set({ updatedAt: new Date() })
-        .where(eq(issues.id, issueId));
+        if (!issue) throw notFound("Issue not found");
+        const expectedAssigneeAgentId = actor.intent === "correction"
+          ? actor.expectedAssigneeAgentId ?? issue.assigneeAgentId
+          : null;
+        if (actor.intent === "correction" && !expectedAssigneeAgentId) {
+          throw unprocessable("Correction comments require an assigned agent");
+        }
+        if (actor.expectedAssigneeAgentId) {
+          const target = await tx
+            .select({ companyId: agents.companyId })
+            .from(agents)
+            .where(eq(agents.id, actor.expectedAssigneeAgentId))
+            .then((rows) => rows[0] ?? null);
+          if (!target || target.companyId !== issue.companyId) {
+            throw unprocessable("Correction target must be an agent in the issue company");
+          }
+          if (issue.assigneeAgentId !== actor.expectedAssigneeAgentId && !actor.allowPriorAssigneeTarget) {
+            throw conflict("The correction is no longer assigned to the expected agent", {
+              code: "correction_assignee_conflict",
+            });
+          }
+        }
+        const correctionRecipientAgentIds = actor.intent === "correction"
+          ? await validateCorrectionRecipientAgentIds(
+            tx as unknown as Db,
+            issue.companyId,
+            expectedAssigneeAgentId!,
+            actor.correctionRecipientAgentIds ?? [expectedAssigneeAgentId!],
+          )
+          : null;
 
-      return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+        const [comment] = await tx
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            authorType: actor.authorType ?? null,
+            intent: actor.intent ?? "message",
+            expectedAssigneeAgentId,
+            correctionRecipientAgentIds,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+          })
+          .returning();
+
+        // Update issue's updatedAt so comment activity is reflected in recency sorting
+        await tx
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+
+        return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+      });
+    },
+
+    addCorrectionIdempotent: async (
+      issueId: string,
+      body: string,
+      input: {
+        idempotencyKey: string;
+        targetAgentId: string;
+        correctionRecipientAgentIds?: string[];
+        reassign: boolean;
+        reopen: boolean;
+        allowPriorAssigneeTarget?: boolean;
+        agentId?: string;
+        userId?: string;
+        runId?: string | null;
+      },
+    ) => {
+      const currentUserRedactionOptions = {
+        enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+      };
+      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      const requestedAuthorAgentId = input.agentId ?? null;
+      const requestedAuthorUserId = input.userId ?? null;
+
+      const result = await db.transaction(async (tx) => {
+        const issue = await tx
+          .select()
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!issue) throw notFound("Issue not found");
+
+        let existing = await tx
+          .select()
+          .from(issueComments)
+          .where(and(
+            eq(issueComments.issueId, issueId),
+            eq(issueComments.idempotencyKey, input.idempotencyKey),
+          ))
+          .then((rows) => rows[0] ?? null);
+        if (existing) {
+          if (
+            existing.authorAgentId !== requestedAuthorAgentId ||
+            existing.authorUserId !== requestedAuthorUserId ||
+            existing.intent !== "correction" ||
+            !correctionBodiesMatch(existing.body, body) ||
+            existing.expectedAssigneeAgentId !== input.targetAgentId
+          ) {
+            throw conflict("Issue comment idempotency key was already used by another comment request");
+          }
+          existing = await initializeCorrectionRecipientAgentIds(
+            tx as unknown as Db,
+            existing,
+            input.correctionRecipientAgentIds ?? [input.targetAgentId],
+          );
+          const [enrichedIssue] = await withIssueLabels(tx, [issue]);
+          return {
+            issue: enrichedIssue,
+            comment: redactIssueComment(existing, currentUserRedactionOptions.enabled),
+            created: false as const,
+            previousStatus: null,
+            assigneeChanged: false,
+            transitionActivity: null,
+          };
+        }
+
+        if (input.reassign) {
+          await assertAssignableAgent(issue.companyId, input.targetAgentId, tx);
+        } else {
+          const target = await tx.select({ companyId: agents.companyId }).from(agents)
+            .where(eq(agents.id, input.targetAgentId)).then((rows) => rows[0] ?? null);
+          if (!target || target.companyId !== issue.companyId) {
+            throw unprocessable("Correction target must be an agent in the issue company");
+          }
+        }
+        if (!input.reassign && issue.assigneeAgentId !== input.targetAgentId && !input.allowPriorAssigneeTarget) {
+          throw conflict("The correction is no longer assigned to the expected agent", {
+            code: "correction_assignee_conflict",
+          });
+        }
+        const correctionRecipientAgentIds = await validateCorrectionRecipientAgentIds(
+          tx as unknown as Db,
+          issue.companyId,
+          input.targetAgentId,
+          input.correctionRecipientAgentIds ?? [input.targetAgentId],
+        );
+        const assigneeChanged = input.reassign && (
+          issue.assigneeAgentId !== input.targetAgentId || issue.assigneeUserId !== null
+        );
+        let shouldReopen = input.reopen && (input.reassign || issue.assigneeAgentId === input.targetAgentId)
+          && ["done", "cancelled", "blocked"].includes(issue.status);
+        if (shouldReopen && issue.status === "blocked") {
+          const readiness = await listIssueDependencyReadinessMap(tx, issue.companyId, [issueId]);
+          if ((readiness.get(issueId)?.unresolvedBlockerCount ?? 0) > 0) {
+            if (input.reassign) throw conflict("Issue follow-up blocked by unresolved blockers");
+            shouldReopen = false;
+          }
+        }
+        const patch: Partial<typeof issues.$inferInsert> = {
+          ...(input.reassign ? { assigneeAgentId: input.targetAgentId, assigneeUserId: null } : {}),
+          ...(shouldReopen ? { status: "todo" } : {}),
+          updatedAt: new Date(),
+        };
+        if (assigneeChanged) {
+          patch.checkoutRunId = null;
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+          const preserveExecutionPolicy = isIssueExecutionPolicyHandoff({
+            issue,
+            policy: normalizeIssueExecutionPolicy(issue.executionPolicy),
+            requestedAssignee: { assigneeAgentId: input.targetAgentId, assigneeUserId: null },
+            requestedStatus: shouldReopen ? "todo" : undefined,
+          });
+          if (!issue.executionPolicyExplicit && !preserveExecutionPolicy) {
+            patch.executionPolicy = await defaultExecutionPolicyForAssignee(issue.companyId, input.targetAgentId, tx);
+            patch.executionPolicyExplicit = false;
+          }
+        }
+        if (input.reassign || shouldReopen) {
+          const nextExecutionPolicy = patch.executionPolicy !== undefined
+            ? normalizeIssueExecutionPolicy(patch.executionPolicy)
+            : normalizeIssueExecutionPolicy(issue.executionPolicy);
+          const transition = applyIssueExecutionPolicyTransition({
+            issue,
+            policy: nextExecutionPolicy,
+            requestedStatus: shouldReopen ? "todo" : undefined,
+            requestedAssigneePatch: input.reassign ? {
+              assigneeAgentId: input.targetAgentId,
+              assigneeUserId: null,
+            } : {},
+            actor: {
+              agentId: input.agentId ?? null,
+              userId: input.userId ?? null,
+            },
+            commentBody: body,
+            reviewRequest: undefined,
+          });
+          if (transition.decision) {
+            throw conflict("Correction comments cannot decide an active review stage");
+          }
+          Object.assign(patch, transition.patch);
+        }
+        if (shouldReopen) {
+          patch.completedAt = null;
+          patch.cancelledAt = null;
+          patch.checkoutRunId = null;
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+          patch.sortOrder = await nextSortOrderForColumn(tx, issue.companyId, patch.status ?? issue.status);
+        }
+
+        const updatedIssue = await tx
+          .update(issues)
+          .set(patch)
+          .where(eq(issues.id, issueId))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+        if (!updatedIssue) throw notFound("Issue not found");
+
+        const [comment] = await tx
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: requestedAuthorAgentId,
+            authorUserId: requestedAuthorUserId,
+            intent: "correction",
+            idempotencyKey: input.idempotencyKey,
+            expectedAssigneeAgentId: input.targetAgentId,
+            correctionRecipientAgentIds,
+            createdByRunId: input.runId ?? null,
+            body: redactedBody,
+          })
+          .returning();
+        // Keep the audit record with the transition so retries never reconstruct historical state.
+        const transitionActivity = assigneeChanged || shouldReopen
+          ? await persistActivityLog(tx as unknown as Db, {
+            id: deterministicActivityId(input.reassign ? "issue-correction-reassign" : "issue-correction-reopen", comment.id),
+            companyId: issue.companyId,
+            actorType: input.agentId ? "agent" : input.userId ? "user" : "system",
+            actorId: input.agentId ?? input.userId ?? "system",
+            agentId: input.agentId,
+            runId: input.runId,
+            action: "issue.updated",
+            entityType: "issue",
+            entityId: issueId,
+            details: {
+              ...(assigneeChanged ? { assigneeAgentId: input.targetAgentId, assigneeUserId: null } : {}),
+              ...(shouldReopen ? { status: updatedIssue.status, reopened: true, reopenedFrom: issue.status } : {}),
+              identifier: issue.identifier,
+              source: "correction",
+              correctionCommentId: comment.id,
+            },
+          })
+          : null;
+        const [enrichedIssue] = await withIssueLabels(tx, [updatedIssue]);
+        return {
+          issue: enrichedIssue,
+          comment: redactIssueComment(comment, currentUserRedactionOptions.enabled),
+          created: true as const,
+          previousStatus: shouldReopen ? issue.status : null,
+          assigneeChanged,
+          transitionActivity,
+        };
+      });
+      if (result.transitionActivity) publishPersistedActivityLog(result.transitionActivity);
+      return result;
     },
 
     addCommentIdempotent: async (
@@ -4019,16 +4382,11 @@ export function issueService(db: Db) {
         runId?: string | null;
         authorType?: "agent" | "user" | "system";
         intent?: "message" | "correction";
+        expectedAssigneeAgentId?: string;
+        correctionRecipientAgentIds?: string[];
+        allowPriorAssigneeTarget?: boolean;
       },
     ) => {
-      const issue = await db
-        .select({ companyId: issues.companyId })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .then((rows) => rows[0] ?? null);
-
-      if (!issue) throw notFound("Issue not found");
-
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
@@ -4037,54 +4395,149 @@ export function issueService(db: Db) {
       const requestedAuthorUserId = actor.userId ?? null;
       const requestedAuthorType = actor.authorType ?? null;
       const requestedIntent = actor.intent ?? "message";
-      const [inserted] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: requestedAuthorAgentId,
-          authorUserId: requestedAuthorUserId,
-          authorType: requestedAuthorType,
-          intent: requestedIntent,
-          idempotencyKey: actor.idempotencyKey,
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-        })
-        .onConflictDoNothing({ target: [issueComments.issueId, issueComments.idempotencyKey] })
-        .returning();
-
-      if (inserted) {
-        await db
-          .update(issues)
-          .set({ updatedAt: new Date() })
-          .where(eq(issues.id, issueId));
-        return {
-          comment: redactIssueComment(inserted, currentUserRedactionOptions.enabled),
-          created: true as const,
+      return db.transaction(async (tx) => {
+        const validateExisting = (existing: typeof issueComments.$inferSelect) => {
+          if (
+            existing.authorAgentId !== requestedAuthorAgentId ||
+            existing.authorUserId !== requestedAuthorUserId ||
+            existing.authorType !== requestedAuthorType ||
+            existing.intent !== requestedIntent ||
+            (requestedIntent === "correction" && (
+              !correctionBodiesMatch(existing.body, body) ||
+              (actor.expectedAssigneeAgentId !== undefined && existing.expectedAssigneeAgentId !== actor.expectedAssigneeAgentId)
+            ))
+          ) {
+            throw conflict("Issue comment idempotency key was already used by another comment request");
+          }
+          return existing;
         };
-      }
+        const existingBeforeLock = await tx
+          .select()
+          .from(issueComments)
+          .where(and(
+            eq(issueComments.issueId, issueId),
+            eq(issueComments.idempotencyKey, actor.idempotencyKey),
+          ))
+          .then((rows) => rows[0] ?? null);
+        if (existingBeforeLock) {
+          validateExisting(existingBeforeLock);
+          if (requestedIntent !== "correction" || existingBeforeLock.correctionRecipientAgentIds) {
+            return {
+              comment: redactIssueComment(existingBeforeLock, currentUserRedactionOptions.enabled),
+              created: false as const,
+            };
+          }
+        }
 
-      const existing = await db
-        .select()
-        .from(issueComments)
-        .where(and(
+        const issue = await tx
+          .select({ companyId: issues.companyId, assigneeAgentId: issues.assigneeAgentId })
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+
+        if (!issue) throw notFound("Issue not found");
+        // Another request may have committed while this transaction waited for the issue lock.
+        const existingAfterLock = await tx.select().from(issueComments).where(and(
           eq(issueComments.issueId, issueId),
           eq(issueComments.idempotencyKey, actor.idempotencyKey),
-        ))
-        .then((rows) => rows[0] ?? null);
-      if (!existing) throw conflict("Issue comment idempotency conflict could not be resolved");
-      if (
-        existing.authorAgentId !== requestedAuthorAgentId ||
-        existing.authorUserId !== requestedAuthorUserId ||
-        existing.authorType !== requestedAuthorType ||
-        existing.intent !== requestedIntent
-      ) {
-        throw conflict("Issue comment idempotency key was already used by another comment request");
-      }
-      return {
-        comment: redactIssueComment(existing, currentUserRedactionOptions.enabled),
-        created: false as const,
-      };
+        )).then((rows) => rows[0] ?? null);
+        if (existingAfterLock) {
+          validateExisting(existingAfterLock);
+          const initialized = requestedIntent === "correction"
+            ? await initializeCorrectionRecipientAgentIds(
+              tx as unknown as Db,
+              existingAfterLock,
+              actor.correctionRecipientAgentIds ?? [existingAfterLock.expectedAssigneeAgentId!],
+            )
+            : existingAfterLock;
+          return {
+            comment: redactIssueComment(initialized, currentUserRedactionOptions.enabled),
+            created: false as const,
+          };
+        }
+
+        const expectedAssigneeAgentId = requestedIntent === "correction"
+          ? actor.expectedAssigneeAgentId ?? issue.assigneeAgentId
+          : null;
+        if (requestedIntent === "correction" && !expectedAssigneeAgentId) {
+          throw unprocessable("Correction comments require an assigned agent");
+        }
+        if (actor.expectedAssigneeAgentId) {
+          const target = await tx
+            .select({ companyId: agents.companyId })
+            .from(agents)
+            .where(eq(agents.id, actor.expectedAssigneeAgentId))
+            .then((rows) => rows[0] ?? null);
+          if (!target || target.companyId !== issue.companyId) {
+            throw unprocessable("Correction target must be an agent in the issue company");
+          }
+          if (issue.assigneeAgentId !== actor.expectedAssigneeAgentId && !actor.allowPriorAssigneeTarget) {
+            throw conflict("The correction is no longer assigned to the expected agent", {
+              code: "correction_assignee_conflict",
+            });
+          }
+        }
+        const correctionRecipientAgentIds = requestedIntent === "correction"
+          ? await validateCorrectionRecipientAgentIds(
+            tx as unknown as Db,
+            issue.companyId,
+            expectedAssigneeAgentId!,
+            actor.correctionRecipientAgentIds ?? [expectedAssigneeAgentId!],
+          )
+          : null;
+
+        const [inserted] = await tx
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: requestedAuthorAgentId,
+            authorUserId: requestedAuthorUserId,
+            authorType: requestedAuthorType,
+            intent: requestedIntent,
+            idempotencyKey: actor.idempotencyKey,
+            expectedAssigneeAgentId,
+            correctionRecipientAgentIds,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+          })
+          .onConflictDoNothing({ target: [issueComments.issueId, issueComments.idempotencyKey] })
+          .returning();
+
+        if (inserted) {
+          await tx
+            .update(issues)
+            .set({ updatedAt: new Date() })
+            .where(eq(issues.id, issueId));
+          return {
+            comment: redactIssueComment(inserted, currentUserRedactionOptions.enabled),
+            created: true as const,
+          };
+        }
+
+        const existing = await tx
+          .select()
+          .from(issueComments)
+          .where(and(
+            eq(issueComments.issueId, issueId),
+            eq(issueComments.idempotencyKey, actor.idempotencyKey),
+          ))
+          .then((rows) => rows[0] ?? null);
+        if (!existing) throw conflict("Issue comment idempotency conflict could not be resolved");
+        validateExisting(existing);
+        const initialized = requestedIntent === "correction"
+          ? await initializeCorrectionRecipientAgentIds(
+            tx as unknown as Db,
+            existing,
+            actor.correctionRecipientAgentIds ?? [existing.expectedAssigneeAgentId!],
+          )
+          : existing;
+        return {
+          comment: redactIssueComment(initialized, currentUserRedactionOptions.enabled),
+          created: false as const,
+        };
+      });
     },
 
     createAttachment: async (input: {
@@ -4256,7 +4709,10 @@ export function issueService(db: Db) {
       if (tokens.size === 0 && explicitAgentMentionIds.length === 0) return [];
       const rows = await db.select({ id: agents.id, name: agents.name })
         .from(agents).where(eq(agents.companyId, companyId));
-      const resolved = new Set<string>(explicitAgentMentionIds);
+      const companyAgentIds = new Set(rows.map((agent) => agent.id));
+      const resolved = new Set<string>(
+        explicitAgentMentionIds.filter((agentId) => companyAgentIds.has(agentId)),
+      );
       for (const agent of rows) {
         if (tokens.has(agent.name.toLowerCase())) {
           resolved.add(agent.id);
