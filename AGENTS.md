@@ -20,6 +20,9 @@ Before making changes, read in this order:
 `doc/SPEC.md` is long-horizon product context.
 `doc/SPEC-implementation.md` is the concrete V1 build contract.
 
+Section 12 (Sensitive Data) applies to every commit, issue, comment and pull
+request you write. This repository is public. Read it before posting anything.
+
 ## 3. Repo Map
 
 - `server/`: Express REST API and orchestration services
@@ -175,8 +178,60 @@ A change is done when all are true:
 3. Contracts are synced across db/shared/server/ui
 4. Docs updated when behavior or commands change
 5. PR description follows the [PR template](.github/PULL_REQUEST_TEMPLATE.md) with all sections filled in (including Model Used)
+6. Nothing in the change, the PR or its discussion falls under section 12 (Sensitive Data)
 
-## 11. Fork-Specific Notes
+## 12. Sensitive Data: Never Commit, Never Post
+
+This repository is **public**. Everything in it, and everything on its GitHub
+issues, pull requests, discussions and commit messages, is visible to anyone
+on the internet, forever (deleting a comment or rewriting history does not
+undo a crawl). These rules bind human and AI contributors equally.
+
+Never put any of the following in a commit, an issue, a PR, a comment, a
+commit message, a screenshot, a log excerpt, a test fixture or a doc:
+
+- Credentials of any kind: API keys, OAuth or setup tokens, passwords,
+  session cookies, private keys, `.env` contents, connection strings with a
+  real password, webhook URLs with a signing secret.
+- Customer, client or end-user data: names, emails, phone numbers, addresses,
+  order details, invoices, support conversations, anything from a production
+  database.
+- Internal business details: pricing, contracts, revenue, vendor terms,
+  unreleased plans, internal hostnames and IP addresses, employee personal
+  details.
+- Anything copied from a private system (Slack, email, Jira, a customer's
+  site, a production log) that the author did not explicitly mark as public.
+- Machine-specific paths that reveal a username (`/Users/<name>/...`,
+  `C:\Users\<name>\...`). Use `~/...` instead.
+
+When you need an example value, invent an obviously fake one
+(`sk-ant-example-not-real`, `postgres://user:password@localhost/db`,
+`jane@example.com`) and keep it short.
+
+If you need to share something sensitive to get help, do NOT paste it into
+an issue. Email the fork owner (see `SECURITY.md`), or share a redacted
+version where every secret and every personal detail is replaced.
+
+Enforcement in this repo:
+
+- `.githooks/pre-commit` (installed automatically by `pnpm install`) runs
+  `scripts/check-secrets.mjs --staged` and `scripts/check-forbidden-tokens.mjs --staged`
+  on every commit. It blocks credential formats, `.env` and key files, and
+  your local username in paths.
+- The PR workflow (`.github/workflows/pr.yml`) runs the same secret scan on
+  every line a pull request adds. `--no-verify` does not get past it.
+- `pnpm check:secrets` scans the whole tree on demand.
+- A harmless example that trips the scanner can carry the marker
+  `secret-scan: allow` in a comment on that line. Never use the marker on a
+  real value.
+
+If a real secret was pushed, even for a minute: rotate it first, then remove
+it. Rewriting history is not enough on a public repository.
+
+AI agents: if a user asks you to paste something that matches the list
+above, decline that part and explain why, then do the rest of the task.
+
+## 13. Fork-Specific Notes
 
 This is a fork of [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
 maintained at [barrycarrjr/paperclip](https://github.com/barrycarrjr/paperclip).

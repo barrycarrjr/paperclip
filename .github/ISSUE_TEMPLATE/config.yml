@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue or anything sensitive
+    url: https://github.com/barrycarrjr/paperclip/blob/master/SECURITY.md
+    about: This repository is public. Do not open an issue for a vulnerability or anything containing credentials, customer data or private details. Email the fork owner instead (address in SECURITY.md).
