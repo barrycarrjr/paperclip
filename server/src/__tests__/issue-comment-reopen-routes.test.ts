@@ -12,10 +12,12 @@ const mockIssueService = vi.hoisted(() => ({
   findMentionedAgents: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
+  defaultExecutionPolicyForAssignee: vi.fn(),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  getMembership: vi.fn(),
   hasPermission: vi.fn(),
 }));
 
@@ -216,8 +218,10 @@ describe.sequential("issue comment reopen routes", () => {
     mockIssueService.findMentionedAgents.mockReset();
     mockIssueService.listWakeableBlockedDependents.mockReset();
     mockIssueService.getWakeableParentAfterChildCompletion.mockReset();
+    mockIssueService.defaultExecutionPolicyForAssignee.mockReset();
     mockAccessService.canUser.mockReset();
     mockAccessService.hasPermission.mockReset();
+    mockAccessService.getMembership.mockReset();
     mockHeartbeatService.wakeup.mockReset();
     mockHeartbeatService.reportRunActivity.mockReset();
     mockHeartbeatService.getRun.mockReset();
@@ -238,6 +242,8 @@ describe.sequential("issue comment reopen routes", () => {
     mockTxInsert.mockImplementation(() => ({ values: mockTxInsertValues }));
     mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx));
     mockHeartbeatService.wakeup.mockResolvedValue(undefined);
+    mockIssueService.defaultExecutionPolicyForAssignee.mockResolvedValue(null);
+    mockAccessService.getMembership.mockResolvedValue({ status: "active" });
     mockHeartbeatService.reportRunActivity.mockResolvedValue(undefined);
     mockHeartbeatService.getRun.mockResolvedValue(null);
     mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
@@ -1187,9 +1193,11 @@ describe.sequential("issue comment reopen routes", () => {
       status: "in_progress",
       assigneeAgentId: "22222222-2222-4222-8222-222222222222",
       executionPolicy: policy,
+      executionPolicyExplicit: true,
       executionState: null,
     };
     mockIssueService.getById.mockResolvedValue(issue);
+    mockAccessService.hasPermission.mockResolvedValue(true);
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...issue,
       ...patch,

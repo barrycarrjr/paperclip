@@ -12,6 +12,7 @@ const mockIssueService = vi.hoisted(() => ({
   getRelationSummaries: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
+  defaultExecutionPolicyForAssignee: vi.fn(),
 }));
 
 const mockHeartbeatService = vi.hoisted(() => ({
@@ -181,6 +182,7 @@ describe("issue update comment wakeups", () => {
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+    mockIssueService.defaultExecutionPolicyForAssignee.mockResolvedValue(null);
   });
 
   it("includes the new comment in assignment wakes from issue updates", async () => {
