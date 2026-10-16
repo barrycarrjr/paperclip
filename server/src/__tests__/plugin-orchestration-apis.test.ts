@@ -95,6 +95,18 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
     return { companyId, agentId };
   }
 
+  async function waitForWakeupAttempt(agentId: string) {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const rows = await db
+        .select({ id: agentWakeupRequests.id })
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.agentId, agentId));
+      if (rows.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Timed out waiting for the wakeup attempt for agent ${agentId}`);
+  }
+
   it("creates plugin-origin issues with full orchestration fields and audit activity", async () => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const blockerIssueId = randomUUID();
@@ -206,6 +218,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
       currentParticipant: { type: "agent", agentId: reviewerId },
       returnAssignee: { type: "agent", agentId: workerId },
     });
+    await waitForWakeupAttempt(reviewerId);
   });
 
   it("keeps the worker's policy when plugin completion names its configured reviewer", async () => {
@@ -249,6 +262,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
       currentParticipant: { type: "agent", agentId: reviewerId },
       returnAssignee: { type: "agent", agentId: workerId },
     });
+    await waitForWakeupAttempt(reviewerId);
   });
 
   it("stores the same normalized policy IDs used by plugin review state", async () => {
@@ -290,6 +304,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
       currentStageId: updated.executionPolicy?.stages[0]?.id,
       currentParticipant: { type: "agent", agentId: reviewerId },
     });
+    await waitForWakeupAttempt(reviewerId);
   });
 
   it("records a plugin review decision and its required comment atomically", async () => {
@@ -325,6 +340,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
         actorAgentId: workerId,
       },
     });
+    await waitForWakeupAttempt(reviewerId);
 
     const approved = await services.issues.update({
       issueId: issue.id,
@@ -417,7 +433,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
         companyId,
         name: "First Reviewer",
         role: "engineer",
-        status: "idle",
+        status: "paused",
         adapterType: "process",
         adapterConfig: { command: "true" },
         runtimeConfig: {},
@@ -428,7 +444,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
         companyId,
         name: "Next Reviewer",
         role: "engineer",
-        status: "idle",
+        status: "paused",
         adapterType: "process",
         adapterConfig: { command: "true" },
         runtimeConfig: {},
@@ -459,6 +475,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
       actorAgentId: firstWorkerId,
     });
     expect(inReview.status).toBe("in_review");
+    await waitForWakeupAttempt(firstReviewerId);
 
     const reassigned = await services.issues.update({
       issueId: inReview.id,

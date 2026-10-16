@@ -1040,7 +1040,10 @@ describe("IssueDetail", () => {
     mockIssuesApi.get.mockResolvedValue(createIssue({ assigneeAgentId: "agent-1" }));
     mockIssuesApi.addComment.mockResolvedValueOnce(comment);
     const storageSet = window.localStorage.setItem.bind(window.localStorage);
-    const storageSpy = vi.spyOn(window.localStorage, "setItem").mockImplementation((key, value) => {
+    const storage = Object.prototype.hasOwnProperty.call(window.localStorage, "setItem")
+      ? window.localStorage
+      : Storage.prototype;
+    const storageSpy = vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
       if (key.startsWith("paperclip:correction-delivery:")) throw new Error("Browser storage is full");
       storageSet(key, value);
     });
