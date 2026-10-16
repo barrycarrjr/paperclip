@@ -101,54 +101,54 @@
       "expectedMockState": "runtime_decision_record"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:266",
+      "id": "skill:skills/paperclip/SKILL.md:267",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L266:comment-style-required",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L267:comment-style-required",
       "heading": "Comment Style (Required)",
       "primaryDisposition": "always_agent_tool",
       "semanticOperation": "report_progress",
       "expectedMockState": "operation_result"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:298",
+      "id": "skill:skills/paperclip/SKILL.md:299",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L298:update",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L299:update",
       "heading": "Update",
       "primaryDisposition": "control_plane_owned",
       "semanticOperation": "runtime_reconciliation",
       "expectedMockState": "runtime_decision_record"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:308",
+      "id": "skill:skills/paperclip/SKILL.md:309",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L308:planning-required-when-planning-requested",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L309:planning-required-when-planning-requested",
       "heading": "Planning (Required when planning requested)",
       "primaryDisposition": "always_agent_tool",
       "semanticOperation": "write_document",
       "expectedMockState": "operation_result"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:337",
+      "id": "skill:skills/paperclip/SKILL.md:338",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L337:key-endpoints-hot-routes",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L338:key-endpoints-hot-routes",
       "heading": "Key Endpoints (Hot Routes)",
       "primaryDisposition": "control_plane_owned",
       "semanticOperation": "runtime_reconciliation",
       "expectedMockState": "runtime_decision_record"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:367",
+      "id": "skill:skills/paperclip/SKILL.md:368",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L367:searching-issues",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L368:searching-issues",
       "heading": "Searching Issues",
       "primaryDisposition": "control_plane_owned",
       "semanticOperation": "runtime_reconciliation",
       "expectedMockState": "runtime_decision_record"
     },
     {
-      "id": "skill:skills/paperclip/SKILL.md:377",
+      "id": "skill:skills/paperclip/SKILL.md:378",
       "kind": "skill_heading",
-      "sourceAnchor": "skills/paperclip/SKILL.md#L377:full-reference",
+      "sourceAnchor": "skills/paperclip/SKILL.md#L378:full-reference",
       "heading": "Full Reference",
       "primaryDisposition": "control_plane_owned",
       "semanticOperation": "runtime_reconciliation",
