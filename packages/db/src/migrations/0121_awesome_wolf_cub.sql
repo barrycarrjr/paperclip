@@ -1,5 +1,5 @@
-ALTER TABLE "issue_comments" ADD COLUMN "expected_assignee_agent_id" uuid;--> statement-breakpoint
-ALTER TABLE "issue_comments" ADD COLUMN "correction_recipient_agent_ids" jsonb;--> statement-breakpoint
+ALTER TABLE "issue_comments" ADD COLUMN IF NOT EXISTS "expected_assignee_agent_id" uuid;--> statement-breakpoint
+ALTER TABLE "issue_comments" ADD COLUMN IF NOT EXISTS "correction_recipient_agent_ids" jsonb;--> statement-breakpoint
 -- Backfill only when an existing proposal proves one immutable target. Legacy
 -- corrections without that evidence stay unassigned and must be resubmitted.
 UPDATE "issue_comments" AS "comment"

@@ -101,7 +101,11 @@ describeEmbeddedPostgres("migration 0121, correction target", () => {
       await sql.unsafe(
         `ALTER TABLE "issue_comments" DROP COLUMN "correction_recipient_agent_ids"`,
       );
-      for (const statement of await migrationStatements()) await sql.unsafe(statement);
+      // Startup can be interrupted after PostgreSQL commits one DDL statement
+      // but before Drizzle records the migration. Retrying must finish safely.
+      const statements = await migrationStatements();
+      await sql.unsafe(statements[0]!);
+      for (const statement of statements) await sql.unsafe(statement);
 
       const results = await sql<Array<{
         body: string;
