@@ -1,3 +1,9 @@
+<!--
+  THIS REPOSITORY IS PUBLIC. Do not include credentials, customer data,
+  internal business details, or anything copied from a private system in
+  this PR, its code, its screenshots or its discussion. See SECURITY.md.
+-->
+
 ## Thinking Path
 
 <!--
@@ -65,4 +71,5 @@
 - [ ] If this change affects the UI, I have included before/after screenshots
 - [ ] I have updated relevant documentation to reflect my changes
 - [ ] I have considered and documented any risks above
+- [ ] This PR, its screenshots and its discussion contain no credentials, customer data, internal business details or private-system content (see `SECURITY.md`)
 - [ ] I will address all Greptile and reviewer comments before requesting merge

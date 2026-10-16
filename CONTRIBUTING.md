@@ -73,6 +73,7 @@ Bugs, docs improvements, and small targeted improvements are still the easiest p
 - One PR = one logical change (unless it's a small related group)
 - Run tests locally first
 - Be kind in discussions 😄
+- This repository is public. Never post credentials, customer data, internal business details, or anything copied from a private system in a commit, issue, PR or comment. See [`SECURITY.md`](SECURITY.md) and [`AGENTS.md`](AGENTS.md) section 12. The pre-commit hook and the PR workflow both scan for secrets, but they catch formats, not judgment.
 
 ## Writing a Good PR message
 

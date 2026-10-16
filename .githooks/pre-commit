@@ -26,7 +26,26 @@ set -euo pipefail
 # invoke from subdirs).
 cd "$(git rev-parse --show-toplevel)"
 
-# Forbidden tokens first, and on EVERY commit — including doc-only ones.
+# Secrets first, on EVERY commit. Credential formats (API keys, tokens,
+# private keys), passwords in URLs, literal values assigned to credential-
+# shaped names, and files that must never be committed (.env, *.pem, ...).
+# Staged additions only, so nothing pre-existing blocks anyone. Pure Node, so
+# a fresh clone has it with no extra install. See scripts/check-secrets.mjs.
+echo "[pre-commit] Scanning staged changes for secrets."
+if ! node scripts/check-secrets.mjs --staged; then
+  echo ""
+  echo "============================================================"
+  echo "  [pre-commit] Secret scan FAILED."
+  echo ""
+  echo "  A staged change looks like a credential or a file that"
+  echo "  must never be committed. Remove it (and rotate it if it"
+  echo "  was ever pushed). For a harmless example, add the marker"
+  echo "  'secret-scan: allow' in a comment on that line."
+  echo "============================================================"
+  exit 1
+fi
+
+# Forbidden tokens next, and on EVERY commit — including doc-only ones.
 # The check below this only looks at TypeScript, and the thing this catches
 # (a local username, a machine-specific path, anything on the token list)
 # turns up in docs and scripts at least as often as in source. That is not
