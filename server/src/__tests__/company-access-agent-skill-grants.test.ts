@@ -590,6 +590,56 @@ describeEmbeddedPostgres("Company Access agent and skill grants", () => {
       expect(await db.select().from(companySkills).where(eq(companySkills.companyId, companyId))).toEqual([]);
     });
 
+    it("lets a person switch Can create skills on and off for an agent that cannot create agents", async () => {
+      const companyId = await seedCompany();
+      const writer = await agentActor(companyId, []);
+      const board = request(app({
+        type: "board",
+        userId: "local-board",
+        companyIds: [companyId],
+        source: "local_implicit",
+        isInstanceAdmin: false,
+      }));
+      const setSkillSwitch = (canCreateSkills: boolean) =>
+        board.patch(`/api/agents/${writer.agentId}/permissions`).send({
+          canCreateAgents: false,
+          canAssignTasks: false,
+          canCreateSkills,
+        });
+      const addSkill = (name: string) =>
+        request(app(writer)).post(`/api/companies/${companyId}/skills`).send({ name });
+
+      const switchedOn = await setSkillSwitch(true);
+      expect(switchedOn.status, JSON.stringify(switchedOn.body)).toBe(200);
+      expect(switchedOn.body.access).toMatchObject({ canCreateSkills: true, skillCreateSource: "explicit_grant" });
+      expect(switchedOn.body.permissions.canCreateAgents).toBe(false);
+      expect(switchedOn.body.permissions).not.toHaveProperty("canCreateSkills");
+      expect((await addSkill("Release notes")).status).toBe(201);
+
+      const switchedOff = await setSkillSwitch(false);
+      expect(switchedOff.status, JSON.stringify(switchedOff.body)).toBe(200);
+      expect(switchedOff.body.access).toMatchObject({ canCreateSkills: false, skillCreateSource: "none" });
+      const refused = await addSkill("Changelog");
+      expect(refused.status).toBe(403);
+      expect(refused.body).toEqual(AGENT_CREATE_REFUSAL);
+    });
+
+    it("reports Can create skills as coming from Can create new agents when that is on", async () => {
+      const companyId = await seedCompany();
+      const creator = await agentActor(companyId, [], { permissions: { canCreateAgents: true } });
+
+      const res = await request(app({
+        type: "board",
+        userId: "local-board",
+        companyIds: [companyId],
+        source: "local_implicit",
+        isInstanceAdmin: false,
+      })).get(`/api/agents/${creator.agentId}`);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.access).toMatchObject({ canCreateSkills: true, skillCreateSource: "agent_creator" });
+    });
+
     it("keeps agents:create holders adding skills: a member, an agent by grant and an agent by its flag", async () => {
       const companyId = await seedCompany();
       const actors = [

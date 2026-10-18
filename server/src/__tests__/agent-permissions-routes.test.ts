@@ -1661,6 +1661,59 @@ describe.sequential("agent permission routes", () => {
     });
   });
 
+  describe("skills grant (skills:create)", () => {
+    const boardActor = {
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    };
+
+    it("sets the grant from the switch, logs it, and keeps it off the agent row", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: false, canCreateSkills: true }));
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+        companyId,
+        "agent",
+        agentId,
+        "skills:create",
+        true,
+        "board-user",
+      );
+      expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(agentId, {
+        canCreateAgents: false,
+        canAssignTasks: false,
+      });
+      expect(mockLogActivity).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "agent.permissions_updated",
+          details: expect.objectContaining({ canCreateSkills: true }),
+        }),
+      );
+    });
+
+    it("leaves the grant alone when the flag is not sent", async () => {
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}/permissions`)
+        .send({ canCreateAgents: false, canAssignTasks: true }));
+
+      expect(res.status).toBe(200);
+      const skillCalls = mockAccessService.setPrincipalPermission.mock.calls.filter(
+        (call) => call[3] === "skills:create",
+      );
+      expect(skillCalls).toHaveLength(0);
+    });
+  });
+
   it("exposes a dedicated agent route for the inbox mine view", async () => {
     mockIssueService.list.mockResolvedValue([
       {

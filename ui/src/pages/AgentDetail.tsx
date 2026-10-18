@@ -1856,6 +1856,11 @@ function ConfigurationTab({
   const canCreateBoardReminders = Boolean(agent.access?.canCreateBoardReminders);
   const taskAssignSource = agent.access?.taskAssignSource ?? "none";
   const taskAssignLocked = agent.role === "ceo" || canCreateAgents;
+  const canCreateSkills = Boolean(agent.access?.canCreateSkills);
+  const skillCreateLocked = agent.access?.skillCreateSource === "agent_creator";
+  const skillCreateHint = skillCreateLocked
+    ? "Enabled automatically while this agent can create new agents."
+    : "Lets this agent add and change company skills, without letting it create agents.";
   const taskAssignHint =
     taskAssignSource === "ceo_role"
       ? "Enabled automatically for CEO agents."
@@ -1944,6 +1949,25 @@ function ConfigurationTab({
                 })
               }
               disabled={updatePermissions.isPending || taskAssignLocked}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <div className="space-y-1">
+              <div>Can create skills</div>
+              <p className="text-xs text-muted-foreground">
+                {skillCreateHint}
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={canCreateSkills}
+              onCheckedChange={() =>
+                updatePermissions.mutate({
+                  canCreateAgents,
+                  canAssignTasks,
+                  canCreateSkills: !canCreateSkills,
+                })
+              }
+              disabled={updatePermissions.isPending || skillCreateLocked}
             />
           </div>
           <div className="flex items-center justify-between gap-4 text-sm">
