@@ -295,6 +295,21 @@ export function agentRoutes(
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
 
+  // Creating agents already allows creating skills, so the skills grant only
+  // matters for an agent that cannot create agents.
+  function describeSkillCreateAccess(
+    agent: { role: string; permissions: Record<string, unknown> | null | undefined },
+    grants: Array<{ permissionKey: string }>,
+  ) {
+    if (canCreateAgents(agent) || grants.some((grant) => grant.permissionKey === "agents:create")) {
+      return { canCreateSkills: true, skillCreateSource: "agent_creator" as const };
+    }
+    if (grants.some((grant) => grant.permissionKey === "skills:create")) {
+      return { canCreateSkills: true, skillCreateSource: "explicit_grant" as const };
+    }
+    return { canCreateSkills: false, skillCreateSource: "none" as const };
+  }
+
   async function buildAgentAccessState(agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>) {
     const membership = await access.getMembership(agent.companyId, "agent", agent.id);
     const grants = membership
@@ -304,12 +319,14 @@ export function agentRoutes(
     const canCreateBoardReminders = grants.some(
       (grant) => grant.permissionKey === "reminders:create_for_board",
     );
+    const skillAccess = describeSkillCreateAccess(agent, grants);
 
     if (agent.role === "ceo") {
       return {
         canAssignTasks: true,
         taskAssignSource: "ceo_role" as const,
         canCreateBoardReminders,
+        ...skillAccess,
         membership,
         grants,
       };
@@ -320,6 +337,7 @@ export function agentRoutes(
         canAssignTasks: true,
         taskAssignSource: "agent_creator" as const,
         canCreateBoardReminders,
+        ...skillAccess,
         membership,
         grants,
       };
@@ -330,6 +348,7 @@ export function agentRoutes(
         canAssignTasks: true,
         taskAssignSource: "explicit_grant" as const,
         canCreateBoardReminders,
+        ...skillAccess,
         membership,
         grants,
       };
@@ -339,6 +358,7 @@ export function agentRoutes(
       canAssignTasks: false,
       taskAssignSource: "none" as const,
       canCreateBoardReminders,
+      ...skillAccess,
       membership,
       grants,
     };
@@ -2269,7 +2289,13 @@ export function agentRoutes(
       return;
     }
 
-    const { canCreateBoardReminders: _reminderFlag, ...agentPermissionFlags } = req.body;
+    // Both are company grants, not flags on the agent row.
+    const skillGrantRequested = req.body.canCreateSkills;
+    const {
+      canCreateBoardReminders: _reminderFlag,
+      canCreateSkills: _skillFlag,
+      ...agentPermissionFlags
+    } = req.body;
     const agent = await svc.updatePermissions(id, agentPermissionFlags);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -2287,6 +2313,16 @@ export function agentRoutes(
       effectiveCanAssignTasks,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+    if (skillGrantRequested !== undefined) {
+      await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "skills:create",
+        skillGrantRequested,
+        req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+      );
+    }
     if (reminderGrantRequested !== undefined) {
       await access.setPrincipalPermission(
         agent.companyId,
@@ -2311,6 +2347,7 @@ export function agentRoutes(
       details: {
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canAssignTasks: effectiveCanAssignTasks,
+        ...(skillGrantRequested !== undefined ? { canCreateSkills: skillGrantRequested } : {}),
         ...(reminderGrantRequested !== undefined
           ? { canCreateBoardReminders: reminderGrantRequested }
           : {}),

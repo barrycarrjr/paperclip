@@ -83,6 +83,8 @@ export interface AgentPermissionUpdate {
   canAssignTasks: boolean;
   /** Omit to leave the reminder grant as it is. */
   canCreateBoardReminders?: boolean;
+  /** Omit to leave the skills grant as it is. */
+  canCreateSkills?: boolean;
 }
 
 function withCompanyScope(path: string, companyId?: string) {

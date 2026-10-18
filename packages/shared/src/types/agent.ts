@@ -71,6 +71,8 @@ export interface AgentInstructionsBundle {
 export interface AgentAccessState {
   canAssignTasks: boolean;
   canCreateBoardReminders: boolean;
+  canCreateSkills: boolean;
+  skillCreateSource: "agent_creator" | "explicit_grant" | "none";
   taskAssignSource: "simple_default" | "explicit_grant" | "agent_creator" | "ceo_role" | "none";
   membership: CompanyMembership | null;
   grants: PrincipalPermissionGrant[];
