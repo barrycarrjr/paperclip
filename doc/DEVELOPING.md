@@ -499,6 +499,25 @@ Environment overrides:
 
 ## Secrets in Dev
 
+The shared local child-process helper drops the server's `BETTER_AUTH_SECRET`,
+`DATABASE_URL` and `DATABASE_MIGRATION_URL` from its inherited environment.
+Intentional agent bindings for these names must be supplied explicitly through
+adapter/run `env` (prefer secret references for credentials); explicit values,
+including empty strings, are kept. Callers that merge the server environment
+before launching (including Hermes execution, Pi and OpenCode execution/model
+discovery/diagnostics, and Aider preparation) sanitize inherited values with the
+shared helper before adding explicit bindings. Windows matches these three
+inherited names without regard to case. SSH still forwards only the explicit
+run environment. Native Linux/macOS launch behavior needs separate verification.
+Subprocesses that bypass this helper are not covered, including status, version,
+auth and model probes and execution-workspace provision, teardown, runtime-service
+and job commands. These can still inherit some or all three server credentials;
+covering these paths is a separate #132 follow-up.
+
+This only prevents accidental credential inheritance. Same-account filesystem
+access, other inherited provider credentials, saved output and per-agent secret
+scope remain separate concerns; this does not enforce machine isolation.
+
 Agent env vars now support secret references. By default, secret values are stored with local encryption and only secret refs are persisted in agent config.
 
 - Default local key path: `~/.paperclip/instances/default/secrets/master.key`

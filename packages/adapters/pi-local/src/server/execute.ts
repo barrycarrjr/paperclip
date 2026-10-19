@@ -31,6 +31,7 @@ import {
   ensureAbsoluteDirectory,
   ensurePaperclipSkillSymlink,
   ensurePathInEnv,
+  sanitizeInheritedPaperclipEnv,
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
   removeMaintainerOnlySkillSymlinks,
@@ -260,7 +261,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const skillBinDirs = piSkillEntries
     .filter((entry) => injectedSkillKeys.has(entry.key) && entry.source.length > 0)
     .map((entry) => path.join(entry.source, "bin"));
-  const mergedEnv = ensurePathInEnv({ ...process.env, ...env });
+  const mergedEnv = ensurePathInEnv({ ...sanitizeInheritedPaperclipEnv(process.env), ...env });
   const pathKey =
     typeof mergedEnv.Path === "string" && mergedEnv.Path.length > 0 && !mergedEnv.PATH
       ? "Path"

@@ -4,6 +4,7 @@ import {
   applyPaperclipWorkspaceEnv,
   appendWithByteCap,
   buildSpawnChildEnv,
+  defaultPathForPlatform,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   renderPaperclipApprovedRules,
   stringifyPaperclipApprovedRulesPayload,
@@ -14,6 +15,92 @@ import {
 } from "./server-utils.js";
 
 describe("buildSpawnChildEnv", () => {
+  const serverCredentialKeys = ["BETTER_AUTH_SECRET", "DATABASE_URL", "DATABASE_MIGRATION_URL"];
+
+  it.each(serverCredentialKeys)("drops inherited %s without mutating the input", (key) => {
+    const inherited = Object.freeze({ PATH: "/example/bin", [key]: "fake-server-value" });
+    const env = buildSpawnChildEnv(inherited, undefined);
+
+    expect(env).not.toHaveProperty(key);
+    expect(inherited[key]).toBe("fake-server-value");
+  });
+
+  it.each(serverCredentialKeys)("preserves explicit %s bindings, including empty values", (key) => {
+    const inherited = Object.freeze({ PATH: "/example/bin", [key]: "fake-server-value" });
+    for (const value of ["fake-agent-value", "", "   "]) {
+      const overrides = Object.freeze({ [key]: value });
+      const env = buildSpawnChildEnv(inherited, overrides);
+
+      expect(env[key]).toBe(value);
+      expect(overrides[key]).toBe(value);
+      expect(inherited[key]).toBe("fake-server-value");
+    }
+  });
+
+  it("preserves unrelated paths and provider auth, runtime hints and explicit run tokens", () => {
+    const preserved = {
+      Path: "/example/bin",
+      HOME: "/example/home",
+      TEMP: "/example/tmp",
+      TMP: "/example/tmp",
+      TMPDIR: "/example/tmp",
+      SystemRoot: "/example/system",
+      PATHEXT: ".EXE;.CMD",
+      OPENAI_API_KEY: "fake-provider-key",
+      ANTHROPIC_API_KEY: "fake-provider-key",
+      DATABASE_URL_EXTRA: "unrelated-value",
+      PAPERCLIP_RUNTIME_API_URL: "http://127.0.0.1:9999",
+      PAPERCLIP_LISTEN_HOST: "127.0.0.1",
+      PAPERCLIP_LISTEN_PORT: "9999",
+    };
+    const inherited = Object.freeze({
+      ...preserved,
+      PAPERCLIP_API_KEY: "fake-inherited-token",
+      PAPERCLIP_AGENT_JWT_SECRET: "fake-server-value",
+      PAPERCLIP_HOME: "/example/server-home",
+    });
+    const overrides = Object.freeze({ PAPERCLIP_API_KEY: "fake-run-token" });
+    const env = buildSpawnChildEnv(inherited, overrides);
+
+    expect(env).toEqual({ ...preserved, ...overrides });
+    expect(inherited.PAPERCLIP_API_KEY).toBe("fake-inherited-token");
+  });
+
+  it("keeps the computed PATH fallback when no path was inherited", () => {
+    expect(buildSpawnChildEnv({}, undefined).PATH).toBe(defaultPathForPlatform());
+  });
+
+  it.skipIf(process.platform !== "win32")("drops all inherited Windows case variants before explicit overrides", () => {
+    const inherited = Object.freeze({
+      Path: "/example/bin",
+      better_auth_secret: "fake-server-value",
+      Better_Auth_Secret: "fake-server-value",
+      database_url: "fake-server-value",
+      DATABASE_URL: "fake-server-value",
+      Database_Migration_Url: "fake-server-value",
+      DATABASE_URL_EXTRA: "unrelated-value",
+    });
+    const env = buildSpawnChildEnv(inherited, undefined);
+    expect(env).toEqual({ Path: "/example/bin", DATABASE_URL_EXTRA: "unrelated-value" });
+
+    const overrides = Object.freeze({
+      BETTER_AUTH_SECRET: "fake-agent-value",
+      Database_Url: "fake-agent-value",
+      database_migration_url: "",
+    });
+    expect(buildSpawnChildEnv(inherited, overrides)).toEqual({ ...env, ...overrides });
+  });
+
+  it.skipIf(process.platform === "win32")("preserves distinct lowercase names on case-sensitive platforms", () => {
+    const inherited = Object.freeze({
+      PATH: "/example/bin",
+      database_url: "unrelated-value",
+      better_auth_secret: "unrelated-value",
+      database_migration_url: "unrelated-value",
+    });
+    expect(buildSpawnChildEnv(inherited, undefined)).toEqual(inherited);
+  });
+
   it("strips the inherited desktop token + nesting guards when desktop markers are present", () => {
     const env = buildSpawnChildEnv(
       {
