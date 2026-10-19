@@ -10,7 +10,7 @@ import type {
   MemoryFolderSettings,
   UpdateMemoryFolder,
 } from "@paperclipai/shared";
-import { MEMORY_CONTENT_MAX, MEMORY_NAME_MAX, DRIVE_FILE_ID_FIELDS } from "@paperclipai/shared";
+import { MEMORY_CONTENT_MAX, MEMORY_NAME_MAX, DRIVE_FILE_ID_FIELDS, validateMemoryFileHeader } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 import { agentService } from "./agents.js";
 import { memoryService } from "./memories.js";
@@ -27,7 +27,6 @@ import {
   regenerateKnowledgeBaseIndex,
   readMemoryFolderFileSafely,
   validateKnowledgeBase,
-  validateMemoryFileHeader,
   writeMemoryFolderFileAtomically,
 } from "./memory-folder-validator.js";
 import { documentLinkMigrationService, migrationSummary, assertNoPendingLinkMigration } from "./memory-folder-link-migration.js";

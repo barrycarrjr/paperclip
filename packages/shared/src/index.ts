@@ -1507,3 +1507,8 @@ export type { NativeFinalizationResult, NativeFinalizationResultV1 } from "./typ
 export { nativeFinalizationResultSchema, type NativeFinalizationResultInput } from "./validators/native-finalization.js";
 export { WORKSPACE_RESTORE_FAILURE_CODES, hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, isNativeWorkspaceExportRepairCause } from "./workspace-restore.js";
 
+
+export { validateMemoryFileHeader } from "./knowledge-base/frontmatter.js";
+export type { MemoryHeaderValidation } from "./knowledge-base/frontmatter.js";
+export { documentReferences, driveIdFromUrl, relativeDocumentTarget, documentPath, documentLink } from "./knowledge-base/document-references.js";
+export type { DocumentReference } from "./knowledge-base/document-references.js";
