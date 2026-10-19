@@ -1001,6 +1001,36 @@ Origin rules:
 - The host derives the default plugin origin from the installed plugin key and rejects attempts to set `plugin:<otherPluginKey>` origins.
 - `originId` is plugin-defined and should be stable for idempotent generated work.
 
+Email Tools has one narrow exception to the plugin origin namespace: its trusted
+installed worker may call `issues.create` with `originKind: "email_handoff"`, an
+assigned agent, and an `originId` from `buildEmailHandoffOriginId`. The source must
+name that worker's `email-tools` key or installed database id, a nonblank mailbox
+key (at most 200 characters, no whitespace or controls), and a bracketed
+Message-ID of the form `<local@domain>` (at most 998 characters). UID-only sources
+are refused because the existing key does not include UIDVALIDITY. The host
+checks the installed plugin identity and canonicalizes the source to its database
+id, matching the Email page's hold key. Destination agent and project checks
+still apply inside the destination company.
+
+Issue, standard email handoff, and `issue.created` audit row commit in one
+transaction under a per-company/source lock. Concurrent calls and retries return
+the same issue without another audit row or wake. A closed handoff also replays
+its issue; this API never silently reopens it. Explicit manual re-delegation is
+unchanged. Deduplication is per destination company, so the routing plugin must
+keep its own ledger across destinations, schedules, and closed handoffs. It must
+request its explicit wake separately. Plugin updates cannot rewrite a handoff's
+origin. Ordinary plugin origins keep their existing behavior.
+
+This is a trusted worker API, not an agent-facing cross-company create route.
+Core validates identity and destination records; Email Tools must enforce the
+admin destination allowlist, named routing agent, and server-side message
+re-read before supplying destination or content. Initiating agent/run or board
+user provenance is retained; automatic routes have no handed-over-by user.
+The creation audit excludes mail subject, body, and Message-ID. No mail action
+is performed here, and HQ agents gain no cross-company REST write access.
+This path does not isolate the routing agent's other tools or change sending
+and approval settings; operator activation prerequisites remain necessary.
+
 Relation and read helpers:
 
 - `ctx.issues.relations.get(issueId, companyId)`

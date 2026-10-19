@@ -1494,7 +1494,8 @@ export interface PluginIssuesClient {
     assigneeUserId?: string | null;
     requestDepth?: number;
     billingCode?: string | null;
-    originKind?: PluginIssueOriginKind;
+    /** Email Tools only: a validated self Message-ID origin creates an atomic, replayable handoff. */
+    originKind?: PluginIssueOriginKind | "email_handoff";
     originId?: string | null;
     originRunId?: string | null;
     blockedByIssueIds?: string[];

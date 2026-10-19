@@ -47,8 +47,21 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
-/** Records every dispatch so the tests can assert what was actually sent. */
+/** Advertises the reply selectors and records synthetic dispatches; never sends mail. */
 function makeDispatcher(behaviour: "draft" | "send" | "throw" = "draft") {
+  const getTool = vi.fn(() => ({
+    parametersSchema: {
+      type: "object",
+      properties: {
+        mailbox: { type: "string" },
+        folder: { type: "string" },
+        uid: { type: "integer", minimum: 1, maximum: 4_294_967_295 },
+        messageId: { type: "string" },
+        body: { type: "string" },
+      },
+      required: ["mailbox", "body"],
+    },
+  }));
   const executeTool = vi.fn(async () => {
     if (behaviour === "throw") throw new Error("Mailbox rejected the message");
     return {
@@ -57,10 +70,10 @@ function makeDispatcher(behaviour: "draft" | "send" | "throw" = "draft") {
       result:
         behaviour === "draft"
           ? { content: "queued", data: { drafted: true, approvalId: "ap-1" } }
-          : { content: "sent" },
+          : { content: "sent", data: { ok: true, accepted: ["recipient@example.com"], rejected: [] } },
     };
   });
-  return { executeTool } as any;
+  return { getTool, executeTool } as any;
 }
 
 describeEmbeddedPostgres("email delegation routes", () => {
@@ -229,10 +242,12 @@ describeEmbeddedPostgres("email delegation routes", () => {
     expect(res.body.reply).toEqual({ replyState: "queued" });
     expect(dispatcher.executeTool).toHaveBeenCalledWith(
       "email-tools:email_reply",
-      expect.objectContaining({ mailbox: "personal", messageId: "<invoice@customer.example>" }),
-      expect.anything(),
+      { mailbox: "personal", messageId: "<invoice@customer.example>", body: "Refund issued, sorry for the trouble." },
+      expect.objectContaining({ companyId, userId, agentId: "", runId: "" }),
       undefined,
     );
+    const [row] = await db.select().from(issueEmailDelegations);
+    expect(row).toMatchObject({ id: delegation.id, status: "resolved", replyState: "queued" });
   });
 
   it("sends the reply straight out when the operator asked for that", async () => {
@@ -245,6 +260,91 @@ describeEmbeddedPostgres("email delegation routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.reply).toEqual({ replyState: "sent" });
+    expect(dispatcher.executeTool).toHaveBeenCalledWith(
+      "email-tools:email_reply",
+      { mailbox: "personal", messageId: "<invoice@customer.example>", body: "All done." },
+      expect.objectContaining({ companyId, userId }),
+      { legacyActionMode: "go_ahead" },
+    );
+    const [row] = await db.select().from(issueEmailDelegations);
+    expect(row).toMatchObject({ id: delegation.id, status: "resolved", replyState: "sent" });
+  });
+
+  it.each([
+    { name: "missing tool metadata", tool: undefined },
+    {
+      name: "UID-only schema",
+      tool: { parametersSchema: {
+        properties: { mailbox: { type: "string" }, uid: { type: "integer" }, body: { type: "string" } },
+        required: ["mailbox", "uid", "body"],
+      } },
+    },
+    {
+      name: "Message-ID schema still requiring UID",
+      tool: { parametersSchema: {
+        properties: { messageId: { type: "string" }, uid: { type: "integer" } },
+        required: ["mailbox", "uid", "body"],
+      } },
+    },
+  ])("resolves without dispatching a Message-ID reply with $name", async ({ tool }) => {
+    const delegation = await seed({ hold: true, replyApproval: "always" });
+    dispatcher = makeDispatcher("draft");
+    dispatcher.getTool.mockReturnValue(tool);
+
+    const res = await request(makeApp(() => companyId))
+      .post(`${base()}/${delegation.id}/resolve`)
+      .send({ replyBody: "All done.", resolutionNote: "Work completed" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.delegation.status).toBe("resolved");
+    expect(res.body.reply).toEqual({
+      replyState: "none",
+      reason: "Installed Email Tools cannot reply by Message-ID. No reply was attempted.",
+    });
+    expect(dispatcher.getTool).toHaveBeenCalledWith("email-tools:email_reply");
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+    const [row] = await db.select().from(issueEmailDelegations);
+    expect(row).toMatchObject({
+      id: delegation.id, status: "resolved", replyState: "none", replyError: null,
+      resolutionNote: "Work completed",
+    });
+    expect(row.resolvedAt).toBeTruthy();
+  });
+
+  it.each([
+    { name: "unconfirmed text result", result: { content: "sent" } },
+    { name: "partially rejected delivery", result: { data: {
+      ok: true, accepted: ["recipient@example.com"], rejected: ["other@example.com"],
+    } } },
+  ])("preserves resolution without claiming sent for $name", async ({ result }) => {
+    const delegation = await seed({ hold: true, replyApproval: "never" });
+    dispatcher = makeDispatcher("send");
+    dispatcher.executeTool.mockResolvedValueOnce({
+      pluginId: "email-tools", toolName: "email-tools:email_reply", result,
+    });
+
+    const res = await request(makeApp(() => companyId))
+      .post(`${base()}/${delegation.id}/resolve`)
+      .send({ replyBody: "All done." });
+
+    expect(res.status).toBe(200);
+    expect(res.body.delegation.status).toBe("resolved");
+    expect(res.body.reply).toEqual({
+      replyState: "failed",
+      error: "Reply outcome is unknown or incomplete. Verify delivery before trying again.",
+    });
+    expect(dispatcher.executeTool).toHaveBeenCalledTimes(1);
+    expect(dispatcher.executeTool).toHaveBeenCalledWith(
+      "email-tools:email_reply",
+      { mailbox: "personal", messageId: "<invoice@customer.example>", body: "All done." },
+      expect.objectContaining({ companyId, userId }),
+      { legacyActionMode: "go_ahead" },
+    );
+    const [row] = await db.select().from(issueEmailDelegations);
+    expect(row).toMatchObject({
+      id: delegation.id, status: "resolved", replyState: "failed", replyError: res.body.reply.error,
+    });
+    expect(row.resolvedAt).toBeTruthy();
   });
 
   it("resolves without sending when no reply was written", async () => {
@@ -278,6 +378,12 @@ describeEmbeddedPostgres("email delegation routes", () => {
   it("records a failed send without losing the resolution", async () => {
     const delegation = await seed();
     dispatcher = makeDispatcher("throw");
+    dispatcher.executeTool.mockImplementationOnce(async () => {
+      const [row] = await db.select().from(issueEmailDelegations);
+      expect(row).toMatchObject({ id: delegation.id, status: "resolved" });
+      expect(row.resolvedAt).toBeTruthy();
+      throw new Error("Mailbox rejected the message");
+    });
 
     const res = await request(makeApp(() => companyId))
       .post(`${base()}/${delegation.id}/resolve`)
@@ -286,11 +392,13 @@ describeEmbeddedPostgres("email delegation routes", () => {
     expect(res.status).toBe(200);
     expect(res.body.reply).toEqual({
       replyState: "failed",
-      error: "Mailbox rejected the message",
+      error: "Reply attempt did not confirm delivery: Mailbox rejected the message. Verify delivery before trying again.",
     });
+    expect(dispatcher.executeTool).toHaveBeenCalledTimes(1);
     const [row] = await db.select().from(issueEmailDelegations);
     expect(row.status).toBe("resolved");
     expect(row.replyState).toBe("failed");
+    expect(row.replyError).toBe(res.body.reply.error);
   });
 
   it("hands work back with a reason, and sends nothing", async () => {

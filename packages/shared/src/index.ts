@@ -1169,6 +1169,7 @@ export {
   isEmailHandoffOriginKind,
   type EmailHandoffSourceRef,
 } from "./email-handoff-origin.js";
+export { EMAIL_HANDOFF_PLUGIN_KEY, canonicalizePluginEmailHandoffOrigin } from "./plugin-email-handoff-origin.js";
 export {
   EMAIL_DELEGATION_STATES,
   TERMINAL_EMAIL_DELEGATION_STATES,

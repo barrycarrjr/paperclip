@@ -84,9 +84,13 @@ export function buildReplyParameters(input: {
     return { conversationId: source.messageId, mailbox, text: body };
   }
 
+  if (pluginId !== "email-tools") return null;
+
   if (source.kind === "msgid") {
     return { mailbox, messageId: source.messageId, body };
   }
+  if (!source.folder.trim() || /[\x00-\x1f\x7f]/.test(source.folder)
+    || !Number.isSafeInteger(source.uid) || source.uid < 1 || source.uid > 4_294_967_295) return null;
   return { mailbox, folder: source.folder, uid: source.uid, body };
 }
 
@@ -249,6 +253,18 @@ export function emailHandoffResolutionService(deps: {
       return { replyState: "none", reason: "The original message cannot be replied to." };
     }
 
+    if (pluginKey === "email-tools" && source.kind === "msgid") {
+      // Older Email Tools accepts only a UID. Never guess one, or queue an approval
+      // that cannot address the source. The plugin phase must advertise messageId
+      // and resolve it to a verified UID in the mailbox before sending.
+      const schema = dispatcher.getTool?.(toolName)?.parametersSchema;
+      const properties = schema?.properties as Record<string, unknown> | undefined;
+      const required = schema?.required;
+      if (!properties?.messageId || (Array.isArray(required) && required.includes("uid"))) {
+        return { replyState: "none", reason: "Installed Email Tools cannot reply by Message-ID. No reply was attempted." };
+      }
+    }
+
     const legacyActionMode = await replyLegacyActionMode();
     // Shaped like the one chat-tools builds. An absent agentId is meaningful
     // rather than missing: the draft gate reads it as "no agent behind this"
@@ -273,21 +289,37 @@ export function emailHandoffResolutionService(deps: {
         legacyActionMode ? { legacyActionMode } : undefined,
       );
 
-      // The gate returns a synthesized result rather than sending. Detect it
-      // by the marker it sets, not by guessing from the text.
-      const drafted = Boolean(
-        (execution.result as { data?: { drafted?: boolean } } | undefined)?.data?.drafted,
-      );
-      if (drafted) return { replyState: "queued" };
-
-      return { replyState: "sent" };
+      const result = execution.result;
+      const data = result?.data as Record<string, unknown> | undefined;
+      // A returned failure is as real as a thrown one. Failure takes precedence
+      // even if a malformed result also claims to have been drafted or sent.
+      if (!result || result.error !== undefined || result.failure
+        || (result as { isError?: boolean }).isError === true || data?.ok === false
+        || data?.success === false) {
+        const detail = result?.error || result?.failure?.message;
+        return { replyState: "failed", error: `Reply tool reported a failure${detail ? `: ${detail}` : "."} Verify delivery before trying again.` };
+      }
+      if (data?.drafted === true && typeof data.approvalId === "string" && data.approvalId) {
+        return { replyState: "queued" };
+      }
+      const uncertain = data?.uncertain === true
+        || [data?.outcome, data?.status].some((value) => ["uncertain", "unknown", "pending"].includes(String(value)));
+      const confirmed = pluginKey === "email-tools"
+        ? data?.ok === true && Array.isArray(data.accepted) && data.accepted.length > 0
+          && data.accepted.every((address) => typeof address === "string" && address.trim())
+          && Array.isArray(data.rejected) && data.rejected.length === 0
+        : data?.ok === true;
+      if (!uncertain && !data?.drafted && confirmed) return { replyState: "sent" };
+      // The existing schema has no unknown state. Keep the uncertainty explicit
+      // in replyError, without asserting that no mail was delivered or retrying it.
+      return { replyState: "failed", error: "Reply outcome is unknown or incomplete. Verify delivery before trying again." };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(
         { err, delegationId: delegation.id, tool: toolName },
         "handoff resolution reply failed",
       );
-      return { replyState: "failed", error: message };
+      return { replyState: "failed", error: `Reply attempt did not confirm delivery: ${message}. Verify delivery before trying again.` };
     }
   }
 
