@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createInviteRateLimiter } from "../services/invite-rate-limit.js";
 
 function createSelectChain(rows: unknown[]) {
@@ -36,11 +36,10 @@ function createDbStub(...selectResponses: unknown[][]) {
   };
 }
 
-async function createApp(db: Record<string, unknown>) {
-  const [{ accessRoutes }, { errorHandler }] = await Promise.all([
-    import("../routes/access.js"),
-    import("../middleware/index.js"),
-  ]);
+let accessRoutes: typeof import("../routes/access.js").accessRoutes;
+let errorHandler: typeof import("../middleware/index.js").errorHandler;
+
+function createApp(db: Record<string, unknown>) {
   const app = express();
   app.use((req, _res, next) => {
     (req as any).actor = { type: "anon" };
@@ -65,10 +64,17 @@ async function createApp(db: Record<string, unknown>) {
 }
 
 describe("invite-token endpoint rate limiting", () => {
+  beforeAll(async () => {
+    [{ accessRoutes }, { errorHandler }] = await Promise.all([
+      import("../routes/access.js"),
+      import("../middleware/index.js"),
+    ]);
+  });
+
   it("returns 429 once the per-IP threshold is exceeded", async () => {
     // No invite row -> route would 404, but the rate-limit middleware runs first
     // and short-circuits on the second request.
-    const app = await createApp(createDbStub([], [], [], [], []));
+    const app = createApp(createDbStub([], [], [], [], []));
 
     const first = await request(app).get(
       "/api/invites/pcp_invite_aaaaaaaaaaaaaaaaaaaaaa",
@@ -87,7 +93,7 @@ describe("invite-token endpoint rate limiting", () => {
   });
 
   it("also rate-limits the accept sub-route", async () => {
-    const app = await createApp(createDbStub([], [], [], [], []));
+    const app = createApp(createDbStub([], [], [], [], []));
 
     await request(app).get("/api/invites/pcp_invite_bbbbbbbbbbbbbbbbbbbbbb");
 
@@ -101,7 +107,7 @@ describe("invite-token endpoint rate limiting", () => {
     // `trust proxy` is unset here (Express default: trust nothing), so the
     // rate-limit key is the socket's remote address. Rotating fake
     // X-Forwarded-For values must NOT mint a fresh per-IP budget.
-    const app = await createApp(createDbStub([], [], [], [], []));
+    const app = createApp(createDbStub([], [], [], [], []));
 
     const first = await request(app)
       .get("/api/invites/pcp_invite_cccccccccccccccccccccc")
