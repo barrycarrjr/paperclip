@@ -88,5 +88,8 @@ export const heartbeatRuns = pgTable(
       table.status,
       table.processStartedAt,
     ),
+    // Backs the foreign key to agent_wakeup_requests. Without it every delete
+    // of a wake-up request sequentially scans this table for the key check.
+    wakeupRequestIdx: index("heartbeat_runs_wakeup_request_idx").on(table.wakeupRequestId),
   }),
 );

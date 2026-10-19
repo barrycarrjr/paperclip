@@ -362,12 +362,37 @@ describeDatabase("transactional issue dependency wakeups", () => {
     expect(runs[0].contextSnapshot).toMatchObject({ wakeReason: "issue_children_completed" });
   });
 
+  it("records one skipped row per blocked target across sibling events and retries", async () => {
+    const f = await fixture();
+    const siblingId = randomUUID();
+    const blockerId = randomUUID();
+    await db.insert(issues).values({ id: siblingId, companyId: f.companyId, title: "Sibling", status: "todo", parentId: f.parentId });
+    await db.insert(issues).values({ id: blockerId, companyId: f.companyId, title: "Open blocker", status: "todo" });
+    await db.insert(issueRelations).values({ companyId: f.companyId, issueId: blockerId, relatedIssueId: f.parentId, type: "blocks" });
+    await Promise.all([f.childId, siblingId].map((id) => db.execute(sql`update issues set status = 'done' where id = ${id}`)));
+    // Two closed children share one parent target, so one tick records one skip.
+    expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 0, retried: 2 });
+    expect(await deliveries(f.companyId)).toMatchObject([{ status: "skipped", reason: "issue_dependencies_blocked", coalescedCount: 0 }]);
+    // Later ticks retry on the same row instead of inserting another.
+    await heartbeat.reconcileIssueDependencyWakeups();
+    await heartbeat.reconcileIssueDependencyWakeups();
+    expect(await deliveries(f.companyId)).toMatchObject([{ status: "skipped", reason: "issue_dependencies_blocked", coalescedCount: 2 }]);
+    // Once the blocker is done the pending events deliver a real wake.
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, blockerId));
+    expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ retried: 0 });
+    const requests = await deliveries(f.companyId);
+    expect(requests.filter((row) => row.status === "skipped")).toHaveLength(1);
+    expect(requests.filter((row) => row.status === "queued")).toHaveLength(1);
+    expect(await db.select().from(issueTerminalEvents).where(sql`${issueTerminalEvents.processedVersion} < ${issueTerminalEvents.version}`)).toHaveLength(0);
+  });
+
   it("keeps a policy-suppressed wake pending until the assignee can run", async () => {
     const f = await fixture();
     await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.agentId));
     await db.update(issues).set({ status: "cancelled" }).where(eq(issues.id, f.childId));
     expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 0, retried: 1 });
-    expect(await deliveries(f.companyId)).toMatchObject([{ status: "skipped", reason: "agent.paused" }]);
+    expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 0, retried: 1 });
+    expect(await deliveries(f.companyId)).toMatchObject([{ status: "skipped", reason: "agent.paused", coalescedCount: 1 }]);
     await db.update(agents).set({ status: "running" }).where(eq(agents.id, f.agentId));
     expect(await heartbeat.reconcileIssueDependencyWakeups()).toMatchObject({ processed: 1, retried: 0 });
     expect(await deliveries(f.companyId)).toMatchObject([

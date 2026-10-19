@@ -8048,6 +8048,32 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
+  // A skipped wake that carries an idempotency key is retried on every scheduler
+  // tick until it is accepted, so record each retry on the existing skipped row
+  // instead of inserting a fresh one. Unbounded inserts of the same skip filled
+  // agent_wakeup_requests with two million rows (19 GB of payload) in four days.
+  async function recordSkippedWakeup(
+    tx: Pick<Db, "select" | "update" | "insert">,
+    values: Omit<typeof agentWakeupRequests.$inferInsert, "status">,
+  ) {
+    const now = new Date();
+    if (values.idempotencyKey) {
+      const existing = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
+        .where(and(
+          eq(agentWakeupRequests.companyId, values.companyId), eq(agentWakeupRequests.agentId, values.agentId),
+          eq(agentWakeupRequests.idempotencyKey, values.idempotencyKey), eq(agentWakeupRequests.status, "skipped"),
+          values.reason ? eq(agentWakeupRequests.reason, values.reason) : isNull(agentWakeupRequests.reason),
+        )).limit(1);
+      if (existing[0]) {
+        await tx.update(agentWakeupRequests)
+          .set({ coalescedCount: sql`${agentWakeupRequests.coalescedCount} + 1`, finishedAt: now, updatedAt: now })
+          .where(eq(agentWakeupRequests.id, existing[0].id));
+        return;
+      }
+    }
+    await tx.insert(agentWakeupRequests).values({ ...values, status: "skipped", finishedAt: values.finishedAt ?? now });
+  }
+
   async function hasExistingWakeupDelivery(tx: Pick<Db, "select" | "update">, companyId: string, agentId: string, idempotencyKey: string): Promise<boolean> {
     const fields = {
       id: agentWakeupRequests.id, status: agentWakeupRequests.status, reason: agentWakeupRequests.reason,
@@ -8145,18 +8171,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const continuationAttempt = readContinuationAttempt(enrichedContextSnapshot.livenessContinuationAttempt);
 
     const writeSkippedRequest = async (skipReason: string) => {
-      await db.insert(agentWakeupRequests).values({
+      await recordSkippedWakeup(db, {
         companyId: agent.companyId,
         agentId,
         source,
         triggerDetail,
         reason: skipReason,
         payload,
-        status: "skipped",
         requestedByActorType: opts.requestedByActorType ?? null,
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
-        finishedAt: new Date(),
       });
     };
 
@@ -8274,18 +8298,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           .then((rows) => rows[0] ?? null);
 
         if (!issue) {
-          await tx.insert(agentWakeupRequests).values({
+          await recordSkippedWakeup(tx, {
             companyId: agent.companyId,
             agentId,
             source,
             triggerDetail,
             reason: "issue_execution_issue_not_found",
             payload,
-            status: "skipped",
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
-            finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
         }
@@ -8485,7 +8507,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
 
         if (!activeExecutionRun && dependencyReadiness && !dependencyReadiness.isDependencyReady && !blockedInteractionWake) {
-          await tx.insert(agentWakeupRequests).values({
+          await recordSkippedWakeup(tx, {
             companyId: agent.companyId,
             agentId,
             source,
@@ -8496,11 +8518,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               issueId,
               unresolvedBlockerIssueIds: dependencyReadiness.unresolvedBlockerIssueIds,
             },
-            status: "skipped",
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
-            finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
         }
