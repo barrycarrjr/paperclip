@@ -689,7 +689,8 @@ export async function inspectKnowledgeBase(
 
   const staleBefore = now.getTime() - staleDays * 24 * 60 * 60 * 1_000;
   for (const note of notes) {
-    if (isArchived(note)) continue;
+    const isImmutableRecord = note.fields.record_type === "decision" || note.fields.record_type === "outcome";
+    if (isArchived(note) || isImmutableRecord) continue;
     if ((note.status === null || note.status === "active") && note.updated.getTime() > 0 && note.updated.getTime() < staleBefore) {
       findings.push(finding(
         "stale_active_note",
