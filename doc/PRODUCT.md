@@ -58,6 +58,12 @@ More detailed task structure TBD.
 
 ## Principles
 
+Manual comment redaction lets a board user choose exact text, preview the
+replacement, and either apply it or authorize one named agent in that issue.
+Sensitive information can still be sent and stored normally. There is no
+real-time redaction scanner. See [manual comment redaction](comment-redaction.md)
+for the stored copies covered and the copies this action cannot reach.
+
 1. **Unopinionated about how you run your agents.** Your agents could be OpenClaw bots, Python scripts, Node scripts, Claude Code sessions, Codex instances — we don't care. Paperclip defines the control plane for communication and provides utility infrastructure for heartbeats. It does not mandate an agent runtime.
 
 2. **Company is the unit of organization.** Everything lives under a company. One Paperclip instance, many companies.

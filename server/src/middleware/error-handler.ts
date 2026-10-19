@@ -1,6 +1,7 @@
 import type { Request, RequestHandler, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
+import { isManualRedactionRequest } from "./manual-redaction-privacy.js";
 
 export interface ErrorContext {
   error: { message: string; stack?: string; name?: string; details?: unknown; raw?: unknown };
@@ -86,6 +87,14 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
+  if (isManualRedactionRequest(req)) {
+    const bodyError = bodyReaderError(err);
+    const status = bodyError?.status ?? (err instanceof HttpError ? err.status : err instanceof ZodError ? 400 : 500);
+    // Never attach raw errors: database drivers can include bound secret values.
+    res.status(status).json({ error: err instanceof HttpError && status < 500
+      ? err.message : bodyError?.message ?? "The manual redaction request could not be completed." });
+    return;
+  }
   if (err instanceof HttpError) {
     if (err.status >= 500) {
       attachErrorContext(

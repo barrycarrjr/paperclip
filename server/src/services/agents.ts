@@ -558,7 +558,7 @@ export function agentService(db: Db) {
           .set({ agentId: null, runId: null })
           .where(
             and(
-              sql`${activityLog.action} like 'agent_action.%'`,
+              or(sql`${activityLog.action} like 'agent_action.%'`, sql`${activityLog.action} in ('issue.comment_redacted', 'issue.comment_redaction_authorized')`),
               activityLinkedToAgent,
             ),
           );
