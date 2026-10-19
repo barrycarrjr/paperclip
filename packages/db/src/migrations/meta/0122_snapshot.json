@@ -1,5 +1,5 @@
 {
-  "id": "b391e771-a03b-4f18-a152-728f4af4fbe0",
+  "id": "45271e3c-53cf-4f2c-9bf6-b2e8db00c2f4",
   "prevId": "96656ddd-94c8-43a7-b9af-8f9a7c3b2c83",
   "version": "7",
   "dialect": "postgresql",
@@ -5649,194 +5649,6 @@
             "id"
           ],
           "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.comment_redaction_authorizations": {
-      "name": "comment_redaction_authorizations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "company_id": {
-          "name": "company_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "issue_id": {
-          "name": "issue_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "comment_id": {
-          "name": "comment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "instruction_comment_id": {
-          "name": "instruction_comment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agent_id": {
-          "name": "agent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_by_user_id": {
-          "name": "requested_by_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_by_local_board": {
-          "name": "requested_by_local_board",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "body_digest": {
-          "name": "body_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ranges": {
-          "name": "ranges",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "keep_last4": {
-          "name": "keep_last4",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "consumed_at": {
-          "name": "consumed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "comment_redaction_authorizations_company_issue_idx": {
-          "name": "comment_redaction_authorizations_company_issue_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "issue_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "comment_redaction_authorizations_company_id_companies_id_fk": {
-          "name": "comment_redaction_authorizations_company_id_companies_id_fk",
-          "tableFrom": "comment_redaction_authorizations",
-          "tableTo": "companies",
-          "columnsFrom": [
-            "company_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "comment_redaction_authorizations_issue_id_issues_id_fk": {
-          "name": "comment_redaction_authorizations_issue_id_issues_id_fk",
-          "tableFrom": "comment_redaction_authorizations",
-          "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "comment_redaction_authorizations_comment_id_issue_comments_id_fk": {
-          "name": "comment_redaction_authorizations_comment_id_issue_comments_id_fk",
-          "tableFrom": "comment_redaction_authorizations",
-          "tableTo": "issue_comments",
-          "columnsFrom": [
-            "comment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "comment_redaction_authorizations_instruction_comment_id_issue_comments_id_fk": {
-          "name": "comment_redaction_authorizations_instruction_comment_id_issue_comments_id_fk",
-          "tableFrom": "comment_redaction_authorizations",
-          "tableTo": "issue_comments",
-          "columnsFrom": [
-            "instruction_comment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "comment_redaction_authorizations_agent_id_agents_id_fk": {
-          "name": "comment_redaction_authorizations_agent_id_agents_id_fk",
-          "tableFrom": "comment_redaction_authorizations",
-          "tableTo": "agents",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -11546,6 +11358,21 @@
             },
             {
               "expression": "process_started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "heartbeat_runs_wakeup_request_idx": {
+          "name": "heartbeat_runs_wakeup_request_idx",
+          "columns": [
+            {
+              "expression": "wakeup_request_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

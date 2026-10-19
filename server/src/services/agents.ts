@@ -602,7 +602,7 @@ export function agentService(db: Db) {
 
     updatePermissions: async (
       id: string,
-      permissions: Omit<UpdateAgentPermissions, "canCreateBoardReminders">,
+      permissions: Omit<UpdateAgentPermissions, "canCreateBoardReminders" | "canCreateSkills">,
     ) => {
       const existing = await getById(id);
       if (!existing) return null;

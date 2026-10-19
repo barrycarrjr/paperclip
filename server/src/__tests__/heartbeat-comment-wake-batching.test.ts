@@ -161,7 +161,7 @@ describe("heartbeat comment wake batching", () => {
   });
 
   it.each(["paused", "terminated", "pending_approval"] as const)(
-    "records each exact retry refused for a %s agent as a durable skipped receipt",
+    "records every exact retry refused for a %s agent on one durable skipped receipt",
     async (status) => {
       const companyId = randomUUID();
       const agentId = randomUUID();
@@ -211,11 +211,11 @@ describe("heartbeat comment wake batching", () => {
         eq(agentWakeupRequests.agentId, agentId),
         eq(agentWakeupRequests.idempotencyKey, idempotencyKey),
       ));
-      expect(receipts).toHaveLength(2);
-      expect(receipts).toEqual(expect.arrayContaining([
-        expect.objectContaining({ status: "skipped", reason: `agent.${status}`, idempotencyKey }),
-        expect.objectContaining({ status: "skipped", reason: `agent.${status}`, idempotencyKey }),
-      ]));
+      // Retries of the same key land on one row (coalescedCount counts them)
+      // rather than inserting a row per scheduler tick for as long as the agent
+      // stays unavailable.
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]).toMatchObject({ status: "skipped", reason: `agent.${status}`, idempotencyKey, coalescedCount: 1 });
       await expect(heartbeat.getWakeupDelivery(agentId, idempotencyKey)).resolves.toMatchObject({ status: "pending" });
 
       await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agentId));
@@ -226,7 +226,7 @@ describe("heartbeat comment wake batching", () => {
         eq(agentWakeupRequests.agentId, agentId),
         eq(agentWakeupRequests.idempotencyKey, idempotencyKey),
       ));
-      expect(deliveredReceipts).toHaveLength(3);
+      expect(deliveredReceipts).toHaveLength(2);
       expect(deliveredReceipts.filter((receipt) => receipt.status !== "skipped")).toHaveLength(1);
     },
   );

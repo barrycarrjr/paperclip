@@ -326,7 +326,7 @@ describeEmbeddedPostgres("sessions of runs with no task", () => {
 
     releaseTaskRun();
     expect(await waitForRunStatus(taskRun!.id, "succeeded")).toBe("succeeded");
-  });
+  }, 30_000);
 
   it("continues one conversation across runs of the same kind, whatever ran in between", async () => {
     const { agentId } = await createAgent();

@@ -169,7 +169,6 @@ describe("agentActionPolicyService", () => {
 
     await agentService(db).updatePermissions(agentId, {
       canCreateAgents: true,
-      canCreateSkills: true,
       canAssignTasks: true,
       trustPreset: "low_trust_review",
       authorizationPolicy: { protectedAgent: { blockAssignment: true } },
@@ -178,7 +177,6 @@ describe("agentActionPolicyService", () => {
     const [agent] = await db.select().from(agents);
     expect(agent?.permissions).toMatchObject({
       canCreateAgents: true,
-      canCreateSkills: true,
       canAssignTasks: true,
       trustPreset: "low_trust_review",
       authorizationPolicy: { protectedAgent: { blockAssignment: true } },

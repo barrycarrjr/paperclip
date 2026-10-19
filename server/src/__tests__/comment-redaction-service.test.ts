@@ -1480,8 +1480,8 @@ describeDb("redactIssueCommentEverywhere", () => {
     expect(JSON.stringify(audit!.details)).not.toContain(ACCT);
   });
 
-  it("can retry migration 0122 twice after a partially installed constraint set", async () => {
-    const migration = await fs.readFile(new URL("../../../packages/db/src/migrations/0122_outstanding_tiger_shark.sql", import.meta.url), "utf8");
+  it("can retry migration 0123 twice after a partially installed constraint set", async () => {
+    const migration = await fs.readFile(new URL("../../../packages/db/src/migrations/0123_outstanding_tiger_shark.sql", import.meta.url), "utf8");
     await db.execute(sql`alter table comment_redaction_authorizations drop constraint comment_redaction_authorizations_agent_id_agents_id_fk`);
     for (let round = 0; round < 2; round++) {
       for (const statement of migration.split("--> statement-breakpoint")) if (statement.trim()) await db.execute(sql.raw(statement));
