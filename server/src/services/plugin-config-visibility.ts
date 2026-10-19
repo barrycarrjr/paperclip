@@ -107,6 +107,13 @@ function itemSchema(schema: Schema | null): Schema | null {
   return null;
 }
 
+/** Only a schema-marked top-level allowedCompanies list controls UI discovery. */
+export function pluginDeclaresCompanyAllowList(schema: JsonSchema | null | undefined): boolean {
+  return variants(asSchema(schema)).some((variant) =>
+    marksCompanyId(itemSchema(asSchema(asSchema(variant.properties)?.allowedCompanies))),
+  );
+}
+
 /** True when the schema, or anything below it, marks a company id. */
 function hasCompanyField(schema: Schema | null): boolean {
   return variants(schema).some((variant) => {

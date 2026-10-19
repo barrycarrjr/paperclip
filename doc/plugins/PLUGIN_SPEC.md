@@ -1409,6 +1409,27 @@ These routes are instance-level.
 
 These routes exist because the board UI is organized around companies even though plugin installation is global.
 
+Company UI discovery uses `GET /api/plugins/ui-contributions?companyId=<id>`.
+The host first checks the board user's existing company read access, including
+Personal company privacy. If the plugin's instance config schema declares a
+top-level `allowedCompanies` list with `items.format: "company-id"`, the host
+only returns its slots and launchers when the saved list includes that company
+or `"*"`. An absent, empty or malformed saved list hides that plugin's company
+UI. The response does not include the allowlist or saved configuration.
+
+Plugins without that top-level schema declaration keep their existing visibility.
+Nested account lists and arbitrary company-looking config values do not establish
+plugin ownership. Plugins remain responsible for finer account-specific behavior
+and all data/action authorization. Discovery filtering grants no permissions.
+
+Pages, widgets, launchers, Everything, command search and pinned plugin links use
+the company-specific result and cache identity. A company switch cannot reuse
+another company's discovery result. Config saves invalidate discovery caches;
+external config changes appear on the next normal refetch. The call without a
+company keeps its established instance-wide behavior for settings discovery and
+route-name recognition. Recognizing a route name does not make that page visible
+or authorize access.
+
 ## 19.3 Detail Tabs
 
 Plugins may add tabs to:
@@ -1426,6 +1447,15 @@ Recommended route pattern:
 ## 19.4 Dashboard Widgets
 
 Plugins may add cards or sections to the dashboard.
+
+A styled React slot frame collapses when its component renders no DOM children,
+including `null`. Content, loading messages and render/load errors remain visible.
+An outlet containing only empty React frames also collapses, removing its outer
+spacing. Unstyled React content keeps its layout through a `display: contents`
+frame; text-only content and custom elements remain visible.
+This does not detect visually empty nested markup or empty custom elements.
+Morning Brief supplies both the route company's id and its prefix in widget
+context so widget links can keep the correct company during a selection change.
 
 ## 19.5 Sidebar Entries
 

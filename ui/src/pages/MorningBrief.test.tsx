@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
+import * as React from "react";
+import * as ReactDom from "react-dom";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -8,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttentionRow as AttentionRowData, DashboardSummary } from "@paperclipai/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MorningBrief } from "./MorningBrief";
+import { _resetPluginModuleLoader } from "@/plugins/slots";
+import type { PluginUiContribution } from "@/api/plugins";
 
 vi.mock("@/lib/router", () => ({
   Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
@@ -18,7 +22,10 @@ vi.mock("@/lib/router", () => ({
 }));
 
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ companies: [{ id: "company-1" }] }),
+  useCompany: () => ({
+    companies: [{ id: "company-1", issuePrefix: "ALPHA" }, { id: "company-2", issuePrefix: "OLD" }],
+    selectedCompany: { id: "company-2", issuePrefix: "OLD" },
+  }),
 }));
 vi.mock("../hooks/useRouteCompany", () => ({
   useActiveCompanyId: () => "company-1",
@@ -47,7 +54,15 @@ vi.mock("../components/ActivityCharts", () => ({
   IssueStatusChart: () => null,
   SuccessRateChart: () => null,
 }));
-vi.mock("@/plugins/slots", () => ({ PluginSlotOutlet: () => null }));
+const widgetDiscovery = { contributions: [] as PluginUiContribution[], list: vi.fn() };
+vi.mock("@/api/plugins", () => ({
+  pluginsApi: {
+    listUiContributions: async (companyId: string) => {
+      widgetDiscovery.list(companyId);
+      return widgetDiscovery.contributions;
+    },
+  },
+}));
 vi.mock("../components/AttentionRow", () => ({
   AttentionRow: ({ row }: { row: AttentionRowData }) => <div>{row.title}</div>,
 }));
@@ -166,11 +181,17 @@ describe("MorningBrief", () => {
     state.emailApi = null;
     state.rulesHomeIssues = [];
     mockActivity.events = [];
+    widgetDiscovery.contributions = [];
+    widgetDiscovery.list.mockClear();
+    _resetPluginModuleLoader();
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    _resetPluginModuleLoader();
+    vi.unstubAllGlobals();
+    delete globalThis.__paperclipPluginBridge__;
   });
 
   async function settle() {
@@ -203,6 +224,36 @@ describe("MorningBrief", () => {
   function link(label: RegExp): HTMLAnchorElement | undefined {
     return Array.from(container.querySelectorAll("a")).find((a) => label.test(a.textContent ?? ""));
   }
+
+  it("gives real widget links the route company's prefix while selection still names the previous company", async () => {
+    widgetDiscovery.contributions = [{
+      pluginId: "context-widget", pluginKey: "context-widget", displayName: "Context widget",
+      version: "1.0.0", uiEntryFile: "index.js", launchers: [],
+      slots: [{ id: "widget", type: "dashboardWidget", displayName: "Widget", exportName: "Widget" }],
+    }];
+    globalThis.__paperclipPluginBridge__ = { react: React, reactDom: ReactDom, sdkUi: {} };
+    class SourceBlob {
+      readonly source: string;
+      constructor(parts: string[]) { this.source = parts.join(""); }
+    }
+    vi.stubGlobal("Blob", SourceBlob);
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: (blob: SourceBlob) => `data:text/javascript;base64,${Buffer.from(blob.source).toString("base64")}`,
+      revokeObjectURL: () => {},
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(`
+      export function Widget({ context }) {
+        return globalThis.__paperclipPluginBridge__.react.createElement("a", {
+          href: "/" + context.companyPrefix + "/agents/scout",
+        }, "Widget agent");
+      }
+    `)));
+    await renderPage();
+    expect(link(/^Widget agent$/)?.getAttribute("href")).toBe("/ALPHA/agents/scout");
+    expect(widgetDiscovery.list).toHaveBeenCalledWith("company-1");
+    expect(widgetDiscovery.list).not.toHaveBeenCalledWith("company-2");
+  });
 
   // Seen live: "All systems green." over nine blocked tasks and a full
   // Attention list, and "1 agent error." beside a green dot with no name.

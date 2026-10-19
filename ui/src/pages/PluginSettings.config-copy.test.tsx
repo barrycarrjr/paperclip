@@ -245,4 +245,20 @@ describe("PluginSettings: saving a copy of the config", () => {
       "Settings for other people's Personal companies are left out. Saving keeps them as they are.",
     );
   });
+
+  it("invalidates global and every company discovery cache after saving configuration", async () => {
+    loadedCopy.value = copy({ pollMinutes: 5 }, { editable: true, trimmed: false, coverage: null });
+    await openConfiguration();
+    const keys = [
+      queryKeys.plugins.uiContributions,
+      queryKeys.plugins.companyUiContributions("company-1"),
+      queryKeys.plugins.companyUiContributions("company-2"),
+    ];
+    for (const key of keys) queryClient.setQueryData(key, []);
+    await edit();
+    await act(async () => { saveButton()?.click(); });
+    await settle();
+    expect(saveConfig).toHaveBeenCalled();
+    for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
 });

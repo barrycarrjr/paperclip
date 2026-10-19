@@ -18,7 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import { createDb, plugins, pluginOperationCalls } from "@paperclipai/db";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
 import { getTestDatabaseSupport, startTestDatabase } from "./helpers/test-postgres.js";
@@ -160,6 +161,14 @@ describeWithDatabase("plugin operations — through the running app", () => {
     // itself is covered in plugin-operation-policy-routes.test.ts with a
     // ready plugin; faking readiness here to reach it would mean asserting
     // against a state the running app cannot actually be in.
+    // Plugin activation runs asynchronously after createApp returns. Wait for
+    // this fixture's actual load failure before asserting the readiness error.
+    const db = createDb(tempDb!.connectionString);
+    await vi.waitFor(async () => {
+      const [plugin] = await db.select({ status: plugins.status }).from(plugins)
+        .where(eq(plugins.id, pluginRowId));
+      expect(plugin?.status).toBe("error");
+    }, { timeout: 10_000 });
     const res = await request(app as never)
       .post(`/api/plugins/${pluginRowId}/actions/send-invoice`)
       .send({});

@@ -176,7 +176,7 @@ export function PluginSettings() {
 
   const { slots } = usePluginSlots({
     slotTypes: ["settingsPage"],
-    companyId: selectedCompanyId,
+    // Settings discovery stays instance-wide so denied companies can be configured.
     enabled: !!selectedCompanyId,
   });
 
@@ -875,6 +875,7 @@ function PluginConfigForm({
       setSaveMessage({ type: "success", text: "Configuration saved." });
       setTestResult(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.plugins.config(pluginId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.plugins.uiContributions });
       // Clear success message after 3s
       setTimeout(() => setSaveMessage(null), 3000);
     },
