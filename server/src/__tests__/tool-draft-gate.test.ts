@@ -212,7 +212,8 @@ describe("brokered action name inference", () => {
     ["email-tools:email_mark_read", "change_knowledge_base"],
     ["email-tools:email_mark_unread", "change_knowledge_base"],
     ["email-tools:email_move", "change_knowledge_base"],
-    ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
+    // Bookkeeping, not an action: see "treats agent bookkeeping as no action" below.
+    // ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
     ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
     ["email-tools:email_save_contact", "change_knowledge_base"],
     ["mcp:gmail:email_move", "change_knowledge_base"],
@@ -416,6 +417,24 @@ describe("brokered action name inference", () => {
 
   it("honors an explicit read declaration over name heuristics", () => {
     expect(classifyBrokeredAgentAction("acme:archive_record", { writes: false })).toBeNull();
+  });
+
+  it("treats agent bookkeeping as no action, so company policy never asks about it", () => {
+    expect(isLikelyBrokeredMutationToolName("email-tools:email_set_triage_cursor")).toBe(false);
+    expect(classifyBrokeredAgentAction("email-tools:email_set_triage_cursor")).toBeNull();
+    // Only the bookmark is exempt: the triage run's real mailbox changes still classify.
+    expect(classifyBrokeredAgentAction("email-tools:email_move")).toEqual({
+      actionType: "change_knowledge_base",
+    });
+  });
+
+  it("still asks about agent bookkeeping when the tool or an operator says so", () => {
+    expect(
+      classifyBrokeredAgentAction("email-tools:email_set_triage_cursor", { requiresApproval: true }),
+    ).not.toBeNull();
+    expect(
+      classifyBrokeredAgentAction("email-tools:email_set_triage_cursor", { actionType: "change_files" }),
+    ).toEqual({ actionType: "change_files" });
   });
 });
 
