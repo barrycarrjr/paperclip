@@ -37,8 +37,9 @@ const delegation = {
   version: 1,
 };
 
-function makeDispatcher(result: unknown = { content: "sent" }) {
+function makeDispatcher(result: unknown = { data: { ok: true, accepted: ["recipient@example.com"], rejected: [] } }) {
   return {
+    getTool: vi.fn(() => ({ parametersSchema: { properties: { messageId: { type: "string" } }, required: ["mailbox", "body"] } })),
     executeTool: vi.fn(async () => ({
       pluginId: "email-tools",
       toolName: "email-tools:email_reply",
@@ -101,7 +102,7 @@ describe("email handoff resolution", () => {
     );
   });
 
-  it("sends immediately when the setting says never, even with the global hold on", async () => {
+  it("records a confirmed synthetic send when the setting says never, even with the global hold on", async () => {
     mockGetGeneral.mockResolvedValue({
       outboundToolDraftMode: true,
       emailHandoffReplyApproval: "never",
@@ -169,6 +170,7 @@ describe("email handoff resolution", () => {
 
   it("records a failed send instead of losing it", async () => {
     const dispatcher = {
+      getTool: makeDispatcher().getTool,
       executeTool: vi.fn(async () => {
         throw new Error("Mailbox rejected the message");
       }),
@@ -181,17 +183,98 @@ describe("email handoff resolution", () => {
       actor: {},
     });
 
-    expect(reply).toEqual({ replyState: "failed", error: "Mailbox rejected the message" });
+    expect(reply).toEqual({ replyState: "failed", error: expect.stringContaining("Mailbox rejected the message") });
     expect(mockSetReplyState).toHaveBeenCalledWith(
       expect.objectContaining({
         replyState: "failed",
-        replyError: "Mailbox rejected the message",
+        replyError: expect.stringContaining("Mailbox rejected the message"),
       }),
     );
   });
 
+  it.each([
+    { error: "uid is required" },
+    { error: "", data: { ok: true } },
+    { failure: { code: "unavailable", message: "Try later" } },
+    { isError: true, data: { ok: true } },
+    { data: { ok: false } },
+    { data: { success: false } },
+    { content: "sent" },
+    {},
+    null,
+    { data: { drafted: true } },
+    { error: "refused", data: { drafted: true, approvalId: "ap-1" } },
+    { data: { ok: true, accepted: [], rejected: [] } },
+    { data: { ok: true, accepted: [null], rejected: [] } },
+    { data: { ok: true, accepted: ["recipient@example.com"], rejected: ["other@example.com"] } },
+    { data: { ok: true, accepted: ["recipient@example.com"], rejected: [], outcome: "unknown" } },
+    { data: { ok: true, accepted: ["recipient@example.com"], rejected: [], uncertain: true } },
+  ])("never labels a returned failure or uncertain result as sent: %j", async (result) => {
+    const dispatcher = makeDispatcher(result);
+    const { reply, delegation: resolved } = await service(dispatcher).resolve({
+      companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {},
+    });
+    expect(reply.replyState).toBe("failed");
+    expect(resolved.status).toBe("resolved");
+    expect(mockSetReplyState).toHaveBeenCalledWith(expect.objectContaining({ replyState: "failed" }));
+    expect(dispatcher.executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves delivery uncertainty explicit instead of claiming nothing was sent", async () => {
+    const { reply } = await service(makeDispatcher({ content: "timeout after SMTP" })).resolve({
+      companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {},
+    });
+    expect(reply).toMatchObject({ replyState: "failed", error: expect.stringContaining("unknown") });
+  });
+
+  it("records confirmed SMTP delivery even when saving the copy or marking the original failed", async () => {
+    const { reply } = await service(makeDispatcher({ data: {
+      ok: true, accepted: ["recipient@example.com"], rejected: [],
+      sent_copy: { ok: false, error: "Synthetic copy failure" }, original_mark: { ok: false, pending: true },
+    } })).resolve({ companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {} });
+    expect(reply).toEqual({ replyState: "sent" });
+  });
+
+  it.each([0, -1, 1.5, 4_294_967_296])("does not dispatch an invalid UID selector %s", async (uid) => {
+    mockTransition.mockResolvedValue({ ...delegation, sourceKey: buildEmailHandoffOriginId({
+      pluginId: "email-tools", mailbox: "personal", folder: "INBOX", uid,
+    }) });
+    const dispatcher = makeDispatcher();
+    const { reply } = await service(dispatcher).resolve({
+      companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {},
+    });
+    expect(reply.replyState).toBe("none");
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch or queue a Message-ID reply to the installed UID-only contract", async () => {
+    const dispatcher = makeDispatcher();
+    dispatcher.getTool.mockReturnValue({ parametersSchema: {
+      properties: { uid: { type: "number" } }, required: ["mailbox", "uid", "body"],
+    } });
+    const { reply } = await service(dispatcher).resolve({
+      companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {},
+    });
+    expect(reply).toMatchObject({ replyState: "none", reason: expect.stringContaining("cannot reply by Message-ID") });
+    expect(dispatcher.executeTool).not.toHaveBeenCalled();
+  });
+
+  it("still uses the UID reply contract for an existing manual UID handoff", async () => {
+    mockTransition.mockResolvedValue({ ...delegation, sourceKey: buildEmailHandoffOriginId({
+      pluginId: "email-tools", mailbox: "personal", folder: "INBOX", uid: 7,
+    }) });
+    const dispatcher = makeDispatcher(draftedResult);
+    const { reply } = await service(dispatcher).resolve({
+      companyId: "c1", delegationId: "deleg-1", replyBody: "Done.", actor: {},
+    });
+    expect(reply).toEqual({ replyState: "queued" });
+    expect(dispatcher.executeTool).toHaveBeenCalledWith("email-tools:email_reply",
+      { mailbox: "personal", folder: "INBOX", uid: 7, body: "Done." }, expect.anything(), undefined);
+  });
+
   it("still resolves when the reply fails", async () => {
     const dispatcher = {
+      getTool: makeDispatcher().getTool,
       executeTool: vi.fn(async () => {
         throw new Error("nope");
       }),
