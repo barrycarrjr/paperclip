@@ -23,8 +23,9 @@ const COMPANY_SWITCH_TOAST_ID = "company-switch";
  * Keeps plugin-route-registry.ts current with the plugin page routes that
  * are actually installed, so toCompanyRelativePath can recognize them as
  * valid company-scoped route roots (not just the compile-time-known core
- * pages). Shares its query with every other caller of listUiContributions()
- * via the same query key — this doesn't cause an extra fetch.
+ * pages). This deliberately uses instance-wide discovery for route-name
+ * recognition, sharing the global settings query. Company navigation and
+ * page mounts use separate company-filtered queries for visibility.
  */
 function usePluginRouteRootsSync() {
   const { data } = useQuery({

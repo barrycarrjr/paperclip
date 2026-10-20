@@ -5,10 +5,10 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, memories, memoryFolders } from "@paperclipai/db";
 import type { DocumentLinkApplyResult, DocumentLinkChange, DocumentLinkPreview, KnowledgeBaseValidationResult } from "@paperclipai/shared";
-import { DRIVE_FILE_ID_PATTERN, MEMORY_CONTENT_MAX } from "@paperclipai/shared";
+import { DRIVE_FILE_ID_PATTERN, MEMORY_CONTENT_MAX, documentReferences, driveIdFromUrl } from "@paperclipai/shared";
 import { conflict, unprocessable } from "../errors.js";
 import { encryptTextAtRest, decryptTextAtRest } from "../secrets/local-encrypted-provider.js";
-import { documentLink, documentPath, documentReferences, driveIdFromUrl, relativeDocumentTarget } from "./document-links.js";
+import { documentLink, documentPath, relativeDocumentTarget } from "./document-links.js";
 import { parseMemoryFile } from "./memory-folder-markdown.js";
 import { DEFAULT_ACTIVE_NOTE_STALE_DAYS, MEMORY_FOLDER_FILE_MAX_BYTES, inspectKnowledgeBase, readMemoryFolderFileSafely, validateKnowledgeBase, writeMemoryFolderFileAtomically, type Inspection, type ScannedNote } from "./memory-folder-validator.js";
 

@@ -650,6 +650,10 @@ export type {
 export { KNOWLEDGE_BASE_FINDING_KINDS } from "./types/memory-folder.js";
 export { DRIVE_FILE_ID_PATTERN, DRIVE_FILE_ID_FIELDS, declaredDriveFileId } from "./validators/document-links.js";
 export { applyDocumentLinksSchema } from "./validators/memory-folder.js";
+export { validateMemoryFileHeader } from "./knowledge-base/frontmatter.js";
+export type { MemoryHeaderValidation } from "./knowledge-base/frontmatter.js";
+export { documentReferences, driveIdFromUrl, relativeDocumentTarget, documentPath, documentLink } from "./knowledge-base/document-references.js";
+export type { DocumentReference } from "./knowledge-base/document-references.js";
 export type {
   CalendarEventKind,
   CalendarChannel,
@@ -1169,6 +1173,7 @@ export {
   isEmailHandoffOriginKind,
   type EmailHandoffSourceRef,
 } from "./email-handoff-origin.js";
+export { EMAIL_HANDOFF_PLUGIN_KEY, canonicalizePluginEmailHandoffOrigin } from "./plugin-email-handoff-origin.js";
 export {
   EMAIL_DELEGATION_STATES,
   TERMINAL_EMAIL_DELEGATION_STATES,
@@ -1507,3 +1512,4 @@ export type { NativeFinalizationResult, NativeFinalizationResultV1 } from "./typ
 export { nativeFinalizationResultSchema, type NativeFinalizationResultInput } from "./validators/native-finalization.js";
 export { WORKSPACE_RESTORE_FAILURE_CODES, hasWorkspaceRestoreFailure, safeWorkspaceRestorePath, isNativeWorkspaceExportRepairCause } from "./workspace-restore.js";
 
+export * from "./comment-redaction.js";

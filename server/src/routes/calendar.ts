@@ -248,8 +248,18 @@ export function calendarRoutes(db: Db, options: CalendarSourceOptions = {}) {
     const occurrenceArrays = await Promise.all(
       targetCompanies.map((company) => svc.listOccurrences(company.id, from, to, { kinds })),
     );
+    const seen = new Set<string>();
     const occurrences = occurrenceArrays
       .flat()
+      .filter((occ) => {
+        const dedupeKey =
+          occ.source === "paperclip"
+            ? `${occ.companyId}:${occ.eventId}:${occ.start}`
+            : `${occ.source}:${occ.eventId}:${occ.start}`;
+        if (seen.has(dedupeKey)) return false;
+        seen.add(dedupeKey);
+        return true;
+      })
       .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 
     res.json({ occurrences, companies: targetCompanies });

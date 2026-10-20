@@ -670,9 +670,11 @@ function usePluginModuleLoader(contributions: PluginUiContribution[] | undefined
 export function usePluginSlots(filters: SlotFilters): UsePluginSlotsResult {
   const queryEnabled = filters.enabled ?? true;
   const { data, isLoading: isQueryLoading, error } = useQuery({
-    queryKey: queryKeys.plugins.uiContributions,
-    queryFn: () => pluginsApi.listUiContributions(),
-    enabled: queryEnabled,
+    queryKey: filters.companyId === undefined
+      ? queryKeys.plugins.uiContributions
+      : queryKeys.plugins.companyUiContributions(filters.companyId),
+    queryFn: () => pluginsApi.listUiContributions(filters.companyId),
+    enabled: queryEnabled && filters.companyId !== null,
   });
 
   // Kick off dynamic imports for any new plugin contributions.
@@ -792,6 +794,7 @@ type PluginSlotMountProps = {
   context: PluginSlotContext;
   className?: string;
   missingBehavior?: "hidden" | "placeholder";
+  frameUnstyledReact?: boolean;
 };
 
 /**
@@ -893,6 +896,7 @@ export function PluginSlotMount({
   context,
   className,
   missingBehavior = "hidden",
+  frameUnstyledReact = false,
 }: PluginSlotMountProps) {
   const [, forceRerender] = useState(0);
   const component = resolveRegisteredComponent(slot);
@@ -933,7 +937,7 @@ export function PluginSlotMount({
     return (
       <PluginSlotErrorBoundary slot={slot} className={className}>
         <PluginBridgeScope pluginId={slot.pluginId} context={context}>
-          {className ? <div className={className}>{node}</div> : node}
+          {className || frameUnstyledReact ? <div data-plugin-slot-frame className={cn(className || "contents", "empty:hidden")}>{node}</div> : node}
         </PluginBridgeScope>
       </PluginSlotErrorBoundary>
     );
@@ -987,7 +991,10 @@ export function PluginSlotOutlet({
   if (slots.length === 0) return null;
 
   return (
-    <div className={className}>
+    // Every React mount has a frame, including unstyled text-only components.
+    // Only empty React frames collapse the outlet. Custom elements and error
+    // notices stay visible even when they have no light-DOM children.
+    <div className={cn(className, "[&:not(:has(>:not([data-plugin-slot-frame]:empty)))]:hidden")}>
       {slots.map((slot) => (
         <PluginSlotMount
           key={`${slot.pluginKey}:${slot.id}`}
@@ -995,6 +1002,7 @@ export function PluginSlotOutlet({
           context={context}
           className={itemClassName}
           missingBehavior={missingBehavior}
+          frameUnstyledReact
         />
       ))}
     </div>

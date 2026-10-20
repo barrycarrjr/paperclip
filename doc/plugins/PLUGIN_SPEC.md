@@ -1001,6 +1001,36 @@ Origin rules:
 - The host derives the default plugin origin from the installed plugin key and rejects attempts to set `plugin:<otherPluginKey>` origins.
 - `originId` is plugin-defined and should be stable for idempotent generated work.
 
+Email Tools has one narrow exception to the plugin origin namespace: its trusted
+installed worker may call `issues.create` with `originKind: "email_handoff"`, an
+assigned agent, and an `originId` from `buildEmailHandoffOriginId`. The source must
+name that worker's `email-tools` key or installed database id, a nonblank mailbox
+key (at most 200 characters, no whitespace or controls), and a bracketed
+Message-ID of the form `<local@domain>` (at most 998 characters). UID-only sources
+are refused because the existing key does not include UIDVALIDITY. The host
+checks the installed plugin identity and canonicalizes the source to its database
+id, matching the Email page's hold key. Destination agent and project checks
+still apply inside the destination company.
+
+Issue, standard email handoff, and `issue.created` audit row commit in one
+transaction under a per-company/source lock. Concurrent calls and retries return
+the same issue without another audit row or wake. A closed handoff also replays
+its issue; this API never silently reopens it. Explicit manual re-delegation is
+unchanged. Deduplication is per destination company, so the routing plugin must
+keep its own ledger across destinations, schedules, and closed handoffs. It must
+request its explicit wake separately. Plugin updates cannot rewrite a handoff's
+origin. Ordinary plugin origins keep their existing behavior.
+
+This is a trusted worker API, not an agent-facing cross-company create route.
+Core validates identity and destination records; Email Tools must enforce the
+admin destination allowlist, named routing agent, and server-side message
+re-read before supplying destination or content. Initiating agent/run or board
+user provenance is retained; automatic routes have no handed-over-by user.
+The creation audit excludes mail subject, body, and Message-ID. No mail action
+is performed here, and HQ agents gain no cross-company REST write access.
+This path does not isolate the routing agent's other tools or change sending
+and approval settings; operator activation prerequisites remain necessary.
+
 Relation and read helpers:
 
 - `ctx.issues.relations.get(issueId, companyId)`
@@ -1409,6 +1439,27 @@ These routes are instance-level.
 
 These routes exist because the board UI is organized around companies even though plugin installation is global.
 
+Company UI discovery uses `GET /api/plugins/ui-contributions?companyId=<id>`.
+The host first checks the board user's existing company read access, including
+Personal company privacy. If the plugin's instance config schema declares a
+top-level `allowedCompanies` list with `items.format: "company-id"`, the host
+only returns its slots and launchers when the saved list includes that company
+or `"*"`. An absent, empty or malformed saved list hides that plugin's company
+UI. The response does not include the allowlist or saved configuration.
+
+Plugins without that top-level schema declaration keep their existing visibility.
+Nested account lists and arbitrary company-looking config values do not establish
+plugin ownership. Plugins remain responsible for finer account-specific behavior
+and all data/action authorization. Discovery filtering grants no permissions.
+
+Pages, widgets, launchers, Everything, command search and pinned plugin links use
+the company-specific result and cache identity. A company switch cannot reuse
+another company's discovery result. Config saves invalidate discovery caches;
+external config changes appear on the next normal refetch. The call without a
+company keeps its established instance-wide behavior for settings discovery and
+route-name recognition. Recognizing a route name does not make that page visible
+or authorize access.
+
 ## 19.3 Detail Tabs
 
 Plugins may add tabs to:
@@ -1426,6 +1477,15 @@ Recommended route pattern:
 ## 19.4 Dashboard Widgets
 
 Plugins may add cards or sections to the dashboard.
+
+A styled React slot frame collapses when its component renders no DOM children,
+including `null`. Content, loading messages and render/load errors remain visible.
+An outlet containing only empty React frames also collapses, removing its outer
+spacing. Unstyled React content keeps its layout through a `display: contents`
+frame; text-only content and custom elements remain visible.
+This does not detect visually empty nested markup or empty custom elements.
+Morning Brief supplies both the route company's id and its prefix in widget
+context so widget links can keep the correct company during a selection change.
 
 ## 19.5 Sidebar Entries
 

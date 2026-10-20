@@ -402,7 +402,9 @@ References are relative to the managed instruction bundle. A runtime without mou
 
 ## Memory Folder Checks
 
-Markdown notes in a configured memory folder require `name`, `kind` and `updated` frontmatter fields. A read-only check runs after each manual or scheduled memory-folder run and reports malformed headers, broken relative links, orphan notes, open gaps and active notes older than 90 days. The **Rebuild index** action can replace `MEMORY.md` without running an import or export; normal exports continue to refresh it too. Exports retain obsolete Paperclip-owned notes and warn the operator to review and remove them manually. Drive file IDs are currently checked for valid syntax only when a note declares one; Paperclip does not contact Drive to confirm that the file exists.
+Markdown notes in a configured memory folder require `name`, `kind` and `updated` frontmatter fields. A read-only check runs after each manual or scheduled memory-folder run and reports malformed headers, broken relative links, orphan notes, open gaps and active notes older than 90 days. Notes whose flat frontmatter `record_type` value is exactly `decision` or `outcome` (case-sensitive) skip only stale-active and orphan findings to avoid recommending edits to dated records; immutability is a convention, not an enforced guard. The **Rebuild index** action can replace `MEMORY.md` without running an import or export; normal exports continue to refresh it too. Exports retain obsolete Paperclip-owned notes and warn the operator to review and remove them manually. Drive file IDs are currently checked for valid syntax only when a note declares one; Paperclip does not contact Drive to confirm that the file exists.
+
+The existing pure header and document-reference checks are exported from `@paperclipai/shared` for reuse without filesystem or network access. Logical document paths use slash separators; server wrappers retain host case matching and normal working-directory behavior. On Node versions that preserve a leading double slash in `path.posix.resolve(".")`, normalization corrects previously broken Drive-link migration links from top-level notes when a Windows server starts in a network-share or device-path working directory. The path helpers `relativeDocumentTarget`, `documentPath` and `documentLink` operate on text and are not filesystem containment checks.
 
 ### Declared document links
 
@@ -439,6 +441,16 @@ Claude local configuration has an optional `advisorModel` string in Advanced set
 The runtime passes the native `--advisor` flag on fresh and resumed invocations. Use this field instead of `extraArgs` for the flag. Advice remains experimental and depends on the installed CLI, account, provider and compatible model pair; an explicit selection is a request, not proof of availability or consultation. Native disable policies remain respected. The CLI may omit this flag from `--help`.
 
 Advisor calls have no separate call cap and consume provider usage or plan limits. The main model and run timeout/turn limits remain unchanged. Reported native per-model usage can contain provider estimates; missing advisor consumption stays unknown. Automatic model routing and forced consultation are outside this setting. See [Claude Code advisor requirements, behavior and cost](https://code.claude.com/docs/en/advisor).
+
+## Mail Triage Approvals
+
+Mail triage can save its reading position (`email_set_triage_cursor`) and record
+sender suggestions (`email_add_to_review_queue`) without a company action
+approval. These only update the agent's working state. Recording a suggestion
+does not move mail or apply a sender rule; the operator decides through the
+mail review controls. Explicit tool action declarations and operation approval
+requirements still apply. Existing pending approval cards are not removed by
+this classification change.
 
 ## Quick Health Checks
 
@@ -498,6 +510,25 @@ Environment overrides:
 - `PAPERCLIP_DB_BACKUP_DIR=/absolute/or/~/path`
 
 ## Secrets in Dev
+
+The shared local child-process helper drops the server's `BETTER_AUTH_SECRET`,
+`DATABASE_URL` and `DATABASE_MIGRATION_URL` from its inherited environment.
+Intentional agent bindings for these names must be supplied explicitly through
+adapter/run `env` (prefer secret references for credentials); explicit values,
+including empty strings, are kept. Callers that merge the server environment
+before launching (including Hermes execution, Pi and OpenCode execution/model
+discovery/diagnostics, and Aider preparation) sanitize inherited values with the
+shared helper before adding explicit bindings. Windows matches these three
+inherited names without regard to case. SSH still forwards only the explicit
+run environment. Native Linux/macOS launch behavior needs separate verification.
+Subprocesses that bypass this helper are not covered, including status, version,
+auth and model probes and execution-workspace provision, teardown, runtime-service
+and job commands. These can still inherit some or all three server credentials;
+covering these paths is a separate #132 follow-up.
+
+This only prevents accidental credential inheritance. Same-account filesystem
+access, other inherited provider credentials, saved output and per-agent secret
+scope remain separate concerns; this does not enforce machine isolation.
 
 Agent env vars now support secret references. By default, secret values are stored with local encryption and only secret refs are persisted in agent config.
 

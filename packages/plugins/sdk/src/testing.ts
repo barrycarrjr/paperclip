@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { OperationFailed } from "./types.js";
+import { canonicalizePluginEmailHandoffOrigin } from "@paperclipai/shared";
 import type {
   PaperclipPluginManifestV1,
   PluginCapability,
@@ -56,6 +57,8 @@ import type {
 export interface TestHarnessOptions {
   /** Plugin manifest used to seed capability checks and metadata. */
   manifest: PaperclipPluginManifestV1;
+  /** Synthetic installed plugin id for canonical email handoff origins. Defaults to manifest.id. */
+  pluginId?: string;
   /** Optional capability override. Defaults to `manifest.capabilities`. */
   capabilities?: PluginCapability[];
   /** Initial config returned by `ctx.config.get()`. */
@@ -847,6 +850,26 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
       async create(input) {
         requireCapability(manifest, capabilitySet, "issues.create");
+        const handoff = input.originKind === "email_handoff"
+          ? canonicalizePluginEmailHandoffOrigin({
+            pluginKey: manifest.id, pluginId: options.pluginId ?? manifest.id,
+            originId: input.originId, assigneeAgentId: input.assigneeAgentId,
+            assigneeUserId: input.assigneeUserId,
+          }) : null;
+        if (handoff) {
+          const replay = [...issues.values()].find((issue) => issue.companyId === input.companyId
+            && issue.originKind === "email_handoff" && issue.originId === handoff.originId);
+          if (replay) return replay;
+          if (agents.get(input.assigneeAgentId!)?.companyId !== input.companyId) {
+            throw new Error("Assigned agent not found in company");
+          }
+          if (["pending_approval", "terminated"].includes(agents.get(input.assigneeAgentId!)!.status)) {
+            throw new Error("Assigned agent cannot receive work");
+          }
+          if (input.projectId && projects.get(input.projectId)?.companyId !== input.companyId) {
+            throw new Error("Project not found in company");
+          }
+        }
         const now = new Date();
         const record: Issue = {
           id: randomUUID(),
@@ -865,13 +888,13 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
-          createdByAgentId: null,
-          createdByUserId: null,
+          createdByAgentId: handoff ? input.actor?.actorAgentId ?? null : null,
+          createdByUserId: handoff ? input.actor?.actorUserId ?? null : null,
           issueNumber: null,
           identifier: null,
-          originKind: normalizePluginOriginKind(input.originKind),
-          originId: input.originId ?? null,
-          originRunId: input.originRunId ?? null,
+          originKind: handoff ? "email_handoff" : normalizePluginOriginKind(input.originKind),
+          originId: handoff?.originId ?? input.originId ?? null,
+          originRunId: input.originRunId ?? (handoff ? input.actor?.actorRunId ?? null : null),
           requestDepth: input.requestDepth ?? 0,
           billingCode: input.billingCode ?? null,
           assigneeAdapterOverrides: null,
@@ -897,6 +920,10 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         const record = issues.get(issueId);
         if (!isInCompany(record, companyId)) throw new Error(`Issue not found: ${issueId}`);
         const { blockedByIssueIds: nextBlockedByIssueIds, ...issuePatch } = patch;
+        if (record.originKind === "email_handoff"
+          && (issuePatch.originKind !== undefined || issuePatch.originId !== undefined || issuePatch.originRunId !== undefined)) {
+          throw new Error("Plugin updates cannot rewrite email handoff origins");
+        }
         if (issuePatch.originKind !== undefined) {
           issuePatch.originKind = normalizePluginOriginKind(issuePatch.originKind);
         }

@@ -229,6 +229,17 @@ Invariants:
 - `author_user_id` uuid fk `users.id` null
 - `body` text not null
 
+### Manual comment redaction
+
+The board can select exact comment text, preview last-four or full replacement,
+and confirm a one-time redaction. No automatic scanner or future-write rule is
+installed. The base redaction endpoint remains board-only. A separate delegated
+endpoint requires a one-use, expiring permission issued by a board user in that
+issue for a named company agent and unchanged comment version. Email content,
+agent prose and general destructive-action settings do not grant permission.
+Changes and their counts-only activity entry commit together. See
+[`comment-redaction.md`](comment-redaction.md) for routes, coverage and limits.
+
 ## 7.8 `heartbeat_runs`
 
 - `id` uuid pk

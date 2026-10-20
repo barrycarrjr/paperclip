@@ -265,9 +265,11 @@ export function usePluginLaunchers(
 ): UsePluginLaunchersResult {
   const queryEnabled = filters.enabled ?? true;
   const { data, isLoading, error } = useQuery({
-    queryKey: queryKeys.plugins.uiContributions,
-    queryFn: () => pluginsApi.listUiContributions(),
-    enabled: queryEnabled,
+    queryKey: filters.companyId === undefined
+      ? queryKeys.plugins.uiContributions
+      : queryKeys.plugins.companyUiContributions(filters.companyId),
+    queryFn: () => pluginsApi.listUiContributions(filters.companyId),
+    enabled: queryEnabled && filters.companyId !== null,
   });
 
   const placementZonesKey = useMemo(

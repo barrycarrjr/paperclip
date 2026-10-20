@@ -92,7 +92,7 @@ import {
 } from "../lib/transcriptPresentation";
 import { cn, formatDateTime, formatShortDate } from "../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square } from "lucide-react";
+import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, Copy, EyeOff, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square } from "lucide-react";
 import { IssueBlockedNotice } from "./IssueBlockedNotice";
 
 interface IssueChatMessageContext {
@@ -105,6 +105,8 @@ interface IssueChatMessageContext {
   stoppingRunId?: string | null;
   onInterruptQueued?: (runId: string) => Promise<void>;
   onCancelQueued?: (commentId: string) => void;
+  /** Board only: open the redact dialog for a comment. */
+  onRedactComment?: (commentId: string, body: string) => void;
   interruptingQueuedRunId?: string | null;
   onImageClick?: (src: string) => void;
   onAcceptInteraction?: (
@@ -257,6 +259,8 @@ interface IssueChatThreadProps {
   includeSucceededRunsWithoutOutput?: boolean;
   onInterruptQueued?: (runId: string) => Promise<void>;
   onCancelQueued?: (commentId: string) => void;
+  /** Board only: open the redact dialog for a comment. */
+  onRedactComment?: (commentId: string, body: string) => void;
   interruptingQueuedRunId?: string | null;
   stoppingRunId?: string | null;
   onImageClick?: (src: string) => void;
@@ -1137,6 +1141,7 @@ function IssueChatUserMessage({ message }: { message: ThreadMessage }) {
   const {
     onInterruptQueued,
     onCancelQueued,
+    onRedactComment,
     interruptingQueuedRunId,
     currentUserId,
     userProfileMap,
@@ -1269,6 +1274,25 @@ function IssueChatUserMessage({ message }: { message: ThreadMessage }) {
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           </button>
+          {onRedactComment && !commentId.startsWith("optimistic-") ? (
+            <button
+              type="button"
+              className="inline-flex h-6 w-6 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+              title="Redact text in this comment"
+              aria-label="Redact text in this comment"
+              onClick={() =>
+                onRedactComment(
+                  commentId,
+                  message.content
+                    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                    .map((p) => p.text)
+                    .join("\n\n"),
+                )
+              }
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       )}
     </div>
@@ -1299,6 +1323,7 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
     activeRunIds,
     onStopRun,
     stoppingRunId,
+    onRedactComment,
   } = useContext(IssueChatCtx);
   const custom = message.metadata.custom as Record<string, unknown>;
   const anchorId = typeof custom.anchorId === "string" ? custom.anchorId : undefined;
@@ -1309,6 +1334,7 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
       : "Agent";
   const authorAgentId = typeof custom.authorAgentId === "string" ? custom.authorAgentId : null;
   const runId = typeof custom.runId === "string" ? custom.runId : null;
+  const commentIdForRedact = typeof custom.commentId === "string" ? custom.commentId : null;
   const runAgentId = typeof custom.runAgentId === "string" ? custom.runAgentId : null;
   const runStatus = typeof custom.runStatus === "string" ? custom.runStatus : null;
   const agentId = authorAgentId ?? runAgentId;
@@ -1472,6 +1498,12 @@ function IssueChatAssistantMessage({ message }: { message: ThreadMessage }) {
                       <Copy className="mr-2 h-3.5 w-3.5" />
                       Copy message
                     </DropdownMenuItem>
+                    {onRedactComment && commentIdForRedact ? (
+                      <DropdownMenuItem onSelect={() => onRedactComment(commentIdForRedact, copyText)}>
+                        <EyeOff className="mr-2 h-3.5 w-3.5" />
+                        Redact…
+                      </DropdownMenuItem>
+                    ) : null}
                     {canStopRun && onStopRun && runId ? (
                       <DropdownMenuItem
                         disabled={stoppingRunId === runId}
@@ -2316,6 +2348,7 @@ export function IssueChatThread({
   includeSucceededRunsWithoutOutput = false,
   onInterruptQueued,
   onCancelQueued,
+  onRedactComment,
   interruptingQueuedRunId = null,
   stoppingRunId = null,
   onImageClick,
@@ -2546,6 +2579,7 @@ export function IssueChatThread({
       stoppingRunId,
       onInterruptQueued,
       onCancelQueued,
+      onRedactComment,
       interruptingQueuedRunId,
       onImageClick,
       onAcceptInteraction,
@@ -2562,6 +2596,7 @@ export function IssueChatThread({
       stoppingRunId,
       onInterruptQueued,
       onCancelQueued,
+      onRedactComment,
       interruptingQueuedRunId,
       onImageClick,
       onAcceptInteraction,

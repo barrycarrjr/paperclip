@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, isNotNull, lte, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { calendarEvents, calendarEventDeliveries, pluginConfig, plugins } from "@paperclipai/db";
+import { calendarEvents, calendarEventDeliveries, companies, pluginConfig, plugins } from "@paperclipai/db";
 import type {
   CalendarEvent,
   CalendarEventDetail,
@@ -12,7 +12,8 @@ import type {
 } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 import { type CalendarScheduleInput, computeNextRun } from "./calendar-schedule.js";
-import { aggregateOccurrences, type CalendarSourceOptions } from "./calendar-sources.js";
+import { aggregateOccurrences, clearGoogleCalendarCache, type CalendarSourceOptions } from "./calendar-sources.js";
+import { formatGoogleEventSummary } from "./calendar-company-routing.js";
 import { sendEventSlackDm } from "./event-slack.js";
 import { publishLiveEvent } from "./live-events.js";
 
@@ -557,10 +558,34 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
         throw unprocessable("No connected Google Calendar account found for this company");
       }
 
+      const allowed = Array.isArray(matchingAccount.allowedCompanies)
+        ? (matchingAccount.allowedCompanies as string[])
+        : [];
+      const isSharedAccount = allowed.includes("*") || allowed.length > 1;
+
+      let eventSummary = input.summary;
+      if (isSharedAccount) {
+        const [targetComp] = await db
+          .select({
+            id: companies.id,
+            name: companies.name,
+            issuePrefix: companies.issuePrefix,
+            kind: companies.kind,
+            isPortfolioRoot: companies.isPortfolioRoot,
+          })
+          .from(companies)
+          .where(eq(companies.id, companyId))
+          .limit(1);
+
+        if (targetComp) {
+          eventSummary = formatGoogleEventSummary(input.summary, targetComp);
+        }
+      }
+
       const toolParams = {
         account: matchingAccount.key,
         calendarId: input.calendarId || "primary",
-        summary: input.summary,
+        summary: eventSummary,
         description: input.description ?? undefined,
         location: input.location ?? undefined,
         start: input.start,
@@ -604,6 +629,7 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
         throw unprocessable(typeof result.error === "string" ? result.error : JSON.stringify(result.error));
       }
 
+      clearGoogleCalendarCache();
       return result?.data?.event ?? result;
     },
 
@@ -688,6 +714,7 @@ export function calendarService(db: Db, options: CalendarSourceOptions = {}) {
         throw unprocessable(typeof result.error === "string" ? result.error : JSON.stringify(result.error));
       }
 
+      clearGoogleCalendarCache();
       if (result?.data?.drafted === true) return result;
 
       return { success: true, eventId };

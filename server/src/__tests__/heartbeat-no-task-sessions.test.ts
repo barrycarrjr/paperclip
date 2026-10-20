@@ -310,7 +310,11 @@ describeEmbeddedPostgres("sessions of runs with no task", () => {
   it("does not hand a run with no task the session a task's run is using", async () => {
     const { agentId } = await createAgent(2);
     expect(await sessionOfRun("books-session", () => sendSessionMessage(agentId, "reconcile the books"))).toBeNull();
-    expect(await lastSavedSessionId(agentId)).toBe("books-session");
+    // Run status is saved before the runtime session. This race predates
+    // log serialization, so wait for the actual session write.
+    await vi.waitFor(async () => {
+      expect(await lastSavedSessionId(agentId)).toBe("books-session");
+    }, { timeout: 15_000, interval: 50 });
 
     // The task's next run is going, on the task's session, when Pat presses Run now.
     const releaseTaskRun = holdNextRun("books-session");
@@ -322,7 +326,7 @@ describeEmbeddedPostgres("sessions of runs with no task", () => {
 
     releaseTaskRun();
     expect(await waitForRunStatus(taskRun!.id, "succeeded")).toBe("succeeded");
-  });
+  }, 30_000);
 
   it("continues one conversation across runs of the same kind, whatever ran in between", async () => {
     const { agentId } = await createAgent();

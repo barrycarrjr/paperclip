@@ -1,12 +1,13 @@
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { calendarEvents, pluginConfig, plugins, routines, routineTriggers } from "@paperclipai/db";
+import { calendarEvents, companies, pluginConfig, plugins, routines, routineTriggers } from "@paperclipai/db";
 import type { CalendarOccurrence } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { type CalendarScheduleInput, expandOccurrences } from "./calendar-schedule.js";
 import { getZonedMinuteParts } from "./cron.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
+import { resolveCompanyForCalendarEvent } from "./calendar-company-routing.js";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -21,8 +22,7 @@ export interface CalendarSourceOptions {
 /**
  * A calendar source expands stored schedules into concrete occurrences for a
  * time window. `paperclip` reads the local `calendar_events` table; `google` and
- * `outlook` are seams for future external-calendar integrations.
- */
+ * `outlook` are seams for future external-calendar integrations.\n */
 export interface CalendarSource {
   id: "paperclip" | "routine" | "google" | "outlook";
   listOccurrences(
@@ -239,6 +239,18 @@ export function routineCalendarSource(db: Db): CalendarSource {
   };
 }
 
+interface GcalCacheEntry {
+  expiresAt: number;
+  events: unknown[];
+}
+const gcalCache = new Map<string, GcalCacheEntry>();
+const gcalInflight = new Map<string, Promise<unknown[]>>();
+
+export function clearGoogleCalendarCache(): void {
+  gcalCache.clear();
+  gcalInflight.clear();
+}
+
 /**
  * Calendar source backed by Google Calendar via the `google-workspace` plugin.
  * Queries events across `[from, to]` and maps them to `CalendarOccurrence`.
@@ -292,6 +304,11 @@ export function googleCalendarSource(
           return [];
         }
 
+        const allowed = Array.isArray(matchingAccount.allowedCompanies)
+          ? (matchingAccount.allowedCompanies as string[])
+          : [];
+        const isSharedAccount = allowed.includes("*") || allowed.length > 1;
+
         const toolParams = {
           account: matchingAccount.key,
           calendarId: "primary",
@@ -308,59 +325,129 @@ export function googleCalendarSource(
           userId: null,
         };
 
-        let rawResult: unknown;
-        const dispatcher = options.getToolDispatcher?.();
-        if (dispatcher) {
-          const res = await dispatcher.executeTool(
-            "google-workspace:gcal_list_events",
-            toolParams,
-            runContext as any,
-            { bypassDraftGate: true, localTrustedUser: true },
-          );
-          rawResult = res.result;
-        } else if (options.pluginWorkerManager) {
-          rawResult = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
-            toolName: "gcal_list_events",
-            parameters: toolParams,
-            runContext,
-          });
+        const cacheKey = `${matchingAccount.key}:${toolParams.calendarId}:${toolParams.timeMin}:${toolParams.timeMax}`;
+        const now = Date.now();
+        const cached = gcalCache.get(cacheKey);
+
+        let eventsList: unknown[];
+        if (cached && cached.expiresAt > now) {
+          eventsList = cached.events;
+        } else if (gcalInflight.has(cacheKey)) {
+          eventsList = (await gcalInflight.get(cacheKey))!;
         } else {
-          return [];
+          const fetchPromise = (async () => {
+            let rawResult: unknown;
+            const dispatcher = options.getToolDispatcher?.();
+            if (dispatcher) {
+              const res = await dispatcher.executeTool(
+                "google-workspace:gcal_list_events",
+                toolParams,
+                runContext as any,
+                { bypassDraftGate: true, localTrustedUser: true },
+              );
+              rawResult = res.result;
+            } else if (options.pluginWorkerManager) {
+              rawResult = await options.pluginWorkerManager.call(plugin.id, "executeTool", {
+                toolName: "gcal_list_events",
+                parameters: toolParams,
+                runContext,
+              });
+            } else {
+              return [];
+            }
+
+            const dataObj = (rawResult as any)?.data ?? rawResult;
+            const list = Array.isArray(dataObj?.events)
+              ? dataObj.events
+              : Array.isArray(rawResult)
+                ? rawResult
+                : [];
+
+            gcalCache.set(cacheKey, {
+              expiresAt: Date.now() + 10_000,
+              events: list,
+            });
+            return list;
+          })();
+
+          gcalInflight.set(cacheKey, fetchPromise);
+          try {
+            eventsList = await fetchPromise;
+          } finally {
+            gcalInflight.delete(cacheKey);
+          }
         }
 
-        const dataObj = (rawResult as any)?.data ?? rawResult;
-        const eventsList = Array.isArray(dataObj?.events)
-          ? dataObj.events
-          : Array.isArray(rawResult)
-            ? rawResult
-            : [];
+        let allCompaniesMeta: Array<{
+          id: string;
+          name: string;
+          issuePrefix: string;
+          kind: string | null;
+          isPortfolioRoot: boolean | null;
+        }> = [];
+        let fallbackCompanyId = companyId;
+
+        if (isSharedAccount) {
+          allCompaniesMeta = await db
+            .select({
+              id: companies.id,
+              name: companies.name,
+              issuePrefix: companies.issuePrefix,
+              kind: companies.kind,
+              isPortfolioRoot: companies.isPortfolioRoot,
+            })
+            .from(companies);
+
+          const personalCompany =
+            allCompaniesMeta.find((c) => c.kind === "personal" || c.name.toLowerCase() === "personal") ||
+            allCompaniesMeta.find((c) => c.isPortfolioRoot) ||
+            allCompaniesMeta[0];
+
+          fallbackCompanyId = personalCompany?.id ?? companyId;
+        }
 
         const occurrences: CalendarOccurrence[] = [];
         for (const e of eventsList) {
           if (!e || typeof e !== "object") continue;
+          const ev = e as Record<string, any>;
+
+          const resolvedTargetCompanyId = isSharedAccount
+            ? resolveCompanyForCalendarEvent(
+                ev.summary || "",
+                ev.description ?? null,
+                allCompaniesMeta,
+                fallbackCompanyId,
+              )
+            : companyId;
+
+          // If this event resolves to a different company, don't include it in this company's list
+          if (resolvedTargetCompanyId !== companyId) {
+            continue;
+          }
+
           const startStr =
-            e.start?.dateTime ??
-            (e.start?.date ? `${e.start.date}T00:00:00.000Z` : from.toISOString());
+            ev.start?.dateTime ??
+            (ev.start?.date ? `${ev.start.date}T00:00:00.000Z` : from.toISOString());
           const endStr =
-            e.end?.dateTime ?? (e.end?.date ? `${e.end.date}T23:59:59.999Z` : null);
-          const allDay = Boolean(e.start?.date && !e.start?.dateTime);
+            ev.end?.dateTime ?? (ev.end?.date ? `${ev.end.date}T23:59:59.999Z` : null);
+          const allDay = Boolean(ev.start?.date && !ev.start?.dateTime);
 
           occurrences.push({
-            eventId: e.id || `google-${startStr}`,
+            eventId: ev.id || `google-${startStr}`,
             companyId,
             source: "google",
             kind: "google",
-            title: e.summary || "(No title)",
-            body: e.description ?? null,
+            title: ev.summary || "(No title)",
+            body: ev.description ?? null,
             start: startStr,
             end: endStr,
             allDay,
             ownerUserId: "",
-            status: e.status === "cancelled" ? "cancelled" : "active",
+            status: ev.status === "cancelled" ? "cancelled" : "active",
             notify: false,
             channels: [],
-            location: e.location ?? null,
-            htmlLink: e.htmlLink ?? null,
+            location: ev.location ?? null,
+            htmlLink: ev.htmlLink ?? null,
           });
         }
 

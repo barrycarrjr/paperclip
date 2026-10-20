@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Issue, PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import { buildEmailHandoffOriginId } from "@paperclipai/shared";
 import { createTestHarness } from "../../../packages/plugins/sdk/src/testing.js";
 
 function manifest(capabilities: PaperclipPluginManifestV1["capabilities"]): PaperclipPluginManifestV1 {
@@ -57,6 +58,23 @@ function issue(input: Partial<Issue> & Pick<Issue, "id" | "companyId" | "title">
 }
 
 describe("plugin SDK orchestration contract", () => {
+  it("mirrors Email Tools handoff origin validation, canonical replay and origin update protection", async () => {
+    const companyId = randomUUID(), pluginId = randomUUID(), agentId = randomUUID(), runId = randomUUID();
+    const harness = createTestHarness({ pluginId,
+      manifest: { ...manifest(["issues.create", "issues.update"]), id: "email-tools" } });
+    harness.seed({ agents: [{ id: agentId, companyId, status: "idle" } as any] });
+    const originId = buildEmailHandoffOriginId({ pluginId: "email-tools", mailbox: "shared", messageId: "<example@example.com>" })!;
+    const input = { companyId, title: "Example handoff", assigneeAgentId: agentId,
+      originKind: "email_handoff" as const, originId, actor: { actorAgentId: agentId, actorRunId: runId } };
+    const created = await harness.ctx.issues.create(input);
+    expect(created).toMatchObject({ originKind: "email_handoff", createdByAgentId: agentId, originRunId: runId,
+      originId: buildEmailHandoffOriginId({ pluginId, mailbox: "shared", messageId: "<example@example.com>" }) });
+    expect((await harness.ctx.issues.create({ ...input, originId: created.originId })).id).toBe(created.id);
+    await expect(harness.ctx.issues.create({ ...input, assigneeAgentId: undefined })).rejects.toThrow(/assigned agent/);
+    await expect(harness.ctx.issues.update(created.id, { originId: "replacement" }, companyId)).rejects.toThrow(/rewrite/);
+    const other = createTestHarness({ manifest: manifest(["issues.create"]) });
+    await expect(other.ctx.issues.create(input)).rejects.toThrow(/Only Email Tools/);
+  });
   it("keeps matching external IDs separate in each company", async () => {
     const harness = createTestHarness({ manifest: manifest([]) });
     const companyA = randomUUID(), companyB = randomUUID();

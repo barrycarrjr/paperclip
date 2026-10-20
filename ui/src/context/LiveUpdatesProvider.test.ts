@@ -15,6 +15,19 @@ import { __liveUpdatesTestUtils } from "./LiveUpdatesProvider";
 import { queryKeys } from "../lib/queryKeys";
 
 describe("LiveUpdatesProvider issue invalidation", () => {
+  it.each(["issue.comment_redacted", "issue.comment_redaction_authorized"])("refreshes active comments after %s without waiting for navigation", (action) => {
+    const invalidations: unknown[] = [];
+    const queryClient = {
+      invalidateQueries: (input: unknown) => { invalidations.push(input); },
+      getQueryData: () => undefined,
+    };
+    __liveUpdatesTestUtils.invalidateActivityQueries(queryClient as never, "company-1", {
+      entityType: "issue", entityId: "issue-1", actorType: "agent", actorId: "agent-1", action,
+      details: { commentId: "comment-1" },
+    }, { userId: null, agentId: "agent-1" });
+    expect(invalidations).toContainEqual({ queryKey: queryKeys.issues.comments("issue-1") });
+  });
+
   it("refreshes touched inbox queries and only the changed issue data for issue updates", () => {
     const invalidations: unknown[] = [];
     const queryClient = {

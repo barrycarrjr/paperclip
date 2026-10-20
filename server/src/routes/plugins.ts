@@ -51,6 +51,7 @@ import type {
 import {
   PLUGIN_CONNECTOR_SURFACES,
   PLUGIN_STATUSES,
+  isCompanyAllowed,
   upgradePluginSchema,
 } from "@paperclipai/shared";
 import { pluginRegistryService } from "../services/plugin-registry.js";
@@ -66,6 +67,7 @@ import {
   type ConfigViewer,
   keepUnseenParts,
   pluginConfigVisibleTo,
+  pluginDeclaresCompanyAllowList,
 } from "../services/plugin-config-visibility.js";
 import { isPersonalCompany, personalCompanyIds } from "../services/personal-companies.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
@@ -1138,16 +1140,36 @@ export function pluginRoutes(
    */
   router.get("/plugins/ui-contributions", async (req, res) => {
     assertBoardOrgAccess(req);
+    const requestedCompanyId = req.query.companyId;
+    if (requestedCompanyId !== undefined && (
+      typeof requestedCompanyId !== "string" || requestedCompanyId.trim().length === 0
+    )) {
+      throw badRequest('"companyId" must be a non-empty string when provided');
+    }
+    if (typeof requestedCompanyId === "string") {
+      assertCompanyAccess(req, requestedCompanyId, "read");
+    }
     const plugins = await registry.listByStatus("ready");
 
-    const contributions: PluginUiContribution[] = plugins
-      .map((plugin) => {
+    const candidates = await Promise.all(
+      plugins.map(async (plugin): Promise<PluginUiContribution | null> => {
         // Safety check: manifestJson should always exist for ready plugins, but guard against null
         const manifest = plugin.manifestJson;
         if (!manifest) return null;
 
         const uiMetadata = getPluginUiContributionMetadata(manifest);
         if (!uiMetadata) return null;
+
+        // Only the recognized top-level list controls discovery. Account data
+        // and nested company fields do not establish plugin ownership.
+        if (requestedCompanyId && pluginDeclaresCompanyAllowList(manifest.instanceConfigSchema)) {
+          const config = await registry.getConfig(plugin.id);
+          const allowed = config?.configJson.allowedCompanies;
+          if (
+            !Array.isArray(allowed) || !allowed.every((id) => typeof id === "string") ||
+            !isCompanyAllowed(allowed, requestedCompanyId)
+          ) return null;
+        }
 
         return {
           pluginId: plugin.id,
@@ -1159,8 +1181,9 @@ export function pluginRoutes(
           slots: uiMetadata.slots,
           launchers: uiMetadata.launchers,
         };
-      })
-      .filter((item): item is PluginUiContribution => item !== null);
+      }),
+    );
+    const contributions = candidates.filter((item): item is PluginUiContribution => item !== null);
     res.json(contributions);
   });
 

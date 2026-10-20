@@ -7,6 +7,10 @@ import type { Db } from "@paperclipai/db";
 import { issueExecutionDecisions, pipelineCaseIssueLinks, pipelineCases, pipelines, pipelineStages } from "@paperclipai/db";
 import {
   addIssueCommentSchema,
+  COMMENT_REDACTION_BODY_SIZE_ERROR,
+  redactIssueCommentSchema,
+  authorizeCommentRedactionSchema,
+  executeCommentRedactionSchema,
   acceptIssueThreadInteractionSchema,
   createIssueAttachmentMetadataSchema,
   createIssueThreadInteractionSchema,
@@ -61,6 +65,8 @@ import { deterministicActivityId } from "../services/activity-log.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, validationErrorMessage } from "../errors.js";
 import { type AccessMode, assertBoard, assertCompanyAccess, getActorInfo, isUserDrivenActor } from "./authz.js";
+import { authorizeCommentRedaction, previewCommentRedaction, redactIssueCommentEverywhere } from "../services/comment-redaction.js";
+import { runLogBaseDir } from "../services/run-log-store.js";
 import {
   excludeOthersPersonalCompanies,
   viewerUserIdForPersonalCheck,
@@ -3701,6 +3707,61 @@ export function issueRoutes(
     },
   );
 
+  // Explicit manual paths. Generic action settings never authorize redaction.
+  router.post("/issues/:id/comments/:commentId/redaction-preview", async (req, res) => {
+    assertBoard(req);
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
+    assertCompanyAccess(req, issue.companyId);
+    const parsed = redactIssueCommentSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.issues.some((issue) => issue.path[0] === "expectedBody" && issue.message === COMMENT_REDACTION_BODY_SIZE_ERROR) ? COMMENT_REDACTION_BODY_SIZE_ERROR : "Select 4 to 2000 exact characters; include surrounding text for shorter secrets." }); return; }
+    res.json(await previewCommentRedaction(db, {
+      companyId: issue.companyId, issueId: issue.id, commentId: req.params.commentId as string, ...parsed.data,
+      requestedByUserId: req.actor.userId ?? "local-board",
+    }));
+  });
+  router.post("/issues/:id/comments/:commentId/redact", async (req, res) => {
+    assertBoard(req);
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
+    assertCompanyAccess(req, issue.companyId);
+    const parsed = redactIssueCommentSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.issues.some((issue) => issue.path[0] === "expectedBody" && issue.message === COMMENT_REDACTION_BODY_SIZE_ERROR) ? COMMENT_REDACTION_BODY_SIZE_ERROR : "Select 4 to 2000 exact characters and preview the stored copies before confirming." }); return; }
+    const result = await redactIssueCommentEverywhere(db, {
+      companyId: issue.companyId, issueId: issue.id, commentId: req.params.commentId as string,
+      selection: parsed.data, actor: getActorInfo(req), runLogBaseDir: runLogBaseDir(),
+    });
+    res.json({ ...result, placesChanged: result.counts, counts: undefined });
+  });
+
+  router.post("/issues/:id/comments/:commentId/redaction-authorizations", async (req, res) => {
+    assertBoard(req);
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
+    assertCompanyAccess(req, issue.companyId);
+    const parsed = authorizeCommentRedactionSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.issues.some((issue) => issue.path[0] === "expectedBody" && issue.message === COMMENT_REDACTION_BODY_SIZE_ERROR) ? COMMENT_REDACTION_BODY_SIZE_ERROR : "Select 4 to 2000 exact characters, preview stored copies and choose an agent." }); return; }
+    const result = await authorizeCommentRedaction(db, {
+      companyId: issue.companyId, issueId: issue.id, commentId: req.params.commentId as string,
+      ...parsed.data, requestedByUserId: req.actor.userId ?? "local-board",
+      requestedByLocalBoard: req.actor.source === "local_implicit",
+    });
+    res.status(201).json(result);
+  });
+
+  router.post("/issues/:id/comments/:commentId/redact-delegated", async (req, res) => {
+    if (req.actor.type !== "agent" || !req.actor.agentId) throw forbidden("Agent access and an explicit board authorization are required.");
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
+    assertCompanyAccess(req, issue.companyId);
+    const parsed = executeCommentRedactionSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: "A board-issued authorization id is required. Selections cannot be overridden." }); return; }
+    const result = await redactIssueCommentEverywhere(db, {
+      companyId: issue.companyId, issueId: issue.id, commentId: req.params.commentId as string,
+      authorizationId: parsed.data.authorizationId, actor: getActorInfo(req), runLogBaseDir: runLogBaseDir(),
+    });
+    res.json({ ...result, placesChanged: result.counts, counts: undefined });
+  });
   router.get("/issues/:id/comments/:commentId", async (req, res) => {
     const id = req.params.id as string;
     const commentId = req.params.commentId as string;

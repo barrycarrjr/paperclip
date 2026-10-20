@@ -4,6 +4,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/lib/queryKeys";
 
 const routeParams: { value: Record<string, string | undefined> } = { value: {} };
 const navigateSpy = vi.fn();
@@ -39,8 +40,9 @@ vi.mock("@/context/BreadcrumbContext", () => ({
 }));
 
 const contributions: { value: unknown[] } = { value: [] };
+const listContributions = vi.fn(async (_companyId?: string | null): Promise<unknown[]> => contributions.value);
 vi.mock("@/api/plugins", () => ({
-  pluginsApi: { listUiContributions: async () => contributions.value },
+  pluginsApi: { listUiContributions: (companyId?: string | null) => listContributions(companyId) },
 }));
 
 vi.mock("@/plugins/slots", () => ({
@@ -82,6 +84,8 @@ describe("PluginPage", () => {
     activeCompanyId.value = "company-1";
     navigateSpy.mockClear();
     contributions.value = [];
+    listContributions.mockClear();
+    listContributions.mockImplementation(async () => contributions.value);
   });
 
   afterEach(() => {
@@ -121,7 +125,7 @@ describe("PluginPage", () => {
 
     expect(navigateSpy).not.toHaveBeenCalled();
     expect(container.textContent).toContain("not available here");
-    expect(container.textContent).toContain("does not add a page of its own");
+    expect(container.textContent).toContain("no page available for this company");
   });
 
   it("still offers the plugin's settings as a choice", async () => {
@@ -164,5 +168,42 @@ describe("PluginPage", () => {
     routeParams.value = { companyPrefix: "NOPE", pluginId: "plugin-1" };
     await render();
     expect(container.querySelector('[data-testid="not-found"]')).toBeTruthy();
+  });
+
+  it("does not reuse the previous company's or global page while the new company is loading or denied", async () => {
+    const page = { pluginId: "plugin-1", pluginKey: "example", displayName: "Example", version: "1.0.0", slots: [{ type: "page", id: "page" }] };
+    let answerHq!: (rows: unknown[]) => void;
+    const pendingHq = new Promise<unknown[]>((resolve) => { answerHq = resolve; });
+    listContributions.mockImplementation(async (companyId) => companyId === "hq" ? pendingHq : [page]);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(queryKeys.plugins.uiContributions, [page]);
+    const root = createRoot(container);
+    const show = async () => {
+      await act(async () => root.render(<QueryClientProvider client={client}><PluginPage /></QueryClientProvider>));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    };
+    await show();
+    expect(container.querySelector('[data-testid="slot-mount"]')).toBeTruthy();
+    expect(listContributions).toHaveBeenCalledWith("company-1");
+
+    routeParams.value = { companyPrefix: "HQ", pluginId: "plugin-1" };
+    activeCompanyId.value = "hq";
+    await show();
+    expect(container.querySelector('[data-testid="slot-mount"]')).toBeNull();
+    expect(container.textContent).toContain("Loading");
+    await act(async () => { answerHq([]); });
+    await show();
+    expect(container.querySelector('[data-testid="slot-mount"]')).toBeNull();
+    expect(container.textContent).toContain("not available here");
+    expect(listContributions).toHaveBeenCalledWith("hq");
+    act(() => root.unmount());
+    client.clear();
+  });
+
+  it("shows contribution failures instead of remaining on loading", async () => {
+    listContributions.mockRejectedValueOnce(new Error("Discovery failed"));
+    const root = await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Discovery failed");
+    act(() => root.unmount());
   });
 });

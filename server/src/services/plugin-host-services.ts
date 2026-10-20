@@ -9,6 +9,8 @@ import {
   issueComments,
   issueExecutionDecisions,
   issues as issuesTable,
+  issueEmailDelegations,
+  plugins as pluginsTable,
   pluginLogs,
 } from "@paperclipai/db";
 import { eq, and, asc, like, desc, inArray, or, sql } from "drizzle-orm";
@@ -24,7 +26,8 @@ import type {
   PluginIssueAssigneeSummary,
   PluginIssueOrchestrationSummary,
 } from "@paperclipai/plugin-sdk";
-import type { CreateIssueThreadInteraction, IssueDocumentSummary } from "@paperclipai/shared";
+import { canonicalizePluginEmailHandoffOrigin, EMAIL_HANDOFF_ORIGIN_KIND, EMAIL_HANDOFF_PLUGIN_KEY, type CreateIssueThreadInteraction, type IssueDocumentSummary } from "@paperclipai/shared";
+import { issueEmailDelegationService } from "./issue-email-delegations.js";
 import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -51,7 +54,7 @@ import { pluginRegistryService } from "./plugin-registry.js";
 import { pluginStateStore } from "./plugin-state-store.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
-import { deterministicActivityId, logActivity } from "./activity-log.js";
+import { deterministicActivityId, logActivity, persistActivityLog, publishPersistedActivityLog } from "./activity-log.js";
 import { chatService } from "./chat.js";
 import { chatAttachmentService } from "./chat-attachments.js";
 import { PLUGIN_MAX_IMAGE_BASE64_BYTES, PLUGIN_MAX_IMAGES_BASE64_BYTES } from "./plugin-image-limits.js";
@@ -1480,6 +1483,64 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         const { actorAgentId, actorUserId, actorRunId, originKind, ...issueInput } = params;
+        if (originKind === EMAIL_HANDOFF_ORIGIN_KIND) {
+          const { source, originId } = canonicalizePluginEmailHandoffOrigin({
+            pluginKey, pluginId, originId: params.originId,
+            assigneeAgentId: params.assigneeAgentId, assigneeUserId: params.assigneeUserId,
+          });
+          const [self] = await db.select({ id: pluginsTable.id }).from(pluginsTable)
+            .where(and(eq(pluginsTable.id, pluginId), eq(pluginsTable.pluginKey, EMAIL_HANDOFF_PLUGIN_KEY)));
+          if (!self) throw new Error("Email handoffs require the installed Email Tools plugin identity");
+
+          const result = await db.transaction(async (tx) => {
+            // Serialize before reading or creating either record. The unique open-handoff index
+            // alone cannot roll back an issue created by a competing request.
+            await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["plugin-email-handoff", companyId, originId])}, 0))`);
+            const transactionDb = tx as unknown as Db;
+            const transactionIssues = issueService(transactionDb);
+            const delegations = issueEmailDelegationService(transactionDb);
+            const open = await delegations.findOpenBySourceKey(companyId, originId);
+            const [latest] = open ? [open] : await tx.select().from(issueEmailDelegations)
+              .where(and(eq(issueEmailDelegations.companyId, companyId), eq(issueEmailDelegations.sourceKey, originId)))
+              .orderBy(desc(issueEmailDelegations.delegatedAt), desc(issueEmailDelegations.id)).limit(1);
+            // A retry after resolution must not reopen the handoff or silently create new work.
+            // Explicit manual re-delegation keeps its existing contract and is a separate action.
+            if (latest) {
+              const issue = requireInCompany("Issue", await transactionIssues.getById(latest.issueId), companyId);
+              return { issue: issue as unknown as Issue, activity: null };
+            }
+            const issue = await transactionIssues.create(companyId, {
+              ...(issueInput as any),
+              originKind: EMAIL_HANDOFF_ORIGIN_KIND,
+              originId,
+              originRunId: params.originRunId ?? actorRunId ?? null,
+              createdByAgentId: actorAgentId ?? null,
+              createdByUserId: actorUserId ?? null,
+            });
+            const handoff = await delegations.create({
+              companyId, issueId: issue.id, pluginId,
+              sourceKey: originId, mailbox: source.mailbox, messageId: source.messageId,
+              delegatedByUserId: actorUserId ?? null,
+              delegatedToAgentId: params.assigneeAgentId!,
+            });
+            // Also cover an open handoff created by another path that does not take our lock.
+            // Losing the insert race must roll back this issue, never commit an orphan.
+            if (!handoff.created || handoff.delegation.issueId !== issue.id) {
+              throw new Error("Email handoff changed concurrently; retry the request");
+            }
+            const activity = await persistActivityLog(transactionDb, {
+              companyId, actorType: "plugin", actorId: pluginId,
+              agentId: actorAgentId ?? null, runId: actorRunId ?? null,
+              action: "issue.created", entityType: "issue", entityId: issue.id,
+              details: pluginActivityDetails({ identifier: issue.identifier, originKind: EMAIL_HANDOFF_ORIGIN_KIND },
+                { actorAgentId, actorUserId, actorRunId }),
+            });
+            return { issue: issue as unknown as Issue, activity };
+          });
+          if (result.activity) publishPersistedActivityLog(result.activity);
+          // Email Tools requests its own explicit, idempotent wake after recording its ledger.
+          return result.issue;
+        }
         const normalizedOriginKind = normalizePluginOriginKind(originKind);
         const issue = (await issues.create(companyId, {
           ...(issueInput as any),
@@ -1529,6 +1590,10 @@ export function buildHostServices(
         delete patch.actorUserId;
         delete patch.actorRunId;
         delete patch.comment;
+        if (existing.originKind === EMAIL_HANDOFF_ORIGIN_KIND
+          && (patch.originKind !== undefined || patch.originId !== undefined || patch.originRunId !== undefined)) {
+          throw new Error("Plugin updates cannot rewrite email handoff origins");
+        }
         if (patch.assigneeAgentId && patch.assigneeUserId) {
           throw unprocessable("Issue can only have one assignee");
         }

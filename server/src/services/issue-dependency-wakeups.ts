@@ -81,6 +81,31 @@ export function issueDependencyWakeupService(
       )).where(sql`${issueTerminalEvents.processedVersion} < ${issueTerminalEvents.version}`);
       let processed = 0;
       let retried = 0;
+      // Many pending events (every closed child of one parent) resolve to the
+      // same target and reason. Build and enqueue each target once per tick and
+      // share the outcome, instead of once per event.
+      const outcomes = new Map<string, Promise<boolean>>();
+      const deliver = (companyId: string, issueId: string, reason: IssueDependencyWakeReason) => {
+        const key = `${companyId}:${issueId}:${reason}`;
+        let outcome = outcomes.get(key);
+        if (!outcome) {
+          outcome = (async () => {
+            const wakeup = await buildIssueDependencyWakeup(db, companyId, issueId, reason);
+            if (!wakeup) return true;
+            await enqueueWakeup(wakeup.agentId, wakeup.options);
+            // null can mean a successful deferral or a policy skip. Only a
+            // persisted accepted request acknowledges delivery; skips retry.
+            const receipt = await db.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
+              .where(and(
+                eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, wakeup.agentId),
+                eq(agentWakeupRequests.idempotencyKey, wakeup.options.idempotencyKey), ne(agentWakeupRequests.status, "skipped"),
+              )).limit(1);
+            return receipt.length > 0;
+          })();
+          outcomes.set(key, outcome);
+        }
+        return outcome;
+      };
       for (const event of pending) {
         try {
           const targets = new Map<string, IssueDependencyWakeReason[]>();
@@ -96,17 +121,7 @@ export function issueDependencyWakeupService(
           let accepted = true;
           for (const [issueId, reasons] of targets) {
             for (const reason of reasons) {
-              const wakeup = await buildIssueDependencyWakeup(db, event.companyId, issueId, reason);
-              if (!wakeup) continue;
-              await enqueueWakeup(wakeup.agentId, wakeup.options);
-              // null can mean a successful deferral or a policy skip. Only a
-              // persisted accepted request acknowledges delivery; skips retry.
-              const receipt = await db.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests)
-                .where(and(
-                  eq(agentWakeupRequests.companyId, event.companyId), eq(agentWakeupRequests.agentId, wakeup.agentId),
-                  eq(agentWakeupRequests.idempotencyKey, wakeup.options.idempotencyKey), ne(agentWakeupRequests.status, "skipped"),
-                )).limit(1);
-              if (receipt.length === 0) accepted = false;
+              if (!(await deliver(event.companyId, issueId, reason))) accepted = false;
             }
           }
           if (!accepted) { retried += 1; continue; }

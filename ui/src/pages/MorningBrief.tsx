@@ -860,7 +860,10 @@ export function MorningBrief() {
 
       <PluginSlotOutlet
         slotTypes={["dashboardWidget"]}
-        context={{ companyId: selectedCompanyId }}
+        context={{
+          companyId: selectedCompanyId,
+          companyPrefix: companies.find((company) => company.id === selectedCompanyId)?.issuePrefix ?? null,
+        }}
         className="grid gap-4 md:grid-cols-2"
         itemClassName="rounded-xl border border-border/70 bg-card p-4 shadow-sm"
       />

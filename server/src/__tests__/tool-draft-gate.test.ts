@@ -212,8 +212,9 @@ describe("brokered action name inference", () => {
     ["email-tools:email_mark_read", "change_knowledge_base"],
     ["email-tools:email_mark_unread", "change_knowledge_base"],
     ["email-tools:email_move", "change_knowledge_base"],
-    ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
-    ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
+    // Working state, not an action: covered by the working-state cases below.
+    // ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
+    // ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
     ["email-tools:email_save_contact", "change_knowledge_base"],
     ["mcp:gmail:email_move", "change_knowledge_base"],
     ["mcp:gmail:mark_message_read", "change_knowledge_base"],
@@ -416,6 +417,42 @@ describe("brokered action name inference", () => {
 
   it("honors an explicit read declaration over name heuristics", () => {
     expect(classifyBrokeredAgentAction("acme:archive_record", { writes: false })).toBeNull();
+  });
+
+  it.each([
+    "email-tools:email_set_triage_cursor",
+    "email-tools:email_add_to_review_queue",
+  ])("treats %s as working state without a company action approval", (tool) => {
+    expect(isLikelyBrokeredMutationToolName(tool)).toBe(false);
+    expect(classifyBrokeredAgentAction(tool)).toBeNull();
+  });
+
+  it.each([
+    "email-tools:email_move",
+    "email-tools:email_mark_read",
+    "email-tools:email_mark_unread",
+    "email-tools:email_save_contact",
+  ])("still classifies mailbox and contact changes: %s", (tool) => {
+    expect(classifyBrokeredAgentAction(tool)).toEqual({
+      actionType: "change_knowledge_base",
+    });
+  });
+
+  it.each([
+    "email-tools:email_set_triage_cursor",
+    "email-tools:email_add_to_review_queue",
+  ])("honors explicit action declarations for %s", (tool) => {
+    expect(
+      classifyBrokeredAgentAction(tool, { requiresApproval: true }),
+    ).not.toBeNull();
+    expect(
+      classifyBrokeredAgentAction(tool, { actionType: "change_files" }),
+    ).toEqual({ actionType: "change_files" });
+  });
+
+  it("does not exempt another plugin or an external server with the same tool name", () => {
+    expect(classifyBrokeredAgentAction("other:email_add_to_review_queue")).not.toBeNull();
+    expect(classifyBrokeredAgentAction("mcp:email-tools:email_add_to_review_queue")).not.toBeNull();
   });
 });
 
@@ -1171,6 +1208,29 @@ describe("tool draft gate action policies", () => {
     mockApprovalService.create.mockResolvedValue({ id: "approval-policy" });
     mockApprovalService.list.mockResolvedValue([]);
     mockInstanceSettingsService.getGeneral.mockResolvedValue({ outboundToolDraftMode: true });
+  });
+
+  it.each([false, true])("only asks before queueing sender suggestions when the operation explicitly requires it (%s)", async (operatorRequired) => {
+    const tool = "email-tools:email_add_to_review_queue";
+    const { createDraftGate } = await import("../services/tool-draft-gate.js");
+    const gate = createDraftGate({
+      db: stubDb,
+      isAdditionallyGated: () => operatorRequired,
+      resolveActionPolicy: async (name) => {
+        const classification = classifyBrokeredAgentAction(name, { requiresApproval: operatorRequired });
+        return classification
+          ? { actionType: classification.actionType, mode: "ask_first", source: "operation" }
+          : null;
+      },
+    });
+
+    const result = await gate.intercept(tool, {
+      mailbox: "example",
+      entries: [{ sender: "sender@example.com", count: 1 }],
+    }, ctx({}));
+
+    expect(result.intercepted).toBe(operatorRequired);
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(operatorRequired ? 1 : 0);
   });
 
   it("lets a governed action run when its resolved policy says go ahead", async () => {

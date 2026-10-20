@@ -10,6 +10,7 @@ import {
   buildPaperclipEnv,
   ensureAbsoluteDirectory,
   ensurePathInEnv,
+  sanitizeInheritedPaperclipEnv,
   renderTemplate,
   renderPaperclipApprovedRules,
   renderPaperclipWakePrompt,
@@ -160,7 +161,7 @@ async function buildAiderRuntime(input: {
     countsInstructions,
   ].filter(Boolean).join("\n\n"));
 
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const runtimeEnv = ensurePathInEnv({ ...sanitizeInheritedPaperclipEnv(process.env), ...env });
   // Resolution check is deferred to ensureAiderInstalled() so we can attempt
   // an auto-install when the binary is missing rather than failing the run
   // outright. The original ensureAdapterExecutionTargetCommandResolvable call

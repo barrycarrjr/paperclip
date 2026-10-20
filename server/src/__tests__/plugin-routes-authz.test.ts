@@ -6,6 +6,8 @@ const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
   getByKey: vi.fn(),
   upsertConfig: vi.fn(),
+  listByStatus: vi.fn(),
+  getConfig: vi.fn(),
 }));
 
 const mockLifecycle = vi.hoisted(() => ({
@@ -124,6 +126,129 @@ function readyPlugin() {
     status: "ready",
   });
 }
+
+describe("company-scoped plugin UI contributions", () => {
+  const companyList = { type: "array", items: { type: "string", format: "company-id" } };
+  const scopedSchema = { type: "object", properties: { allowedCompanies: companyList } };
+  const scopedPlugin = (schema: Record<string, unknown> | undefined = scopedSchema) => ({
+    id: pluginId,
+    pluginKey: "paperclip.example",
+    version: "1.0.0",
+    updatedAt: new Date("2026-10-18T00:00:00Z"),
+    manifestJson: {
+      displayName: "Example",
+      instanceConfigSchema: schema as Record<string, unknown> | undefined,
+      ui: { slots: [{ id: "page", type: "page", exportName: "Page", routePath: "example" }] },
+      launchers: [{ id: "open", placementZone: "sidebar" }],
+    },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRegistry.listByStatus.mockResolvedValue([scopedPlugin()]);
+    mockRegistry.getConfig.mockResolvedValue({ configJson: { allowedCompanies: [companyA, companyB] } });
+  });
+
+  it("returns allowed slots and launchers without config or private-company metadata", async () => {
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].slots[0].routePath).toBe("example");
+    expect(res.body[0].launchers[0].id).toBe("open");
+    expect(JSON.stringify(res.body)).not.toContain(companyB);
+    expect(res.body[0]).not.toHaveProperty("configJson");
+    expect(res.body[0]).not.toHaveProperty("instanceConfigSchema");
+  });
+
+  it.each([
+    ["denied company", { allowedCompanies: [companyB] }],
+    ["empty list", { allowedCompanies: [] }],
+    ["missing list", {}],
+    ["malformed list", { allowedCompanies: "*" }],
+    ["mixed list", { allowedCompanies: ["*", 1] }],
+  ])("hides every contribution for %s", async (_label, configJson) => {
+    mockRegistry.getConfig.mockResolvedValue({ configJson });
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it("hides an unconfigured scoped plugin", async () => {
+    mockRegistry.getConfig.mockResolvedValue(null);
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it("supports the established wildcard and composed schema recognition", async () => {
+    mockRegistry.listByStatus.mockResolvedValue([scopedPlugin({ allOf: [scopedSchema] })]);
+    mockRegistry.getConfig.mockResolvedValue({ configJson: { allowedCompanies: ["*"] } });
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+  });
+
+  it.each([
+    ["legacy", undefined],
+    ["unmarked list", { properties: { allowedCompanies: { type: "array", items: { type: "string" } } } }],
+    ["nested account list", { properties: { accounts: { type: "array", items: scopedSchema } } }],
+    ["arbitrary extra properties", { additionalProperties: companyList }],
+  ])("does not infer plugin ownership from %s settings", async (_label, schema) => {
+    const plugin = scopedPlugin();
+    plugin.manifestJson.instanceConfigSchema = schema;
+    mockRegistry.listByStatus.mockResolvedValue([plugin]);
+    mockRegistry.getConfig.mockResolvedValue({ configJson: { allowedCompanies: [], accounts: [{ allowedCompanies: [companyB] }] } });
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockRegistry.getConfig).not.toHaveBeenCalled();
+  });
+
+  it("preserves global discovery for instance settings", async () => {
+    mockRegistry.getConfig.mockResolvedValue({ configJson: { allowedCompanies: [] } });
+    const { app } = await createApp(boardActor({ isInstanceAdmin: true, companyIds: [] }));
+    const res = await request(app).get("/api/plugins/ui-contributions");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockRegistry.getConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects a company the caller cannot read before consulting plugins", async () => {
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyB}`);
+    expect(res.status).toBe(403);
+    expect(mockRegistry.listByStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not let admins bypass another user's Personal company", async () => {
+    const { rememberPersonalCompany } = await import("../services/personal-companies.js");
+    const personalId = "99999999-9999-4999-8999-999999999999";
+    rememberPersonalCompany(personalId, "other-owner");
+    const { app } = await createApp(boardActor({ isInstanceAdmin: true, companyIds: [personalId] }));
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${personalId}`);
+    expect(res.status).toBe(403);
+    expect(mockRegistry.listByStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "companyId=", "companyId=a&companyId=b"])("rejects malformed company query %s", async (query) => {
+    if (query === "") query = "companyId=%20";
+    const { app } = await createApp(boardActor());
+    const res = await request(app).get(`/api/plugins/ui-contributions?${query}`);
+    expect(res.status).toBe(400);
+    expect(mockRegistry.listByStatus).not.toHaveBeenCalled();
+  });
+
+  it("remains board-only", async () => {
+    const { app } = await createApp({ type: "agent", companyId: companyA, agentId: agentA });
+    const res = await request(app).get(`/api/plugins/ui-contributions?companyId=${companyA}`);
+    expect(res.status).toBe(403);
+  });
+});
 
 describe.sequential("plugin install and upgrade authz", () => {
   beforeEach(() => {

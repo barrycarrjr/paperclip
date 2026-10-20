@@ -688,6 +688,8 @@ export const queryKeys = {
     detail: (pluginId: string) => ["plugins", pluginId] as const,
     health: (pluginId: string) => ["plugins", pluginId, "health"] as const,
     uiContributions: ["plugins", "ui-contributions"] as const,
+    companyUiContributions: (companyId: string | null | undefined) =>
+      ["plugins", "ui-contributions", "company", companyId ?? null] as const,
     connectors: (surface: string) => ["plugins", "connectors", surface] as const,
     config: (pluginId: string, companyId?: string) =>
       companyId ? (["plugins", pluginId, "companies", companyId, "config"] as const) : (["plugins", pluginId, "config"] as const),

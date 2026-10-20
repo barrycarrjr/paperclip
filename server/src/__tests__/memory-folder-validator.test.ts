@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import type { Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,13 +18,41 @@ function note(fields: string, body: string): string {
 }
 
 let folder: string;
+const ownedFolders = new Map<string, { realPath: string; parent: string; stat: Stats; marker: string }>();
+
+async function createFixtureFolder(prefix: string): Promise<string> {
+  const parent = await fs.realpath(os.tmpdir());
+  const target = await fs.mkdtemp(path.join(parent, prefix));
+  const realPath = await fs.realpath(target);
+  if (path.dirname(realPath) !== parent) throw new Error("Fixture escaped its temporary parent");
+  const stat = await fs.lstat(target);
+  const marker = randomUUID();
+  await fs.writeFile(path.join(target, ".fixture-owner"), marker, { flag: "wx" });
+  ownedFolders.set(target, { realPath, parent, stat, marker });
+  return target;
+}
+
+async function removeFixtureFolder(target: string): Promise<void> {
+  const owned = ownedFolders.get(target);
+  if (!owned) throw new Error("Refusing to remove an unowned fixture");
+  const current = await fs.lstat(target);
+  const realPath = await fs.realpath(target);
+  if (
+    current.isSymbolicLink() || !current.isDirectory() ||
+    current.dev !== owned.stat.dev || current.ino !== owned.stat.ino ||
+    realPath !== owned.realPath || path.dirname(realPath) !== owned.parent ||
+    await fs.readFile(path.join(target, ".fixture-owner"), "utf8") !== owned.marker
+  ) throw new Error("Refusing to remove a changed fixture");
+  await fs.rm(target, { recursive: true, force: true });
+  ownedFolders.delete(target);
+}
 
 beforeEach(async () => {
-  folder = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-kb-validator-"));
+  folder = await createFixtureFolder("paperclip-kb-validator-");
 });
 
 afterEach(async () => {
-  await fs.rm(folder, { recursive: true, force: true });
+  await removeFixtureFolder(folder);
 });
 
 describe("memory note frontmatter", () => {
@@ -44,7 +74,7 @@ describe("memory note frontmatter", () => {
 
 describe("knowledge-base validation", () => {
   it("refuses a configured-root junction swap before reading outside the root", async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-kb-read-outside-"));
+    const outside = await createFixtureFolder("paperclip-kb-read-outside-");
     const held = `${folder}-held`;
     const fileName = "note.md";
     await fs.writeFile(path.join(folder, fileName), "INSIDE\n", "utf8");
@@ -73,7 +103,7 @@ describe("knowledge-base validation", () => {
       } catch {
         // The original directory may not have moved.
       }
-      await fs.rm(outside, { recursive: true, force: true });
+      await removeFixtureFolder(outside);
     }
   });
 
@@ -162,6 +192,132 @@ describe("knowledge-base validation", () => {
     expect(result.findings).toContainEqual(expect.objectContaining({ kind: "stale_active_note", path: "old.md" }));
   });
 
+  it.each(["decision", "outcome"])("does not recommend changing an old, unlinked %s record", async (recordType) => {
+    await fs.mkdir(path.join(folder, "records"));
+    const recordPath = `records/${recordType}.md`;
+    const original = note(
+      `name: Dated record\nkind: project\nstatus: active\nupdated: 2026-01-01\nrecord_type: ${recordType}`,
+      "Evidence recorded on that date.",
+    );
+    await fs.writeFile(path.join(folder, recordPath), original);
+
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z") });
+    expect(result.error).toBeNull();
+    expect(result.filesScanned).toBe(1);
+    expect(result.findings).toEqual([]);
+    expect(await fs.readFile(path.join(folder, recordPath), "utf8")).toBe(original);
+  });
+
+  it.each([
+    ["ordinary", ""],
+    ["unknown", "record_type: memo"],
+    ["capitalized decision", "record_type: Decision"],
+    ["capitalized outcome", "record_type: OUTCOME"],
+    ["list value", "record_type: [decision]"],
+    ["object value", "record_type: {type: outcome}"],
+    ["empty value", "record_type:"],
+    ["comment suffix", "record_type: decision # dated"],
+  ])("retains stale and orphan findings for an %s note", async (_label, recordField) => {
+    await fs.writeFile(
+      path.join(folder, "old.md"),
+      note(`name: Ordinary note\nkind: project\nstatus: active\nupdated: 2026-01-01\n${recordField}`, "No links."),
+    );
+
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z") });
+    expect(result.error).toBeNull();
+    expect(result.findings).toEqual([
+      expect.objectContaining({ kind: "orphan_note", path: "old.md" }),
+      expect.objectContaining({ kind: "stale_active_note", path: "old.md" }),
+    ]);
+  });
+
+  it.each(["decision", "outcome"])("keeps header, broken-link and GAP findings on a %s record", async (recordType) => {
+    await fs.writeFile(
+      path.join(folder, "record.md"),
+      note(
+        `name: Dated record\nkind: invalid\nstatus: active\nupdated: 2026-01-01\nrecord_type: ${recordType}`,
+        "[Missing evidence](missing.md)\nGAP: confirm the evidence",
+      ),
+    );
+
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z") });
+    expect(result.error).toBeNull();
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "malformed_frontmatter", path: "record.md" }),
+      expect.objectContaining({ kind: "broken_relative_link", path: "record.md", details: expect.objectContaining({ target: "missing.md" }) }),
+      expect.objectContaining({ kind: "open_gap", path: "record.md" }),
+    ]));
+  });
+
+  it("does not interpret a multiline record type as an exemption", async () => {
+    await fs.writeFile(
+      path.join(folder, "old.md"),
+      note("name: Old\nkind: project\nstatus: active\nupdated: 2026-01-01\nrecord_type:\n  - decision", "No links."),
+    );
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z") });
+    expect(result.error).toBeNull();
+    expect(result.findings).toEqual([
+      expect.objectContaining({ kind: "malformed_frontmatter", path: "old.md" }),
+      expect.objectContaining({ kind: "stale_active_note", path: "old.md" }),
+    ]);
+  });
+
+  it("accepts an outcome's matching Drive link to a decision without changing either record", async () => {
+    const decision = note(
+      "name: Decision\nkind: project\nstatus: active\nupdated: 2026-01-01\nrecord_type: decision\ndrive_file_id: example-decision-id",
+      "Original decision.",
+    );
+    const outcome = note(
+      "name: Outcome\nkind: project\nstatus: active\nupdated: 2026-01-02\nrecord_type: outcome\ndrive_file_id: example-outcome-id",
+      "[Decision](decision.md) (Drive-ID: example-decision-id)",
+    );
+    await fs.writeFile(path.join(folder, "decision.md"), decision);
+    await fs.writeFile(path.join(folder, "outcome.md"), outcome);
+
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z"), driveLinkMode: true });
+    expect(result.error).toBeNull();
+    expect(result.filesScanned).toBe(2);
+    expect(result.findings).toEqual([]);
+    expect(await fs.readFile(path.join(folder, "decision.md"), "utf8")).toBe(decision);
+    expect(await fs.readFile(path.join(folder, "outcome.md"), "utf8")).toBe(outcome);
+  });
+
+  it("still reports Drive identity and annotation problems on dated records", async () => {
+    const records = [
+      ["decision.md", "decision", "drive_file_id: example-decision-id", "Original decision."],
+      ["other.md", "decision", "drive_file_id: example-other-id", "Another decision."],
+      ["duplicate.md", "decision", "drive_file_id: example-other-id", "Duplicate identity."],
+      ["invalid.md", "outcome", "drive_file_id: bad id", "Invalid declared identity."],
+      ["aliases.md", "outcome", "drive_file_id: example-alias-one\ndrive_id: example-alias-two", "Conflicting aliases."],
+      ["outcome.md", "outcome", "drive_file_id: example-outcome-id", [
+        "[Missing annotation](decision.md)",
+        "[Invalid annotation](decision.md) (Drive-ID: bad!)",
+        "[Wrong identity](decision.md) (Drive-ID: example-other-id)",
+        "[Unknown identity](decision.md) (Drive-ID: example-missing-id)",
+      ].join("\n")],
+    ];
+    for (const [fileName, recordType, identity, body] of records) {
+      await fs.writeFile(path.join(folder, fileName!), note(
+        `name: Dated record\nkind: project\nstatus: active\nupdated: 2026-01-01\nrecord_type: ${recordType}\n${identity}`,
+        body!,
+      ));
+    }
+
+    const result = await validateKnowledgeBase(folder, "manual", { now: new Date("2026-10-19T00:00:00Z"), driveLinkMode: true });
+    expect(result.error).toBeNull();
+    expect(result.filesScanned).toBe(6);
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "invalid_drive_id", path: "invalid.md" }),
+      expect.objectContaining({ kind: "invalid_drive_id", path: "aliases.md" }),
+      expect.objectContaining({ kind: "missing_drive_id", path: "outcome.md", line: 9 }),
+      expect.objectContaining({ kind: "invalid_drive_id", path: "outcome.md", line: 10 }),
+      expect.objectContaining({ kind: "conflicting_drive_id", path: "outcome.md", line: 11 }),
+      expect.objectContaining({ kind: "duplicate_drive_id", path: "outcome.md", line: 11 }),
+      expect.objectContaining({ kind: "unresolved_drive_id", path: "outcome.md", line: 12 }),
+    ]));
+    expect(result.findings.some((item) => item.kind === "stale_active_note" || item.kind === "orphan_note")).toBe(false);
+  });
+
   it("does not let a self-link hide an orphan note", async () => {
     await fs.writeFile(
       path.join(folder, "self.md"),
@@ -209,7 +365,7 @@ describe("knowledge-base validation", () => {
   });
 
   it.skipIf(process.platform === "win32")("does not follow linked entries", async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-kb-outside-"));
+    const outside = await createFixtureFolder("paperclip-kb-outside-");
     try {
       await fs.writeFile(path.join(outside, "secret.md"), note("name: Secret\nkind: reference\nupdated: 2026-10-14", "Private"));
       await fs.symlink(outside, path.join(folder, "linked"), "dir");
@@ -217,12 +373,12 @@ describe("knowledge-base validation", () => {
       expect(result.filesScanned).toBe(0);
       expect(result.findings).toEqual([expect.objectContaining({ kind: "unsafe_entry", path: "linked" })]);
     } finally {
-      await fs.rm(outside, { recursive: true, force: true });
+      await removeFixtureFolder(outside);
     }
   });
 
   it.skipIf(process.platform === "win32")("refuses a file swapped to an outside symlink after opening", async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-kb-swap-"));
+    const outside = await createFixtureFolder("paperclip-kb-swap-");
     const file = path.join(folder, "note.md");
     try {
       await fs.writeFile(file, note("name: Safe\nkind: reference\nupdated: 2026-10-14", "Safe"));
@@ -239,14 +395,14 @@ describe("knowledge-base validation", () => {
       });
       expect(result.findings).toEqual([expect.objectContaining({ kind: "unsafe_entry", path: "note.md" })]);
     } finally {
-      await fs.rm(outside, { recursive: true, force: true });
+      await removeFixtureFolder(outside);
     }
   });
 });
 
 describe("knowledge-base index", () => {
   it("refuses a configured-root junction swap during root validation", async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-kb-write-outside-"));
+    const outside = await createFixtureFolder("paperclip-kb-write-outside-");
     const held = `${folder}-held`;
     const outsideIndex = path.join(outside, "MEMORY.md");
     await fs.writeFile(outsideIndex, "ORIGINAL OUTSIDE\n", "utf8");
@@ -280,7 +436,7 @@ describe("knowledge-base index", () => {
       } catch {
         // The original directory may not have moved.
       }
-      await fs.rm(outside, { recursive: true, force: true });
+      await removeFixtureFolder(outside);
     }
   });
 
