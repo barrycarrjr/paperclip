@@ -442,6 +442,16 @@ The runtime passes the native `--advisor` flag on fresh and resumed invocations.
 
 Advisor calls have no separate call cap and consume provider usage or plan limits. The main model and run timeout/turn limits remain unchanged. Reported native per-model usage can contain provider estimates; missing advisor consumption stays unknown. Automatic model routing and forced consultation are outside this setting. See [Claude Code advisor requirements, behavior and cost](https://code.claude.com/docs/en/advisor).
 
+## Mail Triage Approvals
+
+Mail triage can save its reading position (`email_set_triage_cursor`) and record
+sender suggestions (`email_add_to_review_queue`) without a company action
+approval. These only update the agent's working state. Recording a suggestion
+does not move mail or apply a sender rule; the operator decides through the
+mail review controls. Explicit tool action declarations and operation approval
+requirements still apply. Existing pending approval cards are not removed by
+this classification change.
+
 ## Quick Health Checks
 
 In another terminal:

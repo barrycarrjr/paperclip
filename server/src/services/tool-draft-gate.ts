@@ -75,7 +75,7 @@ const LEGACY_ACTION_TYPES = new Map<string, AgentActionType>([
   ["email-tools:email_move", "change_knowledge_base"],
   // Not an action: see AGENT_BOOKKEEPING_TOOLS.
   // ["email-tools:email_set_triage_cursor", "change_knowledge_base"],
-  ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
+  // ["email-tools:email_add_to_review_queue", "change_knowledge_base"],
   ["email-tools:email_save_contact", "change_knowledge_base"],
   ["email-tools:email_import_contacts", "change_knowledge_base"],
   ["help-scout:helpscout_send_reply", "send_message"],
@@ -231,9 +231,13 @@ const LEGACY_READ_TOOLS = new Set([
  * The triage cursor is a bookmark of how far the mail triage run has read.
  * Asking about it raised a card after every triage run, and approving the
  * card woke the agent, which ended its run by asking for the bookmark again.
+ * Adding sender suggestions to the review queue is also working state: it
+ * records a proposed decision without changing mail or applying a sender rule.
+ * Asking before recording the suggestion adds an approval before the decision.
  */
 const AGENT_BOOKKEEPING_TOOLS = new Set([
   "email-tools:email_set_triage_cursor",
+  "email-tools:email_add_to_review_queue",
 ]);
 
 export function isLikelyBrokeredMutationToolName(namespacedName: string): boolean {
