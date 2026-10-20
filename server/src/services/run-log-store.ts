@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { withRunLogFileLock } from "./run-log-lock.js";
 
 export type RunLogStoreType = "local_file";
 
@@ -50,7 +51,7 @@ function resolveWithin(basePath: string, relativePath: string) {
   return resolved;
 }
 
-function createLocalFileRunLogStore(basePath: string): RunLogStore {
+export function createLocalFileRunLogStore(basePath: string): RunLogStore {
   async function ensureDir(relativeDir: string) {
     const dir = resolveWithin(basePath, relativeDir);
     await fs.mkdir(dir, { recursive: true });
@@ -94,45 +95,51 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
 
   return {
     async begin(input) {
-      const [companyId, agentId] = safeSegments(input.companyId, input.agentId);
-      const runId = safeSegments(input.runId)[0]!;
-      const relDir = path.join(companyId, agentId);
-      const relPath = path.join(relDir, `${runId}.ndjson`);
-      await ensureDir(relDir);
+      return withRunLogFileLock(basePath, path.join(...safeSegments(input.companyId, input.agentId), `${safeSegments(input.runId)[0]!}.ndjson`), async () => {
+        const [companyId, agentId] = safeSegments(input.companyId, input.agentId);
+        const runId = safeSegments(input.runId)[0]!;
+        const relDir = path.join(companyId, agentId);
+        const relPath = path.join(relDir, `${runId}.ndjson`);
+        await ensureDir(relDir);
 
-      const absPath = resolveWithin(basePath, relPath);
-      await fs.writeFile(absPath, "", "utf8");
+        const absPath = resolveWithin(basePath, relPath);
+        await fs.writeFile(absPath, "", "utf8");
 
-      return { store: "local_file", logRef: relPath };
+        return { store: "local_file", logRef: relPath };
+      });
     },
 
     async append(handle, event) {
-      if (handle.store !== "local_file") return 0;
-      const absPath = resolveWithin(basePath, handle.logRef);
-      const line = JSON.stringify({
-        ts: event.ts,
-        stream: event.stream,
-        chunk: event.chunk,
+      return withRunLogFileLock(basePath, handle.logRef, async () => {
+        if (handle.store !== "local_file") return 0;
+        const absPath = resolveWithin(basePath, handle.logRef);
+        const line = JSON.stringify({
+          ts: event.ts,
+          stream: event.stream,
+          chunk: event.chunk,
+        });
+        const persisted = `${line}\n`;
+        await fs.appendFile(absPath, persisted, "utf8");
+        return Buffer.byteLength(persisted, "utf8");
       });
-      const persisted = `${line}\n`;
-      await fs.appendFile(absPath, persisted, "utf8");
-      return Buffer.byteLength(persisted, "utf8");
     },
 
     async finalize(handle) {
-      if (handle.store !== "local_file") {
-        return { bytes: 0, compressed: false };
-      }
-      const absPath = resolveWithin(basePath, handle.logRef);
-      const stat = await fs.stat(absPath).catch(() => null);
-      if (!stat) throw notFound("Run log not found");
+      return withRunLogFileLock(basePath, handle.logRef, async () => {
+        if (handle.store !== "local_file") {
+          return { bytes: 0, compressed: false };
+        }
+        const absPath = resolveWithin(basePath, handle.logRef);
+        const stat = await fs.stat(absPath).catch(() => null);
+        if (!stat) throw notFound("Run log not found");
 
-      const hash = await sha256File(absPath);
-      return {
-        bytes: stat.size,
-        sha256: hash,
-        compressed: false,
-      };
+        const hash = await sha256File(absPath);
+        return {
+          bytes: stat.size,
+          sha256: hash,
+          compressed: false,
+        };
+      });
     },
 
     async read(handle, opts) {
@@ -149,9 +156,14 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
 
 let cachedStore: RunLogStore | null = null;
 
+/** Folder the local-file run logs are written under. */
+export function runLogBaseDir(): string {
+  return process.env.RUN_LOG_BASE_PATH ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "run-logs");
+}
+
 export function getRunLogStore() {
   if (cachedStore) return cachedStore;
-  const basePath = process.env.RUN_LOG_BASE_PATH ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "run-logs");
+  const basePath = runLogBaseDir();
   cachedStore = createLocalFileRunLogStore(basePath);
   return cachedStore;
 }

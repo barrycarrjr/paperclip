@@ -1,4 +1,5 @@
 import { redactSensitive } from "./redact-sensitive.js";
+import { isManualRedactionRequest } from "./manual-redaction-privacy.js";
 
 /**
  * Extra fields for a failed request's log line (status 400 and up): the error
@@ -8,6 +9,9 @@ import { redactSensitive } from "./redact-sensitive.js";
  * the line is written to the server log file.
  */
 export function failedRequestLogProps(req: unknown, res: unknown): Record<string, unknown> {
+  if (isManualRedactionRequest(req as { originalUrl?: string; url?: string })) {
+    return { manualRedaction: true };
+  }
   const ctx = (res as { __errorContext?: Record<string, unknown> }).__errorContext;
   if (ctx) {
     return {

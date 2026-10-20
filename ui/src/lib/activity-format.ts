@@ -1,3 +1,4 @@
+import { commentRedactionActivityStatus } from "./comment-redaction-result";
 import type { Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "./company-members";
 
@@ -28,6 +29,8 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.released": "released",
   "issue.comment_added": "commented on",
   "issue.comment_cancelled": "cancelled a queued comment on",
+  "issue.comment_redacted": "redacted a comment on",
+  "issue.comment_redaction_authorized": "authorized manual comment redaction on",
   "issue.attachment_added": "attached file to",
   "issue.attachment_removed": "removed attachment from",
   "issue.document_created": "created document for",
@@ -95,6 +98,8 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.released": "released the issue",
   "issue.comment_added": "added a comment",
   "issue.comment_cancelled": "cancelled a queued comment",
+  "issue.comment_redacted": "redacted a comment",
+  "issue.comment_redaction_authorized": "authorized manual comment redaction",
   "issue.attachment_added": "added an attachment",
   "issue.attachment_removed": "removed an attachment",
   "issue.document_created": "created a document",
@@ -314,6 +319,10 @@ export function formatActivityVerb(
   details?: Record<string, unknown> | null,
   options: ActivityFormatOptions = {},
 ): string {
+  if (action === "issue.comment_redacted") {
+    const state = commentRedactionActivityStatus(details);
+    return `redacted a comment (${state}) on`;
+  }
   if (action === "issue.updated") {
     const issueUpdatedVerb = formatIssueUpdatedVerb(details);
     if (issueUpdatedVerb) return issueUpdatedVerb;
@@ -343,6 +352,10 @@ export function formatIssueActivityAction(
   details?: Record<string, unknown> | null,
   options: ActivityFormatOptions = {},
 ): string {
+  if (action === "issue.comment_redacted") {
+    const state = commentRedactionActivityStatus(details);
+    return `redacted a comment (${state})`;
+  }
   if (action === "issue.updated") {
     const issueUpdatedAction = formatIssueUpdatedAction(details, options);
     if (issueUpdatedAction) return issueUpdatedAction;

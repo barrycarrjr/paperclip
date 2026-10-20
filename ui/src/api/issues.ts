@@ -12,6 +12,10 @@ import type {
   Issue,
   IssueAttachment,
   IssueComment,
+  RedactIssueComment,
+  AuthorizeCommentRedaction,
+  CommentRedactionResponse,
+  CommentRedactionAuthorizationResponse,
   IssueDocument,
   IssueLabel,
   IssuePriority,
@@ -386,6 +390,12 @@ export const issuesApi = {
   },
   cancelComment: (id: string, commentId: string) =>
     api.delete<IssueComment>(`/issues/${id}/comments/${commentId}`),
+  previewCommentRedaction: (id: string, commentId: string, data: RedactIssueComment) =>
+    api.post<import("@paperclipai/shared").CommentRedactionImpact>(`/issues/${id}/comments/${commentId}/redaction-preview`, data),
+  redactComment: (id: string, commentId: string, data: RedactIssueComment) =>
+    api.post<CommentRedactionResponse>(`/issues/${id}/comments/${commentId}/redact`, data),
+  authorizeCommentRedaction: (id: string, commentId: string, data: AuthorizeCommentRedaction) =>
+    api.post<CommentRedactionAuthorizationResponse>(`/issues/${id}/comments/${commentId}/redaction-authorizations`, data),
   listDocuments: (id: string, options?: { includeSystem?: boolean }) =>
     api.get<IssueDocument[]>(
       `/issues/${id}/documents${options?.includeSystem ? "?includeSystem=true" : ""}`,

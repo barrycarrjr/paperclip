@@ -1,3 +1,4 @@
+import { commentRedactionResultToast } from "@/lib/comment-redaction-result";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type Ref } from "react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
@@ -117,6 +118,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { formatIssueActivityAction } from "@/lib/activity-format";
 import { buildIssuePropertiesPanelKey } from "../lib/issue-properties-panel-key";
+import { RedactCommentDialog } from "../components/RedactCommentDialog";
 import { shouldRenderRichSubIssuesSection } from "../lib/issue-detail-subissues";
 import { filterIssueDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
@@ -546,6 +548,7 @@ type IssueDetailChatTabProps = {
   onAttachImage: (file: File) => Promise<IssueAttachment | void>;
   onInterruptQueued: (runId: string) => Promise<void>;
   onCancelQueued: (commentId: string) => void;
+  onRedactComment?: (commentId: string, body: string) => void;
   interruptingQueuedRunId: string | null;
   onImageClick: (src: string) => void;
   onAcceptInteraction: (
@@ -591,6 +594,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   onAttachImage,
   onInterruptQueued,
   onCancelQueued,
+  onRedactComment,
   interruptingQueuedRunId,
   onImageClick,
   onAcceptInteraction,
@@ -775,6 +779,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         onAttachImage={onAttachImage}
         onInterruptQueued={onInterruptQueued}
         onCancelQueued={onCancelQueued}
+        onRedactComment={onRedactComment}
         interruptingQueuedRunId={interruptingQueuedRunId}
         stoppingRunId={interruptingQueuedRunId}
         onStopRun={onInterruptQueued}
@@ -1175,13 +1180,19 @@ export function IssueDetail() {
   const { data: boardAccess } = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
     queryFn: () => accessApi.getCurrentBoardAccess(),
-    enabled: !!session?.user?.id,
+    enabled: sessionReady,
     retry: false,
   });
   const canManageTreeControl = Boolean(
     resolvedCompanyId
     && boardAccess?.companyIds?.includes(resolvedCompanyId),
   );
+  const canRedactComments = Boolean(boardAccess && resolvedCompanyId && (
+    boardAccess.source === "local_implicit" || (
+      boardAccess.companyIds.includes(resolvedCompanyId) && (boardAccess.isInstanceAdmin
+        || boardAccess.memberships?.some((m) => m.companyId === resolvedCompanyId && m.status === "active" && m.membershipRole !== "viewer"))
+    )
+  ));
   const { data: instanceGeneralSettings } = useQuery({
     queryKey: queryKeys.instance.generalSettings,
     queryFn: () => instanceSettingsApi.getGeneral(),
@@ -2021,6 +2032,44 @@ export function IssueDetail() {
       pushToast({
         title: "Interrupt failed",
         body: err instanceof Error ? err.message : "Unable to interrupt the active run",
+        tone: "error",
+      });
+    },
+  });
+
+  // Board only: hide text in a comment (and in Paperclip's stored copies of it).
+  const [redactTarget, setRedactTarget] = useState<{ commentId: string; body: string } | null>(null);
+  const handleRedactComment = useCallback(async (commentId: string) => {
+    try {
+      const comment = await issuesApi.getComment(issueId!, commentId);
+      setRedactTarget({ commentId, body: comment.body });
+    } catch {
+      pushToast({ title: "Unable to open the redaction preview", tone: "error" });
+    }
+  }, [issueId, pushToast]);
+  const redactComment = useMutation({
+    gcTime: 0,
+    mutationFn: async ({ commentId, targets, keepLast4, expectedBody, agentId, impactToken }: {
+      commentId: string; targets: string[]; keepLast4: boolean; expectedBody: string; agentId?: string; impactToken?: string;
+    }) => agentId
+      ? issuesApi.authorizeCommentRedaction(issueId!, commentId, { targets, keepLast4, expectedBody, agentId, impactToken })
+      : issuesApi.redactComment(issueId!, commentId, { targets, keepLast4, expectedBody, impactToken }),
+    onSuccess: (result) => {
+      setRedactTarget(null);
+      redactComment.reset();
+      invalidateIssueDetail();
+      invalidateIssueThreadLazily();
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueId!) });
+      if ("authorizationId" in result) {
+        pushToast({ title: "Agent authorized once", body: "Start or mention the named agent in this issue so it sees the board instruction. Permission expires in 30 minutes. No run was started.", tone: "success" });
+        return;
+      }
+      pushToast(commentRedactionResultToast(result));
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Redact failed",
+        body: err instanceof Error ? err.message : "Unable to redact the comment",
         tone: "error",
       });
     },
@@ -3530,6 +3579,7 @@ export function IssueDetail() {
               onAttachImage={handleCommentAttachImage}
               onInterruptQueued={handleInterruptQueuedRun}
               onCancelQueued={handleCancelQueuedComment}
+              onRedactComment={canRedactComments ? handleRedactComment : undefined}
               interruptingQueuedRunId={interruptQueuedComment.isPending ? interruptQueuedComment.variables ?? null : null}
               onImageClick={handleChatImageClick}
               onAcceptInteraction={handleAcceptInteraction}
@@ -3580,6 +3630,19 @@ export function IssueDetail() {
       </Tabs>
       </PageSection>
 
+      <RedactCommentDialog
+        open={redactTarget !== null}
+        body={redactTarget?.body ?? ""}
+        pending={redactComment.isPending}
+        agents={(agents ?? []).filter((agent) => !["terminated", "paused", "pending_approval"].includes(agent.status))}
+        onOpenChange={(open) => {
+          if (!open && !redactComment.isPending) setRedactTarget(null);
+        }}
+        onPreview={(targets, keepLast4) => issuesApi.previewCommentRedaction(issueId!, redactTarget!.commentId, { targets, keepLast4, expectedBody: redactTarget!.body })}
+        onConfirm={(targets, keepLast4, agentId, impactToken) => {
+          if (redactTarget) redactComment.mutate({ commentId: redactTarget.commentId, targets, keepLast4, agentId, expectedBody: redactTarget.body, impactToken });
+        }}
+      />
       <Dialog open={treeControlOpen} onOpenChange={setTreeControlOpen}>
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
           <DialogHeader className="border-b border-border/60 px-6 pb-4 pr-12 pt-6">
