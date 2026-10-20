@@ -7,6 +7,7 @@ import { WorkspaceUnavailable } from "@/components/WorkspaceUnavailable";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
+import { describeError } from "@/lib/error-message";
 import { PluginSlotMount } from "@/plugins/slots";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, PlugZap } from "lucide-react";
@@ -51,9 +52,9 @@ export function PluginPage() {
     [companies, resolvedCompanyId],
   );
 
-  const { data: contributions } = useQuery({
-    queryKey: queryKeys.plugins.uiContributions,
-    queryFn: () => pluginsApi.listUiContributions(),
+  const { data: contributions, error } = useQuery({
+    queryKey: queryKeys.plugins.companyUiContributions(resolvedCompanyId),
+    queryFn: () => pluginsApi.listUiContributions(resolvedCompanyId),
     enabled: !!resolvedCompanyId && (!!pluginId || !!pluginRoutePath),
   });
 
@@ -116,6 +117,10 @@ export function PluginPage() {
     );
   }
 
+  if (error) {
+    return <div role="alert" className="text-sm text-destructive">Plugin extensions unavailable: {describeError(error)}</div>;
+  }
+
   if (!contributions) {
     return <div className="text-sm text-muted-foreground">Loading…</div>;
   }
@@ -148,8 +153,8 @@ export function PluginPage() {
       <WorkspaceUnavailable
         title="This plugin"
         icon={PlugZap}
-        reason="It does not add a page of its own."
-        whatToDo="Plugins can add tools, jobs or panels without having a page. Its settings show what it does provide."
+        reason="It has no page available for this company."
+        whatToDo="The plugin may not provide a page, or its settings may limit which companies can use it."
         actionHref={settingsPath}
         actionLabel="Open plugin settings"
       />

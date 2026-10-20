@@ -424,6 +424,8 @@ export const pluginsApi = {
   /**
    * Returns normalized UI contribution declarations for ready plugins.
    * Used by the slot host runtime and launcher discovery surfaces.
+   * With companyId, returns only contributions visible in that company.
+   * Omitting companyId preserves instance-wide settings discovery.
    *
    * Response shape:
    * - `slots`: concrete React mount declarations from `manifest.ui.slots`
@@ -438,8 +440,10 @@ export const pluginsApi = {
    * );
    * ```
    */
-  listUiContributions: () =>
-    api.get<PluginUiContribution[]>("/plugins/ui-contributions"),
+  listUiContributions: (companyId?: string | null) =>
+    api.get<PluginUiContribution[]>(
+      `/plugins/ui-contributions${companyId != null ? `?companyId=${encodeURIComponent(companyId)}` : ""}`,
+    ),
 
   /**
    * Per-company connection status for every plugin connector declared for a

@@ -17,6 +17,7 @@ import * as ReactDom from "react-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/lib/queryKeys";
 
 vi.mock("@/api/auth", () => ({
   authApi: { getSession: async () => null },
@@ -24,6 +25,7 @@ vi.mock("@/api/auth", () => ({
 
 const {
   PluginSlotMount,
+  PluginSlotOutlet,
   ensurePluginContributionLoaded,
   getPluginLoadFailure,
   resolveRegisteredPluginComponent,
@@ -31,6 +33,7 @@ const {
   _buildReactShimSourceForTests,
   _buildReactDomShimSourceForTests,
   _collectReactExportNamesForTests,
+  registerPluginReactComponent,
 } = await import("./slots");
 
 type Contribution = Parameters<typeof ensurePluginContributionLoaded>[0];
@@ -128,7 +131,7 @@ describe("plugin React stand-in module", () => {
     );
   }
 
-  async function renderSlot(contribution: Contribution) {
+  async function renderSlot(contribution: Contribution, className?: string) {
     const root = createRoot(container);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
@@ -138,12 +141,121 @@ describe("plugin React stand-in module", () => {
             slot={resolvedSlot(contribution)}
             context={{ companyId: "company-1" }}
             missingBehavior="placeholder"
+            className={className}
           />
         </QueryClientProvider>,
       );
     });
     return root;
   }
+
+  it("only collapses the styled frame when the component renders no content", async () => {
+    const contribution = makeContribution();
+    registerPluginReactComponent(contribution.pluginKey, "ReviewsPage", () => null);
+    const root = await renderSlot(contribution, "rounded-xl border p-4");
+    const frame = container.querySelector(".empty\\:hidden");
+    expect(frame).not.toBeNull();
+    expect(frame?.matches(":empty")).toBe(true);
+    expect(frame?.classList.contains("border")).toBe(true);
+    act(() => root.unmount());
+
+    registerPluginReactComponent(contribution.pluginKey, "ReviewsPage", () => <p>Loading widget...</p>);
+    const loadingRoot = await renderSlot(contribution, "rounded-xl border p-4");
+    expect(container.querySelector(".empty\\:hidden")?.matches(":empty")).toBe(false);
+    expect(container.textContent).toBe("Loading widget...");
+    act(() => loadingRoot.unmount());
+
+    registerPluginReactComponent(contribution.pluginKey, "ReviewsPage", () => <a href="/EXAMPLE/agents/scout">Scout</a>);
+    const contentRoot = await renderSlot(contribution, "rounded-xl border p-4");
+    expect(container.querySelector(".empty\\:hidden")?.matches(":empty")).toBe(false);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/EXAMPLE/agents/scout");
+    act(() => contentRoot.unmount());
+  });
+
+  it("keeps a render failure visible in a styled frame", async () => {
+    const contribution = makeContribution();
+    registerPluginReactComponent(contribution.pluginKey, "ReviewsPage", () => { throw new Error("Widget failed"); });
+    const root = await renderSlot(contribution, "rounded-xl border p-4");
+    expect(container.textContent).toContain("failed to render");
+    expect(container.querySelector(":scope > div")?.matches(":empty")).toBe(false);
+    act(() => root.unmount());
+  });
+
+  it("renders actual outlets with empty, loading, content, text and error frames as their content changes", async () => {
+    serveBundle(`
+      import { createElement } from "react";
+      export function Widget({ context }) {
+        if (context.entityId === "null") return null;
+        if (context.entityId === "error") throw new Error("Synthetic widget failure");
+        if (context.entityId === "text") return "Plain text widget";
+        if (context.entityId === "table") return createElement("table", null, createElement("tbody", null, createElement("tr", null, createElement("td", null, "Table content"))));
+        return createElement("p", null, context.entityId === "loading" ? "Loading widget..." : "Widget content");
+      }
+    `);
+    const contribution = makeContribution({ slots: [{ id: "widget", type: "dashboardWidget", exportName: "Widget", displayName: "Widget" }] });
+    await ensurePluginContributionLoaded(contribution);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(queryKeys.plugins.companyUiContributions("company-1"), [contribution]);
+    const root = createRoot(container);
+    async function render(entityId: string, styled = true) {
+      await act(async () => root.render(<QueryClientProvider client={client}>
+        <PluginSlotOutlet key={entityId === "error" ? "error" : "normal"} slotTypes={["dashboardWidget"]} context={{ companyId: "company-1", entityId }} className="grid gap-4" itemClassName={styled ? "rounded-xl border p-4" : undefined} />
+      </QueryClientProvider>));
+    }
+    for (const styled of [true, false]) {
+      await render("null", styled);
+      expect(container.querySelector("[data-plugin-slot-frame]")?.matches(":empty")).toBe(true);
+      await render("loading", styled);
+      expect(container.textContent).toBe("Loading widget...");
+      await render("content", styled);
+      expect(container.textContent).toBe("Widget content");
+      await render("text", styled);
+      expect(container.querySelector("[data-plugin-slot-frame]")?.textContent).toBe("Plain text widget");
+      await render("table", styled);
+      expect(container.querySelector("table td")?.textContent).toBe("Table content");
+      await render("null", styled);
+      expect(container.querySelector("[data-plugin-slot-frame]")?.matches(":empty")).toBe(true);
+    }
+    await render("error");
+    expect(container.textContent).toContain("failed to render");
+    expect(container.querySelector("[data-plugin-slot-frame]")).toBeNull();
+    act(() => root.unmount());
+    client.clear();
+  });
+
+  it("keeps custom elements, placeholders and bundle errors as real outlet children", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const root = createRoot(container);
+    async function render(contribution: Contribution, missingBehavior: "hidden" | "placeholder") {
+      client.setQueryData(queryKeys.plugins.companyUiContributions("company-1"), [contribution]);
+      await act(async () => root.render(<QueryClientProvider client={client}>
+        <PluginSlotOutlet slotTypes={["dashboardWidget"]} context={{ companyId: "company-1" }} className="grid gap-4" missingBehavior={missingBehavior} />
+      </QueryClientProvider>));
+    }
+    const slots = [{ id: "widget", type: "dashboardWidget" as const, exportName: "Widget", displayName: "Widget" }];
+    serveBundle('export const Widget = "example-widget";');
+    const custom = makeContribution({ slots });
+    await ensurePluginContributionLoaded(custom);
+    await render(custom, "hidden");
+    expect(container.querySelector("example-widget")).not.toBeNull();
+    expect(container.querySelector("example-widget")?.hasAttribute("data-plugin-slot-frame")).toBe(false);
+
+    serveBundle("export const Other = 1;");
+    const missing = makeContribution({ pluginId: "missing", pluginKey: "missing", slots });
+    await ensurePluginContributionLoaded(missing);
+    await render(missing, "hidden");
+    expect(container.firstElementChild?.childNodes.length).toBe(0);
+    await render(missing, "placeholder");
+    expect(container.textContent).toContain("Google reviews: Widget");
+
+    serveBundle('throw new Error("Synthetic bundle failure");');
+    const failed = makeContribution({ pluginId: "failed", pluginKey: "failed", slots });
+    await ensurePluginContributionLoaded(failed);
+    await render(failed, "hidden");
+    expect(container.querySelector('[data-testid="plugin-load-failure"]')).not.toBeNull();
+    act(() => root.unmount());
+    client.clear();
+  });
 
   // -------------------------------------------------------------------------
   // What the stand-in decides to export
