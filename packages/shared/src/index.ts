@@ -650,6 +650,10 @@ export type {
 export { KNOWLEDGE_BASE_FINDING_KINDS } from "./types/memory-folder.js";
 export { DRIVE_FILE_ID_PATTERN, DRIVE_FILE_ID_FIELDS, declaredDriveFileId } from "./validators/document-links.js";
 export { applyDocumentLinksSchema } from "./validators/memory-folder.js";
+export { validateMemoryFileHeader } from "./knowledge-base/frontmatter.js";
+export type { MemoryHeaderValidation } from "./knowledge-base/frontmatter.js";
+export { documentReferences, driveIdFromUrl, relativeDocumentTarget, documentPath, documentLink } from "./knowledge-base/document-references.js";
+export type { DocumentReference } from "./knowledge-base/document-references.js";
 export type {
   CalendarEventKind,
   CalendarChannel,

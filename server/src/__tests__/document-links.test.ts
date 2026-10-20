@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { describe, it, expect } from "vitest";
-import { documentReferences, driveIdFromUrl } from "../services/document-links.js";
+import { describe, it, expect, vi } from "vitest";
+import { documentReferences, driveIdFromUrl, documentPath, documentLink } from "../services/document-links.js";
 import { validateKnowledgeBase, validateMemoryFileHeader } from "../services/memory-folder-validator.js";
 import { parseMemoryFile, serializeMemoryFile } from "../services/memory-folder-markdown.js";
 
@@ -11,6 +11,32 @@ const B = "FileIdentity_B123";
 const note = (name: string, identity: string, content: string) => `---\nname: ${name}\nkind: reference\nupdated: 2026-10-14\n${identity}\n---\n${content}\n`;
 
 describe("declared document references", () => {
+  it.each([
+    ["network-share", process.platform === "win32" ? "\\\\server\\share\\dir" : "//server/share/dir"],
+    ["device-path", process.platform === "win32" ? "\\\\?\\C:\\dir" : "//?/C:/dir"],
+  ])("renders top-level document links with a normalized %s working directory", (_name, cwd) => {
+    const originalCwd = process.cwd();
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    let actual;
+    try {
+      actual = {
+        path: documentPath("note.md", "target.md"),
+        link: documentLink("Target", "note.md", "areas/a b.md", A, "#heading"),
+        nestedPath: documentPath("sub/note.md", "target.md"),
+        nestedLink: documentLink("Target", "sub/note.md", "target.md", A),
+      };
+    } finally {
+      cwdSpy.mockRestore();
+    }
+    expect(process.cwd()).toBe(originalCwd);
+    expect(actual).toEqual({
+      path: "target.md",
+      link: `[Target](areas/a%20b.md#heading) (Drive-ID: ${A})`,
+      nestedPath: "../target.md",
+      nestedLink: `[Target](../target.md) (Drive-ID: ${A})`,
+    });
+  });
+
   it("reads consistent aliases, blocks disagreement, and exports one canonical identity", () => {
     const source = note("Target", `drive_id: ${A}\ndriveFileId: ${A}`, "Body");
     expect(validateMemoryFileHeader(source).valid).toBe(true);
