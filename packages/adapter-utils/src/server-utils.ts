@@ -1083,9 +1083,22 @@ export function applyPaperclipWorkspaceEnv(
   return env;
 }
 
+const SERVER_OWNED_CREDENTIAL_ENV_KEYS = new Set([
+  "BETTER_AUTH_SECRET",
+  "DATABASE_URL",
+  "DATABASE_MIGRATION_URL",
+]);
+
 export function sanitizeInheritedPaperclipEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   for (const key of Object.keys(env)) {
+    // Windows environment names are case-insensitive. Remove every inherited
+    // spelling before merging explicit adapter bindings in buildSpawnChildEnv.
+    const credentialKey = process.platform === "win32" ? key.toUpperCase() : key;
+    if (SERVER_OWNED_CREDENTIAL_ENV_KEYS.has(credentialKey)) {
+      delete env[key];
+      continue;
+    }
     if (!key.startsWith("PAPERCLIP_")) continue;
     if (key === "PAPERCLIP_RUNTIME_API_URL") continue;
     if (key === "PAPERCLIP_LISTEN_HOST") continue;
@@ -1710,6 +1723,8 @@ const CLAUDE_CODE_NESTING_VARS = [
  * Build the environment for a spawned child process (e.g. the `claude` CLI):
  * the inherited, Paperclip-sanitized process env overlaid with the
  * adapter-provided `overrideEnv`.
+ * Server database/auth credentials are excluded from inheritance; explicit
+ * adapter bindings for those names, including empty strings, remain supported.
  *
  * Strips the Claude Code nesting guards and the desktop-injected OAuth token
  * that leak in from the inherited env, so a spawned `claude` starts cleanly and
