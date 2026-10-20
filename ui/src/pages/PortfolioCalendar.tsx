@@ -275,7 +275,16 @@ export function PortfolioCalendar() {
       const allowed = new Set(statusFilter);
       list = list.filter((occ) => allowed.has(occ.status));
     }
-    return list;
+    const seen = new Set<string>();
+    return list.filter((occ) => {
+      const dedupeKey =
+        occ.source === "paperclip"
+          ? `${occ.companyId}:${occ.eventId}:${occ.start}`
+          : `${occ.source}:${occ.eventId}:${occ.start}`;
+      if (seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
+      return true;
+    });
   }, [monthData?.occurrences, companyIdFilter, statusFilter]);
 
   const fireMutation = useMutation({

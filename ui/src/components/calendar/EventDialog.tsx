@@ -449,7 +449,9 @@ export function EventDialog({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Which company this reminder belongs to. It shows on that company's calendar too.
+                {destination === "google"
+                  ? "Which company this event belongs to. Business events are tagged so they route to the correct company."
+                  : "Which company this reminder belongs to. It shows on that company's calendar too."}
               </p>
             </div>
           ) : null}
@@ -466,6 +468,9 @@ export function EventDialog({
                   placeholder="e.g. Weekly Team Standup"
                   autoFocus
                 />
+                <p className="text-[11px] text-muted-foreground">
+                  Syncs to Google Calendar. Business events are auto-tagged with their prefix (e.g. [BIN], [IND]). Untagged events stay Personal.
+                </p>
               </div>
 
               <label className="flex items-center gap-2 text-sm">
