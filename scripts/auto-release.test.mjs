@@ -31,13 +31,13 @@ test("notes name the change, its issues, the pull request and the author", () =>
     pr: {
       number: 42,
       title: "feat(agents): company defaults for run permissions",
-      author: { login: "bryonstout" },
+      author: { login: "example-contributor" },
       closingIssuesReferences: [{ number: 41 }],
     },
   });
   assert.match(notes, /^# v2026\.1008\.2\n/);
   assert.match(notes, /> Released: 2026-10-08/);
   assert.match(notes, /## Features\n\n- \*\*Company defaults for run permissions\.\*\* \(#41, #42\)/);
-  assert.match(notes, /@bryonstout\n$/);
+  assert.match(notes, /@example-contributor\n$/);
   assert.doesNotMatch(notes, /[–—]/);
 });

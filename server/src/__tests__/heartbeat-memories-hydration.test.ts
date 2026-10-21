@@ -20,7 +20,7 @@ describe("buildPaperclipMemoriesMarkdown", () => {
       },
       {
         name: "board_contact",
-        content: "Ping Bryon for board approvals",
+        content: "Ping Jane for board approvals",
         description: null,
         kind: "contact",
       },
@@ -28,7 +28,7 @@ describe("buildPaperclipMemoriesMarkdown", () => {
 
     expect(markdown).toContain("Paperclip company memories:");
     expect(markdown).toContain("- **tech_stack** (frontend guidelines): React 19 with Tailwind v4");
-    expect(markdown).toContain("- **board_contact**: Ping Bryon for board approvals");
+    expect(markdown).toContain("- **board_contact**: Ping Jane for board approvals");
   });
 
   it("indents multi-line memory content cleanly", () => {
