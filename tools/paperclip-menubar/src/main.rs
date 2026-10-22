@@ -488,8 +488,12 @@ fn start_server(settings: &Settings) -> Result<(), String> {
             });
             return Ok(());
         }
+        // With start at login on, the script hands the start to launchd and
+        // exits at once, so only a failed exit means the server is not coming.
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("The launch script exited ({}) before the server answered. {}", status, log_hint));
+            if !status.success() {
+                return Err(format!("The launch script exited ({}) before the server answered. {}", status, log_hint));
+            }
         }
         std::thread::sleep(Duration::from_secs(1));
     }

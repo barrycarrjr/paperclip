@@ -153,10 +153,11 @@ test("every script backs up before it stops the server", { skip }, async () => {
 // The UI passes PAPERCLIP_MAINTENANCE_LOG: the run's output goes there, and it
 // is how the helpers know nobody is watching a terminal.
 
-async function stubMac(inst, { system = "Darwin", openExit = 0, fromUi = true } = {}) {
+async function stubMac(inst, { system = "Darwin", openExit = 0, fromUi = true, loginItem = false } = {}) {
   const { chmod } = await import("node:fs/promises");
   const stubs = {
     uname: `echo ${system}`,
+    launchctl: `echo "launchctl $*" >> "$STUB_LOG"; [ "$1" != print ] || exit ${loginItem ? 0 : 1}`,
     open: `echo "open $*" >> "$STUB_LOG"; exit ${openExit}`,
     osascript: `printf 'osascript' >> "$STUB_LOG"; printf ' [%s]' "$@" >> "$STUB_LOG"; echo >> "$STUB_LOG"`,
     "failing-step": "exit 2",
@@ -233,6 +234,44 @@ test("Linux starts the server in place", { skip }, async () => {
   const log = await readLog(inst);
   assert.match(log, /installed-service\.ts start/);
   assert.doesNotMatch(log, /open -a Terminal/);
+});
+
+test("with the login item loaded, the server starts again through launchd", { skip }, async () => {
+  for (const fromUi of [true, false]) {
+    const inst = await instance();
+    const env = await stubMac(inst, { fromUi, loginItem: true });
+    const result = run("start_after_maintenance", inst, env);
+    assert.equal(result.code, 0, result.stderr);
+    const log = await readLog(inst);
+    assert.match(log, /^launchctl kickstart -k gui\/\d+\/com\.paperclip\.login\.[0-9a-f]{12}$/m);
+    assert.doesNotMatch(log, /installed-service\.ts start|open -a Terminal/);
+  }
+});
+
+const launch = (inst, env, ...args) =>
+  execFileSync("bash", [path.join(path.dirname(common), "launch-paperclip.sh"), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${inst.bin}:${process.env.PATH}`, PAPERCLIP_CONFIG: inst.config, STUB_LOG: inst.log, ...env },
+  });
+
+test("the app hands the start to a loaded login item, without replacing a running server", { skip }, async () => {
+  const inst = await instance();
+  const env = await stubMac(inst, { fromUi: false, loginItem: true });
+  assert.match(launch(inst, env), /starting in the background/);
+  const log = await readLog(inst);
+  assert.match(log, /^launchctl kickstart gui\/\d+\/com\.paperclip\.login\./m);
+  assert.doesNotMatch(log, /installed-service\.ts start/);
+});
+
+test("the login item itself, or no login item, starts the server in place", { skip }, async () => {
+  for (const [loginItem, args] of [[true, ["--login-item"]], [false, []]]) {
+    const inst = await instance();
+    const env = await stubMac(inst, { fromUi: false, loginItem });
+    launch(inst, env, ...args);
+    const log = await readLog(inst);
+    assert.match(log, /installed-service\.ts start/);
+    assert.doesNotMatch(log, /kickstart/);
+  }
 });
 
 test("a failure before stopping says Paperclip is still running, and why", { skip }, async () => {

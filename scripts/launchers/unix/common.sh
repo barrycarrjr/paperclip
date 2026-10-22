@@ -41,6 +41,23 @@ service() {
   pnpm --dir "$PAPERCLIP_SRC" --filter @paperclipai/server exec tsx ../scripts/installed-service.ts "$1"
   if [ "$1" = stop ]; then PAPERCLIP_SERVICE_STOPPED=1; fi
 }
+# The macOS login item (login-item.sh) is a launchd job, one per installation.
+login_item_label() {
+  printf 'com.paperclip.login.%s' "$(printf '%s' "$PAPERCLIP_CONFIG" | shasum -a 256 | cut -c1-12)"
+}
+login_item_target() { printf 'gui/%s/%s' "$(id -u)" "$(login_item_label)"; }
+login_item_log() { printf '%s' "$PAPERCLIP_HOME/logs/login-item.log"; }
+login_item_loaded() {
+  [ "$(uname -s)" = Darwin ] && launchctl print "$(login_item_target)" >/dev/null 2>&1
+}
+# While the login item is loaded, the server runs under launchd, which starts
+# it again after a crash. -k replaces a job that is still on its way out after
+# a stop, so only pass it when the server has just been stopped.
+start_login_item() {
+  launchctl kickstart "$@" "$(login_item_target)" ||
+    fail 'Could not start Paperclip through its login item.'
+  printf 'Paperclip is starting in the background. Log: %s\n' "$(login_item_log)"
+}
 # Start the server at the end of a restart, update, or rebuild. A run started
 # from the Settings UI has no terminal, so on macOS the server reopens in a
 # Terminal window, the way the Paperclip app starts it, where Ctrl-C stops it
@@ -49,6 +66,10 @@ start_after_maintenance() {
   # The run itself has succeeded. A server started in place exits through this
   # script too, possibly days later, and that is not a failure of this run.
   trap - EXIT
+  if login_item_loaded; then
+    start_login_item -k
+    return 0
+  fi
   if unattended_run && [ "$(uname -s)" = Darwin ]; then
     if open_in_terminal; then return 0; fi
     printf 'Could not open Terminal, so Paperclip is starting in the background instead.\n' >&2
