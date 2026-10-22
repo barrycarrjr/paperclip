@@ -52,15 +52,38 @@ comes back. On Linux reminders go through `notify-send` when it is installed.
 To start Paperclip when you log in on macOS, double-click
 `scripts/launchers/macos/start-at-login-on.command` (or run
 `bash scripts/launchers/unix/login-item.sh on`). It adds a per-user
-LaunchAgent in `~/Library/LaunchAgents` that runs the launch script once at
-login, in the background, with its output in
-`$PAPERCLIP_HOME/logs/login-item.log`. It is not kept alive: `stop-paperclip`
-stops the server until the next login, and update, rebuild, and restart stop
-and start it as usual. `start-at-login-off.command` (or `login-item.sh off`)
-turns it off, and `login-item.sh status` shows whether it is on. Turning it on
-or off does not start or stop a running server. The login item keeps the
-`PATH` (and any `PORT`) from when it was turned on, so turn it on again after moving Node or
-pnpm, and each `PAPERCLIP_CONFIG` gets its own login item.
+LaunchAgent in `~/Library/LaunchAgents`, loads it right away (which starts
+Paperclip if it is not already running), and runs it in the background at each
+login. Its output is appended to `$PAPERCLIP_HOME/logs/login-item.log`, which
+moves to `login-item.log.1` once it passes 5 MB.
+
+While it is on, launchd watches the server:
+
+- If the server exits without being asked to (a crash, or the process is
+  killed), launchd starts it again, at most once every 30 seconds.
+- A requested stop is respected: `stop-paperclip`, Ctrl-C, and the Shut down
+  button in Settings stop it until the next login or start.
+- Restart, update, rebuild, the Settings buttons, the Mac app, and the menu-bar
+  helper start it through launchd, so it stays watched. They no longer open a
+  second, unwatched copy in Terminal; the output is in the log above.
+
+`start-at-login-off.command` (or `login-item.sh off`) turns it off. The job
+stays loaded, and keeps restarting a crashed server, until you log out,
+because unloading it would stop the server it started. `login-item.sh status`
+shows whether it is on and loaded. The login item keeps the `PATH` (and any
+`PORT` or `LANG`) from when it was turned on, so turn it on again after moving
+Node or pnpm, and each `PAPERCLIP_CONFIG` gets its own login item.
+
+However it was started, the macOS launcher keeps the Mac out of idle sleep
+while the server runs (`caffeinate -i`), so routines keep firing; the display
+can still sleep. Closing a laptop's lid still sleeps the Mac unless it is on
+power with an external display.
+
+A LaunchAgent runs only once someone logs in. To have Paperclip running after a
+restart with nobody at the Mac, turn on automatic login in System Settings >
+Users & Groups. macOS does not offer automatic login while FileVault is on, but
+entering your FileVault password at startup also logs you in, so
+Paperclip starts as soon as the password is entered.
 
 Data defaults to `~/.paperclip/instances/default`. `PAPERCLIP_HOME`,
 `PAPERCLIP_INSTANCE_ID`, and `PAPERCLIP_CONFIG` can select another installation.
