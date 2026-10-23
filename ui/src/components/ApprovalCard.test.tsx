@@ -130,6 +130,29 @@ describe("ApprovalCard", () => {
     expect(onReject).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a tick box for bulk selection only on approvals that can still be decided", () => {
+    const onSelectedChange = vi.fn();
+    render(makeApproval(), { selected: false, onSelectedChange });
+
+    const box = container.querySelector<HTMLButtonElement>('button[role="checkbox"]');
+    expect(box?.getAttribute("aria-label")).toBe("Select Slack DM");
+    act(() => {
+      box?.click();
+    });
+    expect(onSelectedChange).toHaveBeenCalledWith(true);
+
+    render(makeApproval({ status: "approved" }), { selected: false, onSelectedChange });
+    expect(container.querySelector('button[role="checkbox"]')).toBeNull();
+
+    render(makeApproval({ type: "budget_override_required" }), { selected: false, onSelectedChange });
+    expect(container.querySelector('button[role="checkbox"]')).toBeNull();
+  });
+
+  it("has no tick box when the page does not offer selection", () => {
+    render(makeApproval());
+    expect(container.querySelector('button[role="checkbox"]')).toBeNull();
+  });
+
   it("keeps the summary as the title when a draft has nothing readable", () => {
     render(
       makeApproval({
