@@ -420,7 +420,10 @@ export function routineService(
       )
       .limit(1)
       .then((rows) => rows[0] ?? null);
-    if (!responsibleUserId) {
+    // Only a failure is worth a popup. A routine that runs every half hour
+    // would otherwise pop one up each time it finishes.
+    if (run.status === "completed" || !responsibleUserId) {
+      const skipReason = run.status === "completed" ? "completed_runs_are_quiet" : "no_responsible_user";
       if (!existingActivity) {
         await logActivity(executor, {
           companyId: run.companyId,
@@ -429,21 +432,18 @@ export function routineService(
           action: "routine.completion_notification_skipped",
           entityType: "routine_run",
           entityId: run.id,
-          details: { routineId: routine.id, status: run.status, reason: "no_responsible_user" },
+          details: { routineId: routine.id, status: run.status, reason: skipReason },
         });
       }
       return null;
     }
-    const completed = run.status === "completed";
     const dedupeKey = `routine-run:${run.id}:terminal:desktop`;
     const notifier = deps.desktopNotifications ?? calendarService(executor);
     const insertedDelivery = await notifier.enqueueDesktopNotification({
       companyId: run.companyId,
       userId: responsibleUserId,
-      title: `Routine ${completed ? "completed" : "failed"}: ${routine.title}`,
-      body: completed
-        ? "The routine finished successfully."
-        : "The routine did not finish successfully. Open the routine to review the failure.",
+      title: `Routine failed: ${routine.title}`,
+      body: "The routine did not finish successfully. Open the routine to review the failure.",
       url: `/${company.issuePrefix}/routines/${routine.id}`,
       dedupeKey,
       scheduledFor: run.completedAt ?? new Date(),

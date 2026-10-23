@@ -195,41 +195,32 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     return { companyId, agentId, issueSvc, projectId, routine, svc, wakeups };
   }
 
-  it("queues one event-free desktop notification when a routine completes", async () => {
-    const { companyId, routine, svc } = await seedFixture();
-    expect(routine.responsibleUserId).toBe("owner-user");
+  it("does not pop up a desktop notification when a routine completes", async () => {
+    const { routine, svc } = await seedFixture();
     const run = await svc.runRoutine(routine.id, { source: "manual" });
-    expect(run.responsibleUserId).toBe("owner-user");
 
     await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
     await Promise.all([
       svc.syncRunStatusForIssue(run.linkedIssueId!),
       svc.syncRunStatusForIssue(run.linkedIssueId!),
     ]);
+    await svc.tickScheduledTriggers();
 
     const deliveries = await db
       .select()
       .from(calendarEventDeliveries)
       .where(eq(calendarEventDeliveries.dedupeKey, `routine-run:${run.id}:terminal:desktop`));
-    expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]).toMatchObject({
-      eventId: null,
-      userId: "owner-user",
-      channel: "desktop",
-      status: "pending",
-      title: `Routine completed: ${routine.title}`,
-      url: `/${(await db.select({ issuePrefix: companies.issuePrefix }).from(companies).where(eq(companies.id, companyId)))[0]!.issuePrefix}/routines/${routine.id}`,
-    });
+    expect(deliveries).toHaveLength(0);
 
     const activity = await db
       .select()
       .from(activityLog)
-      .where(eq(activityLog.action, "routine.completion_notification_enqueued"));
+      .where(eq(activityLog.action, "routine.completion_notification_skipped"));
     expect(activity).toHaveLength(1);
     expect(activity[0]).toMatchObject({
       entityType: "routine_run",
       entityId: run.id,
-      responsibleUserId: "owner-user",
+      details: { routineId: routine.id, status: "completed", reason: "completed_runs_are_quiet" },
     });
   });
 
@@ -249,6 +240,8 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(deliveries[0]).toMatchObject({
       eventId: null,
       userId: "owner-user",
+      channel: "desktop",
+      status: "pending",
       title: `Routine failed: ${routine.title}`,
       body: "The routine did not finish successfully. Open the routine to review the failure.",
     });
@@ -265,7 +258,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       },
     });
     const run = await svc.runRoutine(routine.id, { source: "manual" });
-    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+    await db.update(issues).set({ status: "blocked" }).where(eq(issues.id, run.linkedIssueId!));
 
     await expect(svc.syncRunStatusForIssue(run.linkedIssueId!)).rejects.toThrow("desktop queue unavailable");
     const [rolledBack] = await db.select().from(routineRuns).where(eq(routineRuns.id, run.id));
@@ -274,7 +267,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     await svc.tickScheduledTriggers();
 
     const [stored] = await db.select().from(routineRuns).where(eq(routineRuns.id, run.id));
-    expect(stored?.status).toBe("completed");
+    expect(stored?.status).toBe("failed");
     expect(attempts).toBe(2);
     const deliveries = await db
       .select()
@@ -337,7 +330,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(await svc.syncRunStatusForIssue(foreignIssue!.id)).toBeNull();
     expect((await db.select().from(routineRuns).where(eq(routineRuns.id, run.id)))[0]?.status).toBe("issue_created");
 
-    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+    await db.update(issues).set({ status: "blocked" }).where(eq(issues.id, run.linkedIssueId!));
     await svc.syncRunStatusForIssue(run.linkedIssueId!);
 
     const ownDeliveries = await db.select().from(calendarEventDeliveries).where(eq(calendarEventDeliveries.companyId, companyId));
@@ -356,7 +349,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       .where(eq(routines.id, routine.id));
     const run = await svc.runRoutine(routine.id, { source: "manual" });
     expect(run.responsibleUserId).toBeNull();
-    await db.update(issues).set({ status: "done" }).where(eq(issues.id, run.linkedIssueId!));
+    await db.update(issues).set({ status: "blocked" }).where(eq(issues.id, run.linkedIssueId!));
 
     await svc.syncRunStatusForIssue(run.linkedIssueId!);
 
