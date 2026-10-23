@@ -2,6 +2,8 @@ import { CheckCircle2, XCircle, Clock } from "lucide-react";
 import { Link } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { isBulkResolvable } from "../lib/approval-bulk";
 import { Identity } from "./Identity";
 import {
   approvalSubject,
@@ -34,6 +36,8 @@ export function ApprovalCard({
   detailLink,
   isPending = false,
   pendingAction = null,
+  selected = false,
+  onSelectedChange,
 }: {
   approval: Approval;
   requesterAgent: Agent | null;
@@ -43,6 +47,9 @@ export function ApprovalCard({
   detailLink?: string;
   isPending?: boolean;
   pendingAction?: "approve" | "reject" | null;
+  /** Shows a tick box for bulk actions when given, on approvals that can still be decided. */
+  selected?: boolean;
+  onSelectedChange?: (selected: boolean) => void;
 }) {
   const payload = approval.payload as Record<string, unknown> | null;
   const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
@@ -54,10 +61,9 @@ export function ApprovalCard({
   const title = draftPreview
     ? outboundToolLabel(typeof payload?.toolName === "string" ? payload.toolName : null)
     : subject ?? kindLabel;
-  const showResolutionButtons =
-    Boolean(onApprove && onReject) &&
-    approval.type !== "budget_override_required" &&
-    (approval.status === "pending" || approval.status === "revision_requested");
+  const resolvable = isBulkResolvable(approval);
+  const showResolutionButtons = Boolean(onApprove && onReject) && resolvable;
+  const showSelectBox = Boolean(onSelectedChange) && resolvable;
   const detailsClassName = cn(
     buttonVariants({ variant: "ghost", size: "sm" }),
     "h-auto px-2 py-0.5 text-xs text-muted-foreground",
@@ -66,10 +72,23 @@ export function ApprovalCard({
   return (
     // min-w-0: the card sits in grid and flex lists, and without it one long
     // unbroken value inside makes the whole card wider than the page.
-    <div className="min-w-0 rounded-md border border-border/70 bg-card p-4 shadow-sm">
+    <div
+      className={cn(
+        "min-w-0 rounded-md border border-border/70 bg-card p-4 shadow-sm",
+        showSelectBox && selected && "border-primary/70 ring-1 ring-primary/40",
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-3">
+            {showSelectBox && (
+              <Checkbox
+                checked={selected}
+                onCheckedChange={(next) => onSelectedChange?.(next === true)}
+                aria-label={`Select ${title}`}
+                className="mt-2.5 h-4 w-4"
+              />
+            )}
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/80">
               <Icon className="h-4 w-4 text-muted-foreground" />
             </div>

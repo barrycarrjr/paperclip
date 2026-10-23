@@ -12,9 +12,13 @@ import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { ShieldCheck, CheckCircle2, History, Lock, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { ApprovalBulkBar } from "../components/ApprovalBulkBar";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { EmptyState } from "../components/EmptyState";
+import { useApprovalSelection, selectAllState } from "../hooks/useApprovalSelection";
+import { bulkFailureMessage, isBulkResolvable, type BulkApprovalAction } from "../lib/approval-bulk";
 
 type StatusFilter = "pending" | "all";
 
@@ -138,6 +142,19 @@ export function Approvals() {
     (a) => a.status === "pending" || a.status === "revision_requested",
   ).length;
 
+  const selectableIds = filtered.filter(isBulkResolvable).map((a) => a.id);
+  const selection = useApprovalSelection(selectableIds, `${selectedCompanyId ?? ""}|${statusFilter}`);
+  const selectAll = selectAllState(selectableIds, selection.isSelected);
+
+  async function runBulk(action: BulkApprovalAction) {
+    const result = await selection.run(action);
+    if (!result) return;
+    setActionError(bulkFailureMessage(result, action));
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+    queryClient.invalidateQueries({ queryKey: ["portfolio-approvals"] });
+    invalidateAttention(queryClient, selectedCompanyId!);
+  }
+
   if (!selectedCompanyId) {
     return <EmptyState icon={ShieldCheck} message="Select a company to view its approvals." />;
   }
@@ -162,6 +179,16 @@ export function Approvals() {
             { value: "all", label: "All" },
           ]} />
         </Tabs>
+        {selectableIds.length > 0 && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox
+              checked={selectAll}
+              onCheckedChange={() => selection.setMany(selectableIds, selectAll !== true)}
+              aria-label="Select all approvals"
+            />
+            Select all ({selectableIds.length})
+          </label>
+        )}
       </div>
 
       {error && <p className="text-sm text-destructive">{error.message}</p>}
@@ -184,13 +211,29 @@ export function Approvals() {
               onApprove={() => approveMutation.mutate(approval.id)}
               onReject={() => rejectMutation.mutate(approval.id)}
               detailLink={`/approvals/${approval.id}`}
-              isPending={approveMutation.isPending || rejectMutation.isPending}
+              isPending={approveMutation.isPending || rejectMutation.isPending || selection.runningAction !== null}
               pendingAction={
-                approveMutation.isPending ? "approve" : rejectMutation.isPending ? "reject" : null
+                approveMutation.isPending && approveMutation.variables === approval.id
+                  ? "approve"
+                  : rejectMutation.isPending && rejectMutation.variables === approval.id
+                    ? "reject"
+                    : null
               }
+              selected={selection.isSelected(approval.id)}
+              onSelectedChange={(next) => selection.toggle(approval.id, next)}
             />
           ))}
         </div>
+      )}
+
+      {selection.selectedIds.length > 0 && (
+        <ApprovalBulkBar
+          count={selection.selectedIds.length}
+          onApprove={() => void runBulk("approve")}
+          onReject={() => void runBulk("reject")}
+          onClear={selection.clear}
+          runningAction={selection.runningAction}
+        />
       )}
     </div>
   );
