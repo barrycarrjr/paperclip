@@ -28,7 +28,7 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, heartbeatRuns, issueApprovals } from "@paperclipai/db";
+import { agents, heartbeatRuns, issueApprovals, issues } from "@paperclipai/db";
 import { isAgentStatusInvokable } from "@paperclipai/shared/agent-eligibility";
 import {
   DEFAULT_SELF_NOTIFY_SETTINGS,
@@ -1133,7 +1133,39 @@ function buildSummary(toolName: string, params: unknown): string {
     parts.push(`— "${trimmed}"`);
   }
 
-  return parts.length > 0 ? clip(parts.join(" "), MAX_SUMMARY_LENGTH) : toolName;
+  if (parts.length === 0) {
+    if (p.mailbox && p.uid) {
+      parts.push(`mailbox ${String(p.mailbox)}, UID ${String(p.uid)}`);
+    } else if (p.mailbox) {
+      parts.push(`mailbox ${String(p.mailbox)}`);
+    }
+    const name = candidate("name") ?? candidate("channel") ?? candidate("channelName");
+    if (name) parts.push(name);
+    const target =
+      candidate("path") ??
+      candidate("filePath") ??
+      candidate("filename") ??
+      candidate("url") ??
+      candidate("query") ??
+      candidate("target");
+    if (target) parts.push(target);
+
+    if (parts.length === 0) {
+      const entries = Object.entries(p)
+        .filter(
+          ([k, v]) =>
+            !["companyId", "hostScope"].includes(k) &&
+            (typeof v === "string" || typeof v === "number" || typeof v === "boolean"),
+        )
+        .slice(0, 3)
+        .map(([k, v]) => `${k}: ${v}`);
+      if (entries.length > 0) {
+        parts.push(entries.join(", "));
+      }
+    }
+  }
+
+  return parts.length > 0 ? clip(parts.join(" "), MAX_SUMMARY_LENGTH) : "";
 }
 
 export function createDraftGate(opts: DraftGateOptions): DraftGate {
@@ -1379,6 +1411,22 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         };
       };
       if (duplicate) return duplicateResult(duplicate);
+      const draftIssueId = await issueIdForRun(db, actor.runUuid);
+      let issueContext: { id: string; identifier: string | null; title: string } | null = null;
+      if (draftIssueId) {
+        try {
+          const issueRow = await db
+            .select({ id: issues.id, identifier: issues.identifier, title: issues.title })
+            .from(issues)
+            .where(eq(issues.id, draftIssueId))
+            .then((rows) => rows[0] ?? null);
+          if (issueRow) {
+            issueContext = issueRow;
+          }
+        } catch {
+          // non-fatal
+        }
+      }
       const payload = {
         toolName: namespacedName,
         parameters: parameters ?? null,
@@ -1401,6 +1449,9 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
         draftedAt: new Date().toISOString(),
         actionType: actionPolicy?.actionType ?? null,
         actionPolicySource: actionPolicy?.source ?? null,
+        issueId: draftIssueId ?? null,
+        issueIdentifier: issueContext?.identifier ?? null,
+        issueTitle: issueContext?.title ?? null,
       } satisfies Record<string, unknown>;
 
       const createdDraft = await approvals.createPendingDraft(runContext.companyId, {
@@ -1421,7 +1472,6 @@ export function createDraftGate(opts: DraftGateOptions): DraftGate {
       // message was drafted and (after approval) sent. This is also what puts
       // an issue id on the post-approval wake, so the agent is woken about the
       // work rather than about a bare approval id.
-      const draftIssueId = await issueIdForRun(db, actor.runUuid);
       if (draftIssueId) {
         try {
           await issueApprovalService(db).link(draftIssueId, approval.id, {

@@ -7,6 +7,7 @@ import {
   outboundToolLabel,
 } from "@paperclipai/shared";
 import { cn, formatCents } from "../lib/utils";
+import { Badge } from "./ui/badge";
 
 // The label logic moved to @paperclipai/shared so the attention queue on the
 // server produces the exact same words. Re-exported here because this module
@@ -445,6 +446,114 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
   );
 }
 
+export function OutboundToolCallPayload({
+  payload,
+  compact = false,
+}: {
+  payload: Record<string, unknown>;
+  compact?: boolean;
+}) {
+  const toolName = typeof payload.toolName === "string" ? payload.toolName : null;
+  const actionType = typeof payload.actionType === "string" ? payload.actionType : null;
+  const parameters =
+    payload.parameters && typeof payload.parameters === "object" && !Array.isArray(payload.parameters)
+      ? (payload.parameters as Record<string, unknown>)
+      : null;
+
+  const toolLabel = outboundToolLabel(toolName);
+  const actionTypeLabel = actionType ? actionType.replace(/_/g, " ") : null;
+
+  if (compact) {
+    if (!parameters || Object.keys(parameters).length === 0) {
+      return (
+        <div className="mt-1 text-xs text-muted-foreground italic">
+          No parameters required.
+        </div>
+      );
+    }
+    const cleanEntries = Object.entries(parameters).filter(
+      ([k, v]) =>
+        !["companyId", "hostScope"].includes(k) &&
+        (typeof v === "string" || typeof v === "number" || typeof v === "boolean"),
+    );
+    if (cleanEntries.length === 0) return null;
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        {cleanEntries.slice(0, 4).map(([key, val]) => (
+          <span
+            key={key}
+            className="inline-flex items-center gap-1 rounded bg-muted/60 px-2 py-0.5 font-mono text-[11px]"
+          >
+            <span className="font-semibold text-foreground/80">{key}:</span>
+            <span className="truncate max-w-[160px]">{String(val)}</span>
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  const entries = parameters ? Object.entries(parameters) : [];
+
+  return (
+    <div className="mt-3 space-y-4">
+      <div className="rounded-lg border border-border/70 bg-muted/20 p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">{toolLabel}</span>
+            {toolName && (
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground font-mono">
+                {toolName}
+              </code>
+            )}
+          </div>
+          {actionTypeLabel && (
+            <Badge variant="outline" className="capitalize text-xs font-normal">
+              {actionTypeLabel}
+            </Badge>
+          )}
+        </div>
+
+        {entries.length > 0 ? (
+          <div className="mt-2 space-y-2 border-t border-border/40 pt-3">
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Parameters
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {entries.map(([key, val]) => {
+                const isComplex = typeof val === "object" && val !== null;
+                const isLongString = typeof val === "string" && val.length > 80;
+                if (isComplex || isLongString) {
+                  return (
+                    <div key={key} className="col-span-full rounded-md bg-muted/40 p-2.5">
+                      <div className="text-xs font-medium text-foreground/90 font-mono mb-1">{key}</div>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground overflow-auto max-h-40">
+                        {isComplex ? JSON.stringify(val, null, 2) : String(val)}
+                      </pre>
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    key={key}
+                    className="flex items-baseline justify-between rounded-md bg-muted/30 px-3 py-1.5 text-xs"
+                  >
+                    <span className="font-mono font-medium text-muted-foreground">{key}</span>
+                    <span className="font-mono font-semibold text-foreground truncate max-w-[250px]">
+                      {String(val)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">No parameters required for this action.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ApprovalPayloadRenderer({
   type,
   payload,
@@ -468,6 +577,7 @@ export function ApprovalPayloadRenderer({
   if (type === "outbound_tool_draft") {
     const preview = outboundDraftPreview(payload);
     if (preview) return <OutboundDraftPayload preview={preview} compact={compact} />;
+    return <OutboundToolCallPayload payload={payload} compact={compact} />;
   }
   if (type === "instruction_change") return <InstructionChangePayload payload={payload} />;
   return <CeoStrategyPayload payload={payload} hideRawFallback={compact} />;

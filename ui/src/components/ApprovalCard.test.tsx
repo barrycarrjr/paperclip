@@ -153,7 +153,7 @@ describe("ApprovalCard", () => {
     expect(container.querySelector('button[role="checkbox"]')).toBeNull();
   });
 
-  it("keeps the summary as the title when a draft has nothing readable", () => {
+  it("humanizes tool names and summarizes parameters when a draft is not a message", () => {
     render(
       makeApproval({
         payload: {
@@ -165,7 +165,29 @@ describe("ApprovalCard", () => {
       }),
     );
 
-    expect(container.querySelector("h3")?.textContent).toBe("kdp-tools:kdp_publish");
+    expect(container.querySelector("h3")?.textContent).toBe("KDP publish: bookId: 7");
+    expect(container.textContent).toContain("bookId:");
+    expect(container.textContent).toContain("7");
     expect(container.textContent).not.toContain("run-123");
+  });
+
+  it("displays linked issue context when present in payload", () => {
+    render(
+      makeApproval({
+        payload: {
+          toolName: "email-tools:email_mark_read",
+          parameters: { mailbox: "m3-barry", uid: "280179" },
+          issueIdentifier: "MME-454",
+          issueTitle: "Triage m3-barry mailbox",
+        },
+      }),
+    );
+
+    expect(container.querySelector("h3")?.textContent).toBe("Mark email read: mailbox m3-barry, UID 280179");
+    expect(container.textContent).toContain("For MME-454: Triage m3-barry mailbox");
+    expect(container.textContent).toContain("mailbox:");
+    expect(container.textContent).toContain("m3-barry");
+    expect(container.textContent).toContain("uid:");
+    expect(container.textContent).toContain("280179");
   });
 });

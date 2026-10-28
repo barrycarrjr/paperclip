@@ -1,4 +1,4 @@
-import type { ActivityEvent, Agent } from "@paperclipai/shared";
+import { type ActivityEvent, type Agent, humanizeToolName } from "@paperclipai/shared";
 
 export type OutcomeTone = "emerald" | "amber" | "sky" | "violet" | "red" | "muted";
 
@@ -259,6 +259,11 @@ const APPROVAL_TYPE_LABEL: Record<string, string> = {
 const OUTBOUND_TOOL_SHORT_LABEL: Record<string, string> = {
   "email-tools:email_send": "email",
   "email-tools:email_reply": "email reply",
+  "email-tools:email_mark_read": "mark email read",
+  "email-tools:email_mark_unread": "mark email unread",
+  "email-tools:email_move": "move email",
+  "email-tools:email_save_contact": "save contact",
+  "email-tools:email_import_contacts": "import contacts",
   "help-scout:helpscout_send_reply": "HelpScout reply",
   "help-scout:helpscout_create_conversation": "HelpScout conversation",
   "slack-tools:slack_send_dm": "Slack DM",
@@ -290,7 +295,7 @@ function approvalTargetFromDetails(event: ActivityEvent): string | null {
   const tool = typeof event.details?.tool === "string" ? event.details.tool : null;
 
   if (type === "outbound_tool_draft" && tool) {
-    return OUTBOUND_TOOL_SHORT_LABEL[tool] ?? tool.split(":").pop() ?? tool;
+    return OUTBOUND_TOOL_SHORT_LABEL[tool] ?? humanizeToolName(tool).toLowerCase();
   }
   if (type && APPROVAL_TYPE_LABEL[type]) return APPROVAL_TYPE_LABEL[type];
   return type ? type.replace(/_/g, " ") : null;

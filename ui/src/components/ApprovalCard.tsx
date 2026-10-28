@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { isBulkResolvable } from "../lib/approval-bulk";
 import { Identity } from "./Identity";
 import {
+  approvalLabel,
   approvalSubject,
   typeIcon,
   defaultTypeIcon,
@@ -60,7 +61,16 @@ export function ApprovalCard({
   const draftPreview = approval.type === "outbound_tool_draft" ? outboundDraftPreview(payload) : null;
   const title = draftPreview
     ? outboundToolLabel(typeof payload?.toolName === "string" ? payload.toolName : null)
-    : subject ?? kindLabel;
+    : approval.type === "outbound_tool_draft"
+      ? approvalLabel(approval.type, payload)
+      : (subject ?? kindLabel);
+
+  const issueIdentifier = typeof payload?.issueIdentifier === "string" ? payload.issueIdentifier : null;
+  const issueTitle = typeof payload?.issueTitle === "string" ? payload.issueTitle : null;
+  const issueRef =
+    issueIdentifier && issueTitle
+      ? `${issueIdentifier}: ${issueTitle}`
+      : (issueTitle ?? issueIdentifier);
   const resolvable = isBulkResolvable(approval);
   const showResolutionButtons = Boolean(onApprove && onReject) && resolvable;
   const showSelectBox = Boolean(onSelectedChange) && resolvable;
@@ -111,9 +121,15 @@ export function ApprovalCard({
                 <h3 className="text-sm font-semibold leading-6 text-foreground wrap-anywhere">
                   {title}
                 </h3>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Approval request created {timeAgo(approval.createdAt)}
-                </p>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                  <span>Approval request created {timeAgo(approval.createdAt)}</span>
+                  {issueRef && (
+                    <>
+                      <span>·</span>
+                      <span className="truncate max-w-[280px]">For {issueRef}</span>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           </div>

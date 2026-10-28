@@ -25,6 +25,8 @@ export {
   approvalLabel,
   approvalSubject,
   outboundToolLabel,
+  humanizeToolName,
+  summarizeParameters,
 } from "./approval-labels.js";
 export {
   AGENT_ACTION_TYPE_LABELS,

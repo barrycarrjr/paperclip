@@ -5,6 +5,7 @@ import {
   approvals,
   budgetIncidents,
   heartbeatRuns,
+  issueApprovals,
   issueEmailDelegations,
   issues,
   joinRequests,
@@ -169,6 +170,7 @@ export function attentionQueueService(db: Db) {
         type: approvals.type,
         status: approvals.status,
         payload: approvals.payload,
+        requestedByAgentId: approvals.requestedByAgentId,
         createdAt: approvals.createdAt,
         updatedAt: approvals.updatedAt,
       })
@@ -181,27 +183,80 @@ export function attentionQueueService(db: Db) {
       )
       .orderBy(desc(approvals.createdAt));
 
-    return rows.map((row) => ({
-      key: `approval:${row.id}`,
-      kind: "approval" as AttentionKind,
-      companyId,
-      // Same words the UI shows on the approval page and in the Brief.
-      title: truncate(approvalLabel(row.type, row.payload)),
-      detail: row.status === "revision_requested" ? "You asked for changes; it is back" : null,
-      askedBy: null,
-      // Approvals gate an action, not an agent's execution: the agent that
-      // drafted it has already moved on or gone back to sleep.
-      blocking: "waiting" as const,
-      blockedSinceMs: ms(row.createdAt),
-      count: 1,
-      consequence: "Nothing is sent or changed until you decide.",
-      // Nothing in Paperclip decides this for you. It waits.
-      deadlineAtMs: null,
-      deadlineOutcome: null,
-      href: `/approvals/${row.id}`,
-      createdAtMs: ms(row.createdAt) ?? 0,
-      updatedAtMs: ms(row.updatedAt) ?? ms(row.createdAt) ?? 0,
-    }));
+    const agentIds = Array.from(
+      new Set(rows.map((r) => r.requestedByAgentId).filter((id): id is string => Boolean(id))),
+    );
+    const agentMap = new Map<string, string>();
+    if (agentIds.length > 0) {
+      const agentRows = await db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, agentIds));
+      for (const a of agentRows) {
+        agentMap.set(a.id, a.name);
+      }
+    }
+
+    const approvalIds = rows.map((r) => r.id);
+    const issueMap = new Map<string, { identifier: string | null; title: string }>();
+    if (approvalIds.length > 0) {
+      const linkedRows = await db
+        .select({
+          approvalId: issueApprovals.approvalId,
+          identifier: issues.identifier,
+          title: issues.title,
+        })
+        .from(issueApprovals)
+        .innerJoin(issues, eq(issueApprovals.issueId, issues.id))
+        .where(inArray(issueApprovals.approvalId, approvalIds))
+        .orderBy(desc(issueApprovals.createdAt));
+      for (const l of linkedRows) {
+        if (!issueMap.has(l.approvalId)) {
+          issueMap.set(l.approvalId, { identifier: l.identifier, title: l.title });
+        }
+      }
+    }
+
+    return rows.map((row) => {
+      const agentName = row.requestedByAgentId ? agentMap.get(row.requestedByAgentId) ?? null : null;
+      const linkedIssue = issueMap.get(row.id);
+      let detail: string | null = null;
+      if (linkedIssue) {
+        const issueRef = linkedIssue.identifier
+          ? `${linkedIssue.identifier}: ${linkedIssue.title}`
+          : linkedIssue.title;
+        detail =
+          row.status === "revision_requested"
+            ? `${issueRef} · You asked for changes; it is back`
+            : issueRef;
+      } else if (row.status === "revision_requested") {
+        detail = "You asked for changes; it is back";
+      } else if (agentName) {
+        detail = `Requested by ${agentName}`;
+      }
+
+      return {
+        key: `approval:${row.id}`,
+        kind: "approval" as AttentionKind,
+        companyId,
+        // Same words the UI shows on the approval page and in the Brief.
+        title: truncate(approvalLabel(row.type, row.payload)),
+        detail,
+        askedBy: agentName,
+        // Approvals gate an action, not an agent's execution: the agent that
+        // drafted it has already moved on or gone back to sleep.
+        blocking: "waiting" as const,
+        blockedSinceMs: ms(row.createdAt),
+        count: 1,
+        consequence: "Nothing is sent or changed until you decide.",
+        // Nothing in Paperclip decides this for you. It waits.
+        deadlineAtMs: null,
+        deadlineOutcome: null,
+        href: `/approvals/${row.id}`,
+        createdAtMs: ms(row.createdAt) ?? 0,
+        updatedAtMs: ms(row.updatedAt) ?? ms(row.createdAt) ?? 0,
+      };
+    });
   }
 
   /**

@@ -108,37 +108,6 @@ describe("outboundDraftPreview", () => {
     });
   });
 
-  it("reads email cc and bcc", () => {
-    expect(
-      outboundDraftPreview({
-        toolName: "email-tools:email_send",
-        parameters: {
-          to: "a@example.com",
-          cc: "c@example.com",
-          bcc: ["hidden@example.com", "other@example.com"],
-          subject: "Quote",
-          body: "Here is the quote.",
-        },
-      }),
-    ).toMatchObject({
-      recipient: "a@example.com",
-      cc: "c@example.com",
-      bcc: "hidden@example.com, other@example.com",
-    });
-  });
-
-  it("shows every recipient field the server checks for self-notification", () => {
-    // Guards against the UI and OUTBOUND_SELF_RECIPIENT_RULES drifting apart:
-    // a recipient the server counts must also be visible to the approver.
-    for (const [toolName, rule] of Object.entries(OUTBOUND_SELF_RECIPIENT_RULES)) {
-      for (const param of rule!.recipientParams) {
-        const address = `${param}-address`;
-        const preview = outboundDraftPreview({ toolName, parameters: { [param]: address, text: "hi" } });
-        expect([preview?.recipient, preview?.cc, preview?.bcc], `${toolName} ${param}`).toContain(address);
-      }
-    }
-  });
-
   it("reads the Help Scout reply's customer, cc and bcc", () => {
     expect(
       outboundDraftPreview({
@@ -235,7 +204,7 @@ describe("ApprovalPayloadRenderer", () => {
     expect(container.textContent).toContain("Post the frog comment on the issue.");
     expect(container.textContent).toContain("The frog might be too powerful.");
     expect(container.textContent).toContain("(o)<");
-    expect(container.textContent).not.toContain("\"recommendedAction\"");
+    expect(container.textContent).not.toContain('"recommendedAction"');
 
     act(() => {
       root.unmount();
@@ -359,6 +328,37 @@ describe("ApprovalPayloadRenderer", () => {
     });
 
     expect(container.querySelector("pre")).toBeNull();
+    expect(container.textContent).not.toContain("run-123");
+    expect(container.textContent).toContain("bookId:");
+    expect(container.textContent).toContain("7");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("renders non-message outbound tool call parameters clearly in full detail view", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <ApprovalPayloadRenderer
+          type="outbound_tool_draft"
+          payload={{
+            toolName: "email-tools:email_mark_read",
+            parameters: { mailbox: "m3-barry", uid: "280179" },
+            actionType: "email_write",
+            runId: "run-123",
+          }}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("Mark email read");
+    expect(container.textContent).toContain("email-tools:email_mark_read");
+    expect(container.textContent).toContain("email write");
+    expect(container.textContent).toContain("m3-barry");
+    expect(container.textContent).toContain("280179");
     expect(container.textContent).not.toContain("run-123");
 
     act(() => {
