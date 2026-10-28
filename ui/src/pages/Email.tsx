@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Link } from "../lib/router";
 import { buildEmailHandoffOriginId, EMAIL_HANDOFF_ORIGIN_KIND } from "@paperclipai/shared";
 import {
+  AlarmClock,
   Mail,
   MailOpen,
   ChevronRight,
@@ -116,6 +117,7 @@ import {
   listViewShowsAllMail,
   type EmailListView,
 } from "../lib/email-list-view";
+import { describeSnoozeUntil, snoozeOptions } from "../lib/email-snooze";
 import { EmailListViewTabs } from "../components/email/EmailListViewTabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
@@ -1482,6 +1484,22 @@ export function Email() {
       clearOverride(msg.uid);
       invalidateMessageLists();
       showFailure("Mark unread", err);
+    },
+  });
+
+  const snoozeMutation = useMutation({
+    mutationFn: async ({ msg, until }: { msg: MailHeader; until: Date }) => {
+      noteOverride(msg.uid, "gone");
+      await emailApi!.snoozeMessage(selectedMailbox!, msg.uid, selectedFolder, until);
+    },
+    onSuccess: (_, { msg, until }) => {
+      invalidateMessageLists();
+      showToast(`Snoozed until ${describeSnoozeUntil(until)}: ${msg.subject || "(no subject)"}`);
+    },
+    onError: (err, { msg }) => {
+      clearOverride(msg.uid);
+      invalidateMessageLists();
+      showFailure("Snooze", err);
     },
   });
 
@@ -3125,6 +3143,39 @@ export function Email() {
                       <TooltipContent>Mark as unread (brings it back to the unread view)</TooltipContent>
                     </Tooltip>
                   )}
+
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            disabled={snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === selectedMsg?.uid}
+                            aria-label="Snooze"
+                          >
+                            {snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === selectedMsg?.uid ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <AlarmClock className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>Snooze (hide it until later, then bring it back unread)</TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuLabel>Snooze until</DropdownMenuLabel>
+                      {snoozeOptions().map((opt) => (
+                        <DropdownMenuItem
+                          key={opt.key}
+                          onSelect={() => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until: opt.until }); }}
+                        >
+                          {opt.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
 
                   <Tooltip>
                     <TooltipTrigger asChild>

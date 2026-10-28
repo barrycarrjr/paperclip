@@ -282,6 +282,22 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
       return extract(result);
     },
 
+    /** Hide a message until `until`; the plugin returns it unread at that time. */
+    snoozeMessage: async (
+      mailbox: string,
+      uid: number,
+      folder: string,
+      until: Date,
+    ): Promise<{ ok: boolean; wakeAt: string }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.snooze-message",
+        { companyId, mailbox, uid, folder, until: until.toISOString() },
+        companyId,
+      );
+      return extract(result);
+    },
+
     deleteMessage: async (
       mailbox: string,
       uid: number,
