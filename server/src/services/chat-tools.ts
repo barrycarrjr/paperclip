@@ -500,6 +500,10 @@ const createIssueTool: ChatToolDefinition<{
           type: "string",
           description: "Optional agent UUID or agent name/shortname (e.g. 'Builder' or 'builder') to assign the issue to.",
         },
+        assignee: {
+          type: "string",
+          description: "Alias for assigneeAgentId. Optional agent UUID or name/shortname (e.g. 'Builder').",
+        },
         findingKey: {
           type: "string",
           description:
@@ -638,6 +642,10 @@ const updateIssueTool: ChatToolDefinition<{
         assigneeAgentId: {
           type: ["string", "null"],
           description: "New assignee agent UUID or agent name/shortname (e.g. 'Builder'). Pass null to unassign.",
+        },
+        assignee: {
+          type: ["string", "null"],
+          description: "Alias for assigneeAgentId. Accepts agent name/shortname (e.g. 'Builder') or UUID. Pass null to unassign.",
         },
         comment: {
           type: "string",

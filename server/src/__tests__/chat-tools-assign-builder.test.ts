@@ -51,7 +51,11 @@ const BUILDER_AGENT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const ISSUE_ID = "11111111-1111-1111-1111-111111111111";
 
 function emptyDb(): Db {
-  return {} as unknown as Db;
+  return {
+    insert: () => ({
+      values: () => Promise.resolve(),
+    }),
+  } as unknown as Db;
 }
 
 function userCtx({
@@ -400,6 +404,30 @@ describe("Clippy Builder assignment and HQ permission gating", () => {
         expect(result.error).toContain("Cannot assign work to terminated agents");
       }
       expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
+    it("accepts 'assignee' field as an alias for 'assigneeAgentId'", async () => {
+      const ctx = userCtx({
+        companyIds: [HQ_COMPANY_ID],
+        memberships: [{ companyId: HQ_COMPANY_ID, membershipRole: "admin" }],
+      });
+
+      const result = await executeChatTool(
+        "update_issue",
+        {
+          issueId: ISSUE_ID,
+          assignee: "Builder",
+        },
+        ctx,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockIssueService.update).toHaveBeenCalledWith(
+        ISSUE_ID,
+        expect.objectContaining({
+          assigneeAgentId: BUILDER_AGENT_ID,
+        }),
+      );
     });
   });
 });
