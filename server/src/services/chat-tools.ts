@@ -26,8 +26,10 @@ import {
   type MemoryKind,
 } from "@paperclipai/shared";
 import { describeOperationFailure } from "@paperclipai/shared";
-import { badRequest, forbidden, notFound } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { accessService } from "./access.js";
+import { agentService } from "./agents.js";
 import { calendarService } from "./calendar.js";
 import {
   applyIssueExecutionPolicyTransition,
@@ -41,6 +43,7 @@ import { scheduleMemoryFolderExport } from "./memory-folder-auto-export.js";
 import { civilToUtc, utcToCivilParts } from "./cron.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { portfolioDirectiveService } from "./portfolio-directive.js";
+import { getPortfolioRootCompanyId } from "./portfolio-root-cache.js";
 import { personalCompanyOwner } from "./personal-companies.js";
 import { requestChatToolConfirmation } from "./chat-tool-interactions.js";
 
@@ -122,6 +125,71 @@ function isViewerOf(actor: ToolActor, companyId: string): boolean {
   return membership?.membershipRole === "viewer";
 }
 
+/**
+ * Who to credit for a change, given an actor that may not be a person.
+ *
+ * A bridge session for an agent run carries `agent:<uuid>` as its user id,
+ * because the chat tools were built for Clippy, where there is always a
+ * person. Writing that string into a user column is how an agent's edits end
+ * up looking like they came from a user who does not exist, so split it back
+ * out here and credit the agent.
+ */
+function attributionFor(ctx: ToolContext): { actorAgentId?: string; actorUserId?: string } {
+  const raw = ctx.actor.userId ?? "";
+  if (raw.startsWith("agent:")) {
+    const agentId = raw.slice("agent:".length);
+    return agentId ? { actorAgentId: agentId } : {};
+  }
+  return raw ? { actorUserId: raw } : {};
+}
+
+async function assertCanAssignTasks(ctx: ToolContext, companyId: string): Promise<void> {
+  await assertCompanyAccess(ctx, companyId, "write");
+  if (ctx.actor.isInstanceAdmin) return;
+  const attribution = attributionFor(ctx);
+  const access = accessService(ctx.db);
+  if (attribution.actorAgentId) {
+    const allowed = await access.hasPermission(companyId, "agent", attribution.actorAgentId, "tasks:assign");
+    if (!allowed) throw forbidden("Missing permission: tasks:assign");
+    return;
+  }
+  if (!ctx.actor.userId) {
+    throw forbidden("Authentication required");
+  }
+  const allowed = await access.canUser(companyId, ctx.actor.userId, "tasks:assign");
+  if (!allowed) {
+    throw forbidden("Missing permission: tasks:assign");
+  }
+}
+
+async function normalizeIssueAssigneeAgentReference(
+  db: Db,
+  companyId: string,
+  rawAssigneeAgentId: string | null | undefined,
+): Promise<string | null> {
+  if (rawAssigneeAgentId === undefined || rawAssigneeAgentId === null) {
+    return null;
+  }
+  const raw = rawAssigneeAgentId.trim();
+  if (raw.length === 0) {
+    return null;
+  }
+  const resolved = await agentService(db).resolveByReference(companyId, raw);
+  if (resolved.ambiguous) {
+    throw conflict("Agent shortname is ambiguous in this company. Use the agent ID.");
+  }
+  if (!resolved.agent) {
+    throw notFound(`Agent "${raw}" not found in this company`);
+  }
+  if (resolved.agent.status === "pending_approval") {
+    throw conflict("Cannot assign work to pending approval agents");
+  }
+  if (resolved.agent.status === "terminated") {
+    throw conflict("Cannot assign work to terminated agents");
+  }
+  return resolved.agent.id;
+}
+
 async function resolveAccessibleCompanyIds(ctx: ToolContext): Promise<string[]> {
   // Whatever the source of the list, other people's personal companies come
   // out of it — an admin listing companies should not learn they exist.
@@ -154,7 +222,11 @@ function summarizeIssue(row: typeof issues.$inferSelect) {
 }
 
 async function resolveAccessibleIssue(ctx: ToolContext, issueId: string, mode: "read" | "write" = "read") {
-  const issue = await issueService(ctx.db).getById(issueId);
+  const svc = issueService(ctx.db);
+  const trimmed = issueId.trim();
+  const issue = /^[A-Z]+-\d+$/i.test(trimmed)
+    ? await svc.getByIdentifier(trimmed)
+    : await svc.getById(trimmed);
   if (!issue) throw notFound(`Issue ${issueId} not found`);
   await assertCompanyAccess(ctx, issue.companyId, mode);
   return issue;
@@ -181,6 +253,7 @@ const listCompaniesTool: ChatToolDefinition<Record<string, never>> = {
         issuePrefix: companies.issuePrefix,
         status: companies.status,
         description: companies.description,
+        isPortfolioRoot: companies.isPortfolioRoot,
       })
       .from(companies)
       .where(inArray(companies.id, ids));
@@ -218,6 +291,7 @@ const getCompanyTool: ChatToolDefinition<{ companyId: string }> = {
       description: row.description,
       brandColor: row.brandColor,
       requireBoardApprovalForNewAgents: row.requireBoardApprovalForNewAgents,
+      isPortfolioRoot: row.isPortfolioRoot,
     };
   },
 };
@@ -359,20 +433,22 @@ const getIssueTool: ChatToolDefinition<{ issueId: string }> = {
       .select({
         id: issueComments.id,
         body: issueComments.body,
-        authorAgentId: issueComments.authorAgentId,
         authorUserId: issueComments.authorUserId,
+        authorAgentId: issueComments.authorAgentId,
         createdAt: issueComments.createdAt,
       })
       .from(issueComments)
       .where(eq(issueComments.issueId, row.id))
-      .orderBy(issueComments.createdAt);
+      .orderBy(desc(issueComments.createdAt))
+      .limit(50);
     return {
-      issue: { ...summarizeIssue(row), description: row.description },
+      issue: summarizeIssue(row),
+      description: row.description,
       comments: comments.map((c) => ({
         id: c.id,
         body: c.body,
-        authorAgentId: c.authorAgentId,
         authorUserId: c.authorUserId,
+        authorAgentId: c.authorAgentId,
         createdAt: c.createdAt.toISOString(),
       })),
     };
@@ -384,25 +460,46 @@ const createIssueTool: ChatToolDefinition<{
   title: string;
   description?: string;
   findingKey?: string;
+  priority?: (typeof ISSUE_PRIORITIES)[number];
+  assigneeAgentId?: string;
+  assignee?: string;
 }> = {
   name: "create_issue",
-  description: "Create a new issue in a company. Mutating — requires permission.",
+  description:
+    "Create a new issue in a company. Can optionally assign to an agent (such as Builder in HQ). " +
+    "Mutating — requires permission.",
   mutating: true,
   inputSchema: z.object({
     companyId: z.string().optional(),
     title: z.string().min(1).max(500),
     description: z.string().max(10_000).optional(),
     findingKey: z.string().trim().min(1).max(AGENT_FINDING_KEY_MAX_LENGTH).optional(),
+    priority: z.enum(ISSUE_PRIORITIES).optional(),
+    assigneeAgentId: z.string().optional(),
+    assignee: z.string().optional(),
   }),
   spec: {
     name: "create_issue",
-    description: "Create a new issue. Pass companyId or it uses the current company.",
+    description:
+      "Create a new issue. Pass companyId or it uses the current company. Can assign to an agent (e.g. Builder).",
     input_schema: {
       type: "object",
       properties: {
-        companyId: { type: "string", description: "Optional. Defaults to current company." },
+        companyId: {
+          type: "string",
+          description: "Optional. Defaults to current company (or HQ if assigning to Builder and no company is specified).",
+        },
         title: { type: "string" },
         description: { type: "string" },
+        priority: {
+          type: "string",
+          enum: [...ISSUE_PRIORITIES],
+          description: "Optional issue priority.",
+        },
+        assigneeAgentId: {
+          type: "string",
+          description: "Optional agent UUID or agent name/shortname (e.g. 'Builder' or 'builder') to assign the issue to.",
+        },
         findingKey: {
           type: "string",
           description:
@@ -414,16 +511,51 @@ const createIssueTool: ChatToolDefinition<{
       required: ["title"],
     },
   },
-  async handler({ companyId, title, description, findingKey }, ctx) {
-    const target = companyId ?? ctx.defaultCompanyId;
+  async handler({ companyId, title, description, findingKey, priority, assigneeAgentId, assignee }, ctx) {
+    const rawAssignee = assigneeAgentId ?? assignee;
+    let target = companyId ?? ctx.defaultCompanyId;
+
+    if (rawAssignee) {
+      const hqCompanyId = await getPortfolioRootCompanyId(ctx.db);
+      if (!companyId && hqCompanyId) {
+        if (!target) {
+          const resolvedInHq = await agentService(ctx.db).resolveByReference(hqCompanyId, rawAssignee);
+          if (resolvedInHq.agent) {
+            target = hqCompanyId;
+          }
+        } else if (target !== hqCompanyId) {
+          const resolvedInTarget = await agentService(ctx.db).resolveByReference(target, rawAssignee);
+          if (!resolvedInTarget.agent) {
+            const resolvedInHq = await agentService(ctx.db).resolveByReference(hqCompanyId, rawAssignee);
+            if (resolvedInHq.agent) {
+              target = hqCompanyId;
+            }
+          }
+        }
+      }
+    }
+
     if (!target) {
       throw forbidden("No company context: pass companyId or select a company first");
     }
-    await assertCompanyAccess(ctx, target, "write");
+
+    if (rawAssignee) {
+      await assertCanAssignTasks(ctx, target);
+    } else {
+      await assertCompanyAccess(ctx, target, "write");
+    }
+
+    let resolvedAssigneeAgentId: string | null = null;
+    if (rawAssignee) {
+      resolvedAssigneeAgentId = await normalizeIssueAssigneeAgentReference(ctx.db, target, rawAssignee);
+    }
+
     const attribution = attributionFor(ctx);
     const created = await issueService(ctx.db).create(target, {
       title,
       description: description ?? null,
+      ...(priority ? { priority } : {}),
+      ...(resolvedAssigneeAgentId ? { assigneeAgentId: resolvedAssigneeAgentId } : {}),
       // A finding key replaces the "chat" origin: the key is what lets the
       // next report of the same finding be recognised and refused.
       ...(findingKey
@@ -432,72 +564,62 @@ const createIssueTool: ChatToolDefinition<{
       createdByUserId: attribution.actorUserId ?? null,
       createdByAgentId: attribution.actorAgentId ?? null,
     });
+
+    if (resolvedAssigneeAgentId) {
+      await queueIssueAssignmentWakeup({
+        heartbeat: heartbeatService(ctx.db),
+        issue: created,
+        reason: "issue_assigned",
+        mutation: "create",
+        contextSource: "issue.create",
+        requestedByActorType: attribution.actorAgentId ? "agent" : "user",
+        requestedByActorId: attribution.actorAgentId ?? attribution.actorUserId ?? ctx.actor.userId,
+      });
+    }
+
     return { issue: summarizeIssue(created) };
   },
 };
 
 /**
- * Who to credit for a change, given an actor that may not be a person.
- *
- * A bridge session for an agent run carries `agent:<uuid>` as its user id,
- * because the chat tools were built for Clippy, where there is always a
- * person. Writing that string into a user column is how an agent's edits end
- * up looking like they came from a user who does not exist, so split it back
- * out here and credit the agent.
- */
-function attributionFor(ctx: ToolContext): { actorAgentId?: string; actorUserId?: string } {
-  const raw = ctx.actor.userId ?? "";
-  if (raw.startsWith("agent:")) {
-    const agentId = raw.slice("agent:".length);
-    return agentId ? { actorAgentId: agentId } : {};
-  }
-  return raw ? { actorUserId: raw } : {};
-}
-
-/**
- * Changing an issue's status — the tool whose absence stranded a run.
- *
- * An agent could read an issue, comment on it and create new ones, but not
- * move the one it was working on. That gap is not cosmetic: when an assigned
- * issue is left `in_progress` with nothing live on it, the recovery sweep
- * wakes the agent again roughly every thirty seconds, so an agent that was
- * genuinely blocked and knew it was blocked could not say so, and instead
- * posted "No new context. No-op. Exiting." on a loop, costing real money
- * every time. The documented fallback was to PATCH the REST API, which is
- * not a fallback for an agent whose shell cannot reach it.
- *
- * Deliberately narrow. Status and priority are what an agent needs to
- * describe the state of its own work. Reassigning, retitling and rewriting
- * are somebody else's decision, and an agent that wants one of those can say
- * so in a comment.
+ * Changing an issue's status or assignee.
  */
 const updateIssueTool: ChatToolDefinition<{
   issueId: string;
   status?: (typeof ISSUE_STATUSES)[number];
   priority?: (typeof ISSUE_PRIORITIES)[number];
+  assigneeAgentId?: string | null;
+  assignee?: string | null;
   comment?: string;
 }> = {
   name: "update_issue",
   description:
-    "Change an issue's status and/or priority, optionally with a comment saying why. " +
-    "Mutating — requires permission. Use this to mark your own work `blocked` when you " +
-    "are waiting on someone, or `done` when it is finished; leaving finished or blocked " +
-    "work sitting in `in_progress` makes Paperclip wake you again and again for nothing.",
+    "Change an issue's status, priority, or assignee (such as the Builder agent), optionally with a comment saying why. " +
+    "Mutating — requires permission.",
   mutating: true,
   inputSchema: z
     .object({
       issueId: z.string().min(1),
       status: z.enum(ISSUE_STATUSES).optional(),
       priority: z.enum(ISSUE_PRIORITIES).optional(),
+      assigneeAgentId: z.string().nullable().optional(),
+      assignee: z.string().nullable().optional(),
       comment: z.string().min(1).max(20_000).optional(),
     })
-    .refine((value) => value.status !== undefined || value.priority !== undefined, {
-      message: "Pass status, priority, or both — there is nothing to change otherwise",
-    }),
+    .refine(
+      (value) =>
+        value.status !== undefined ||
+        value.priority !== undefined ||
+        value.assigneeAgentId !== undefined ||
+        value.assignee !== undefined,
+      {
+        message: "Pass status, priority, or assignee — there is nothing to change otherwise",
+      },
+    ),
   spec: {
     name: "update_issue",
     description:
-      "Change an issue's status and/or priority, optionally with a comment saying why. " +
+      "Change an issue's status, priority, or assignee (e.g. Builder), optionally with a comment saying why. " +
       "Mark work `blocked` when waiting on someone and `done` when finished.",
     input_schema: {
       type: "object",
@@ -506,12 +628,16 @@ const updateIssueTool: ChatToolDefinition<{
         status: {
           type: "string",
           enum: [...ISSUE_STATUSES],
-          description: "New status. Pass this or priority (or both).",
+          description: "New status. Pass this, priority, or assigneeAgentId.",
         },
         priority: {
           type: "string",
           enum: [...ISSUE_PRIORITIES],
-          description: "New priority. Pass this or status (or both).",
+          description: "New priority. Pass this, status, or assigneeAgentId.",
+        },
+        assigneeAgentId: {
+          type: ["string", "null"],
+          description: "New assignee agent UUID or agent name/shortname (e.g. 'Builder'). Pass null to unassign.",
         },
         comment: {
           type: "string",
@@ -521,8 +647,19 @@ const updateIssueTool: ChatToolDefinition<{
       required: ["issueId"],
     },
   },
-  async handler({ issueId, status, priority, comment }, ctx) {
+  async handler({ issueId, status, priority, assigneeAgentId, assignee, comment }, ctx) {
     const existing = await resolveAccessibleIssue(ctx, issueId, "write");
+
+    const rawAssignee = assigneeAgentId !== undefined ? assigneeAgentId : assignee;
+    let targetAssigneeId: string | null | undefined = undefined;
+    if (rawAssignee !== undefined) {
+      await assertCanAssignTasks(ctx, existing.companyId);
+      if (rawAssignee === null || (typeof rawAssignee === "string" && rawAssignee.trim() === "")) {
+        targetAssigneeId = null;
+      } else {
+        targetAssigneeId = await normalizeIssueAssigneeAgentReference(ctx.db, existing.companyId, rawAssignee);
+      }
+    }
 
     const attribution = attributionFor(ctx);
     const executionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
@@ -531,7 +668,7 @@ const updateIssueTool: ChatToolDefinition<{
         issue: existing,
         policy: executionPolicy,
         requestedStatus: status,
-        requestedAssigneePatch: {},
+        requestedAssigneePatch: targetAssigneeId !== undefined ? { assigneeAgentId: targetAssigneeId } : {},
         actor: {
           agentId: attribution.actorAgentId ?? null,
           userId: attribution.actorUserId ?? null,
@@ -550,6 +687,7 @@ const updateIssueTool: ChatToolDefinition<{
     const issuePatch = {
       ...(status !== undefined ? { status } : {}),
       ...(priority !== undefined ? { priority } : {}),
+      ...(targetAssigneeId !== undefined ? { assigneeAgentId: targetAssigneeId } : {}),
       ...transition.patch,
       ...attribution,
       preserveExecutionPolicy:
@@ -614,17 +752,35 @@ const updateIssueTool: ChatToolDefinition<{
       });
     }
 
-    await queueIssueAssignmentWakeup({
-      heartbeat: heartbeatService(ctx.db),
-      issue: updated,
-      previousExecutionState: existing.executionState,
-      reason: "issue_assigned",
-      mutation: "update",
-      contextSource: "issue.execution_stage",
-      executionStageOnly: true,
-      requestedByActorType: attribution.actorAgentId ? "agent" : "user",
-      requestedByActorId: attribution.actorAgentId ?? attribution.actorUserId ?? ctx.actor.userId,
-    });
+    const isNewAssignment =
+      targetAssigneeId !== undefined &&
+      targetAssigneeId !== null &&
+      targetAssigneeId !== existing.assigneeAgentId;
+
+    if (isNewAssignment) {
+      await queueIssueAssignmentWakeup({
+        heartbeat: heartbeatService(ctx.db),
+        issue: updated,
+        previousExecutionState: existing.executionState,
+        reason: "issue_assigned",
+        mutation: "update",
+        contextSource: "issue.assign",
+        requestedByActorType: attribution.actorAgentId ? "agent" : "user",
+        requestedByActorId: attribution.actorAgentId ?? attribution.actorUserId ?? ctx.actor.userId,
+      });
+    } else {
+      await queueIssueAssignmentWakeup({
+        heartbeat: heartbeatService(ctx.db),
+        issue: updated,
+        previousExecutionState: existing.executionState,
+        reason: "issue_assigned",
+        mutation: "update",
+        contextSource: "issue.execution_stage",
+        executionStageOnly: true,
+        requestedByActorType: attribution.actorAgentId ? "agent" : "user",
+        requestedByActorId: attribution.actorAgentId ?? attribution.actorUserId ?? ctx.actor.userId,
+      });
+    }
 
     return { issue: summarizeIssue(updated) };
   },
