@@ -117,7 +117,8 @@ import {
   listViewShowsAllMail,
   type EmailListView,
 } from "../lib/email-list-view";
-import { describeSnoozeUntil, snoozeOptions } from "../lib/email-snooze";
+import { describeSnoozeUntil, formatSnoozeChoiceTime, snoozeOptions } from "../lib/email-snooze";
+import { EmailSnoozeDialog } from "../components/EmailSnoozeDialog";
 import { EmailListViewTabs } from "../components/email/EmailListViewTabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
@@ -550,6 +551,7 @@ export function Email() {
   // The message shown at full size on top of the three-pane layout.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
+  const [snoozeDialogOpen, setSnoozeDialogOpen] = useState(false);
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
   const [handoffNote, setHandoffNote] = useState("");
@@ -3164,18 +3166,32 @@ export function Email() {
                       </TooltipTrigger>
                       <TooltipContent>Snooze (hide it until later, then bring it back unread)</TooltipContent>
                     </Tooltip>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuLabel>Snooze until</DropdownMenuLabel>
-                      {snoozeOptions().map((opt) => (
-                        <DropdownMenuItem
-                          key={opt.key}
-                          onSelect={() => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until: opt.until }); }}
-                        >
-                          {opt.label}
-                        </DropdownMenuItem>
-                      ))}
+                    <DropdownMenuContent align="start" className="min-w-64">
+                      <DropdownMenuLabel>Snooze until...</DropdownMenuLabel>
+                      {(() => {
+                        const menuNow = new Date();
+                        return snoozeOptions(menuNow).map((opt) => (
+                          <DropdownMenuItem
+                            key={opt.key}
+                            className="justify-between gap-6"
+                            onSelect={() => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until: opt.until }); }}
+                          >
+                            <span>{opt.label}</span>
+                            <span className="text-xs text-muted-foreground">{formatSnoozeChoiceTime(opt.until, menuNow)}</span>
+                          </DropdownMenuItem>
+                        ));
+                      })()}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setSnoozeDialogOpen(true)}>
+                        Pick date &amp; time
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  <EmailSnoozeDialog
+                    open={snoozeDialogOpen}
+                    onOpenChange={setSnoozeDialogOpen}
+                    onSave={(until) => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until }); }}
+                  />
 
                   <Tooltip>
                     <TooltipTrigger asChild>
