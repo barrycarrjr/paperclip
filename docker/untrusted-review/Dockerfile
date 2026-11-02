@@ -1,4 +1,6 @@
-FROM node:lts-trixie-slim
+# Pinned to Node 24 for the same reason as the main Dockerfile: Node 26 (the
+# `lts` tag since late October 2026) no longer ships corepack.
+FROM node:24-trixie-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \

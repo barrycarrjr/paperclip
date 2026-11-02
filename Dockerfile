@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.20
-FROM node:lts-trixie-slim AS base
+# Pinned to Node 24: the moving `lts` tag went to Node 26 in late October 2026,
+# which no longer ships corepack, so `corepack enable` below failed and no image
+# was published. Move the pin deliberately, after testing the new major.
+FROM node:24-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN apt-get update \
