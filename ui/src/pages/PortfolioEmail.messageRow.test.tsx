@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { MailHeader } from "../api/emailTools";
-import { MessageRow } from "./PortfolioEmail";
+import { MessageRow, SenderGroup } from "./PortfolioEmail";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -41,6 +41,10 @@ function rowProps() {
     autoTriagePendingUid: null,
     deleteMsg: vi.fn(),
     deletePendingUid: null,
+    snooze: vi.fn(),
+    snoozePendingUid: null,
+    snoozeGroup: vi.fn(),
+    snoozeGroupPendingSender: null,
     onOpenMessage: vi.fn(),
     onPopoutMessage: vi.fn(),
   };
@@ -90,5 +94,87 @@ describe("a Portfolio Email message row", () => {
     });
     expect(document.body.textContent).not.toContain("Hand off to agent");
     expect(toolbar.classList.contains("opacity-0")).toBe(true);
+  });
+
+  it("offers snooze from its hover buttons and snoozes that email", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const props = rowProps();
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <MessageRow {...props} />
+        </TooltipProvider>,
+      );
+    });
+
+    const snoozeButton = container.querySelector('button[aria-label="Snooze"]')!;
+    expect(snoozeButton).not.toBeNull();
+    const toolbar = snoozeButton.parentElement!;
+    // It sits between Keep always and Auto-triage.
+    const titles = Array.from(toolbar.querySelectorAll("button")).map(
+      (b) => b.getAttribute("aria-label") ?? b.getAttribute("title"),
+    );
+    expect(titles.indexOf("Snooze")).toBe(titles.indexOf("Keep always") + 1);
+    expect(titles.indexOf("Auto-triage")).toBe(titles.indexOf("Snooze") + 1);
+
+    await act(async () => {
+      snoozeButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    });
+    expect(document.body.textContent).toContain("Snooze until...");
+    expect(document.body.textContent).toContain("Pick date & time");
+    // The toolbar stays up while the pointer is in the menu.
+    expect(toolbar.classList.contains("opacity-100")).toBe(true);
+
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+    const first = items[0] as HTMLElement;
+    await act(async () => {
+      first.click();
+    });
+    expect(props.snooze).toHaveBeenCalledTimes(1);
+    const [snoozedMsg, until] = (props.snooze as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(snoozedMsg).toBe(msg);
+    expect(until).toBeInstanceOf(Date);
+    expect((until as Date).getTime()).toBeGreaterThan(Date.now());
+  });
+});
+
+describe("a Portfolio Email sender group", () => {
+  it("snoozes every email from that sender at once", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const second: MailHeader = { ...msg, uid: 43, subject: "Second quote" };
+    const props = rowProps();
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <SenderGroup {...props} sender="someone@example.com" msgs={[msg, second]} />
+        </TooltipProvider>,
+      );
+    });
+
+    // The header's snooze comes first; each row below has its own.
+    const headerSnooze = container.querySelector('button[aria-label="Snooze"]')!;
+    const headerButtons = Array.from(headerSnooze.parentElement!.querySelectorAll("button")).map(
+      (b) => b.getAttribute("aria-label"),
+    );
+    expect(headerButtons.indexOf("Snooze")).toBe(headerButtons.indexOf("Keep always") + 1);
+
+    await act(async () => {
+      headerSnooze.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    });
+    const first = document.querySelector('[role="menuitem"]') as HTMLElement;
+    await act(async () => {
+      first.click();
+    });
+
+    expect(props.snoozeGroup).toHaveBeenCalledTimes(1);
+    const [sender, msgs, until] = (props.snoozeGroup as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(sender).toBe("someone@example.com");
+    expect(msgs).toEqual([msg, second]);
+    expect((until as Date).getTime()).toBeGreaterThan(Date.now());
+    expect(props.snooze).not.toHaveBeenCalled();
   });
 });

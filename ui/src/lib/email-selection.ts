@@ -52,7 +52,8 @@ export function canSelectMessages(input: {
   view: EmailListView;
   searchActive: boolean;
 }): boolean {
-  return !input.searchActive && input.view !== "agents";
+  // "Snoozed" is the list of snoozes, likewise not mail that can be ticked.
+  return !input.searchActive && input.view !== "agents" && input.view !== "snoozed";
 }
 
 /**

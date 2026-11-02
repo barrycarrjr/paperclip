@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AlarmClock,
   Mail,
   MailOpen,
   Loader2,
@@ -66,6 +67,9 @@ const MAX_SUBJECT_CHARS = 80;
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import { EmailStateIcons } from "../components/email/EmailStateIcons";
 import { ROW_WITH_HOVER_TOOLBAR, RowHoverToolbar } from "../components/email/RowHoverToolbar";
+import { EmailSnoozeMenu } from "../components/email/EmailSnoozeMenu";
+import { EmailSnoozedList, emailSnoozesQueryKey, useEmailSnoozes } from "../components/email/EmailSnoozedList";
+import { describeSnoozeUntil } from "../lib/email-snooze";
 import { EmptyState } from "../components/EmptyState";
 import { MailSearchBar } from "../components/MailSearchBar";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -907,6 +911,19 @@ function MailboxPanel({
     });
   }
 
+  // This mailbox's snoozed emails: a count in the header, and the list in
+  // place of the mail while "Snoozed" is switched on.
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const emailSnoozes = useEmailSnoozes({
+    pluginId,
+    companyId: primaryCompanyId,
+    mailbox: key,
+    onChanged: invalidateMessageLists,
+  });
+  function invalidateSnoozes() {
+    queryClient.invalidateQueries({ queryKey: emailSnoozesQueryKey(pluginId) });
+  }
+
   function noteOverride(uid: number, kind: ImapOverrideKind) {
     imapOverrideStore.set(overrideScope, uid, kind);
   }
@@ -1007,6 +1024,63 @@ function MailboxPanel({
     },
   });
 
+  const snoozeMutation = useMutation({
+    mutationFn: async ({ msg, until }: { msg: MailHeader; until: Date }) => {
+      noteOverride(msg.uid, "gone");
+      await emailApi.snoozeMessage(key, msg.uid, pollFolder, until);
+    },
+    onSettled: () => invalidateSnoozes(),
+    onSuccess: (_, { msg, until }) => {
+      invalidateMessageLists();
+      pushToast({
+        title: `Snoozed until ${describeSnoozeUntil(until)}`,
+        body: msg.subject || "(no subject)",
+        tone: "success",
+      });
+    },
+    onError: (err, { msg }) => {
+      clearOverride(msg.uid);
+      invalidateMessageLists();
+      pushToast({ title: "Snooze failed", body: (err as Error).message, tone: "error" });
+    },
+  });
+
+  // A sender group's snooze: every email in it, one after another, with one
+  // toast for the lot rather than one per email.
+  const snoozeGroupMutation = useMutation({
+    onSettled: () => invalidateSnoozes(),
+    mutationFn: async ({ msgs, until }: { sender: string; msgs: MailHeader[]; until: Date }) => {
+      let failed = 0;
+      let lastError: unknown = null;
+      for (const msg of msgs) {
+        noteOverride(msg.uid, "gone");
+        try {
+          await emailApi.snoozeMessage(key, msg.uid, pollFolder, until);
+        } catch (err) {
+          clearOverride(msg.uid);
+          failed += 1;
+          lastError = err;
+        }
+      }
+      if (failed > 0) {
+        const done = msgs.length - failed;
+        const reason = lastError instanceof Error ? lastError.message : String(lastError);
+        throw new Error(`${failed} of ${msgs.length} could not be snoozed${done > 0 ? ` (${done} were)` : ""}: ${reason}`);
+      }
+    },
+    onSuccess: (_, { msgs, until }) => {
+      invalidateMessageLists();
+      pushToast({
+        title: `Snoozed ${msgs.length} ${msgs.length === 1 ? "email" : "emails"} until ${describeSnoozeUntil(until)}`,
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      invalidateMessageLists();
+      pushToast({ title: "Snooze failed", body: (err as Error).message, tone: "error" });
+    },
+  });
+
   const allMessages = messagesData?.messages ?? [];
   const messages = applyImapOverrides(allMessages, overrides, { unseenOnly: !showAll });
 
@@ -1055,6 +1129,26 @@ function MailboxPanel({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
+                variant={showSnoozed ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => setShowSnoozed((v) => !v)}
+                aria-pressed={showSnoozed}
+              >
+                <AlarmClock className="h-3.5 w-3.5" />
+                Snoozed
+                {emailSnoozes.snoozes.length > 0 && (
+                  <span className="text-[10px] text-muted-foreground">{emailSnoozes.snoozes.length}</span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {showSnoozed ? "Back to this mailbox's mail" : "Show the snoozed emails in this mailbox"}
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
                 variant="ghost"
                 size="icon-sm"
                 onClick={onOpenMailbox}
@@ -1070,6 +1164,16 @@ function MailboxPanel({
         </div>
       </div>
 
+      {showSnoozed ? (
+        <EmailSnoozedList
+          fill={false}
+          snoozes={emailSnoozes.snoozes}
+          loading={emailSnoozes.loading}
+          error={emailSnoozes.error}
+          onUnsnooze={emailSnoozes.unsnooze}
+          unsnoozingId={emailSnoozes.unsnoozingId}
+        />
+      ) : (
       <MessageListBody
         messages={messages}
         messagesLoading={messagesLoading}
@@ -1099,9 +1203,18 @@ function MailboxPanel({
         deletePendingUid={
           deleteMutation.isPending ? deleteMutation.variables?.uid ?? null : null
         }
+        snooze={(m, until) => snoozeMutation.mutate({ msg: m, until })}
+        snoozePendingUid={
+          snoozeMutation.isPending ? snoozeMutation.variables?.msg.uid ?? null : null
+        }
+        snoozeGroup={(sender, msgs, until) => snoozeGroupMutation.mutate({ sender, msgs, until })}
+        snoozeGroupPendingSender={
+          snoozeGroupMutation.isPending ? snoozeGroupMutation.variables?.sender ?? null : null
+        }
         onOpenMessage={onOpenMessage}
         onPopoutMessage={onPopoutMessage}
       />
+      )}
     </div>
   );
 }
@@ -1125,6 +1238,10 @@ interface MessageListBodyProps {
   autoTriagePendingUid: number | null;
   deleteMsg: (msg: MailHeader) => void;
   deletePendingUid: number | null;
+  snooze: (msg: MailHeader, until: Date) => void;
+  snoozePendingUid: number | null;
+  snoozeGroup: (sender: string, msgs: MailHeader[], until: Date) => void;
+  snoozeGroupPendingSender: string | null;
   onOpenMessage: (uid: number, action?: "reply" | "forward" | "handoff") => void;
   onPopoutMessage: (msg: MailHeader) => void;
 }
@@ -1191,7 +1308,7 @@ function MessageListBody(props: MessageListBodyProps) {
   );
 }
 
-function SenderGroup({
+export function SenderGroup({
   sender,
   msgs,
   autoTriageSet,
@@ -1200,6 +1317,8 @@ function SenderGroup({
   keepAlways,
   autoTriage,
   deleteMsg,
+  snoozeGroup,
+  snoozeGroupPendingSender,
   ...rest
 }: { sender: string; msgs: MailHeader[] } & MessageListBodyProps) {
   const senderLower = sender.toLowerCase();
@@ -1262,6 +1381,12 @@ function SenderGroup({
               {senderHasKeepAlways ? "Keep always (rule active)" : "Keep always from this sender"}
             </TooltipContent>
           </Tooltip>
+          <EmailSnoozeMenu
+            placement="group"
+            hint="Snooze all from this sender (hide them until later, then bring them back unread)"
+            pending={snoozeGroupPendingSender === sender}
+            onSnooze={(until) => snoozeGroup(sender, msgs, until)}
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1318,6 +1443,8 @@ function SenderGroup({
             keepAlways={keepAlways}
             autoTriage={autoTriage}
             deleteMsg={deleteMsg}
+            snoozeGroup={snoozeGroup}
+            snoozeGroupPendingSender={snoozeGroupPendingSender}
             {...rest}
           />
         ))}
@@ -1341,6 +1468,8 @@ export function MessageRow({
   autoTriagePendingUid,
   deleteMsg,
   deletePendingUid,
+  snooze,
+  snoozePendingUid,
   onOpenMessage,
   onPopoutMessage,
 }: { msg: MailHeader } & MessageListBodyProps) {
@@ -1354,6 +1483,8 @@ export function MessageRow({
   // Moving into the open "More actions" menu takes the pointer off the row,
   // which would otherwise hide the toolbar, and the menu's own button with it.
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  // Same for the snooze menu and its date dialog.
+  const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
 
   return (
     <div
@@ -1399,7 +1530,7 @@ export function MessageRow({
           )}
         </HoverPreviewContent>
       </HoverPreview>
-      <RowHoverToolbar forceVisible={moreMenuOpen}>
+      <RowHoverToolbar forceVisible={moreMenuOpen || snoozeMenuOpen}>
         {msg.unseen ? (
           <Button
             variant="ghost"
@@ -1467,6 +1598,12 @@ export function MessageRow({
             <Check className="h-3.5 w-3.5" strokeWidth={hasKeepAlwaysRule ? 3.5 : 2} />
           )}
         </Button>
+        <EmailSnoozeMenu
+          placement="row"
+          pending={snoozePendingUid === msg.uid}
+          onSnooze={(until) => snooze(msg, until)}
+          onActiveChange={setSnoozeMenuOpen}
+        />
         <Button
           variant="ghost"
           size="icon-sm"

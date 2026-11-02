@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import { Link } from "../lib/router";
 import { buildEmailHandoffOriginId, EMAIL_HANDOFF_ORIGIN_KIND } from "@paperclipai/shared";
 import {
-  AlarmClock,
   Mail,
   MailOpen,
   ChevronRight,
@@ -117,8 +116,9 @@ import {
   listViewShowsAllMail,
   type EmailListView,
 } from "../lib/email-list-view";
-import { describeSnoozeUntil, formatSnoozeChoiceTime, snoozeOptions } from "../lib/email-snooze";
-import { EmailSnoozeDialog } from "../components/EmailSnoozeDialog";
+import { describeSnoozeUntil } from "../lib/email-snooze";
+import { EmailSnoozeMenu } from "../components/email/EmailSnoozeMenu";
+import { EmailSnoozedList, emailSnoozesQueryKey, useEmailSnoozes } from "../components/email/EmailSnoozedList";
 import { EmailListViewTabs } from "../components/email/EmailListViewTabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmailSelectionBar } from "../components/email/EmailSelectionBar";
@@ -551,7 +551,6 @@ export function Email() {
   // The message shown at full size on top of the three-pane layout.
   const [popout, setPopout] = useState<EmailPopoutRequest | null>(null);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
-  const [snoozeDialogOpen, setSnoozeDialogOpen] = useState(false);
   const [handoffAgentId, setHandoffAgentId] = useState<string | null>(null);
   const [handoffMessage, setHandoffMessage] = useState<ParsedEmailMessage | null>(null);
   const [handoffNote, setHandoffNote] = useState("");
@@ -569,6 +568,11 @@ export function Email() {
   });
   // Per-row move dropdown: tracks which uid's dropdown is open
   const [moveDropdownUid, setMoveDropdownUid] = useState<number | null>(null);
+  // Per-row snooze menu (or its date dialog): which uid has one open, so that
+  // row's hover buttons stay showing while the pointer is in the menu.
+  const [snoozeMenuUid, setSnoozeMenuUid] = useState<number | null>(null);
+  // The same for a sender group's snooze menu, by sender.
+  const [snoozeMenuSender, setSnoozeMenuSender] = useState<string | null>(null);
   // The narrow list's "More actions" menu, per row, so its toolbar stays up
   // while the menu is open (see RowHoverToolbar's forceVisible).
   const [moreMenuUid, setMoreMenuUid] = useState<number | null>(null);
@@ -1489,17 +1493,62 @@ export function Email() {
     },
   });
 
+  // The Snoozed tab and its count, for the open mailbox.
+  const emailSnoozes = useEmailSnoozes({
+    pluginId,
+    companyId: selectedCompanyId,
+    mailbox: selectedMailbox,
+    onChanged: invalidateMessageLists,
+  });
+  function invalidateSnoozes() {
+    if (pluginId) queryClient.invalidateQueries({ queryKey: emailSnoozesQueryKey(pluginId) });
+  }
+
   const snoozeMutation = useMutation({
     mutationFn: async ({ msg, until }: { msg: MailHeader; until: Date }) => {
       noteOverride(msg.uid, "gone");
       await emailApi!.snoozeMessage(selectedMailbox!, msg.uid, selectedFolder, until);
     },
+    onSettled: () => invalidateSnoozes(),
     onSuccess: (_, { msg, until }) => {
       invalidateMessageLists();
       showToast(`Snoozed until ${describeSnoozeUntil(until)}: ${msg.subject || "(no subject)"}`);
     },
     onError: (err, { msg }) => {
       clearOverride(msg.uid);
+      invalidateMessageLists();
+      showFailure("Snooze", err);
+    },
+  });
+
+  // A sender group's snooze: every email in it, one after another, with one
+  // toast for the lot rather than one per email.
+  const snoozeGroupMutation = useMutation({
+    onSettled: () => invalidateSnoozes(),
+    mutationFn: async ({ msgs, until }: { sender: string; msgs: MailHeader[]; until: Date }) => {
+      let failed = 0;
+      let lastError: unknown = null;
+      for (const msg of msgs) {
+        noteOverride(msg.uid, "gone");
+        try {
+          await emailApi!.snoozeMessage(selectedMailbox!, msg.uid, selectedFolder, until);
+        } catch (err) {
+          clearOverride(msg.uid);
+          failed += 1;
+          lastError = err;
+        }
+      }
+      if (failed > 0) {
+        const done = msgs.length - failed;
+        const reason = lastError instanceof Error ? lastError.message : String(lastError);
+        throw new Error(`${failed} of ${msgs.length} could not be snoozed${done > 0 ? ` (${done} were)` : ""}: ${reason}`);
+      }
+    },
+    onSuccess: (_, { msgs, until }) => {
+      invalidateMessageLists();
+      showToast(`Snoozed ${msgs.length} ${msgs.length === 1 ? "email" : "emails"} until ${describeSnoozeUntil(until)}`);
+    },
+    onError: (err) => {
       invalidateMessageLists();
       showFailure("Snooze", err);
     },
@@ -2239,6 +2288,7 @@ export function Email() {
       value={listView}
       onChange={chooseListView}
       agentHoldCount={agentHolds.length}
+      snoozedCount={emailSnoozes.snoozes.length}
     />
   );
 
@@ -2430,7 +2480,7 @@ export function Email() {
     return (
       // Floats over the row's right end on hover rather than taking its width;
       // held open while its move-to-folder menu is.
-      <RowHoverToolbar forceVisible={moveDropdownUid === msg.uid}>
+      <RowHoverToolbar forceVisible={moveDropdownUid === msg.uid || snoozeMenuUid === msg.uid}>
         {readButton}
 
         <Button
@@ -2493,6 +2543,15 @@ export function Email() {
             />
           )}
         </Button>
+
+        <EmailSnoozeMenu
+          placement="row"
+          pending={snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === msg.uid}
+          onSnooze={(until) => snoozeMutation.mutate({ msg, until })}
+          onActiveChange={(active) =>
+            setSnoozeMenuUid((cur) => (active ? msg.uid : cur === msg.uid ? null : cur))
+          }
+        />
 
         <Button
           size="icon-sm"
@@ -2753,6 +2812,19 @@ export function Email() {
     // Built from the handover records rather than from the mailbox: a message
     // that has been handed over is usually already read and usually not in
     // the newest fifty, so re-reading the mailbox would miss most of them.
+    // Built from the plugin's snooze records: the emails themselves sit in a
+    // hidden folder on the mail server until they come back.
+    if (listView === "snoozed") {
+      return (
+        <EmailSnoozedList
+          snoozes={emailSnoozes.snoozes}
+          loading={emailSnoozes.loading}
+          error={emailSnoozes.error}
+          onUnsnooze={emailSnoozes.unsnooze}
+          unsnoozingId={emailSnoozes.unsnoozingId}
+        />
+      );
+    }
     if (listView === "agents") {
       return (
         <EmailAgentHoldList
@@ -2835,7 +2907,7 @@ export function Email() {
                   </div>
                   {/* Same floating toolbar as the rows, so the sender's name
                       keeps the header's width in a narrow list. */}
-                  <RowHoverToolbar forceVisible={moveDropdownSender === g.sender}>
+                  <RowHoverToolbar forceVisible={moveDropdownSender === g.sender || snoozeMenuSender === g.sender}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -2873,6 +2945,15 @@ export function Email() {
                         {senderHasKeepAlways ? "Keep always (rule already exists)" : "Keep always from this sender"}
                       </TooltipContent>
                     </Tooltip>
+                    <EmailSnoozeMenu
+                      placement="group"
+                      hint="Snooze all from this sender (hide them until later, then bring them back unread)"
+                      pending={snoozeGroupMutation.isPending && snoozeGroupMutation.variables?.sender === g.sender}
+                      onSnooze={(until) => snoozeGroupMutation.mutate({ sender: g.sender, msgs: g.msgs, until })}
+                      onActiveChange={(active) =>
+                        setSnoozeMenuSender((cur) => (active ? g.sender : cur === g.sender ? null : cur))
+                      }
+                    />
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -3146,51 +3227,9 @@ export function Email() {
                     </Tooltip>
                   )}
 
-                  <DropdownMenu>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === selectedMsg?.uid}
-                            aria-label="Snooze"
-                          >
-                            {snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === selectedMsg?.uid ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <AlarmClock className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </DropdownMenuTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent>Snooze (hide it until later, then bring it back unread)</TooltipContent>
-                    </Tooltip>
-                    <DropdownMenuContent align="start" className="min-w-64">
-                      <DropdownMenuLabel>Snooze until...</DropdownMenuLabel>
-                      {(() => {
-                        const menuNow = new Date();
-                        return snoozeOptions(menuNow).map((opt) => (
-                          <DropdownMenuItem
-                            key={opt.key}
-                            className="justify-between gap-6"
-                            onSelect={() => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until: opt.until }); }}
-                          >
-                            <span>{opt.label}</span>
-                            <span className="text-xs text-muted-foreground">{formatSnoozeChoiceTime(opt.until, menuNow)}</span>
-                          </DropdownMenuItem>
-                        ));
-                      })()}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => setSnoozeDialogOpen(true)}>
-                        Pick date &amp; time
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <EmailSnoozeDialog
-                    open={snoozeDialogOpen}
-                    onOpenChange={setSnoozeDialogOpen}
-                    onSave={(until) => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until }); }}
+                  <EmailSnoozeMenu
+                    pending={snoozeMutation.isPending && snoozeMutation.variables?.msg.uid === selectedMsg?.uid}
+                    onSnooze={(until) => { if (selectedMsg) snoozeMutation.mutate({ msg: selectedMsg, until }); }}
                   />
 
                   <Tooltip>

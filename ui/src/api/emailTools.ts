@@ -181,6 +181,25 @@ export interface SenderRule {
   updatedAt: string;
 }
 
+/** One snoozed message, as the email-tools plugin records it. */
+export interface EmailSnooze {
+  id: string;
+  company_id: string;
+  mailbox_key: string;
+  /** The folder it came from and goes back to. */
+  folder: string;
+  snooze_folder: string;
+  snooze_uid: number;
+  message_id: string | null;
+  subject: string | null;
+  sender: string | null;
+  /** When it comes back (ISO timestamp). */
+  wake_at: string;
+  /** Failed attempts to bring it back; it stops retrying after five. */
+  attempts: number;
+  last_error: string | null;
+}
+
 function extract<T>(result: { data: unknown }): T {
   return result.data as T;
 }
@@ -293,6 +312,28 @@ export function makeEmailToolsApi(pluginId: string, companyId: string) {
         pluginId,
         "email.snooze-message",
         { companyId, mailbox, uid, folder, until: until.toISOString() },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    /** The snoozed messages in a mailbox, soonest to come back first. */
+    listSnoozes: async (mailbox: string): Promise<{ snoozes: EmailSnooze[] }> => {
+      const result = await pluginsApi.bridgeGetData(
+        pluginId,
+        "email.list-snoozes",
+        { companyId, mailbox },
+        companyId,
+      );
+      return extract(result);
+    },
+
+    /** Bring a snoozed message back now, unread, to the folder it came from. */
+    unsnoozeMessage: async (id: string): Promise<{ ok: boolean }> => {
+      const result = await pluginsApi.bridgePerformAction(
+        pluginId,
+        "email.unsnooze-message",
+        { companyId, id },
         companyId,
       );
       return extract(result);

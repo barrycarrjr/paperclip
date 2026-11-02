@@ -6,7 +6,7 @@ import {
 } from "@/lib/email-list-view";
 
 /**
- * The three views of the list: All mail, Unread and With agents.
+ * The four views of the list: All mail, Unread, With agents and Snoozed.
  *
  * Switching only on a click or a key press, never on focus alone. The tab
  * bar's default is to switch the moment a tab receives focus, and the choice
@@ -19,10 +19,12 @@ export function EmailListViewTabs({
   value,
   onChange,
   agentHoldCount,
+  snoozedCount = 0,
 }: {
   value: EmailListView;
   onChange: (view: EmailListView) => void;
   agentHoldCount: number;
+  snoozedCount?: number;
 }) {
   return (
     <div className="px-2 py-1.5 border-b border-border shrink-0 overflow-hidden">
@@ -43,6 +45,11 @@ export function EmailListViewTabs({
               {view === "agents" && agentHoldCount > 0 && (
                 <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
                   {agentHoldCount}
+                </span>
+              )}
+              {view === "snoozed" && snoozedCount > 0 && (
+                <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
+                  {snoozedCount}
                 </span>
               )}
             </TabsTrigger>

@@ -13,7 +13,7 @@
  * who had chosen "unread only" keeps it.
  */
 
-export const EMAIL_LIST_VIEWS = ["all", "unread", "agents"] as const;
+export const EMAIL_LIST_VIEWS = ["all", "unread", "agents", "snoozed"] as const;
 export type EmailListView = (typeof EMAIL_LIST_VIEWS)[number];
 
 export const EMAIL_LIST_VIEW_STORAGE_KEY = "email-listView";
@@ -24,6 +24,7 @@ export const EMAIL_LIST_VIEW_LABEL: Record<EmailListView, string> = {
   all: "All mail",
   unread: "Unread",
   agents: "With agents",
+  snoozed: "Snoozed",
 };
 
 export function isEmailListView(value: unknown): value is EmailListView {

@@ -62,8 +62,9 @@ describe("emptyListMessage", () => {
 });
 
 describe("isEmailListView", () => {
-  it("accepts only the three views", () => {
+  it("accepts only the four views", () => {
     expect(isEmailListView("agents")).toBe(true);
+    expect(isEmailListView("snoozed")).toBe(true);
     expect(isEmailListView("everything")).toBe(false);
     expect(isEmailListView(null)).toBe(false);
   });
