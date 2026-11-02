@@ -2482,6 +2482,40 @@ export function issueRoutes(
       }
     }
 
+    // An agent that finishes work it holds and marks it in_review, without
+    // naming anyone to review it, gets the issue handed back to the person
+    // who created it. Without this the issue sat in_review on the agent and
+    // nobody ever saw it (#184). Only when the agent itself asked for
+    // in_review in this request: an unrelated edit to an issue that is
+    // already in_review is not the agent saying it is done, and work that is
+    // already parked is surfaced by the attention queue instead. Never when
+    // an execution stage decides the assignee; those flows are unchanged.
+    let autoReturnedToCreator = false;
+    if (
+      req.actor.type === "agent"
+      && !!req.actor.agentId
+      && existing.assigneeAgentId === req.actor.agentId
+      && req.body.status === "in_review"
+      && req.body.assigneeAgentId === undefined
+      && req.body.assigneeUserId === undefined
+      && !transition.workflowControlledAssignment
+      && !transition.decision
+      && transition.patch.assigneeAgentId === undefined
+      && transition.patch.assigneeUserId === undefined
+      && (updateFields.status ?? existing.status) === "in_review"
+      && parseIssueExecutionState(
+        updateFields.executionState !== undefined ? updateFields.executionState : existing.executionState,
+      )?.status !== "pending"
+      && !!existing.createdByUserId
+    ) {
+      const creatorMembership = await access.getMembership(existing.companyId, "user", existing.createdByUserId);
+      if (creatorMembership?.status === "active") {
+        updateFields.assigneeAgentId = null;
+        updateFields.assigneeUserId = existing.createdByUserId;
+        autoReturnedToCreator = true;
+      }
+    }
+
     const nextAssigneeAgentId =
       updateFields.assigneeAgentId === undefined ? existing.assigneeAgentId : (updateFields.assigneeAgentId as string | null);
     const nextAssigneeUserId =
@@ -2506,12 +2540,18 @@ export function issueRoutes(
         || (requestedAssigneeWillChange && !requestedAssigneeIsPolicyHandoff)
       )
     ) {
-      if (!isAgentExplicitlyReturningIssueToCreator) {
+      // Handing the issue back to its creator, explicitly or automatically,
+      // needs no assign permission: it only returns the work to its owner.
+      if (!isAgentExplicitlyReturningIssueToCreator && !autoReturnedToCreator) {
         await assertCanAssignTasks(req, existing.companyId);
       }
     }
 
+    // The automatic hand-back is the server's move, not the agent's, so the
+    // "say what they need to do" note an agent owes on its own handoff does
+    // not apply; in_review already says what is needed.
     if (
+      !autoReturnedToCreator &&
       isAgentHandoffToUserMissingNote({
         actorType: req.actor.type,
         previousAssigneeUserId: existing.assigneeUserId,
@@ -2708,6 +2748,7 @@ export function issueRoutes(
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
         ...(cancelledStatusRunId ? { cancelledStatusRunId } : {}),
+        ...(autoReturnedToCreator ? { autoReturnedToCreator: true } : {}),
         _previous: hasFieldChanges ? previous : undefined,
         ...summarizeIssueReferenceActivityDetails(
           updateReferenceDiff

@@ -369,6 +369,50 @@ export function attentionQueueService(db: Db) {
   }
 
   /**
+   * Finished work an agent still holds, with no person assigned and no
+   * review stage in charge. The agent said it is done (in_review) but could
+   * not hand it to anyone, so without this row nobody ever sees it.
+   *
+   * Same kind and key shape as a sign-off gate, on purpose: it is the same
+   * decision (finished work waiting for a person to review it), so every
+   * surface that already handles sign_off rows (the Inbox, hiding, the issue
+   * de-duplication) handles these too. The two cannot collide on one issue:
+   * a gate row needs a pending stage and this one needs there to be none.
+   *
+   * No person is named on the issue, so unlike a gate it is not filtered to
+   * one viewer: it shows to everyone who reads the company's queue, like the
+   * other company-wide rows.
+   */
+  async function agentHeldReviewRows(companyId: string): Promise<AttentionRow[]> {
+    const held = await issueService(db).listAgentHeldReviewsForCompany(companyId, {
+      limit: 200,
+    });
+    return held.map((entry) => ({
+      key: `sign_off:${entry.issueId}`,
+      kind: "sign_off" as AttentionKind,
+      companyId,
+      title: `${entry.identifier ?? "An issue"} is finished and waiting for review, but no person is assigned`,
+      detail: truncate(
+        entry.agentName ? `${entry.title} · Held by ${entry.agentName}` : entry.title,
+        90,
+      ),
+      askedBy: entry.agentName,
+      blocking: "waiting" as const,
+      // The last change to the issue, which for work parked like this is
+      // normally the move to in_review itself.
+      blockedSinceMs: ms(entry.updatedAt),
+      count: 1,
+      consequence: "Nobody will look at it until someone is assigned.",
+      // Nothing in Paperclip decides this for you. It waits.
+      deadlineAtMs: null,
+      deadlineOutcome: null,
+      href: `/issues/${entry.identifier ?? entry.issueId}`,
+      createdAtMs: ms(entry.updatedAt) ?? 0,
+      updatedAtMs: ms(entry.updatedAt) ?? 0,
+    }));
+  }
+
+  /**
    * Runs that failed with nothing left to try. Keyed by agent + issue and
    * counted, so repeated failures of the same work are one row that says
    * "failed 5 times" instead of one row that hides four of them (or, as the
@@ -621,21 +665,39 @@ export function attentionQueueService(db: Db) {
       actor: AttentionQueueActor,
       options: { includeSetAside?: boolean } = {},
     ): Promise<AttentionQueueResult> => {
-      const [approvalsList, questions, signOffs, runFailures, budgetStops, joins, staleHandoffs] =
-        await Promise.all([
-          approvalRows(companyId),
-          questionRows(companyId),
-          signOffRows(companyId, actor),
-          runFailureRows(companyId),
-          budgetStopRows(companyId),
-          joinRequestRows(companyId, actor),
-          staleEmailHandoffRows(companyId),
-        ]);
+      const [
+        approvalsList,
+        questions,
+        signOffs,
+        agentHeldReviews,
+        runFailures,
+        budgetStops,
+        joins,
+        staleHandoffs,
+      ] = await Promise.all([
+        approvalRows(companyId),
+        questionRows(companyId),
+        signOffRows(companyId, actor),
+        agentHeldReviewRows(companyId),
+        runFailureRows(companyId),
+        budgetStopRows(companyId),
+        joinRequestRows(companyId, actor),
+        staleEmailHandoffRows(companyId),
+      ]);
+
+      // An agent-held issue that already has an open question is in front of
+      // a person through that row; a second row would show the same work
+      // twice with two different calls to action.
+      const questionKeys = new Set(questions.map((row) => row.key));
+      const agentHeldReviewsWithoutQuestion = agentHeldReviews.filter(
+        (row) => !questionKeys.has(`question:${row.key.slice("sign_off:".length)}`),
+      );
 
       const all = [
         ...approvalsList,
         ...questions,
         ...signOffs,
+        ...agentHeldReviewsWithoutQuestion,
         ...runFailures,
         ...budgetStops,
         ...joins,

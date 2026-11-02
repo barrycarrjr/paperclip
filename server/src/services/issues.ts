@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -2369,6 +2369,58 @@ export function issueService(db: Db) {
         pendingSinceAt:
           (state.lastDecisionId ? decisionCreatedAtById.get(state.lastDecisionId) : undefined)
           ?? row.updatedAt,
+        updatedAt: row.updatedAt,
+      }));
+    },
+
+    /**
+     * Finished work an agent still holds: in_review, assigned to an agent,
+     * no person assigned, and no review or approval stage in charge.
+     *
+     * An agent that cannot hand the issue to a person (its tool cannot set a
+     * user assignee, or it does not know who to give it to) leaves it here,
+     * and before this nothing listed it: the sign-off query above only sees
+     * issues whose execution stage names a person. A pending stage is left
+     * out on purpose, because that flow already decides who acts next.
+     */
+    listAgentHeldReviewsForCompany: async (
+      companyId: string,
+      options: { limit?: number } = {},
+    ) => {
+      const limit = Math.min(Math.max(Math.floor(options.limit ?? 50), 1), 200);
+      const rows = await db
+        .select({
+          issueId: issues.id,
+          identifier: issues.identifier,
+          title: issues.title,
+          assigneeAgentId: issues.assigneeAgentId,
+          agentName: agents.name,
+          updatedAt: issues.updatedAt,
+        })
+        .from(issues)
+        .leftJoin(agents, eq(agents.id, issues.assigneeAgentId))
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            // status = in_review rides the (companyId, status) index, like the
+            // sign-off query above; the rest filters the small remainder.
+            eq(issues.status, "in_review"),
+            isNotNull(issues.assigneeAgentId),
+            isNull(issues.assigneeUserId),
+            isNull(issues.hiddenAt),
+            sql`(${issues.executionState} is null or ${issues.executionState} ->> 'status' is distinct from 'pending')`,
+          ),
+        )
+        .orderBy(asc(issues.updatedAt), asc(issues.id))
+        .limit(limit);
+
+      return rows.map((row) => ({
+        issueId: row.issueId,
+        companyId,
+        identifier: row.identifier,
+        title: row.title,
+        assigneeAgentId: row.assigneeAgentId as string,
+        agentName: row.agentName ?? null,
         updatedAt: row.updatedAt,
       }));
     },

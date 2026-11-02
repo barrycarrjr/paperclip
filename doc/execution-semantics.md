@@ -208,6 +208,11 @@ Agent-assigned `in_review` with no typed participant is only healthy when one of
 
 An `in_review` issue is stalled when it has no typed participant, no pending interaction or approval, no user owner, no active run, no queued wake, and no explicit recovery issue. Paperclip should surface that state as recovery work rather than silently completing the issue or leaving blocker chains parked indefinitely.
 
+Two server behaviors keep agent-held review work from going unseen:
+
+- When the agent holding an issue sets `status: in_review` and the same request names no assignee, no execution-policy stage takes control, and the issue was created by a user who is still an active member, the server hands the issue back to that user (`assigneeAgentId: null`, `assigneeUserId: createdByUserId`). This is the same move as an agent explicitly returning the issue to its creator, needs no assign permission, wakes no one, and is logged on the `issue.updated` activity with `autoReturnedToCreator: true`. An unrelated edit to an issue that is already `in_review` does not trigger it.
+- Any `in_review` issue still assigned to an agent, with no user assignee, no pending execution stage, and not hidden, appears in the attention queue as a `sign_off` row ("finished and waiting for review, but no person is assigned") for everyone who reads that company's queue, including the portfolio roll-up. This covers issues created by agents (no creator to return to) and issues parked before the hand-back existed. If the issue already has an open question row, that row stands for it instead.
+
 ### `blocked`
 
 This is explicit waiting state.
